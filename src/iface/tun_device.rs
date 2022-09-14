@@ -1,15 +1,19 @@
-use std::borrow::Borrow;
-use crate::packet::buf_pool::PktBufHandle;
-use crate::packet::state::Shared;
 use crate::iface::SysError;
+use crate::resource::buf_slab::PktBufHandle;
+use crate::resource::state::Shared;
+use std::borrow::{Borrow, BorrowMut};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
+use std::{io, process};
+use byteorder::{ByteOrder, NetworkEndian};
 use tokio::io::unix::AsyncFd;
-use tokio::net::
+use tokio::io::AsyncReadExt;
+
+pub type AsyncRawFd = tokio_fd::AsyncFd;
 
 pub struct TunDevice {
-    fd: AsyncFd<RawFd>,
+    fd: AsyncRawFd,
     name: String,
     state: Shared,
 }
@@ -29,7 +33,11 @@ impl TunDevice {
             let name = unsafe { CStr::from_ptr(name_ptr as *const c_char) }
                 .to_string_lossy()
                 .into_owned();
-            Ok(TunDevice { fd: AsyncFd::new(RawFd(fd)).unwrap(), name, state: shared })
+            Ok(TunDevice {
+                fd: AsyncRawFd::try_from(RawFd::from(result))?,
+                name,
+                state: shared,
+            })
         } else {
             Err(SysError::Tun(errno::errno()))
         }
@@ -39,9 +47,28 @@ impl TunDevice {
         &self.name
     }
 
-    pub async fn receive(&mut self) -> PktBufHandle {
-        let handle = self.state.pool.obtain().await;
-        loop {}
+    pub async fn receive_ipv4(&mut self) -> io::Result<PktBufHandle> {
+        let mut handle = self.state.pool.obtain().await;
+        let mut buffer = handle.data.write().unwrap();
+        self.fd.read_exact(&mut buffer[..4]).await?;
+        if buffer[0] >> 4 != 4 {
+            panic!("Packet is not IPv4");
+        }
+        handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize;
+        self.fd.read_exact(&mut buffer[4..handle.len]).await?;
+        Ok(handle.clone())
+    }
+
+    pub async fn receive_ipv6(&mut self) -> io::Result<PktBufHandle> {
+        let mut handle = self.state.pool.obtain().await;
+        let mut buffer = handle.data.write().unwrap();
+        self.fd.read_exact(&mut buffer[..40]).await?;
+        if buffer[0] >> 4 != 6 {
+            panic!("Packet is not IPv6");
+        }
+        handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize;
+        self.fd.read_exact(&mut buffer[40..handle.len]).await?;
+        Ok(handle.clone())
     }
 }
 

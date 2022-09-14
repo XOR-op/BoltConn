@@ -3,14 +3,17 @@ use std::thread::sleep;
 use std::time;
 use tracing::{event, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use crate::resource::state::Shared;
 
 mod dns;
 mod iface;
+mod resource;
 mod packet;
 
 fn main() {
     tracing_subscriber::registry().with(fmt::layer()).init();
-    let raw_tun = TunDevice::open();
+    let resource = Shared::new();
+    let raw_tun = TunDevice::open(resource.clone());
     match raw_tun {
         Ok(tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());

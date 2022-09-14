@@ -1,5 +1,5 @@
 [package]
-name = "guardian"
+name = "catalyst"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,11 +8,15 @@ edition = "2021"
 [dependencies]
 thiserror = "1.0.34"
 libc = "0.2.132"
-tokio = { version = "1.21.0", features = ["rt", "net"] }
+mio = "0.8.4"
+tokio = { version = "1.21.0", features = ["rt", "net", "sync", "io-util"] }
+tokio-fd = "0.3.0"
 errno = "0.2.8"
 tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
 bytes = "1.2.1"
+byteorder = "1.4.3"
+pnet = "0.31.0"
 
 [build-dependencies]
 cc = "1.0.73"
