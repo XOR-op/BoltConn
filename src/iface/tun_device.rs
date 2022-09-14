@@ -9,6 +9,8 @@ use std::{io, process};
 use byteorder::{ByteOrder, NetworkEndian};
 use tokio::io::unix::AsyncFd;
 use tokio::io::AsyncReadExt;
+use crate::packet::ipv4::IPv4Pkt;
+use crate::packet::ipv6::IPv6Pkt;
 
 pub type AsyncRawFd = tokio_fd::AsyncFd;
 
@@ -47,19 +49,22 @@ impl TunDevice {
         &self.name
     }
 
-    pub async fn receive_ipv4(&mut self) -> io::Result<PktBufHandle> {
+    pub async fn receive_ipv4(&mut self) -> io::Result<IPv4Pkt> {
         let mut handle = self.state.pool.obtain().await;
+        tracing::trace!("Got buffer, ready for recv");
         let mut buffer = handle.data.write().unwrap();
         self.fd.read_exact(&mut buffer[..4]).await?;
         if buffer[0] >> 4 != 4 {
             panic!("Packet is not IPv4");
         }
         handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize;
+        tracing::trace!("Read header");
         self.fd.read_exact(&mut buffer[4..handle.len]).await?;
-        Ok(handle.clone())
+        tracing::trace!("Read body");
+        Ok(IPv4Pkt::new(handle.clone()))
     }
 
-    pub async fn receive_ipv6(&mut self) -> io::Result<PktBufHandle> {
+    pub async fn receive_ipv6(&mut self) -> io::Result<IPv6Pkt> {
         let mut handle = self.state.pool.obtain().await;
         let mut buffer = handle.data.write().unwrap();
         self.fd.read_exact(&mut buffer[..40]).await?;
@@ -68,7 +73,7 @@ impl TunDevice {
         }
         handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize;
         self.fd.read_exact(&mut buffer[40..handle.len]).await?;
-        Ok(handle.clone())
+        Ok(IPv6Pkt::new(handle.clone()))
     }
 }
 

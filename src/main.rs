@@ -10,15 +10,25 @@ mod iface;
 mod resource;
 mod packet;
 
-fn main() {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     tracing_subscriber::registry().with(fmt::layer()).init();
     let resource = Shared::new();
     let raw_tun = TunDevice::open(resource.clone());
     match raw_tun {
-        Ok(tun) => {
+        Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
-            sleep(time::Duration::from_secs(120));
+            loop {
+                match tun.receive_ipv4().await {
+                    Ok(pkt) => {
+                        event!(Level::INFO, "Received IPv4 packet: [src={}, dst={}, proto={:?}, size={}",
+                        pkt.src_addr,pkt.dst_addr,pkt.proto,pkt.payload_offset);
+                    }
+                    Err(err) => event!(Level::WARN, "{}",err),
+                }
+            }
         }
         Err(err) => println!("{}", err),
     }
+    Ok(())
 }

@@ -1,22 +1,16 @@
 use std::net::Ipv4Addr;
 use std::sync::RwLockReadGuard;
+use crate::packet::PayloadProtocol;
 use crate::resource::buf_slab::{PktBuffer, PktBufHandle};
 
 pub struct IPv4Pkt {
     handle: PktBufHandle,
-    src_addr: Ipv4Addr,
-    dst_addr: Ipv4Addr,
-    payload_offset: usize,
-    proto: PayloadProtocol,
+    pub src_addr: Ipv4Addr,
+    pub dst_addr: Ipv4Addr,
+    pub payload_offset: usize,
+    pub proto: PayloadProtocol,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum PayloadProtocol {
-    TCP,
-    UDP,
-    ICMP,
-    UNKNOWN,
-}
 
 impl IPv4Pkt {
     pub fn new(handle: PktBufHandle) -> Self {
