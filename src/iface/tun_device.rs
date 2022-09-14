@@ -9,8 +9,7 @@ use std::{io, process};
 use byteorder::{ByteOrder, NetworkEndian};
 use tokio::io::unix::AsyncFd;
 use tokio::io::AsyncReadExt;
-use crate::packet::ipv4::IPv4Pkt;
-use crate::packet::ipv6::IPv6Pkt;
+use crate::packet::ip::{IPPkt, IPv4Pkt, IPv6Pkt};
 
 pub type AsyncRawFd = tokio_fd::AsyncFd;
 
@@ -49,36 +48,33 @@ impl TunDevice {
         &self.name
     }
 
-    pub async fn receive_ipv4(&mut self) -> io::Result<IPv4Pkt> {
+    pub async fn recv_ip(&mut self) -> io::Result<IPPkt> {
+        // todo: macOS 4 bytes AF_INET/AF_INET6 prefix even if IFF_NO_PI set
         let mut handle = self.state.pool.obtain().await;
+        let mut buffer = handle.data.write().unwrap();
         tracing::trace!("Got buffer, ready for recv");
-        let mut buffer = handle.data.write().unwrap();
         self.fd.read_exact(&mut buffer[..4]).await?;
-        if buffer[0] >> 4 != 4 {
-            panic!("Packet is not IPv4");
+        match buffer[0] >> 4 {
+            4 => {
+                handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize;
+                tracing::trace!("Read header");
+                self.fd.read_exact(&mut buffer[4..handle.len]).await?;
+                tracing::trace!("Read body");
+                Ok(IPPkt::V4(IPv4Pkt::new(handle.clone())))
+            }
+            6 => {
+                handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize + 40;
+                self.fd.read_exact(&mut buffer[40..handle.len]).await?;
+                Ok(IPPkt::V6(IPv6Pkt::new(handle.clone())))
+            }
+            _ => panic!("Packet is not IPv4 or IPv6"),
         }
-        handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize;
-        tracing::trace!("Read header");
-        self.fd.read_exact(&mut buffer[4..handle.len]).await?;
-        tracing::trace!("Read body");
-        Ok(IPv4Pkt::new(handle.clone()))
     }
 
-    pub async fn receive_ipv6(&mut self) -> io::Result<IPv6Pkt> {
+    pub async fn recv_raw(&mut self) -> io::Result<PktBufHandle> {
         let mut handle = self.state.pool.obtain().await;
         let mut buffer = handle.data.write().unwrap();
-        self.fd.read_exact(&mut buffer[..40]).await?;
-        if buffer[0] >> 4 != 6 {
-            panic!("Packet is not IPv6");
-        }
-        handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize;
-        self.fd.read_exact(&mut buffer[40..handle.len]).await?;
-        Ok(IPv6Pkt::new(handle.clone()))
-    }
-}
-
-impl Drop for TunDevice {
-    fn drop(&mut self) {
-        // todo: unset route table
+        handle.len = self.fd.read(&mut buffer[..]).await?;
+        Ok(handle.clone())
     }
 }

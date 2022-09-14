@@ -37,6 +37,7 @@ dependencies = [
  "bytes",
  "cc",
  "errno",
+ "ipnet",
  "libc",
  "mio",
  "thiserror",
@@ -87,6 +88,12 @@ checksum = "62b467343b94ba476dcb2500d242dadbb39557df889310ac77c5d99100aaac33"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "ipnet"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879d54834c8c76457ef4293a689b2a8c59b076067ad77b15efafbb05f92a592b"
 
 [[package]]
 name = "lazy_static"

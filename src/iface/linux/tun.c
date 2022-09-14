@@ -11,7 +11,7 @@
 /// name should be at most MAX_SIZE bytes long
 int ffi_open_tun(char* name) {
     struct ifreq req;
-    bzero(req, sizeof(req));
+    bzero(&req, sizeof(req));
     req.ifr_ifru.ifru_flags = IFF_TUN | IFF_NO_PI;
 
     int fd = open("/dev/net/tun", O_RDWR);

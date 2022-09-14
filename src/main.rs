@@ -19,10 +19,20 @@ async fn main() -> std::io::Result<()> {
         Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
             loop {
-                match tun.receive_ipv4().await {
+                match tun.recv_raw().await {
                     Ok(pkt) => {
-                        event!(Level::INFO, "Received IPv4 packet: [src={}, dst={}, proto={:?}, size={}",
-                        pkt.src_addr,pkt.dst_addr,pkt.proto,pkt.payload_offset);
+                        let mut str = String::new();
+                        let data = pkt.data.read().unwrap();
+                        for i in 0..pkt.len {
+                            if i % 16 == 0 {
+                                println!("{}", str);
+                                str.clear();
+                            }
+                            str += &*format!("{:02X?} ", data[i]);
+                        }
+                        println!("{}\n", str);
+                        // event!(Level::INFO, "Received IPv4 packet: [src={}, dst={}, proto={:?}, size={}]",
+                        // pkt.src_addr,pkt.dst_addr,pkt.proto,pkt.payload_offset);
                     }
                     Err(err) => event!(Level::WARN, "{}",err),
                 }
