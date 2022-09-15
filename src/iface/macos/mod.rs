@@ -1,9 +1,10 @@
 use crate::iface::macos::c_ffi::*;
-use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM, sockaddr_in, AF_INET, in_addr, sockaddr_in6, AF_INET6, sa_family_t, in6_addr};
+use libc::{c_char, c_void, sockaddr, socklen_t, SOCK_DGRAM};
 use std::ffi::CStr;
-use std::{io, mem, net, ptr};
+use std::{io, mem};
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use super::errno_err;
 
 pub mod c_ffi;
 
@@ -14,7 +15,7 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
         let fd = {
             let fd = libc::socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
             if fd < 0 {
-                return Err(io::Error::last_os_error());
+                return Err(errno_err("Failed to pen tun socket"));
             }
             fd
         };
@@ -33,7 +34,7 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
 
         if ctliocginfo(fd, &mut ctl_info as *mut _) < 0 {
             libc::close(fd);
-            return Err(io::Error::last_os_error());
+            return Err(errno_err("Failed to get fd info"));
         }
 
         let sock_ctl = sockaddr_ctl {
@@ -64,7 +65,7 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
         ) < 0
         {
             libc::close(fd);
-            return Err(io::Error::last_os_error());
+            return Err(errno_err("Failed to get socket options"));
         }
         return Ok((
             fd,
@@ -74,6 +75,6 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
         ));
     }
 
-    Err(io::Error::last_os_error())
+    Err(errno_err("No available sc_unit"))
 }
 

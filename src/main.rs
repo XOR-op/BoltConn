@@ -1,3 +1,4 @@
+use std::net::{IpAddr, Ipv4Addr};
 use crate::resource::state::Shared;
 use iface::tun_device::TunDevice;
 use tracing::{event, Level};
@@ -17,6 +18,9 @@ async fn main() -> std::io::Result<()> {
     match raw_tun {
         Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
+            tun.set_network_address(Ipv4Addr::new(172,20,1,1),24)?;
+            tun.up()?;
+            event!(Level::INFO, "TUN Device {} is up.", tun.get_name());
             loop {
                 if PARSE_PACKET {
                     match tun.recv_ip().await {

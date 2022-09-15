@@ -5,6 +5,7 @@ use std::{io, mem};
 use std::net::IpAddr;
 
 pub mod c_ffi;
+use super::errno_err;
 
 pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     let mut req: ifreq = mem::zeroed();
@@ -12,13 +13,13 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     let fd = {
         let fd = libc::open(b"/dev/net/tun\0".as_ptr() as *const _, O_RDWR);
         if fd < 0 {
-            return Err(io::Error::last_os_error());
+            return Err(errno_err("Failed to open /dev/net/tun"));
         }
         fd
     };
     if tunsetiff(fd, &mut req as *mut _ as *mut _) < 0 {
         libc::close(fd);
-        return Err(io::Error::last_os_error());
+        return Err(errno_err("Failed to tunsetiff"));
     }
     Ok((
         fd,
