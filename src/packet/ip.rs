@@ -72,6 +72,7 @@ impl IPPkt {
             0x06 => PayloadProtocol::TCP,
             0x11 => PayloadProtocol::UDP,
             0x01 => PayloadProtocol::ICMP,
+            0x3a => PayloadProtocol::ICMPv6,
             _ => PayloadProtocol::UNKNOWN,
         };
         Self {

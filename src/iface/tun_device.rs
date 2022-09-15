@@ -46,36 +46,31 @@ impl TunDevice {
         &self.name
     }
 
+    /// Read a full ip packet from tun device.
     pub async fn recv_ip(&mut self) -> io::Result<IPPkt> {
+        // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
+        // We must read full packet in one syscall, otherwise the remaining part will be discarded.
+        // And we are guaranteed to read a full packet when fd is ready.
         // todo: macOS 4 bytes AF_INET/AF_INET6 prefix even if IFF_NO_PI set
         let mut handle = self.state.pool.obtain().await;
         let buffer =
             unsafe { slice::from_raw_parts_mut(handle.data.as_ptr() as *mut u8, MAX_PKT_SIZE) };
         tracing::trace!("Got buffer, ready for recv");
-        self.fd.read_exact(&mut buffer[..4]).await?;
+        self.fd.read(buffer).await?;
         match buffer[0] >> 4 {
             4 => {
                 handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize;
-                tracing::trace!("Read v4 header: expected len {}",handle.len);
-                self.fd.read_exact(&mut buffer[4..handle.len]).await?;
-                tracing::trace!("Read v4 body");
                 Ok(IPPkt::from_v4(handle.clone()))
             }
             6 => {
-                self.fd.read_exact(&mut buffer[4..6]).await?;
                 handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize + 40;
-                println!("{:?}",&buffer[..6]);
-                self.fd.read_exact(&mut buffer[6..40]).await?;
-                println!("{:?}",&buffer[..40]);
-                tracing::trace!("Read v6 header: expected len {}",handle.len);
-                self.fd.read_exact(&mut buffer[40..handle.len]).await?;
-                tracing::trace!("Read v6 body");
                 Ok(IPPkt::from_v6(handle.clone()))
             }
             _ => panic!("Packet is not IPv4 or IPv6"),
         }
     }
 
+    // Read raw data from tun device. No parsing is done.
     pub async fn recv_raw(&mut self) -> io::Result<PktBufHandle> {
         let mut handle = self.state.pool.obtain().await;
         let buffer =

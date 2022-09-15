@@ -17,7 +17,7 @@ async fn main() -> std::io::Result<()> {
         Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
             loop {
-                if false {
+                if true {
                     match tun.recv_ip().await {
                         Ok(pkt) => {
                             event!(Level::INFO, "{}", pkt);
