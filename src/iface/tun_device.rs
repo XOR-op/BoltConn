@@ -1,14 +1,12 @@
 use crate::iface::SysError;
 use crate::packet::ip::IPPkt;
-use crate::resource::buf_slab::PktBufHandle;
+use crate::resource::buf_slab::{PktBufHandle, MAX_PKT_SIZE};
 use crate::resource::state::Shared;
 use byteorder::{ByteOrder, NetworkEndian};
-use std::borrow::{Borrow, BorrowMut};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
-use std::{io, process};
-use tokio::io::unix::AsyncFd;
+use std::{io, slice};
 use tokio::io::AsyncReadExt;
 
 pub type AsyncRawFd = tokio_fd::AsyncFd;
@@ -51,27 +49,28 @@ impl TunDevice {
     pub async fn recv_ip(&mut self) -> io::Result<IPPkt> {
         // todo: macOS 4 bytes AF_INET/AF_INET6 prefix even if IFF_NO_PI set
         let mut handle = self.state.pool.obtain().await;
-        let mut buffer = handle.data.write().unwrap();
+        let buffer =
+            unsafe { slice::from_raw_parts_mut(handle.data.as_ptr() as *mut u8, MAX_PKT_SIZE) };
         tracing::trace!("Got buffer, ready for recv");
         self.fd.read_exact(&mut buffer[..4]).await?;
         match buffer[0] >> 4 {
             4 => {
                 handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize;
-                tracing::trace!("Read v4 header");
+                tracing::trace!("Read v4 header: expected len {}",handle.len);
                 self.fd.read_exact(&mut buffer[4..handle.len]).await?;
                 tracing::trace!("Read v4 body");
-                drop(buffer);
                 Ok(IPPkt::from_v4(handle.clone()))
             }
             6 => {
+                self.fd.read_exact(&mut buffer[4..6]).await?;
                 handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize + 40;
-                tracing::trace!("Read v6 header");
-                self.fd.read_exact(&mut buffer[4..handle.len]).await?;
-                tracing::trace!("Read v6 body!");
-                drop(buffer);
-                let pkt=IPPkt::from_v6(handle.clone());
-                tracing::trace!("{}",pkt);
-                Ok(pkt)
+                println!("{:?}",&buffer[..6]);
+                self.fd.read_exact(&mut buffer[6..40]).await?;
+                println!("{:?}",&buffer[..40]);
+                tracing::trace!("Read v6 header: expected len {}",handle.len);
+                self.fd.read_exact(&mut buffer[40..handle.len]).await?;
+                tracing::trace!("Read v6 body");
+                Ok(IPPkt::from_v6(handle.clone()))
             }
             _ => panic!("Packet is not IPv4 or IPv6"),
         }
@@ -79,7 +78,8 @@ impl TunDevice {
 
     pub async fn recv_raw(&mut self) -> io::Result<PktBufHandle> {
         let mut handle = self.state.pool.obtain().await;
-        let mut buffer = handle.data.write().unwrap();
+        let buffer =
+            unsafe { slice::from_raw_parts_mut(handle.data.as_ptr() as *mut u8, MAX_PKT_SIZE) };
         handle.len = self.fd.read(&mut buffer[..]).await?;
         Ok(handle.clone())
     }

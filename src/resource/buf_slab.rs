@@ -1,16 +1,12 @@
-use bytes::Bytes;
-use std::borrow::BorrowMut;
 use std::future::Future;
-use std::ops::DerefMut;
 use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::Duration;
 use tokio::sync::Notify;
 
-const MAX_PKT_SIZE: usize = 65576;
+pub const MAX_PKT_SIZE: usize = 65576;
 
 pub type PktBuffer = [u8; MAX_PKT_SIZE];
 
@@ -20,7 +16,7 @@ fn get_default_pkt_buffer() -> PktBuffer {
 
 #[derive(Clone)]
 pub struct PktBufHandle {
-    pub data: Arc<RwLock<PktBuffer>>,
+    pub data: Arc<PktBuffer>,
     pub len: usize,
 }
 
@@ -70,7 +66,7 @@ impl PktBufPool {
         let mut free = Vec::with_capacity(size);
         for _ in 0..size {
             free.push(PktBufHandle {
-                data: Arc::new(RwLock::new(get_default_pkt_buffer())),
+                data: Arc::new(get_default_pkt_buffer()),
                 len: 0,
             });
         }

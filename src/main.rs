@@ -1,9 +1,5 @@
-use crate::packet::ip;
 use crate::resource::state::Shared;
 use iface::tun_device::TunDevice;
-use std::net::IpAddr;
-use std::thread::sleep;
-use std::time;
 use tracing::{event, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -21,7 +17,7 @@ async fn main() -> std::io::Result<()> {
         Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
             loop {
-                if true {
+                if false {
                     match tun.recv_ip().await {
                         Ok(pkt) => {
                             event!(Level::INFO, "{}", pkt);
@@ -31,7 +27,7 @@ async fn main() -> std::io::Result<()> {
                 } else {
                     match tun.recv_raw().await {
                         Ok(pkt) => {
-                            let data = pkt.data.read().unwrap();
+                            let data = pkt.data;
                             let mut str = String::new();
                             for i in 0..pkt.len {
                                 if i % 16 == 0 {
