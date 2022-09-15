@@ -17,6 +17,3 @@ bytes = "1.2.1"
 byteorder = "1.4.3"
 ipnet = "2.5.0"
 ioctl-sys = "0.8.0"
-
-[build-dependencies]
-cc = "1.0.73"

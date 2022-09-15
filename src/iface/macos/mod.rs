@@ -1,9 +1,11 @@
-use std::{io, mem};
-use std::ffi::CStr;
-use libc::{c_char, c_void, SOCK_DGRAM, sockaddr, socklen_t};
 use crate::iface::macos::c_ffi::*;
+use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM, sockaddr_in, AF_INET, in_addr, sockaddr_in6, AF_INET6, sa_family_t, in6_addr};
+use std::ffi::CStr;
+use std::{io, mem, net, ptr};
+use std::io::ErrorKind;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-mod c_ffi;
+pub mod c_ffi;
 
 pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     let mut name_buf = [0u8; 32];
@@ -21,7 +23,10 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
             ctl_id: 0,
             ctl_name: {
                 let mut r: [c_char; 96] = [0; 96];
-                UTUN_CONTROL_NAME.bytes().zip(r.iter_mut()).for_each(|(c, ptr)| *ptr = c as c_char);
+                UTUN_CONTROL_NAME
+                    .bytes()
+                    .zip(r.iter_mut())
+                    .for_each(|(c, ptr)| *ptr = c as c_char);
                 r
             },
         };
@@ -40,20 +45,35 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
             sc_reserved: [0; 5],
         };
 
-        if libc::connect(fd, &sock_ctl as *const sockaddr_ctl as *const sockaddr, mem::size_of_val(&sock_ctl) as socklen_t) < 0 {
+        if libc::connect(
+            fd,
+            &sock_ctl as *const sockaddr_ctl as *const sockaddr,
+            mem::size_of_val(&sock_ctl) as socklen_t,
+        ) < 0
+        {
             libc::close(fd);
             continue;
         }
 
-
-        if libc::getsockopt(fd, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, &mut name_buf as *mut u8 as *mut c_void, &mut name_len as *mut socklen_t) < 0 {
+        if libc::getsockopt(
+            fd,
+            SYSPROTO_CONTROL,
+            UTUN_OPT_IFNAME,
+            &mut name_buf as *mut u8 as *mut c_void,
+            &mut name_len as *mut socklen_t,
+        ) < 0
+        {
             libc::close(fd);
             return Err(io::Error::last_os_error());
         }
-        return Ok((fd, CStr::from_ptr(name_buf.as_ptr() as *const c_char)
-            .to_string_lossy()
-            .into_owned()));
+        return Ok((
+            fd,
+            CStr::from_ptr(name_buf.as_ptr() as *const c_char)
+                .to_string_lossy()
+                .into_owned(),
+        ));
     }
 
     Err(io::Error::last_os_error())
 }
+

@@ -14,6 +14,8 @@ pub enum PayloadProtocol {
 
 pub struct IPPkt {
     handle: PktBufHandle,
+    // 0 on linux and 4 on macOS: utun in macOS does not support IFF_NO_PI
+    pkt_start_offset: usize,
     pub src_addr: IpAddr,
     pub dst_addr: IpAddr,
     pub payload_offset: usize,
@@ -41,8 +43,8 @@ impl Display for IPPkt {
 }
 
 impl IPPkt {
-    pub fn from_v4(handle: PktBufHandle) -> Self {
-        let data = &handle.data;
+    pub fn from_v4(handle: PktBufHandle, start_offset: usize) -> Self {
+        let data = &handle.data[start_offset..];
         let src = Ipv4Addr::new(data[12], data[13], data[14], data[15]);
         let dst = Ipv4Addr::new(data[16], data[17], data[18], data[19]);
         let ihl = data[0] & 0xf;
@@ -56,6 +58,7 @@ impl IPPkt {
         };
         Self {
             handle,
+            pkt_start_offset: start_offset,
             src_addr: IpAddr::V4(src),
             dst_addr: IpAddr::V4(dst),
             payload_offset,
@@ -63,10 +66,10 @@ impl IPPkt {
         }
     }
 
-    pub fn from_v6(handle: PktBufHandle) -> Self {
-        let data = &handle.data;
-        let src = Ipv6Addr::from(rename(&data[8..24]));
-        let dst = Ipv6Addr::from(rename(&data[24..40]));
+    pub fn from_v6(handle: PktBufHandle, start_offset: usize) -> Self {
+        let data = &handle.data[start_offset..];
+        let src = Ipv6Addr::from(*rename(&data[8..24]));
+        let dst = Ipv6Addr::from(*rename(&data[24..40]));
         let payload_offset = 40;
         let proto = match data[6] {
             0x06 => PayloadProtocol::TCP,
@@ -77,6 +80,7 @@ impl IPPkt {
         };
         Self {
             handle,
+            pkt_start_offset: start_offset,
             src_addr: IpAddr::V6(src),
             dst_addr: IpAddr::V6(dst),
             payload_offset,
@@ -85,11 +89,6 @@ impl IPPkt {
     }
 }
 
-fn rename(d: &[u8]) -> [u16; 8] {
-    assert_eq!(d.len(), 16);
-    let mut r: [u16; 8] = [0; 8];
-    for i in 0..8 {
-        r[i] = u16::from(d[2 * i]) << 8 | (d[1 + 2 * i] as u16);
-    }
-    r
+fn rename(d: &[u8]) -> &[u8; 16] {
+   d.try_into().expect("slice with incorrect len")
 }
