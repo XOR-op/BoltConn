@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 thiserror = "1.0.34"
 libc = "0.2.132"
-mio = "0.8.4"
 tokio = { version = "1.21.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros"] }
 tokio-fd = "0.3.0"
 errno = "0.2.8"
@@ -17,6 +16,7 @@ tracing-subscriber = "0.3.15"
 bytes = "1.2.1"
 byteorder = "1.4.3"
 ipnet = "2.5.0"
+ioctl-sys = "0.8.0"
 
 [build-dependencies]
 cc = "1.0.73"

@@ -37,9 +37,9 @@ dependencies = [
  "bytes",
  "cc",
  "errno",
+ "ioctl-sys",
  "ipnet",
  "libc",
- "mio",
  "thiserror",
  "tokio",
  "tokio-fd",
@@ -88,6 +88,12 @@ checksum = "62b467343b94ba476dcb2500d242dadbb39557df889310ac77c5d99100aaac33"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "ioctl-sys"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bd11f3a29434026f5ff98c730b668ba74b1033637b8817940b54d040696133c"
 
 [[package]]
 name = "ipnet"

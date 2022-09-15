@@ -1,4 +1,4 @@
-use crate::iface::SysError;
+use crate::iface::{platform, SysError};
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::{PktBufHandle, MAX_PKT_SIZE};
 use crate::resource::state::Shared;
@@ -27,19 +27,12 @@ impl TunDevice {
         name_buffer.resize(36, 0);
         let name_ptr = name_buffer.as_ptr() as *mut u8;
 
-        let result = unsafe { ffi_open_tun(name_ptr) };
-        if result >= 0 {
-            let name = unsafe { CStr::from_ptr(name_ptr as *const c_char) }
-                .to_string_lossy()
-                .into_owned();
-            Ok(TunDevice {
-                fd: AsyncRawFd::try_from(RawFd::from(result))?,
-                name,
-                state: shared,
-            })
-        } else {
-            Err(SysError::Tun(errno::errno()))
-        }
+        let (fd, name) = unsafe { platform::open_tun()? };
+        Ok(TunDevice {
+            fd: AsyncRawFd::try_from(RawFd::from(fd))?,
+            name,
+            state: shared,
+        })
     }
 
     pub fn get_name(&self) -> &str {

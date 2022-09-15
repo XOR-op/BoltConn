@@ -13,11 +13,12 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::registry().with(fmt::layer()).init();
     let resource = Shared::new();
     let raw_tun = TunDevice::open(resource.clone());
+    const PARSE_PACKET: bool = true;
     match raw_tun {
         Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
             loop {
-                if true {
+                if PARSE_PACKET {
                     match tun.recv_ip().await {
                         Ok(pkt) => {
                             event!(Level::INFO, "{}", pkt);
