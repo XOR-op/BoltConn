@@ -1,10 +1,9 @@
+use super::errno_err;
 use crate::iface::macos::c_ffi::*;
+use ipnet::IpNet;
 use libc::{c_char, c_void, sockaddr, socklen_t, SOCK_DGRAM};
 use std::ffi::CStr;
 use std::{io, mem};
-use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use super::errno_err;
 
 pub mod c_ffi;
 
@@ -78,3 +77,17 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     Err(errno_err("No available sc_unit"))
 }
 
+pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
+    // todo: do not use external commands
+    super::run_command(
+        "route",
+        [
+            "-n",
+            "add",
+            "-net",
+            &format!("{}", subnet),
+            "-interface",
+            name,
+        ],
+    )
+}

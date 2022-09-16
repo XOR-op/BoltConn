@@ -1,13 +1,14 @@
-use crate::iface::{errno_err, interface_up, platform, set_address, SysError};
+use crate::iface::route::setup_ipv4_routing_table;
+use crate::iface::{errno_err, interface_up, platform, set_address};
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::{PktBufHandle, MAX_PKT_SIZE};
 use crate::resource::state::Shared;
 use byteorder::{ByteOrder, NetworkEndian};
-use std::net::{IpAddr, Ipv4Addr};
-use std::os::raw::c_char;
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::{io, slice};
+use ipnet::Ipv4Net;
 use std::io::ErrorKind;
+use std::os::raw::c_char;
+use std::os::unix::io::RawFd;
+use std::{io, slice};
 use tokio::io::AsyncReadExt;
 
 pub type AsyncRawFd = tokio_fd::AsyncFd;
@@ -17,15 +18,14 @@ pub struct TunDevice {
     ctl_fd: RawFd,
     name: String,
     // (addr, mask)
-    addr: Option<(Ipv4Addr, u8)>,
+    addr: Option<Ipv4Net>,
     state: Shared,
 }
 
 impl TunDevice {
-    pub fn open(shared: Shared) -> Result<Self, SysError> {
+    pub fn open(shared: Shared) -> io::Result<TunDevice> {
         let mut name_buffer: Vec<c_char> = Vec::new();
         name_buffer.resize(36, 0);
-        let name_ptr = name_buffer.as_ptr() as *mut u8;
 
         let (fd, name) = unsafe { platform::open_tun()? };
         let ctl_fd = {
@@ -59,9 +59,9 @@ impl TunDevice {
         self.fd.read(raw_buffer).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-            let start_offset = 4;
+        let start_offset = 4;
         #[cfg(target_os = "linux")]
-            let start_offset = 0;
+        let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -87,15 +87,19 @@ impl TunDevice {
 
     /// Due to API compatibility of OS, we can only set AF_INET addresses.
     /// See https://man7.org/linux/man-pages/man7/netdevice.7.html
-    pub fn set_network_address(&mut self, addr: Ipv4Addr, subnet: u8) -> io::Result<()> {
-        self.addr = Some((addr, subnet));
-        unsafe { set_address(self.ctl_fd, self.get_name(), addr, subnet) }
+    pub fn set_network_address(&mut self, addr: Ipv4Net) -> io::Result<()> {
+        self.addr = Some(addr);
+        unsafe { set_address(self.ctl_fd, self.get_name(), addr) }
     }
 
     pub fn up(&self) -> io::Result<()> {
         if self.addr.is_none() {
-            return Err(io::Error::new(ErrorKind::AddrNotAvailable, "No available address to up iface"));
+            return Err(io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                "No available address to up iface",
+            ));
         }
-        unsafe { interface_up(self.ctl_fd, self.get_name()) }
+        unsafe { interface_up(self.ctl_fd, self.get_name())? };
+        setup_ipv4_routing_table(self.get_name())
     }
 }

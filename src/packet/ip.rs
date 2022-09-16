@@ -1,7 +1,6 @@
 use crate::resource::buf_slab::PktBufHandle;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::slice;
 
 #[derive(Debug, Clone, Copy)]
 pub enum PayloadProtocol {
@@ -26,7 +25,7 @@ impl Display for IPPkt {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "[version={}, src={}, dst={}, len={}, proto={:?}",
+            "[version={}, src={}, dst={}, len={}, proto={:?}]",
             {
                 if let IpAddr::V4(_) = self.src_addr {
                     4
@@ -90,5 +89,5 @@ impl IPPkt {
 }
 
 fn rename(d: &[u8]) -> &[u8; 16] {
-   d.try_into().expect("slice with incorrect len")
+    d.try_into().expect("slice with incorrect len")
 }
