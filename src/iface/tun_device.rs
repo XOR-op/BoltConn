@@ -9,7 +9,7 @@ use std::io::ErrorKind;
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::{io, slice};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub type AsyncRawFd = tokio_fd::AsyncFd;
 
@@ -49,7 +49,7 @@ impl TunDevice {
     }
 
     /// Read a full ip packet from tun device.
-    pub async fn recv_ip(&mut self) -> io::Result<IPPkt> {
+    pub async fn read_ip(&mut self) -> io::Result<IPPkt> {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
@@ -77,12 +77,20 @@ impl TunDevice {
     }
 
     /// Read raw data from tun device. No parsing is done.
-    pub async fn recv_raw(&mut self) -> io::Result<PktBufHandle> {
+    pub async fn read_raw(&mut self) -> io::Result<PktBufHandle> {
         let mut handle = self.state.pool.obtain().await;
         let buffer =
             unsafe { slice::from_raw_parts_mut(handle.data.as_ptr() as *mut u8, MAX_PKT_SIZE) };
         handle.len = self.fd.read(&mut buffer[..]).await?;
         Ok(handle.clone())
+    }
+
+    pub async fn write_ip(&mut self, ip_pkt: IPPkt) -> io::Result<()> {
+        if self.fd.write(ip_pkt.raw_data()).await? != ip_pkt.raw_data().len() {
+            Err(io::Error::new(ErrorKind::Other, "Write partial packet"))
+        } else {
+            Ok(())
+        }
     }
 
     /// Due to API compatibility of OS, we can only set AF_INET addresses.

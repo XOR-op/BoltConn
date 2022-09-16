@@ -24,14 +24,14 @@ async fn main() -> std::io::Result<()> {
             event!(Level::INFO, "TUN Device {} is up.", tun.get_name());
             loop {
                 if PARSE_PACKET {
-                    match tun.recv_ip().await {
+                    match tun.read_ip().await {
                         Ok(pkt) => {
                             event!(Level::INFO, "{}", pkt);
                         }
                         Err(err) => event!(Level::WARN, "{}", err),
                     }
                 } else {
-                    match tun.recv_raw().await {
+                    match tun.read_raw().await {
                         Ok(pkt) => {
                             let data = pkt.data;
                             let mut str = String::new();

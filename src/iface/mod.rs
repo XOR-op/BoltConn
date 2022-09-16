@@ -28,11 +28,16 @@ pub fn errno_err(msg: &str) -> io::Error {
 }
 
 fn run_command<I, S>(cmd: &str, args: I) -> io::Result<()>
-    where
-        I: IntoIterator<Item=S>,
-        S: AsRef<OsStr>,
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
 {
-    let mut handle = Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    let mut handle = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
     let status = handle.wait()?;
     if status.success() {
         Ok(())

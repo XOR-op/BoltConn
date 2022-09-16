@@ -1,9 +1,9 @@
 use c_ffi::*;
+use ipnet::IpNet;
 use libc::{c_char, c_int, c_void, sockaddr, socklen_t, O_RDWR, SOCK_DGRAM};
 use std::ffi::CStr;
 use std::net::IpAddr;
 use std::{io, mem};
-use ipnet::IpNet;
 
 pub mod c_ffi;
 
