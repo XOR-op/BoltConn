@@ -72,6 +72,10 @@ impl IPPkt {
     pub fn packet_payload(&self) -> &[u8] {
         &self.handle.data[self.handle.len - self.repr.payload_len()..self.handle.len]
     }
+
+    pub fn into_handle(self) -> PktBufHandle {
+        self.handle
+    }
 }
 
 fn rename(d: &[u8]) -> &[u8; 16] {

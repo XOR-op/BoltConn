@@ -1,20 +1,21 @@
+use crate::iface::async_socket::AsyncRawSocket;
 use crate::iface::route::setup_ipv4_routing_table;
-use crate::iface::{errno_err, interface_up, platform, set_address};
+use crate::iface::{errno_err, interface_up, platform, set_address, AsyncRawFd};
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::{PktBufHandle, MAX_PKT_SIZE};
 use crate::resource::state::Shared;
 use byteorder::{ByteOrder, NetworkEndian};
 use ipnet::Ipv4Net;
+use smoltcp::wire;
 use std::io::ErrorKind;
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::{io, slice};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub type AsyncRawFd = tokio_fd::AsyncFd;
-
 pub struct TunDevice {
     fd: AsyncRawFd,
+    v4_outbound: AsyncRawSocket,
     ctl_fd: RawFd,
     name: String,
     // (addr, mask)
@@ -23,7 +24,7 @@ pub struct TunDevice {
 }
 
 impl TunDevice {
-    pub fn open(shared: Shared) -> io::Result<TunDevice> {
+    pub fn open(shared: Shared, outbound_iface: &str) -> io::Result<TunDevice> {
         let mut name_buffer: Vec<c_char> = Vec::new();
         name_buffer.resize(36, 0);
 
@@ -35,8 +36,13 @@ impl TunDevice {
             }
             fd
         };
+        let outbound = AsyncRawSocket::create(
+            unsafe { platform::create_v4_raw_socket(outbound_iface) }.map_err(|e| {
+                io::Error::new(ErrorKind::Other, format!("Create raw socket failed, {}", e))
+            })?)?;
         Ok(TunDevice {
             fd: AsyncRawFd::try_from(RawFd::from(fd))?,
+            v4_outbound: outbound,
             ctl_fd,
             name,
             addr: None,
@@ -59,9 +65,9 @@ impl TunDevice {
         self.fd.read(raw_buffer).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-        let start_offset = 4;
+            let start_offset = 4;
         #[cfg(target_os = "linux")]
-        let start_offset = 0;
+            let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -85,7 +91,7 @@ impl TunDevice {
         Ok(handle.clone())
     }
 
-    pub async fn write_ip(&mut self, ip_pkt: IPPkt) -> io::Result<()> {
+    pub async fn write_ip(&mut self, ip_pkt: &IPPkt) -> io::Result<()> {
         if self.fd.write(ip_pkt.raw_data()).await? != ip_pkt.raw_data().len() {
             Err(io::Error::new(ErrorKind::Other, "Write partial packet"))
         } else {
@@ -97,7 +103,7 @@ impl TunDevice {
     /// See https://man7.org/linux/man-pages/man7/netdevice.7.html
     pub fn set_network_address(&mut self, addr: Ipv4Net) -> io::Result<()> {
         self.addr = Some(addr);
-        unsafe { set_address(self.ctl_fd, self.get_name(), addr) }
+        set_address(self.ctl_fd, self.get_name(), addr)
     }
 
     pub fn up(&self) -> io::Result<()> {
@@ -107,7 +113,23 @@ impl TunDevice {
                 "No available address to up iface",
             ));
         }
-        unsafe { interface_up(self.ctl_fd, self.get_name())? };
+        interface_up(self.ctl_fd, self.get_name())?;
         setup_ipv4_routing_table(self.get_name())
+    }
+
+    pub async fn send_outbound(&mut self, pkt: &IPPkt) -> io::Result<()> {
+        match pkt.repr {
+            wire::IpRepr::Ipv4(_) => {
+
+
+                // let size = self.v4_outbound.write(pkt.raw_data()).await?;
+                tracing::trace!("IPv4 send done: {}",size);
+            }
+            _ => {
+                tracing::trace!("Drop IPv6 send");
+                // Since we did not configure v6 route, we just ignore them (although some are broadcast).
+            }
+        }
+        Ok(())
     }
 }

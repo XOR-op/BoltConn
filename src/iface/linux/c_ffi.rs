@@ -1,7 +1,8 @@
 #![allow(non_camel_case_types)]
 #![allow(unused)]
 
-/// Thanks to meh/rust-tun
+/// This file originates from meh/rust-tun, following DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE.
+/// Thanks meh!
 use ioctl_sys::*;
 use libc::sockaddr;
 use libc::{c_char, c_int, c_short, c_uchar, c_uint, c_ulong, c_ushort, c_void};

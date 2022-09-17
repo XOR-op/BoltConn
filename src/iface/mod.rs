@@ -15,6 +15,7 @@ mod macos;
 #[cfg(target_os = "macos")]
 use macos as platform;
 
+mod async_socket;
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -22,6 +23,8 @@ mod linux;
 use linux as platform;
 
 use platform::c_ffi;
+
+pub type AsyncRawFd = tokio_fd::AsyncFd;
 
 pub fn errno_err(msg: &str) -> io::Error {
     io::Error::new(io::Error::last_os_error().kind(), msg)
@@ -59,16 +62,18 @@ unsafe fn create_req(name: &str) -> c_ffi::ifreq {
     req
 }
 
-pub unsafe fn interface_up(fd: c_int, name: &str) -> io::Result<()> {
-    let mut req = create_req(name);
-    if c_ffi::siocgifflags(fd, &mut req) < 0 {
-        return Err(errno_err("Failed to read ifflags"));
+pub fn interface_up(fd: c_int, name: &str) -> io::Result<()> {
+    unsafe {
+        let mut req = create_req(name);
+        if c_ffi::siocgifflags(fd, &mut req) < 0 {
+            return Err(errno_err("Failed to read ifflags"));
+        }
+        req.ifru.flags |= c_ffi::IFF_UP | c_ffi::IFF_RUNNING;
+        if c_ffi::siocsifflags(fd, &req) < 0 {
+            return Err(errno_err("Failed to up tun"));
+        }
+        Ok(())
     }
-    req.ifru.flags |= c_ffi::IFF_UP | c_ffi::IFF_RUNNING;
-    if c_ffi::siocsifflags(fd, &req) < 0 {
-        return Err(errno_err("Failed to up tun"));
-    }
-    Ok(())
 }
 
 unsafe fn get_sockaddr(v4: Ipv4Addr) -> libc::sockaddr_in {
@@ -96,20 +101,22 @@ unsafe fn set_dest(fd: c_int, name: &str, addr: Ipv4Addr) -> io::Result<()> {
     Ok(())
 }
 
-pub unsafe fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
-    let mut addr_req = create_req(name);
-    addr_req.ifru.addr = mem::transmute(get_sockaddr(addr.addr()));
-    if c_ffi::siocsifaddr(fd, &addr_req) < 0 {
-        return Err(errno_err("Failed to set tun addr"));
-    }
-    // only useful for macos; for linux, this is a nop
-    set_dest(fd, name, addr.addr())?;
+pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
+    unsafe {
+        let mut addr_req = create_req(name);
+        addr_req.ifru.addr = mem::transmute(get_sockaddr(addr.addr()));
+        if c_ffi::siocsifaddr(fd, &addr_req) < 0 {
+            return Err(errno_err("Failed to set tun addr"));
+        }
+        // only useful for macos; for linux, this is a nop
+        set_dest(fd, name, addr.addr())?;
 
-    // set subnet mask
-    let mut mask_req = create_req(name);
-    mask_req.ifru.addr = mem::transmute(get_sockaddr(addr.netmask()));
-    if c_ffi::siocsifnetmask(fd, &mask_req) < 0 {
-        return Err(errno_err("Failed to set tun mask"));
+        // set subnet mask
+        let mut mask_req = create_req(name);
+        mask_req.ifru.addr = mem::transmute(get_sockaddr(addr.netmask()));
+        if c_ffi::siocsifnetmask(fd, &mask_req) < 0 {
+            return Err(errno_err("Failed to set tun mask"));
+        }
+        Ok(())
     }
-    Ok(())
 }
