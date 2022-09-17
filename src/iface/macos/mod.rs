@@ -2,7 +2,7 @@ use super::errno_err;
 use crate::iface::create_req;
 use crate::iface::macos::c_ffi::*;
 use ipnet::IpNet;
-use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
+use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM, sockaddr_in};
 use std::ffi::CStr;
 use std::os::unix::io::RawFd;
 use std::{io, mem};
@@ -94,7 +94,7 @@ pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     )
 }
 
-pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<(c_int, sockaddr)> {
+pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<(c_int, sockaddr_in)> {
     let fd = {
         let fd = libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW);
         if fd < 0 {
@@ -119,5 +119,5 @@ pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<(c_int, s
     if siocgifaddr(fd, &mut req) < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok((fd, req.ifru.addr))
+    Ok((fd, mem::transmute(req.ifru.addr)))
 }

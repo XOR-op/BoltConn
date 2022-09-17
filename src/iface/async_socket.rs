@@ -27,11 +27,11 @@ use tokio::io::{unix, AsyncRead, AsyncWrite, ReadBuf};
 
 pub struct AsyncRawSocket {
     fd: unix::AsyncFd<RawFd>,
-    sockaddr: libc::sockaddr,
+    sockaddr: libc::sockaddr_in,
 }
 
 impl AsyncRawSocket {
-    pub fn create((fd, sockaddr): (c_int, libc::sockaddr)) -> Result<Self> {
+    pub fn create((fd, sockaddr): (c_int, libc::sockaddr_in)) -> Result<Self> {
         let addr_in: libc::sockaddr_in = unsafe { mem::transmute(sockaddr) };
         let v4addr = std::net::Ipv4Addr::from(addr_in.sin_addr.s_addr.to_ne_bytes());
         tracing::trace!("Iface addr: {}:{}",v4addr,addr_in.sin_port);
@@ -63,7 +63,7 @@ impl AsyncWrite for AsyncRawSocket {
                     buf.as_ptr() as _,
                     buf.len(),
                     0,
-                    &self.sockaddr as *const _,
+                    &self.sockaddr as *const _ as *const _,
                     mem::size_of_val(&self.sockaddr) as socklen_t,
                 )
             };

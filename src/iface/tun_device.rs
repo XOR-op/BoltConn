@@ -55,7 +55,7 @@ impl TunDevice {
     }
 
     /// Read a full ip packet from tun device.
-    pub async fn read_ip(&mut self) -> io::Result<IPPkt> {
+    pub async fn recv_ip(&mut self) -> io::Result<IPPkt> {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
@@ -83,7 +83,7 @@ impl TunDevice {
     }
 
     /// Read raw data from tun device. No parsing is done.
-    pub async fn read_raw(&mut self) -> io::Result<PktBufHandle> {
+    pub async fn recv_raw(&mut self) -> io::Result<PktBufHandle> {
         let mut handle = self.state.pool.obtain().await;
         let buffer =
             unsafe { slice::from_raw_parts_mut(handle.data.as_ptr() as *mut u8, MAX_PKT_SIZE) };
@@ -91,7 +91,7 @@ impl TunDevice {
         Ok(handle.clone())
     }
 
-    pub async fn write_ip(&mut self, ip_pkt: &IPPkt) -> io::Result<()> {
+    pub async fn send_ip(&mut self, ip_pkt: &IPPkt) -> io::Result<()> {
         if self.fd.write(ip_pkt.raw_data()).await? != ip_pkt.raw_data().len() {
             Err(io::Error::new(ErrorKind::Other, "Write partial packet"))
         } else {
@@ -120,9 +120,14 @@ impl TunDevice {
     pub async fn send_outbound(&mut self, pkt: &IPPkt) -> io::Result<()> {
         match pkt.repr {
             wire::IpRepr::Ipv4(_) => {
+                // let mut expr = wire::Ipv4Repr::parse(&wire::Ipv4Packet::new_unchecked(pkt.packet_data()), &smoltcp::phy::ChecksumCapabilities::default()).unwrap();
+                // let mut back = pkt.packet_data().to_vec();
+                // let mut new_pkt = wire::Ipv4Packet::new_unchecked(back);
+                // // expr.src_addr = wire::Ipv4Address::new(192,168,50,228);
+                // expr.emit(&mut new_pkt, &smoltcp::phy::ChecksumCapabilities::default());
+                // let size = self.v4_outbound.write(new_pkt.as_ref()).await?;
 
-
-                // let size = self.v4_outbound.write(pkt.raw_data()).await?;
+                let size = self.v4_outbound.write(pkt.raw_data()).await?;
                 tracing::trace!("IPv4 send done: {}",size);
             }
             _ => {
