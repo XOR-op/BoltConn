@@ -1,41 +1,28 @@
-/*
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the Software without restriction, including without
-limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-This file originates from nanpuyue/tokio-fd. Modification applied.
-
-The license of this software will override the above copyright notice.
- */
-
-use libc::{c_int, socklen_t};
+use libc::{c_int, sockaddr_in, socklen_t};
 use std::convert::TryFrom;
 use std::io::{Error, ErrorKind, Result};
-use std::mem;
+use std::{mem, net};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll, Poll::*};
+use byteorder::ByteOrder;
+use crate::iface::platform;
 
 use tokio::io::{unix, AsyncRead, AsyncWrite, ReadBuf};
 
 pub struct AsyncRawSocket {
-    fd: unix::AsyncFd<RawFd>,
-    sockaddr: libc::sockaddr_in,
+    pub fd: unix::AsyncFd<RawFd>,
+    pub sockaddr: sockaddr_in,
 }
 
 impl AsyncRawSocket {
-    pub fn create((fd, sockaddr): (c_int, libc::sockaddr_in)) -> Result<Self> {
-        let addr_in: libc::sockaddr_in = unsafe { mem::transmute(sockaddr) };
-        let v4addr = std::net::Ipv4Addr::from(addr_in.sin_addr.s_addr.to_ne_bytes());
-        tracing::trace!("Iface addr: {}:{}",v4addr,addr_in.sin_port);
+    pub fn create(fd: c_int, dst_addr: net::Ipv4Addr) -> Result<Self> {
         set_nonblock(fd)?;
+        let mut sockaddr: sockaddr_in = unsafe { mem::zeroed() };
+        sockaddr.sin_family=libc::AF_INET as libc::sa_family_t;
+        sockaddr.sin_port = 0;
+        sockaddr.sin_addr = libc::in_addr{ s_addr: u32::to_be(u32::from(dst_addr)) };
+        
         Ok(Self {
             fd: unix::AsyncFd::new(RawFd::from(fd))?,
             sockaddr,

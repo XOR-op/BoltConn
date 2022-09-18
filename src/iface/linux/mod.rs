@@ -1,7 +1,7 @@
 use crate::iface::{create_req, AsyncRawFd};
 use c_ffi::*;
 use ipnet::IpNet;
-use libc::{c_int, sockaddr, sockaddr_in, socklen_t, O_RDWR};
+use libc::{c_int, sockaddr, sockaddr_in, socklen_t, O_RDWR, bind};
 use std::ffi::CStr;
 use std::net::IpAddr;
 use std::os::unix::io::RawFd;
@@ -38,7 +38,7 @@ pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     super::run_command("ip", ["route", "add", &format!("{}", subnet), "dev", name])
 }
 
-pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<(c_int, sockaddr_in)> {
+pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<c_int> {
     let fd = {
         let fd = libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW);
         if fd < 0 {
@@ -46,6 +46,7 @@ pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<(c_int, s
         }
         fd
     };
+
     let req = create_req(dst_iface_name);
     if libc::setsockopt(
         fd,
@@ -62,5 +63,6 @@ pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<(c_int, s
     if siocgifaddr(fd, &mut req) < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok((fd, mem::transmute(req.ifru.addr)))
+    tracing::trace!("Get ip: {} for {}",std::net::Ipv4Addr::from(mem::transmute::<sockaddr,sockaddr_in>(req.ifru.addr).sin_addr.s_addr as u32),dst_iface_name);
+    Ok(fd)
 }

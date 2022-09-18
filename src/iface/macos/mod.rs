@@ -94,7 +94,7 @@ pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     )
 }
 
-pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<(c_int, sockaddr_in)> {
+pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<c_int> {
     let fd = {
         let fd = libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW);
         if fd < 0 {
@@ -114,10 +114,5 @@ pub unsafe fn create_v4_raw_socket(dst_iface_name: &str) -> io::Result<(c_int, s
     {
         return Err(io::Error::last_os_error());
     }
-    let mut req = create_req(dst_iface_name);
-    req.ifru.addr.sa_family = libc::AF_INET as libc::sa_family_t;
-    if siocgifaddr(fd, &mut req) < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok((fd, mem::transmute(req.ifru.addr)))
+    Ok(fd)
 }
