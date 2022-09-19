@@ -1,6 +1,6 @@
-use crate::iface::async_socket::AsyncRawSocket;
-use crate::iface::route::setup_ipv4_routing_table;
-use crate::iface::{errno_err, interface_up, platform, set_address, AsyncRawFd};
+use crate::network::async_socket::AsyncRawSocket;
+use crate::network::route::setup_ipv4_routing_table;
+use crate::network::{errno_err, interface_up, platform, set_address, AsyncRawFd, create_v4_raw_socket};
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::{PktBufHandle, MAX_PKT_SIZE};
 use crate::resource::state::Shared;
@@ -119,10 +119,11 @@ impl TunDevice {
     pub async fn send_outbound(&mut self, pkt: &IPPkt) -> io::Result<()> {
         match pkt.repr {
             wire::IpRepr::Ipv4(repr) => {
-                let mut outbound = AsyncRawSocket::create(
-                    unsafe { platform::create_v4_raw_socket(self.gw_name.as_str()) }.map_err(|e| {
-                        io::Error::new(ErrorKind::Other, format!("Create raw socket failed, {}", e))
-                    })?,repr.dst_addr.into())?;
+                let fd = unsafe { create_v4_raw_socket()? };
+                unsafe { platform::bind_to_device(fd, self.gw_name.as_str()) }.map_err(|e| {
+                    io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
+                })?;
+                let mut outbound = AsyncRawSocket::create(fd, repr.dst_addr.into())?;
                 let size = outbound.write(pkt.packet_data()).await?;
                 tracing::trace!("IPv4 send done: {}",size);
             }

@@ -2,7 +2,7 @@ use ipnet::Ipv4Net;
 use libc::{c_char, c_int};
 use std::ffi::OsStr;
 use std::io::ErrorKind;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::process::{Command, Stdio};
 use std::{io, mem, ptr};
 
@@ -18,6 +18,7 @@ use macos as platform;
 mod async_socket;
 #[cfg(target_os = "linux")]
 mod linux;
+pub mod outbound;
 
 #[cfg(target_os = "linux")]
 use linux as platform;
@@ -31,9 +32,9 @@ pub fn errno_err(msg: &str) -> io::Error {
 }
 
 fn run_command<I, S>(cmd: &str, args: I) -> io::Result<()>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
+    where
+        I: IntoIterator<Item=S>,
+        S: AsRef<OsStr>,
 {
     let mut handle = Command::new(cmd)
         .args(args)
@@ -101,6 +102,14 @@ unsafe fn set_dest(fd: c_int, name: &str, addr: Ipv4Addr) -> io::Result<()> {
     Ok(())
 }
 
+pub unsafe fn create_v4_raw_socket() -> io::Result<c_int> {
+    let fd = libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW);
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(fd)
+}
+
 pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
     unsafe {
         let mut addr_req = create_req(name);
@@ -120,3 +129,31 @@ pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
         Ok(())
     }
 }
+
+pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
+    let ctl_fd = {
+        let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if fd < 0 {
+            return Err(errno_err("Unable to open control fd").into());
+        }
+        fd
+    };
+    let mut req = unsafe { create_req(iface_name) };
+    req.ifru.addr.sa_family = libc::AF_INET as libc::sa_family_t;
+    if unsafe { c_ffi::siocgifaddr(ctl_fd, &mut req) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let addr = req.ifru.addr;
+    match addr.sa_family as c_int {
+        libc::AF_INET => {
+            let addr: libc::sockaddr_in = unsafe { mem::transmute(addr) };
+            Ok(IpAddr::V4(Ipv4Addr::from(u32::from_be(addr.sin_addr.s_addr))))
+        }
+        libc::AF_INET6 => {
+            let addr: libc::sockaddr_in6 = unsafe { mem::transmute(addr) };
+            Ok(IpAddr::V6(Ipv6Addr::from(addr.sin6_addr.s6_addr )))
+        }
+        _ => { Err(io::Error::new(ErrorKind::AddrNotAvailable, format!("No address found for iface {}", iface_name))) }
+    }
+}
+

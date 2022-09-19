@@ -6,7 +6,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll, Poll::*};
 use byteorder::ByteOrder;
-use crate::iface::platform;
+use crate::network::platform;
 
 use tokio::io::{unix, AsyncRead, AsyncWrite, ReadBuf};
 
