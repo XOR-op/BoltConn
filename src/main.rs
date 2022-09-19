@@ -9,7 +9,7 @@ use std::net::Ipv4Addr;
 use std::ops::Deref;
 use smoltcp::wire;
 use tracing::{event, Level};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod dns;
 mod iface;
@@ -18,7 +18,7 @@ mod resource;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    tracing_subscriber::registry().with(fmt::layer()).init();
+    tracing_subscriber::registry().with(fmt::layer()).with(EnvFilter::new("catalyst=trace")).init();
     let mut resource = Shared::new();
     #[cfg(target_os = "macos")]
     let name = "en0";

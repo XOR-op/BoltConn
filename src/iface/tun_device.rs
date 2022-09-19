@@ -119,43 +119,11 @@ impl TunDevice {
     pub async fn send_outbound(&mut self, pkt: &IPPkt) -> io::Result<()> {
         match pkt.repr {
             wire::IpRepr::Ipv4(repr) => {
-                // let mut expr = wire::Ipv4Repr::parse(&wire::Ipv4Packet::new_unchecked(pkt.packet_data()), &smoltcp::phy::ChecksumCapabilities::default()).unwrap();
-                // let mut back = pkt.packet_data().to_vec();
-                // let mut new_pkt = wire::Ipv4Packet::new_unchecked(back);
-                // // expr.src_addr = wire::Ipv4Address::new(192, 168, 50, 228);
-                // // expr.dst_addr = wire::Ipv4Address::new(114, 114, 114, 114);
-                // expr.emit(&mut new_pkt, &smoltcp::phy::ChecksumCapabilities::default());
-                // let size = self.v4_outbound.write(new_pkt.as_ref()).await?;
                 let mut outbound = AsyncRawSocket::create(
                     unsafe { platform::create_v4_raw_socket(self.gw_name.as_str()) }.map_err(|e| {
                         io::Error::new(ErrorKind::Other, format!("Create raw socket failed, {}", e))
                     })?,repr.dst_addr.into())?;
                 let size = outbound.write(pkt.packet_data()).await?;
-                // let size = {
-                //     // test for sendto
-                //     let sockaddr = libc::sockaddr_in {
-                //         sin_family: 0,
-                //         sin_port: 0,
-                //         sin_addr: libc::in_addr { s_addr: u32::from_ne_bytes(repr.dst_addr.0) },
-                //         sin_zero: [0; 8],
-                //     };
-                //
-                //     let size = unsafe {
-                //         let (tmp_fd, _) = platform::create_v4_raw_socket("ens18")?;
-                //         let r = libc::sendto(tmp_fd, new_pkt.as_ref().as_ptr() as *const _, new_pkt.total_len() as usize,
-                //                              0
-                //                              , &sockaddr as *const _ as *const _, mem::size_of_val(&sockaddr) as libc::socklen_t);
-                //         libc::close(tmp_fd);
-                //         if r < 0 {
-                //             tracing::error!("Sendto failed");
-                //             Err(io::Error::last_os_error())
-                //         } else {
-                //             Ok(r)
-                //         }
-                //     }?;
-                //     size
-                // };
-                // let size = self.v4_outbound.write(pkt.raw_data()).await?;
                 tracing::trace!("IPv4 send done: {}",size);
             }
             _ => {
