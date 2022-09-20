@@ -1,14 +1,11 @@
 use libc::{c_int, sockaddr_in, socklen_t};
-use std::convert::TryFrom;
 use std::io::{Error, ErrorKind, Result};
-use std::{mem, net};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll, Poll::*};
-use byteorder::ByteOrder;
-use crate::network::platform;
+use std::{mem, net};
 
-use tokio::io::{unix, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{unix, AsyncWrite};
 
 pub struct AsyncRawSocket {
     pub fd: unix::AsyncFd<RawFd>,
@@ -19,10 +16,12 @@ impl AsyncRawSocket {
     pub fn create(fd: c_int, dst_addr: net::Ipv4Addr) -> Result<Self> {
         set_nonblock(fd)?;
         let mut sockaddr: sockaddr_in = unsafe { mem::zeroed() };
-        sockaddr.sin_family=libc::AF_INET as libc::sa_family_t;
+        sockaddr.sin_family = libc::AF_INET as libc::sa_family_t;
         sockaddr.sin_port = 0;
-        sockaddr.sin_addr = libc::in_addr{ s_addr: u32::to_be(u32::from(dst_addr)) };
-        
+        sockaddr.sin_addr = libc::in_addr {
+            s_addr: u32::to_be(u32::from(dst_addr)),
+        };
+
         Ok(Self {
             fd: unix::AsyncFd::new(RawFd::from(fd))?,
             sockaddr,

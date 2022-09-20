@@ -2,7 +2,7 @@ use crate::resource::buf_slab::PktBufHandle;
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{IpRepr, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr};
 use std::fmt::{Display, Formatter};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 
 pub struct IPPkt {
     handle: PktBufHandle,

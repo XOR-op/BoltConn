@@ -8,7 +8,7 @@ pub struct Shared {
 impl Shared {
     pub fn new() -> Self {
         Self {
-            pool: PktBufPool::new(512),
+            pool: PktBufPool::new(512, 4096),
         }
     }
 }

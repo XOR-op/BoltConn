@@ -1,32 +1,37 @@
 extern crate core;
 
+#[allow(unused_imports)]
 use crate::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
 use crate::resource::state::Shared;
-use network::tun_device::TunDevice;
 use ipnet::Ipv4Net;
+use network::tun_device::TunDevice;
+use smoltcp::wire;
 use smoltcp::wire::IpProtocol;
 use std::net::Ipv4Addr;
 use std::ops::Deref;
-use smoltcp::wire;
 use tokio::io::AsyncWriteExt;
 use tracing::{event, Level};
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
-use crate::network::outbound::tcpv4_stream;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod dispatch;
 mod dns;
 mod network;
+mod outbound;
 mod packet;
 mod resource;
-mod session_mgr;
+mod session;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    tracing_subscriber::registry().with(fmt::layer()).with(EnvFilter::new("catalyst=trace")).init();
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::new("catalyst=trace"))
+        .init();
     let mut resource = Shared::new();
     #[cfg(target_os = "macos")]
-        let name = "en0";
+    let name = "en0";
     #[cfg(target_os = "linux")]
-        let name = "ens18";
+    let name = "ens18";
     let raw_tun = TunDevice::open(resource.clone(), name);
     const PARSE_PACKET: bool = true;
     match raw_tun {

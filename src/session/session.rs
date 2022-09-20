@@ -1,39 +1,35 @@
-use std::net::IpAddr;
+use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time;
 use std::time::Instant;
 
-mod session;
-mod manager;
-
 #[derive(Debug, Clone)]
-pub enum Session {
-    TCP(TcpSession),
-    UDP(UdpSession),
+pub enum SessionCtl {
+    TCP(TcpSessionCtl),
+    UDP(UdpSessionCtl),
 }
 
 #[derive(Debug, Clone)]
-pub struct TcpSession {
-    source_addr: IpAddr,
-    source_port: u16,
-    dest_addr: IpAddr,
-    dest_port: u16,
-    last_time: Instant,
-    // todo add some statistics
+pub struct TcpSessionCtl {
+    pub source_addr: SocketAddr,
+    pub dest_addr: SocketAddr,
+    pub available: Arc<AtomicBool>,
+    pub last_time: Instant,
 }
 
-impl TcpSession {
-    pub fn new(source_addr: IpAddr, source_port: u16, dest_addr: IpAddr, dest_port: u16) -> Self {
+impl TcpSessionCtl {
+    pub fn new(source_addr: SocketAddr, dest_addr: SocketAddr) -> Self {
         Self {
             source_addr,
-            source_port,
             dest_addr,
-            dest_port,
+            available: Arc::new(AtomicBool::new(true)),
             last_time: Instant::now(),
         }
     }
 
     pub fn is_expired(&self, threshold: time::Duration) -> bool {
-        Instant.now() - self.last_time < threshold
+        Instant::now() - self.last_time < threshold
     }
 
     pub fn update_time(&mut self) {
@@ -42,14 +38,14 @@ impl TcpSession {
 }
 
 #[derive(Debug, Clone)]
-pub struct UdpSession {
+pub struct UdpSessionCtl {
     internal_port: u16,
     iface_port: u16,
     last_time: Instant,
     // todo add some statistics
 }
 
-impl UdpSession {
+impl UdpSessionCtl {
     pub fn new(internal_port: u16, iface_port: u16) -> Self {
         Self {
             internal_port,
@@ -59,7 +55,7 @@ impl UdpSession {
     }
 
     pub fn is_expired(&self, threshold: time::Duration) -> bool {
-        Instant.now() - self.last_time < threshold
+        Instant::now() - self.last_time < threshold
     }
 
     pub fn update_time(&mut self) {
@@ -67,4 +63,8 @@ impl UdpSession {
     }
 }
 
-
+pub struct TcpSession {
+    pub source_addr: SocketAddr,
+    pub dest_addr: SocketAddr,
+    pub available: Arc<AtomicBool>,
+}

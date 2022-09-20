@@ -18,12 +18,15 @@ use macos as platform;
 mod async_socket;
 #[cfg(target_os = "linux")]
 mod linux;
-pub mod outbound;
 
 #[cfg(target_os = "linux")]
 use linux as platform;
 
+pub mod outbound;
+
 use platform::c_ffi;
+
+pub use platform::bind_to_device;
 
 pub type AsyncRawFd = tokio_fd::AsyncFd;
 
@@ -32,9 +35,9 @@ pub fn errno_err(msg: &str) -> io::Error {
 }
 
 fn run_command<I, S>(cmd: &str, args: I) -> io::Result<()>
-    where
-        I: IntoIterator<Item=S>,
-        S: AsRef<OsStr>,
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
 {
     let mut handle = Command::new(cmd)
         .args(args)
@@ -147,13 +150,17 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
     match addr.sa_family as c_int {
         libc::AF_INET => {
             let addr: libc::sockaddr_in = unsafe { mem::transmute(addr) };
-            Ok(IpAddr::V4(Ipv4Addr::from(u32::from_be(addr.sin_addr.s_addr))))
+            Ok(IpAddr::V4(Ipv4Addr::from(u32::from_be(
+                addr.sin_addr.s_addr,
+            ))))
         }
         libc::AF_INET6 => {
             let addr: libc::sockaddr_in6 = unsafe { mem::transmute(addr) };
-            Ok(IpAddr::V6(Ipv6Addr::from(addr.sin6_addr.s6_addr )))
+            Ok(IpAddr::V6(Ipv6Addr::from(addr.sin6_addr.s6_addr)))
         }
-        _ => { Err(io::Error::new(ErrorKind::AddrNotAvailable, format!("No address found for iface {}", iface_name))) }
+        _ => Err(io::Error::new(
+            ErrorKind::AddrNotAvailable,
+            format!("No address found for iface {}", iface_name),
+        )),
     }
 }
-

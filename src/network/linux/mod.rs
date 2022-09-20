@@ -1,7 +1,7 @@
 use crate::network::{create_req, AsyncRawFd};
 use c_ffi::*;
 use ipnet::IpNet;
-use libc::{c_int, sockaddr, sockaddr_in, socklen_t, O_RDWR, bind};
+use libc::{bind, c_int, sockaddr, sockaddr_in, socklen_t, O_RDWR};
 use std::ffi::CStr;
 use std::os::unix::io::RawFd;
 use std::{io, mem};
@@ -36,7 +36,6 @@ pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     // todo: do not use external commands
     super::run_command("ip", ["route", "add", &format!("{}", subnet), "dev", name])
 }
-
 
 pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
     unsafe {

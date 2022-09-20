@@ -1,6 +1,8 @@
 use crate::network::async_socket::AsyncRawSocket;
 use crate::network::route::setup_ipv4_routing_table;
-use crate::network::{errno_err, interface_up, platform, set_address, AsyncRawFd, create_v4_raw_socket};
+use crate::network::{
+    create_v4_raw_socket, errno_err, interface_up, platform, set_address, AsyncRawFd,
+};
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::{PktBufHandle, MAX_PKT_SIZE};
 use crate::resource::state::Shared;
@@ -10,9 +12,7 @@ use smoltcp::wire;
 use std::io::ErrorKind;
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
-use std::{io, mem, slice};
-use std::borrow::Borrow;
-use libc::sockaddr;
+use std::{io, slice};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub struct TunDevice {
@@ -64,9 +64,9 @@ impl TunDevice {
         self.fd.read(raw_buffer).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-            let start_offset = 4;
+        let start_offset = 4;
         #[cfg(target_os = "linux")]
-            let start_offset = 0;
+        let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -125,7 +125,7 @@ impl TunDevice {
                 })?;
                 let mut outbound = AsyncRawSocket::create(fd, repr.dst_addr.into())?;
                 let size = outbound.write(pkt.packet_data()).await?;
-                tracing::trace!("IPv4 send done: {}",size);
+                tracing::trace!("IPv4 send done: {}", size);
             }
             _ => {
                 tracing::trace!("Drop IPv6 send");

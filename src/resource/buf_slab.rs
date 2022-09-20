@@ -26,6 +26,9 @@ type PktBufPoolInner = Arc<Mutex<Vec<PktBufHandle>>>;
 #[derive(Clone)]
 pub struct PktBufPool {
     free: PktBufPoolInner,
+    fixed_capacity: usize,
+    extra_capacity: usize,
+    extra_len: usize,
     notify: Arc<Notify>,
 }
 
@@ -62,9 +65,9 @@ impl Future for PktBufFuture {
 }
 
 impl PktBufPool {
-    pub fn new(size: usize) -> Self {
-        let mut free = Vec::with_capacity(size);
-        for _ in 0..size {
+    pub fn new(lower_bound: usize, upper_bound: usize) -> Self {
+        let mut free = Vec::with_capacity(lower_bound);
+        for _ in 0..lower_bound {
             free.push(PktBufHandle {
                 data: Arc::new(get_default_pkt_buffer()),
                 len: 0,
@@ -72,6 +75,9 @@ impl PktBufPool {
         }
         Self {
             free: Arc::new(Mutex::new(free)),
+            fixed_capacity: lower_bound,
+            extra_capacity: upper_bound,
+            extra_len: 0,
             notify: Arc::new(Notify::new()),
         }
     }
@@ -83,6 +89,12 @@ impl PktBufPool {
                 let mut handle = vec.pop().unwrap();
                 handle.len = 0;
                 return handle;
+            } else if self.extra_len < self.extra_capacity {
+                self.extra_len += 1;
+                return PktBufHandle {
+                    data: Arc::new(get_default_pkt_buffer()),
+                    len: 0,
+                };
             }
             drop(vec);
             self.notify.notified().await;
@@ -91,7 +103,12 @@ impl PktBufPool {
 
     pub fn release(&mut self, handle: PktBufHandle) {
         let mut vec = self.free.lock().unwrap();
-        vec.push(handle);
+        if vec.len() < self.fixed_capacity {
+            vec.push(handle);
+        } else {
+            assert!(self.extra_len > 0);
+            self.extra_len -= 1;
+        }
         self.notify.notify_one();
     }
 }

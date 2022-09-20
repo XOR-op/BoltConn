@@ -1,6 +1,6 @@
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::PktBufHandle;
-use smoltcp::wire::{IpProtocol, TcpPacket, TcpRepr, UdpPacket};
+use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 use std::fmt::{Display, Formatter};
 
 pub trait TransLayerPkt {
