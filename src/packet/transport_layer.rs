@@ -1,7 +1,11 @@
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::PktBufHandle;
-use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
+use smoltcp::wire::{IpProtocol, IpRepr, Ipv4Packet, Ipv6Packet, TcpPacket, TcpRepr, UdpPacket};
 use std::fmt::{Display, Formatter};
+use std::io;
+use std::net::{SocketAddrV4, SocketAddrV6};
+use smoltcp::phy::ChecksumCapabilities;
+use tokio::net::unix::SocketAddr;
 
 pub trait TransLayerPkt {
     fn src_port(&self) -> u16;
@@ -9,6 +13,8 @@ pub trait TransLayerPkt {
     fn packet_payload(&self) -> &[u8];
     fn into_handle(self) -> PktBufHandle;
     fn ip_pkt(&self) -> &IPPkt;
+    fn rewrite_v4_addr(&mut self, src_addr: SocketAddrV4, dst_addr: SocketAddrV4) -> io::Result<()>;
+    fn rewrite_v6_addr(&mut self, src_addr: SocketAddrV6, dst_addr: SocketAddrV6) -> io::Result<()>;
 }
 
 pub struct TcpPkt {
@@ -35,6 +41,54 @@ impl TransLayerPkt for TcpPkt {
 
     fn ip_pkt(&self) -> &IPPkt {
         &self.ip_pkt
+    }
+
+    fn rewrite_v4_addr(&mut self, src_addr: SocketAddrV4, dst_addr: SocketAddrV4) -> io::Result<()> {
+        match self.ip_pkt.repr {
+            IpRepr::Ipv4(ref mut repr) => {
+                // rewrite tcp
+                let mut pkt = TcpPacket::new_unchecked(self.ip_pkt.packet_payload_mut());
+                let mut tcp_repr = TcpRepr::parse(&pkt, &self.ip_pkt.repr.src_addr(),
+                                                  &self.ip_pkt.repr.dst_addr(), &ChecksumCapabilities::default())?;
+                tcp_repr.src_port = src_addr.port();
+                tcp_repr.dst_port = dst_addr.port();
+                // use new ip addresses
+                tcp_repr.emit(&mut pkt, src_addr.ip().into(),
+                              dst_addr.ip().into(), &ChecksumCapabilities::default());
+
+                // rewrite ip header
+                let mut pkt = Ipv4Packet::new_unchecked(self.ip_pkt.packet_data_mut());
+                repr.src_addr = src_addr.ip().into();
+                repr.dst_addr = dst_addr.ip().into();
+                repr.emit(&mut pkt, &ChecksumCapabilities::default());
+            }
+            _ => unreachable!(),
+        };
+        Ok(())
+    }
+
+    fn rewrite_v6_addr(&mut self, src_addr: SocketAddrV6, dst_addr: SocketAddrV6) -> io::Result<()> {
+        match self.ip_pkt.repr {
+            IpRepr::Ipv6(ref mut repr) => {
+                // rewrite tcp
+                let mut pkt = TcpPacket::new_unchecked(self.ip_pkt.packet_payload_mut());
+                let mut tcp_repr = TcpRepr::parse(&pkt, &self.ip_pkt.repr.src_addr(),
+                                                  &self.ip_pkt.repr.dst_addr(), &ChecksumCapabilities::default())?;
+                tcp_repr.src_port = src_addr.port();
+                tcp_repr.dst_port = dst_addr.port();
+                // use new ip addresses
+                tcp_repr.emit(&mut pkt, src_addr.ip().into(),
+                              dst_addr.ip().into(), &ChecksumCapabilities::default());
+
+                // rewrite ip header
+                let mut pkt = Ipv6Packet::new_unchecked(self.ip_pkt.packet_data_mut());
+                repr.src_addr = src_addr.ip().into();
+                repr.dst_addr = dst_addr.ip().into();
+                repr.emit(&mut pkt);
+            }
+            _ => unreachable!(),
+        };
+        Ok(())
     }
 }
 

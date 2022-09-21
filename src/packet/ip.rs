@@ -2,7 +2,7 @@ use crate::resource::buf_slab::PktBufHandle;
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{IpRepr, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr};
 use std::fmt::{Display, Formatter};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 pub struct IPPkt {
     handle: PktBufHandle,
@@ -61,6 +61,14 @@ impl IPPkt {
         }
     }
 
+    pub fn src_addr(&self) -> SocketAddr {
+        self.repr.src_addr().into()
+    }
+
+    pub fn dst_addr(&self) -> SocketAddr {
+        self.repr.dst_addr().into()
+    }
+
     pub fn raw_data(&self) -> &[u8] {
         &self.handle.data[..self.handle.len]
     }
@@ -68,9 +76,16 @@ impl IPPkt {
     pub fn packet_data(&self) -> &[u8] {
         &self.handle.data[self.pkt_start_offset..self.handle.len]
     }
+    pub fn packet_data_mut(&mut self) -> &mut [u8] {
+        &mut self.handle.data[self.pkt_start_offset..self.handle.len]
+    }
 
     pub fn packet_payload(&self) -> &[u8] {
         &self.handle.data[self.handle.len - self.repr.payload_len()..self.handle.len]
+    }
+
+    pub fn packet_payload_mut(&mut self) -> &mut [u8] {
+        &mut self.handle.data[self.handle.len - self.repr.payload_len()..self.handle.len]
     }
 
     pub fn into_handle(self) -> PktBufHandle {

@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -11,18 +12,19 @@ pub const MAX_PKT_SIZE: usize = 65576;
 pub type PktBuffer = [u8; MAX_PKT_SIZE];
 
 fn get_default_pkt_buffer() -> PktBuffer {
-    [0; MAX_PKT_SIZE]
+    unsafe { MaybeUninit::uninit().assume_init() }
 }
 
 #[derive(Clone)]
 pub struct PktBufHandle {
-    pub data: Arc<PktBuffer>,
+    // pub data: Arc<PktBuffer>,
+    pub data: Box<PktBuffer>,
     pub len: usize,
 }
 
 type PktBufPoolInner = Arc<Mutex<Vec<PktBufHandle>>>;
 
-/// thread-safe
+/// Fixed capacity for performace; extra capacity for burst traffic but not exhaust system resources
 #[derive(Clone)]
 pub struct PktBufPool {
     free: PktBufPoolInner,
@@ -69,7 +71,8 @@ impl PktBufPool {
         let mut free = Vec::with_capacity(lower_bound);
         for _ in 0..lower_bound {
             free.push(PktBufHandle {
-                data: Arc::new(get_default_pkt_buffer()),
+                // data: Arc::new(get_default_pkt_buffer()),
+                data: Box::new(get_default_pkt_buffer()),
                 len: 0,
             });
         }
@@ -92,7 +95,8 @@ impl PktBufPool {
             } else if self.extra_len < self.extra_capacity {
                 self.extra_len += 1;
                 return PktBufHandle {
-                    data: Arc::new(get_default_pkt_buffer()),
+                    // data: Arc::new(get_default_pkt_buffer()),
+                    data: Box::new(get_default_pkt_buffer()),
                     len: 0,
                 };
             }

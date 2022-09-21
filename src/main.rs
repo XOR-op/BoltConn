@@ -2,7 +2,6 @@ extern crate core;
 
 #[allow(unused_imports)]
 use crate::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
-use crate::resource::state::Shared;
 use ipnet::Ipv4Net;
 use network::tun_device::TunDevice;
 use smoltcp::wire;
@@ -27,7 +26,7 @@ async fn main() -> std::io::Result<()> {
         .with(fmt::layer())
         .with(EnvFilter::new("catalyst=trace"))
         .init();
-    let mut resource = Shared::new();
+    let mut pool = Arc;
     #[cfg(target_os = "macos")]
     let name = "en0";
     #[cfg(target_os = "linux")]

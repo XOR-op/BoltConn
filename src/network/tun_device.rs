@@ -4,8 +4,7 @@ use crate::network::{
     create_v4_raw_socket, errno_err, interface_up, platform, set_address, AsyncRawFd,
 };
 use crate::packet::ip::IPPkt;
-use crate::resource::buf_slab::{PktBufHandle, MAX_PKT_SIZE};
-use crate::resource::state::Shared;
+use crate::resource::buf_slab::{PktBufHandle, MAX_PKT_SIZE, PktBufPool};
 use byteorder::{ByteOrder, NetworkEndian};
 use ipnet::Ipv4Net;
 use smoltcp::wire;
@@ -13,7 +12,12 @@ use std::io::ErrorKind;
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::{io, slice};
+use std::net::{SocketAddr};
+use std::sync::{Arc, Mutex};
+use smoltcp::wire::IpProtocol;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use crate::session::SessionManager;
+use crate::{TcpPkt, TransLayerPkt};
 
 pub struct TunDevice {
     fd: AsyncRawFd,
@@ -22,11 +26,12 @@ pub struct TunDevice {
     gw_name: String,
     // (addr, mask)
     addr: Option<Ipv4Net>,
-    state: Shared,
+    pool: PktBufPool,
+    session_mgr: SessionManager,
 }
 
 impl TunDevice {
-    pub fn open(shared: Shared, outbound_iface: &str) -> io::Result<TunDevice> {
+    pub fn open(session_mgr: SessionManager, pool:Arc<Mutex<PktBufPool>>, outbound_iface: &str) -> io::Result<TunDevice> {
         let mut name_buffer: Vec<c_char> = Vec::new();
         name_buffer.resize(36, 0);
 
@@ -45,7 +50,8 @@ impl TunDevice {
             dev_name: name,
             gw_name: outbound_iface.parse().unwrap(),
             addr: None,
-            state: shared,
+            pool: PktBufPool::new(512, 4096),
+            session_mgr,
         })
     }
 
@@ -58,15 +64,16 @@ impl TunDevice {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
-        let mut handle = self.state.pool.obtain().await;
-        let raw_buffer =
-            unsafe { slice::from_raw_parts_mut(handle.data.as_ptr() as *mut u8, MAX_PKT_SIZE) };
+        let mut handle = self.pool.obtain().await;
+        // Since we only write
+        let raw_buffer = &mut handle.data;
+            // unsafe { slice::from_raw_parts_mut(handle.data.as_ptr() as *mut u8, MAX_PKT_SIZE) };
         self.fd.read(raw_buffer).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-        let start_offset = 4;
+            let start_offset = 4;
         #[cfg(target_os = "linux")]
-        let start_offset = 0;
+            let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -83,11 +90,11 @@ impl TunDevice {
 
     /// Read raw data from tun device. No parsing is done.
     pub async fn recv_raw(&mut self) -> io::Result<PktBufHandle> {
-        let mut handle = self.state.pool.obtain().await;
+        let mut handle = self.pool.obtain().await;
         let buffer =
             unsafe { slice::from_raw_parts_mut(handle.data.as_ptr() as *mut u8, MAX_PKT_SIZE) };
         handle.len = self.fd.read(&mut buffer[..]).await?;
-        Ok(handle.clone())
+        Ok(handle)
     }
 
     pub async fn send_ip(&mut self, ip_pkt: &IPPkt) -> io::Result<()> {
@@ -133,5 +140,38 @@ impl TunDevice {
             }
         }
         Ok(())
+    }
+
+    pub async fn run(&mut self, nat_addr: SocketAddr) -> io::Result<()> {
+        let nat_addr = if let SocketAddr::V4(addr) = nat_addr { addr } else { panic!("v6 nat not supported") };
+        // let (fdRead, fdWrite) = self.fd.
+        loop {
+            let pkt = self.recv_ip().await?;
+            let port = self.session_mgr.query_tcp_by_addr(pkt.src_addr(), pkt.dst_addr());
+            if pkt.src_addr().is_ipv6() {
+                // not supported now
+                continue;
+            }
+            let (src, dst) = match (pkt.src_addr(), pkt.dst_addr()) {
+                (SocketAddr::V4(src), SocketAddr::V4(dst)) => (src, dst),
+                (_, _) => unreachable!()
+            };
+            match pkt.repr.protocol() {
+                IpProtocol::Tcp => {
+                    let mut pkt = TcpPkt::new(pkt);
+                    if let Err(_) = pkt.rewrite_v4_addr(dst, nat_addr) {
+                        tracing::warn!("NAT rewrite failed");
+                        continue;
+                    }
+                    tokio::spawn(async move {
+                        // self.send_ip(&pkt.ip_pkt());
+                    });
+                }
+                IpProtocol::Udp => {}
+                _ => {
+                    // discarded
+                }
+            }
+        }
     }
 }

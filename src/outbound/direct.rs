@@ -4,7 +4,7 @@ use io::Result;
 use std::io;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
@@ -21,7 +21,7 @@ impl DirectOutbound {
         iface_name: &str,
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
-        available: Arc<AtomicBool>,
+        available: Arc<AtomicU8>,
     ) -> Self {
         Self {
             iface_name: iface_name.into(),
@@ -30,7 +30,8 @@ impl DirectOutbound {
     }
 
     pub async fn run(&mut self, inbound: TcpStream) -> Result<()> {
-        let inbound_indicator = self.conn.available.clone();
+        let ingoing_indicator = self.conn.available.clone();
+        let outgoing_indicator = self.conn.available.clone();
         let outbound = match self.conn.dst {
             SocketAddr::V4(v4) => {
                 let socket = TcpSocket::new_v4()?;
@@ -57,6 +58,7 @@ impl DirectOutbound {
                     break;
                 }
             }
+            outgoing_indicator.fetch_sub(1, Ordering::Relaxed);
         });
         // recv from outbound and send to inbound
         let mut buf = [0u8; Self::BUF_SIZE];
@@ -69,6 +71,7 @@ impl DirectOutbound {
                 break;
             }
         }
+        ingoing_indicator.fetch_sub(1, Ordering::Relaxed);
         Ok(())
     }
 }
