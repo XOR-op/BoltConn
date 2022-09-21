@@ -43,33 +43,33 @@ async fn main() -> std::io::Result<()> {
             event!(Level::INFO, "TUN Device {} is up.", tun.get_name());
             // let mut stream = tcpv4_stream(name).await?;
             // stream.write("Hello,world".as_bytes()).await?;
-            loop {
-                match tun.recv_ip().await {
-                    Ok(pkt) => match pkt.protocol() {
-                        IpProtocol::Tcp => {
-                            let pkt = TcpPkt::new(pkt);
-                            event!(Level::INFO, "{}", pkt);
-                            tun.send_outbound(pkt.ip_pkt()).await?;
-                            let handle = pkt.into_handle();
-                            pool.release(handle);
-                        }
-                        IpProtocol::Udp => {
-                            let pkt = UdpPkt::new(pkt);
-                            event!(Level::INFO, "{}", pkt);
-                            tun.send_outbound(pkt.ip_pkt()).await?;
-                            let handle = pkt.into_handle();
-                            pool.release(handle);
-                        }
-                        _ => {
-                            event!(Level::INFO, "{}", pkt);
-                            tun.send_outbound(&pkt).await?;
-                            let handle = pkt.into_handle();
-                            pool.release(handle);
-                        }
-                    },
-                    Err(err) => event!(Level::WARN, "{}", err),
-                }
-            }
+            // loop {
+            //     match tun.recv_ip().await {
+            //         Ok(pkt) => match pkt.protocol() {
+            //             IpProtocol::Tcp => {
+            //                 let pkt = TcpPkt::new(pkt);
+            //                 event!(Level::INFO, "{}", pkt);
+            //                 tun.send_outbound(pkt.ip_pkt()).await?;
+            //                 let handle = pkt.into_handle();
+            //                 pool.release(handle);
+            //             }
+            //             IpProtocol::Udp => {
+            //                 let pkt = UdpPkt::new(pkt);
+            //                 event!(Level::INFO, "{}", pkt);
+            //                 tun.send_outbound(pkt.ip_pkt()).await?;
+            //                 let handle = pkt.into_handle();
+            //                 pool.release(handle);
+            //             }
+            //             _ => {
+            //                 event!(Level::INFO, "{}", pkt);
+            //                 tun.send_outbound(&pkt).await?;
+            //                 let handle = pkt.into_handle();
+            //                 pool.release(handle);
+            //             }
+            //         },
+            //         Err(err) => event!(Level::WARN, "{}", err),
+            //     }
+            // }
         }
         Err(err) => println!("{}", err),
     }

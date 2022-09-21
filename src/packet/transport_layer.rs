@@ -9,8 +9,7 @@ use smoltcp::wire::{
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::io::ErrorKind;
-use std::net::{SocketAddrV4, SocketAddrV6};
-use tokio::net::unix::SocketAddr;
+use std::net::{SocketAddrV4, SocketAddrV6, SocketAddr};
 
 pub trait TransLayerPkt {
     fn src_port(&self) -> u16;
@@ -18,10 +17,7 @@ pub trait TransLayerPkt {
     fn packet_payload(&self) -> &[u8];
     fn into_handle(self) -> PktBufHandle;
     fn ip_pkt(&self) -> &IPPkt;
-    fn rewrite_v4_addr(&mut self, src_addr: SocketAddrV4, dst_addr: SocketAddrV4)
-                       -> io::Result<()>;
-    fn rewrite_v6_addr(&mut self, src_addr: SocketAddrV6, dst_addr: SocketAddrV6)
-                       -> io::Result<()>;
+    fn rewrite_addr(&mut self, src_addr: SocketAddr, dst_addr: SocketAddr);
 }
 
 pub struct TcpPkt {
@@ -50,60 +46,46 @@ impl TransLayerPkt for TcpPkt {
         &self.ip_pkt
     }
 
-    fn rewrite_v4_addr(
+    fn rewrite_addr(
         &mut self,
-        src_addr: SocketAddrV4,
-        dst_addr: SocketAddrV4,
-    ) -> io::Result<()> {
-        if !matches!(self.ip_pkt, IPPkt::V4(_)) {
-            unreachable!()
+        src_addr: SocketAddr,
+        dst_addr: SocketAddr,
+    ) {
+        match (src_addr, dst_addr) {
+            (SocketAddr::V4(src_addr), SocketAddr::V4(dst_addr)) => {
+                // rewrite tcp
+                let mut pkt = TcpPacket::new_unchecked(self.ip_pkt.packet_payload_mut());
+                pkt.set_src_port(src_addr.port());
+                pkt.set_dst_port(dst_addr.port());
+                // use new ip addresses
+                pkt.fill_checksum(
+                    &IpAddress::Ipv4(Ipv4Address::from(*src_addr.ip())),
+                    &IpAddress::Ipv4(Ipv4Address::from(*dst_addr.ip())),
+                );
+                // rewrite ip header
+                let mut pkt = Ipv4Packet::new_unchecked(self.ip_pkt.packet_data_mut());
+                pkt.set_src_addr(Ipv4Address::from(*src_addr.ip()));
+                pkt.set_dst_addr(Ipv4Address::from(*dst_addr.ip()));
+                pkt.fill_checksum();
+            }
+            (SocketAddr::V6(src_addr), SocketAddr::V6(dst_addr)) => {
+                // rewrite tcp
+                let mut pkt = TcpPacket::new_unchecked(self.ip_pkt.packet_payload_mut());
+                pkt.set_src_port(src_addr.port());
+                pkt.set_dst_port(dst_addr.port());
+                // use new ip addresses
+                pkt.fill_checksum(
+                    &IpAddress::Ipv6(Ipv6Address::from(*src_addr.ip())),
+                    &IpAddress::Ipv6(Ipv6Address::from(*dst_addr.ip())),
+                );
+                // rewrite ip header
+                let mut pkt = Ipv6Packet::new_unchecked(self.ip_pkt.packet_data_mut());
+                pkt.set_src_addr(Ipv6Address::from(*src_addr.ip()));
+                pkt.set_dst_addr(Ipv6Address::from(*dst_addr.ip()));
+                // ipv6 does not contain checksum
+            }
+            (_, _) => unreachable!()
         }
-        // rewrite tcp
-        let mut pkt = TcpPacket::new_unchecked(self.ip_pkt.packet_payload_mut());
-        pkt.set_src_port(src_addr.port());
-        pkt.set_dst_port(dst_addr.port());
-        // use new ip addresses
-        pkt.fill_checksum(
-            &IpAddress::Ipv4(Ipv4Address::from(*src_addr.ip())),
-            &IpAddress::Ipv4(Ipv4Address::from(*dst_addr.ip())),
-        );
-        // rewrite ip header
-        let mut pkt = Ipv4Packet::new_unchecked(self.ip_pkt.packet_data_mut());
-        pkt.set_src_addr(Ipv4Address::from(*src_addr.ip()));
-        pkt.set_dst_addr(Ipv4Address::from(*dst_addr.ip()));
-        pkt.fill_checksum();
-        Ok(())
-    }
-
-    fn rewrite_v6_addr(
-        &mut self,
-        src_addr: SocketAddrV6,
-        dst_addr: SocketAddrV6,
-    ) -> io::Result<()> {
-        // // rewrite tcp
-        // let pkt = TcpPacket::new_unchecked(self.ip_pkt.packet_payload());
-        // let mut tcp_repr = TcpRepr::parse(
-        //     &pkt, &self.ip_pkt.repr.src_addr(),
-        //     &self.ip_pkt.repr.dst_addr(), &ChecksumCapabilities::default())
-        //     .map_err(|err| io::Error::new(ErrorKind::InvalidData, err))?;
-        // tcp_repr.src_port = src_addr.port();
-        // tcp_repr.dst_port = dst_addr.port();
-        // // use new ip addresses
-        // let mut pkt = TcpPacket::new_unchecked(self.ip_pkt.packet_payload_mut());
-        // match self.ip_pkt.repr {
-        //     IpRepr::Ipv6(ref mut repr) => {
-        //         tcp_repr.emit(&mut pkt, &IpAddress::Ipv6(Ipv6Address::from(*src_addr.ip())),
-        //                       &IpAddress::Ipv6(Ipv6Address::from(*dst_addr.ip())), &ChecksumCapabilities::default(),
-        //         );
-        //         // rewrite ip header
-        //         let mut pkt = Ipv6Packet::new_unchecked(self.ip_pkt.packet_data_mut());
-        //         repr.src_addr = Ipv6Address::from(*src_addr.ip());
-        //         repr.dst_addr = Ipv6Address::from(*dst_addr.ip());
-        //         repr.emit(&mut pkt);
-        //     }
-        //     _ => unreachable!(),
-        // };
-        Ok(())
     }
 }
 
@@ -150,20 +132,42 @@ impl TransLayerPkt for UdpPkt {
         &self.ip_pkt
     }
 
-    fn rewrite_v4_addr(
-        &mut self,
-        src_addr: SocketAddrV4,
-        dst_addr: SocketAddrV4,
-    ) -> io::Result<()> {
-        todo!()
-    }
-
-    fn rewrite_v6_addr(
-        &mut self,
-        src_addr: SocketAddrV6,
-        dst_addr: SocketAddrV6,
-    ) -> io::Result<()> {
-        todo!()
+    fn rewrite_addr(&mut self, src_addr: SocketAddr, dst_addr: SocketAddr) {
+        match (src_addr, dst_addr) {
+            (SocketAddr::V4(src_addr), SocketAddr::V4(dst_addr)) => {
+                // rewrite tcp
+                let mut pkt = UdpPacket::new_unchecked(self.ip_pkt.packet_payload_mut());
+                pkt.set_src_port(src_addr.port());
+                pkt.set_dst_port(dst_addr.port());
+                // use new ip addresses
+                pkt.fill_checksum(
+                    &IpAddress::Ipv4(Ipv4Address::from(*src_addr.ip())),
+                    &IpAddress::Ipv4(Ipv4Address::from(*dst_addr.ip())),
+                );
+                // rewrite ip header
+                let mut pkt = Ipv4Packet::new_unchecked(self.ip_pkt.packet_data_mut());
+                pkt.set_src_addr(Ipv4Address::from(*src_addr.ip()));
+                pkt.set_dst_addr(Ipv4Address::from(*dst_addr.ip()));
+                pkt.fill_checksum();
+            }
+            (SocketAddr::V6(src_addr), SocketAddr::V6(dst_addr)) => {
+                // rewrite tcp
+                let mut pkt = UdpPacket::new_unchecked(self.ip_pkt.packet_payload_mut());
+                pkt.set_src_port(src_addr.port());
+                pkt.set_dst_port(dst_addr.port());
+                // use new ip addresses
+                pkt.fill_checksum(
+                    &IpAddress::Ipv6(Ipv6Address::from(*src_addr.ip())),
+                    &IpAddress::Ipv6(Ipv6Address::from(*dst_addr.ip())),
+                );
+                // rewrite ip header
+                let mut pkt = Ipv6Packet::new_unchecked(self.ip_pkt.packet_data_mut());
+                pkt.set_src_addr(Ipv6Address::from(*src_addr.ip()));
+                pkt.set_dst_addr(Ipv6Address::from(*dst_addr.ip()));
+                // ipv6 does not contain checksum
+            }
+            (_, _) => unreachable!()
+        }
     }
 }
 
