@@ -25,7 +25,7 @@ impl Nat {
         loop {
             let (socket, addr) = tcp_listener.accept().await?;
             if let Ok((src_addr, dst_addr, indicator)) =
-            self.session_mgr.query_tcp_by_token(addr.port())
+                self.session_mgr.query_tcp_by_token(addr.port())
             {
                 self.dispatcher
                     .submit_tcp(src_addr, dst_addr, indicator, socket);

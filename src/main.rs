@@ -2,6 +2,8 @@ extern crate core;
 
 #[allow(unused_imports)]
 use crate::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
+use crate::resource::buf_slab::PktBufPool;
+use crate::session::SessionManager;
 use ipnet::Ipv4Net;
 use network::tun_device::TunDevice;
 use smoltcp::wire;
@@ -26,43 +28,43 @@ async fn main() -> std::io::Result<()> {
         .with(fmt::layer())
         .with(EnvFilter::new("catalyst=trace"))
         .init();
-    let mut pool = Arc;
     #[cfg(target_os = "macos")]
     let name = "en0";
     #[cfg(target_os = "linux")]
     let name = "ens18";
-    let raw_tun = TunDevice::open(resource.clone(), name);
-    const PARSE_PACKET: bool = true;
+    let mut pool = PktBufPool::new(512, 4096);
+    let manager = SessionManager::new();
+    let raw_tun = TunDevice::open(manager, pool.clone(), name);
     match raw_tun {
         Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
             tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(172, 20, 1, 1), 24).unwrap())?;
             tun.up()?;
             event!(Level::INFO, "TUN Device {} is up.", tun.get_name());
-            let mut stream = tcpv4_stream(name).await?;
-            stream.write("Hello,world".as_bytes()).await?;
+            // let mut stream = tcpv4_stream(name).await?;
+            // stream.write("Hello,world".as_bytes()).await?;
             loop {
                 match tun.recv_ip().await {
-                    Ok(pkt) => match pkt.repr.protocol() {
+                    Ok(pkt) => match pkt.protocol() {
                         IpProtocol::Tcp => {
                             let pkt = TcpPkt::new(pkt);
                             event!(Level::INFO, "{}", pkt);
                             tun.send_outbound(pkt.ip_pkt()).await?;
                             let handle = pkt.into_handle();
-                            resource.pool.release(handle);
+                            pool.release(handle);
                         }
                         IpProtocol::Udp => {
                             let pkt = UdpPkt::new(pkt);
                             event!(Level::INFO, "{}", pkt);
                             tun.send_outbound(pkt.ip_pkt()).await?;
                             let handle = pkt.into_handle();
-                            resource.pool.release(handle);
+                            pool.release(handle);
                         }
                         _ => {
                             event!(Level::INFO, "{}", pkt);
                             tun.send_outbound(&pkt).await?;
                             let handle = pkt.into_handle();
-                            resource.pool.release(handle);
+                            pool.release(handle);
                         }
                     },
                     Err(err) => event!(Level::WARN, "{}", err),

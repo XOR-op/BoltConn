@@ -15,7 +15,6 @@ fn get_default_pkt_buffer() -> PktBuffer {
     unsafe { MaybeUninit::uninit().assume_init() }
 }
 
-#[derive(Clone)]
 pub struct PktBufHandle {
     // pub data: Arc<PktBuffer>,
     pub data: Box<PktBuffer>,

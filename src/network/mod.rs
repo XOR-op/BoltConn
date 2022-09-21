@@ -146,7 +146,7 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
     if unsafe { c_ffi::siocgifaddr(ctl_fd, &mut req) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    let addr = req.ifru.addr;
+    let addr = unsafe { req.ifru.addr };
     match addr.sa_family as c_int {
         libc::AF_INET => {
             let addr: libc::sockaddr_in = unsafe { mem::transmute(addr) };
@@ -155,8 +155,12 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
             ))))
         }
         libc::AF_INET6 => {
-            let addr: libc::sockaddr_in6 = unsafe { mem::transmute(addr) };
-            Ok(IpAddr::V6(Ipv6Addr::from(addr.sin6_addr.s6_addr)))
+            Err(io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                format!("Ipv6 address is not acceptable for iface {}", iface_name),
+            ))
+            // let addr: libc::sockaddr_in6 = unsafe { mem::transmute(addr) };
+            // Ok(IpAddr::V6(Ipv6Addr::from(addr.sin6_addr.s6_addr)))
         }
         _ => Err(io::Error::new(
             ErrorKind::AddrNotAvailable,

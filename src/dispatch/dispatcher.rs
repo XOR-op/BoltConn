@@ -1,6 +1,6 @@
 use crate::outbound::DirectOutbound;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 
@@ -19,11 +19,13 @@ impl Dispatcher {
         &self,
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
-        indicator: Arc<AtomicBool>,
+        indicator: Arc<AtomicU8>,
         stream: TcpStream,
     ) {
-        let mut direct =
-            DirectOutbound::new(self.iface_name.as_str(), src_addr, dst_addr, indicator);
-        tokio::spawn(async move { direct.run(stream) });
+        let name = self.iface_name.clone();
+        tokio::spawn(async move {
+            let mut direct = DirectOutbound::new(name.as_str(), src_addr, dst_addr, indicator);
+            direct.run(stream);
+        });
     }
 }

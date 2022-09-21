@@ -4,10 +4,11 @@ use io::Result;
 use std::io;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct SessionManager {
     tcp_records: DashMap<u16, TcpSessionCtl>,
     udp_records: DashMap<u16, UdpSessionCtl>,
@@ -26,21 +27,16 @@ impl SessionManager {
 
     pub fn query_tcp_by_addr(&self, src_addr: SocketAddr, dst_addr: SocketAddr) -> u16 {
         let entry = self.tcp_records.entry(src_addr.port());
-        entry.or_insert(TcpSessionCtl::new(src_addr, dst_addr));
-        entry.and_modify(|mut se| {
-            // If original connection silently expired
-            if se.dest_addr != dst_addr {
-                *se = TcpSessionCtl::new(src_addr, dst_addr);
-            }
-            se.update_time();
-        });
-        entry.key().clone()
+        let mut pair = entry.or_insert(TcpSessionCtl::new(src_addr, dst_addr));
+        // If original connection silently expired
+        if pair.dest_addr != dst_addr {
+            *pair.value_mut() = TcpSessionCtl::new(src_addr, dst_addr);
+        }
+        pair.value_mut().update_time();
+        pair.key().clone()
     }
 
-    pub fn query_tcp_by_token(
-        &self,
-        port: u16,
-    ) -> Result<(SocketAddr, SocketAddr, Arc<AtomicBool>)> {
+    pub fn query_tcp_by_token(&self, port: u16) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
         match self.tcp_records.get(&port) {
             Some(s) => Ok((s.source_addr, s.dest_addr, s.available.clone())),
             None => Err(io::Error::new(
