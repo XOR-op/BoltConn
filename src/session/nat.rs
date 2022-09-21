@@ -7,26 +7,28 @@ use tokio::net::{TcpListener, UdpSocket};
 
 pub struct Nat {
     nat_addr: SocketAddr,
-    session_mgr: SessionManager,
+    session_mgr: Arc<SessionManager>,
     dispatcher: Arc<Dispatcher>,
 }
 
 impl Nat {
-    pub fn new(addr: SocketAddr, dispatcher: Arc<Dispatcher>) -> Self {
+    pub fn new(addr: SocketAddr, session_mgr: Arc<SessionManager>, dispatcher: Arc<Dispatcher>) -> Self {
         Self {
             nat_addr: addr,
-            session_mgr: SessionManager::new(),
+            session_mgr,
             dispatcher,
         }
     }
 
     pub async fn run_tcp(&self) -> Result<()> {
         let tcp_listener = TcpListener::bind(self.nat_addr).await?;
+        tracing::event!(tracing::Level::INFO,"[NAT] Listen TCP at {}",self.nat_addr);
         loop {
             let (socket, addr) = tcp_listener.accept().await?;
             if let Ok((src_addr, dst_addr, indicator)) =
-                self.session_mgr.query_tcp_by_token(addr.port())
+            self.session_mgr.query_tcp_by_token(addr.port())
             {
+                tracing::trace!("[NAT] received new connection {}->{}",src_addr,dst_addr);
                 self.dispatcher
                     .submit_tcp(src_addr, dst_addr, indicator, socket);
             } else {

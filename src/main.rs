@@ -3,16 +3,18 @@ extern crate core;
 #[allow(unused_imports)]
 use crate::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
 use crate::resource::buf_slab::PktBufPool;
-use crate::session::SessionManager;
+use crate::session::{Nat, SessionManager};
 use ipnet::Ipv4Net;
 use network::tun_device::TunDevice;
 use smoltcp::wire;
 use smoltcp::wire::IpProtocol;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::ops::Deref;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tracing::{event, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use crate::dispatch::Dispatcher;
 
 mod dispatch;
 mod dns;
@@ -29,47 +31,28 @@ async fn main() -> std::io::Result<()> {
         .with(EnvFilter::new("catalyst=trace"))
         .init();
     #[cfg(target_os = "macos")]
-    let name = "en0";
+        let name = "en0";
     #[cfg(target_os = "linux")]
-    let name = "ens18";
-    let mut pool = PktBufPool::new(512, 4096);
-    let manager = SessionManager::new();
-    let raw_tun = TunDevice::open(manager, pool.clone(), name);
+        let name = "ens18";
+    let pool = PktBufPool::new(512, 4096);
+    let manager = Arc::new(SessionManager::new());
+    let raw_tun = TunDevice::open(manager.clone(), pool.clone(), name);
     match raw_tun {
         Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
             tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(172, 20, 1, 1), 24).unwrap())?;
             tun.up()?;
-            event!(Level::INFO, "TUN Device {} is up.", tun.get_name());
-            // let mut stream = tcpv4_stream(name).await?;
-            // stream.write("Hello,world".as_bytes()).await?;
-            // loop {
-            //     match tun.recv_ip().await {
-            //         Ok(pkt) => match pkt.protocol() {
-            //             IpProtocol::Tcp => {
-            //                 let pkt = TcpPkt::new(pkt);
-            //                 event!(Level::INFO, "{}", pkt);
-            //                 tun.send_outbound(pkt.ip_pkt()).await?;
-            //                 let handle = pkt.into_handle();
-            //                 pool.release(handle);
-            //             }
-            //             IpProtocol::Udp => {
-            //                 let pkt = UdpPkt::new(pkt);
-            //                 event!(Level::INFO, "{}", pkt);
-            //                 tun.send_outbound(pkt.ip_pkt()).await?;
-            //                 let handle = pkt.into_handle();
-            //                 pool.release(handle);
-            //             }
-            //             _ => {
-            //                 event!(Level::INFO, "{}", pkt);
-            //                 tun.send_outbound(&pkt).await?;
-            //                 let handle = pkt.into_handle();
-            //                 pool.release(handle);
-            //             }
-            //         },
-            //         Err(err) => event!(Level::WARN, "{}", err),
-            //     }
-            // }
+            let nat_addr = SocketAddr::new(network::get_iface_address(tun.get_name())?, 9961);
+            let dispatcher = Arc::new(Dispatcher::new(tun.get_name()));
+            let nat = Nat::new(nat_addr, manager, dispatcher);
+            let nat_handle = tokio::spawn(async move {
+                nat.run_tcp().await
+            });
+            // let tun_handle = tokio::spawn(async move {
+            // });
+            event!(Level::INFO, "Start running...");
+            // tokio::join!(nat_handle,tun_handle);
+            tun.run(nat_addr).await?;
         }
         Err(err) => println!("{}", err),
     }

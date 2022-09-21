@@ -25,7 +25,9 @@ impl Dispatcher {
         let name = self.iface_name.clone();
         tokio::spawn(async move {
             let mut direct = DirectOutbound::new(name.as_str(), src_addr, dst_addr, indicator);
-            direct.run(stream);
+            if let Err(err) = direct.run(stream).await {
+                tracing::error!("[Dispatcher] create Direct failed: {}",err)
+            }
         });
     }
 }

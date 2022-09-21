@@ -28,12 +28,12 @@ pub struct TunDevice {
     // (addr, mask)
     addr: Option<Ipv4Net>,
     pool: PktBufPool,
-    session_mgr: SessionManager,
+    session_mgr: Arc<SessionManager>,
 }
 
 impl TunDevice {
     pub fn open(
-        session_mgr: SessionManager,
+        session_mgr: Arc<SessionManager>,
         pool: PktBufPool,
         outbound_iface: &str,
     ) -> io::Result<TunDevice> {
@@ -113,14 +113,16 @@ impl TunDevice {
             ));
         }
         interface_up(self.ctl_fd, self.get_name())?;
-        setup_ipv4_routing_table(self.get_name())
+        setup_ipv4_routing_table(self.get_name())?;
+        tracing::event!(tracing::Level::INFO, "TUN Device {} is up.", self.get_name());
+        Ok(())
     }
 
     async fn send_outbound(&mut self, pkt: &IPPkt) -> io::Result<()> {
         match pkt {
             IPPkt::V4(_) => {
                 let fd = unsafe { create_v4_raw_socket()? };
-                unsafe { platform::bind_to_device(fd, self.gw_name.as_str()) }.map_err(|e| {
+                platform::bind_to_device(fd, self.gw_name.as_str()).map_err(|e| {
                     io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
                 })?;
                 let mut outbound = AsyncRawSocket::create(fd, match pkt.dst_addr() {
@@ -161,10 +163,12 @@ impl TunDevice {
             match pkt.protocol() {
                 IpProtocol::Tcp => {
                     let mut pkt = TcpPkt::new(pkt);
+                    tracing::trace!("[TUN] {}:{} -> {}:{}",src,pkt.src_port(),dst,pkt.dst_port());
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
-                        // external->internal
+                        // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) = self.session_mgr.query_tcp_by_token(pkt.dst_port()) {
                             pkt.rewrite_addr(conn_dst, conn_src);
+                            tracing::trace!("[TUN] inbound rewrite {} -> {}",conn_dst,conn_src);
                             if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
                                 tracing::warn!("Send to NAT failed");
                                 continue;
@@ -174,7 +178,7 @@ impl TunDevice {
                             continue;
                         }
                     } else {
-                        // internal->external
+                        // inbound->outbound
                         let port = self.session_mgr.query_tcp_by_addr(
                             SocketAddr::V4(SocketAddrV4::new(src, pkt.src_port())),
                             SocketAddr::V4(SocketAddrV4::new(dst, pkt.dst_port())),
@@ -184,6 +188,7 @@ impl TunDevice {
                             SocketAddr::from(SocketAddrV4::new(dst, port)),
                             SocketAddr::from(nat_addr),
                         );
+                        tracing::trace!("[TUN] outbound rewrite {} -> {}",SocketAddr::from(SocketAddrV4::new(dst, port)),SocketAddr::from(nat_addr));
                         if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
                             tracing::warn!("Send to NAT failed");
                             continue;

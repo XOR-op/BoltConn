@@ -50,12 +50,22 @@ impl DirectOutbound {
         tokio::spawn(async move {
             let mut buf = [0u8; Self::BUF_SIZE];
             loop {
-                if let Ok(size) = in_read.read(&mut buf).await {
-                    if let Err(_) = out_write.write_all(&buf[..size]).await {
+                match in_read.read(&mut buf).await {
+                    Ok(0) => {
+                        tracing::trace!("[Direct] in->out closed");
                         break;
                     }
-                } else {
-                    break;
+                    Ok(size) => {
+                        tracing::trace!("[Direct] outgoing {} bytes",size);
+                        if let Err(err) = out_write.write_all(&buf[..size]).await {
+                            tracing::warn!("[Direct] write to outbound failed: {}",err);
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("[Direct] encounter error: {}",err);
+                        break;
+                    }
                 }
             }
             outgoing_indicator.fetch_sub(1, Ordering::Relaxed);
@@ -63,12 +73,22 @@ impl DirectOutbound {
         // recv from outbound and send to inbound
         let mut buf = [0u8; Self::BUF_SIZE];
         loop {
-            if let Ok(size) = out_read.read(&mut buf).await {
-                if let Err(_) = in_write.write_all(&buf[..size]).await {
+            match out_read.read(&mut buf).await {
+                Ok(0) => {
+                    tracing::trace!("[Direct] out->in closed");
                     break;
                 }
-            } else {
-                break;
+                Ok(size) => {
+                    tracing::trace!("[Direct] ingoing {} bytes",size);
+                    if let Err(err) = in_write.write_all(&buf[..size]).await {
+                        tracing::warn!("[Direct] write to inbound failed: {}",err);
+                        break;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("[Direct] encounter error: {}",err);
+                    break;
+                }
             }
         }
         ingoing_indicator.fetch_sub(1, Ordering::Relaxed);
