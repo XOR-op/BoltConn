@@ -17,8 +17,8 @@ use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use std::{io, mem, slice};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::io::split;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 
 pub struct TunDevice {
     fd: Option<AsyncRawFd>,
@@ -65,7 +65,10 @@ impl TunDevice {
     }
 
     /// Read a full ip packet from tun device.
-    async fn recv_ip(receiver: &mut ReadHalf<AsyncRawFd>, mut handle: PktBufHandle) -> io::Result<IPPkt> {
+    async fn recv_ip(
+        receiver: &mut ReadHalf<AsyncRawFd>,
+        mut handle: PktBufHandle,
+    ) -> io::Result<IPPkt> {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
@@ -73,9 +76,9 @@ impl TunDevice {
         receiver.read(raw_buffer.as_mut_slice()).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-            let start_offset = 4;
+        let start_offset = 4;
         #[cfg(target_os = "linux")]
-            let start_offset = 0;
+        let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -114,7 +117,11 @@ impl TunDevice {
         }
         interface_up(self.ctl_fd, self.get_name())?;
         setup_ipv4_routing_table(self.get_name())?;
-        tracing::event!(tracing::Level::INFO, "TUN Device {} is up.", self.get_name());
+        tracing::event!(
+            tracing::Level::INFO,
+            "TUN Device {} is up.",
+            self.get_name()
+        );
         Ok(())
     }
 
@@ -125,10 +132,13 @@ impl TunDevice {
                 platform::bind_to_device(fd, self.gw_name.as_str()).map_err(|e| {
                     io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
                 })?;
-                let mut outbound = AsyncRawSocket::create(fd, match pkt.dst_addr() {
-                    IpAddr::V4(addr) => addr,
-                    _ => unreachable!()
-                })?;
+                let mut outbound = AsyncRawSocket::create(
+                    fd,
+                    match pkt.dst_addr() {
+                        IpAddr::V4(addr) => addr,
+                        _ => unreachable!(),
+                    },
+                )?;
                 let size = outbound.write(pkt.packet_data()).await?;
                 tracing::trace!("IPv4 send done: {}", size);
             }
@@ -163,18 +173,34 @@ impl TunDevice {
             match pkt.protocol() {
                 IpProtocol::Tcp => {
                     let mut pkt = TcpPkt::new(pkt);
-                    tracing::trace!("[TUN] {}:{} -> {}:{}",src,pkt.src_port(),dst,pkt.dst_port());
+                    tracing::trace!(
+                        "[TUN] {}:{} -> {}:{}",
+                        src,
+                        pkt.src_port(),
+                        dst,
+                        pkt.dst_port()
+                    );
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
-                        if let Ok((conn_src, conn_dst, _)) = self.session_mgr.query_tcp_by_token(pkt.dst_port()) {
+                        if let Ok((conn_src, conn_dst, _)) =
+                            self.session_mgr.query_tcp_by_token(pkt.dst_port())
+                        {
                             pkt.rewrite_addr(conn_dst, conn_src);
-                            tracing::trace!("[TUN] inbound rewrite {} -> {}",conn_dst,conn_src);
+                            tracing::trace!(
+                                "[TUN] inbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
+                                conn_dst,
+                                conn_src,
+                                pkt.packet_payload().len(),
+                                pkt.as_tcp_packet().syn(),
+                                pkt.as_tcp_packet().ack(),
+                                pkt.as_tcp_packet().seq_number()
+                            );
                             if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
                                 tracing::warn!("Send to NAT failed");
                                 continue;
                             }
                         } else {
-                            tracing::warn!("No record found for {}",pkt.dst_port());
+                            tracing::warn!("No record found for {}", pkt.dst_port());
                             continue;
                         }
                     } else {
@@ -188,7 +214,15 @@ impl TunDevice {
                             SocketAddr::from(SocketAddrV4::new(dst, port)),
                             SocketAddr::from(nat_addr),
                         );
-                        tracing::trace!("[TUN] outbound rewrite {} -> {}",SocketAddr::from(SocketAddrV4::new(dst, port)),SocketAddr::from(nat_addr));
+                        tracing::trace!(
+                            "[TUN] outbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
+                            SocketAddr::from(SocketAddrV4::new(dst, port)),
+                            SocketAddr::from(nat_addr),
+                            pkt.packet_payload().len(),
+                            pkt.as_tcp_packet().syn(),
+                            pkt.as_tcp_packet().ack(),
+                            pkt.as_tcp_packet().seq_number()
+                        );
                         if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
                             tracing::warn!("Send to NAT failed");
                             continue;

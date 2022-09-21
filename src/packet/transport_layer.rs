@@ -9,7 +9,7 @@ use smoltcp::wire::{
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::io::ErrorKind;
-use std::net::{SocketAddrV4, SocketAddrV6, SocketAddr};
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
 pub trait TransLayerPkt {
     fn src_port(&self) -> u16;
@@ -46,11 +46,7 @@ impl TransLayerPkt for TcpPkt {
         &self.ip_pkt
     }
 
-    fn rewrite_addr(
-        &mut self,
-        src_addr: SocketAddr,
-        dst_addr: SocketAddr,
-    ) {
+    fn rewrite_addr(&mut self, src_addr: SocketAddr, dst_addr: SocketAddr) {
         match (src_addr, dst_addr) {
             (SocketAddr::V4(src_addr), SocketAddr::V4(dst_addr)) => {
                 // rewrite tcp
@@ -84,7 +80,7 @@ impl TransLayerPkt for TcpPkt {
                 pkt.set_dst_addr(Ipv6Address::from(*dst_addr.ip()));
                 // ipv6 does not contain checksum
             }
-            (_, _) => unreachable!()
+            (_, _) => unreachable!(),
         }
     }
 }
@@ -105,6 +101,10 @@ impl TcpPkt {
     pub fn new(ip_pkt: IPPkt) -> Self {
         assert_eq!(ip_pkt.protocol(), IpProtocol::Tcp);
         Self { ip_pkt }
+    }
+
+    pub fn as_tcp_packet(&self) -> TcpPacket<&[u8]> {
+        TcpPacket::new_unchecked(self.ip_pkt.packet_payload())
     }
 }
 
@@ -166,7 +166,7 @@ impl TransLayerPkt for UdpPkt {
                 pkt.set_dst_addr(Ipv6Address::from(*dst_addr.ip()));
                 // ipv6 does not contain checksum
             }
-            (_, _) => unreachable!()
+            (_, _) => unreachable!(),
         }
     }
 }

@@ -30,7 +30,7 @@ impl SessionManager {
         let mut pair = entry.or_insert(TcpSessionCtl::new(src_addr, dst_addr));
         // If original connection silently expired
         if pair.dest_addr != dst_addr {
-            tracing::debug!("[Session] Recreate record {}",src_addr.port());
+            tracing::debug!("[Session] Recreate record {}", src_addr.port());
             *pair.value_mut() = TcpSessionCtl::new(src_addr, dst_addr);
         }
         pair.value_mut().update_time();
@@ -40,11 +40,20 @@ impl SessionManager {
     pub fn query_tcp_by_token(&self, port: u16) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
         match self.tcp_records.get(&port) {
             Some(s) => {
-                tracing::trace!("[Session] success = ({})=>({},{})",port,s.source_addr,s.dest_addr);
+                tracing::trace!(
+                    "[Session] success = ({})=>({},{})",
+                    port,
+                    s.source_addr,
+                    s.dest_addr
+                );
                 Ok((s.source_addr, s.dest_addr, s.available.clone()))
             }
             None => {
-                tracing::debug!("[Session] token {} not found; tcp_records = {:?}",port,self.tcp_records);
+                tracing::debug!(
+                    "[Session] token {} not found; tcp_records = {:?}",
+                    port,
+                    self.tcp_records
+                );
                 Err(io::Error::new(
                     ErrorKind::AddrNotAvailable,
                     format!("No record found"),

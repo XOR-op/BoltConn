@@ -65,53 +65,75 @@ impl IPPkt {
 
     pub fn src_addr(&self) -> IpAddr {
         match self {
-            IPPkt::V4(inner) => { IpAddr::V4(Ipv4Packet::new_unchecked(inner.handle.data.as_slice()).src_addr().into()) }
-            IPPkt::V6(inner) => { IpAddr::V6(Ipv6Packet::new_unchecked(inner.handle.data.as_slice()).src_addr().into()) }
+            IPPkt::V4(inner) => IpAddr::V4(
+                Ipv4Packet::new_unchecked(inner.handle.data.as_slice())
+                    .src_addr()
+                    .into(),
+            ),
+            IPPkt::V6(inner) => IpAddr::V6(
+                Ipv6Packet::new_unchecked(inner.handle.data.as_slice())
+                    .src_addr()
+                    .into(),
+            ),
         }
     }
 
     pub fn dst_addr(&self) -> IpAddr {
         match self {
-            IPPkt::V4(inner) => { IpAddr::V4(Ipv4Packet::new_unchecked(inner.handle.data.as_slice()).dst_addr().into()) }
-            IPPkt::V6(inner) => { IpAddr::V6(Ipv6Packet::new_unchecked(inner.handle.data.as_slice()).dst_addr().into()) }
+            IPPkt::V4(inner) => IpAddr::V4(
+                Ipv4Packet::new_unchecked(inner.handle.data.as_slice())
+                    .dst_addr()
+                    .into(),
+            ),
+            IPPkt::V6(inner) => IpAddr::V6(
+                Ipv6Packet::new_unchecked(inner.handle.data.as_slice())
+                    .dst_addr()
+                    .into(),
+            ),
         }
     }
 
     pub fn protocol(&self) -> IpProtocol {
         match self {
-            IPPkt::V4(inner) => { Ipv4Packet::new_unchecked(inner.handle.data.as_slice()).protocol() }
-            IPPkt::V6(inner) => { Ipv6Packet::new_unchecked(inner.handle.data.as_slice()).next_header() }
+            IPPkt::V4(inner) => Ipv4Packet::new_unchecked(inner.handle.data.as_slice()).protocol(),
+            IPPkt::V6(inner) => {
+                Ipv6Packet::new_unchecked(inner.handle.data.as_slice()).next_header()
+            }
         }
     }
 
     pub fn raw_data(&self) -> &[u8] {
         match self {
-            IPPkt::V4(inner) => { &inner.handle.data[..inner.handle.len] }
-            IPPkt::V6(inner) => { &inner.handle.data[..inner.handle.len] }
+            IPPkt::V4(inner) => &inner.handle.data[..inner.handle.len],
+            IPPkt::V6(inner) => &inner.handle.data[..inner.handle.len],
         }
     }
 
     pub fn packet_data(&self) -> &[u8] {
         match self {
-            IPPkt::V4(inner) => { &inner.handle.data[inner.pkt_start_offset..inner.handle.len] }
-            IPPkt::V6(inner) => { &inner.handle.data[inner.pkt_start_offset..inner.handle.len] }
+            IPPkt::V4(inner) => &inner.handle.data[inner.pkt_start_offset..inner.handle.len],
+            IPPkt::V6(inner) => &inner.handle.data[inner.pkt_start_offset..inner.handle.len],
         }
     }
     pub fn packet_data_mut(&mut self) -> &mut [u8] {
         match self {
-            IPPkt::V4(inner) => { &mut inner.handle.data[inner.pkt_start_offset..inner.handle.len] }
-            IPPkt::V6(inner) => { &mut inner.handle.data[inner.pkt_start_offset..inner.handle.len] }
+            IPPkt::V4(inner) => &mut inner.handle.data[inner.pkt_start_offset..inner.handle.len],
+            IPPkt::V6(inner) => &mut inner.handle.data[inner.pkt_start_offset..inner.handle.len],
         }
     }
 
     pub fn packet_payload(&self) -> &[u8] {
         match self {
             IPPkt::V4(inner) => {
-                let payload_len = Ipv4Packet::new_unchecked(inner.handle.data.as_slice()).payload().len();
+                let payload_len = Ipv4Packet::new_unchecked(inner.handle.data.as_slice())
+                    .payload()
+                    .len();
                 &inner.handle.data[inner.handle.len - payload_len..inner.handle.len]
             }
             IPPkt::V6(inner) => {
-                let payload_len = Ipv6Packet::new_unchecked(inner.handle.data.as_slice()).payload().len();
+                let payload_len = Ipv6Packet::new_unchecked(inner.handle.data.as_slice())
+                    .payload()
+                    .len();
                 &inner.handle.data[inner.handle.len - payload_len..inner.handle.len]
             }
         }
@@ -120,11 +142,15 @@ impl IPPkt {
     pub fn packet_payload_mut(&mut self) -> &mut [u8] {
         match self {
             IPPkt::V4(inner) => {
-                let payload_len = Ipv4Packet::new_unchecked(inner.handle.data.as_slice()).payload().len();
+                let payload_len = Ipv4Packet::new_unchecked(inner.handle.data.as_slice())
+                    .payload()
+                    .len();
                 &mut inner.handle.data[inner.handle.len - payload_len..inner.handle.len]
             }
             IPPkt::V6(inner) => {
-                let payload_len = Ipv6Packet::new_unchecked(inner.handle.data.as_slice()).payload().len();
+                let payload_len = Ipv6Packet::new_unchecked(inner.handle.data.as_slice())
+                    .payload()
+                    .len();
                 &mut inner.handle.data[inner.handle.len - payload_len..inner.handle.len]
             }
         }
@@ -132,8 +158,8 @@ impl IPPkt {
 
     pub fn into_handle(self) -> PktBufHandle {
         match self {
-            IPPkt::V4(inner) => { inner.handle }
-            IPPkt::V6(inner) => { inner.handle }
+            IPPkt::V4(inner) => inner.handle,
+            IPPkt::V6(inner) => inner.handle,
         }
     }
 }
