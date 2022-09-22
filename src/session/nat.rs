@@ -28,7 +28,7 @@ impl Nat {
         let tcp_listener = TcpListener::bind(self.nat_addr).await?;
         tracing::event!(
             tracing::Level::INFO,
-            "[NAT] Listen TCP at {}",
+            "[NAT] Listen TCP at {}, running...",
             self.nat_addr
         );
         loop {

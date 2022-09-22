@@ -73,7 +73,9 @@ impl TunDevice {
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
         let raw_buffer = &mut handle.data;
+        tracing::trace!("[Recv IP] waiting");
         receiver.read(raw_buffer.as_mut_slice()).await?;
+        tracing::trace!("[Recv IP] got");
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
         let start_offset = 4;
@@ -82,11 +84,14 @@ impl TunDevice {
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
-                handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize;
+                handle.len =
+                    <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize + start_offset;
                 Ok(IPPkt::from_v4(handle, start_offset))
             }
             6 => {
-                handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize + 40;
+                handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize
+                    + 40
+                    + start_offset;
                 Ok(IPPkt::from_v6(handle, start_offset))
             }
             _ => panic!("Packet is not IPv4 or IPv6"),
@@ -157,12 +162,14 @@ impl TunDevice {
             panic!("v6 nat not supported")
         };
         let (mut fd_read, mut fd_write) = split(self.fd.take().unwrap());
+        tracing::info!("[TUN] Running...");
         loop {
             // read a ip packet from tun device
             let handle = self.pool.obtain().await;
             let pkt = Self::recv_ip(&mut fd_read, handle).await?;
             if pkt.src_addr().is_ipv6() {
                 // not supported now
+                tracing::trace!("[TUN] drop IPv6: {} -> {} ", pkt.src_addr(), pkt.dst_addr());
                 continue;
             }
             let (src, dst) = match (pkt.src_addr(), pkt.dst_addr()) {
@@ -229,8 +236,11 @@ impl TunDevice {
                         }
                     }
                 }
-                IpProtocol::Udp => {}
+                IpProtocol::Udp => {
+                    tracing::trace!("[TUN] UDP packet: {} -> {}", src, dst);
+                }
                 _ => {
+                    tracing::trace!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);
                     // discarded
                 }
             }

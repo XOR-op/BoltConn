@@ -48,7 +48,6 @@ async fn main() -> std::io::Result<()> {
             let nat_handle = tokio::spawn(async move { nat.run_tcp().await });
             // let tun_handle = tokio::spawn(async move {
             // });
-            event!(Level::INFO, "Start running...");
             // tokio::join!(nat_handle,tun_handle);
             tun.run(nat_addr).await?;
         }
