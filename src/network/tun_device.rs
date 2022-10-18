@@ -73,9 +73,7 @@ impl TunDevice {
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
         let raw_buffer = &mut handle.data;
-        tracing::trace!("[Recv IP] waiting");
         receiver.read(raw_buffer.as_mut_slice()).await?;
-        tracing::trace!("[Recv IP] got");
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
         let start_offset = 4;
@@ -145,7 +143,7 @@ impl TunDevice {
                     },
                 )?;
                 let size = outbound.write(pkt.packet_data()).await?;
-                tracing::trace!("IPv4 send done: {}", size);
+                // tracing::trace!("IPv4 send done: {}", size);
             }
             _ => {
                 tracing::trace!("Drop IPv6 send");
@@ -180,28 +178,28 @@ impl TunDevice {
             match pkt.protocol() {
                 IpProtocol::Tcp => {
                     let mut pkt = TcpPkt::new(pkt);
-                    tracing::trace!(
-                        "[TUN] {}:{} -> {}:{}",
-                        src,
-                        pkt.src_port(),
-                        dst,
-                        pkt.dst_port()
-                    );
+                    // tracing::trace!(
+                    //     "[TUN] {}:{} -> {}:{}",
+                    //     src,
+                    //     pkt.src_port(),
+                    //     dst,
+                    //     pkt.dst_port()
+                    // );
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
                             self.session_mgr.query_tcp_by_token(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
-                            tracing::trace!(
-                                "[TUN] inbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
-                                conn_dst,
-                                conn_src,
-                                pkt.packet_payload().len(),
-                                pkt.as_tcp_packet().syn(),
-                                pkt.as_tcp_packet().ack(),
-                                pkt.as_tcp_packet().seq_number()
-                            );
+                            // tracing::trace!(
+                            //     "[TUN] inbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
+                            //     conn_dst,
+                            //     conn_src,
+                            //     pkt.packet_payload().len(),
+                            //     pkt.as_tcp_packet().syn(),
+                            //     pkt.as_tcp_packet().ack(),
+                            //     pkt.as_tcp_packet().seq_number()
+                            // );
                             if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
                                 tracing::warn!("Send to NAT failed");
                                 continue;
@@ -221,15 +219,15 @@ impl TunDevice {
                             SocketAddr::from(SocketAddrV4::new(dst, port)),
                             SocketAddr::from(nat_addr),
                         );
-                        tracing::trace!(
-                            "[TUN] outbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
-                            SocketAddr::from(SocketAddrV4::new(dst, port)),
-                            SocketAddr::from(nat_addr),
-                            pkt.packet_payload().len(),
-                            pkt.as_tcp_packet().syn(),
-                            pkt.as_tcp_packet().ack(),
-                            pkt.as_tcp_packet().seq_number()
-                        );
+                        // tracing::trace!(
+                        //     "[TUN] outbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
+                        //     SocketAddr::from(SocketAddrV4::new(dst, port)),
+                        //     SocketAddr::from(nat_addr),
+                        //     pkt.packet_payload().len(),
+                        //     pkt.as_tcp_packet().syn(),
+                        //     pkt.as_tcp_packet().ack(),
+                        //     pkt.as_tcp_packet().seq_number()
+                        // );
                         if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
                             tracing::warn!("Send to NAT failed");
                             continue;

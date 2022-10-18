@@ -40,12 +40,12 @@ impl SessionManager {
     pub fn query_tcp_by_token(&self, port: u16) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
         match self.tcp_records.get(&port) {
             Some(s) => {
-                tracing::trace!(
-                    "[Session] success = ({})=>({},{})",
-                    port,
-                    s.source_addr,
-                    s.dest_addr
-                );
+                // tracing::trace!(
+                //     "[Session] success = ({})=>({},{})",
+                //     port,
+                //     s.source_addr,
+                //     s.dest_addr
+                // );
                 Ok((s.source_addr, s.dest_addr, s.available.clone()))
             }
             None => {

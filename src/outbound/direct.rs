@@ -35,7 +35,6 @@ impl DirectOutbound {
         let outbound = match self.conn.dst {
             SocketAddr::V4(v4) => {
                 let socket = TcpSocket::new_v4()?;
-                tracing::debug!("[Direct] Bind to device {}", self.iface_name);
                 bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
                 socket.connect(self.conn.dst).await?
             }
@@ -62,7 +61,7 @@ impl DirectOutbound {
                         break;
                     }
                     Ok(size) => {
-                        tracing::trace!("[Direct] outgoing {} bytes", size);
+                        // tracing::trace!("[Direct] outgoing {} bytes", size);
                         if let Err(err) = out_write.write_all(&buf[..size]).await {
                             tracing::warn!("[Direct] write to outbound failed: {}", err);
                             break;
@@ -85,7 +84,7 @@ impl DirectOutbound {
                     break;
                 }
                 Ok(size) => {
-                    tracing::trace!("[Direct] ingoing {} bytes", size);
+                    // tracing::trace!("[Direct] ingoing {} bytes", size);
                     if let Err(err) = in_write.write_all(&buf[..size]).await {
                         tracing::warn!("[Direct] write to inbound failed: {}", err);
                         break;
