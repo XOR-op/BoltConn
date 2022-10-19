@@ -41,10 +41,8 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
             0,
         ) < 0
         {
-            // tracing::warn!("[get_pid()] sysctlbyname1: {}",io::Error::last_os_error());
             return Err(io::Error::last_os_error());
         }
-        // tracing::info!("[get_pid()] len is {}",len);
         buf.resize(len, 0);
         // real read
         if libc::sysctlbyname(
@@ -55,7 +53,6 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
             0,
         ) < 0
         {
-            // tracing::warn!("[get_pid()] sysctlbyname2: {}",io::Error::last_os_error());
             return Err(io::Error::last_os_error());
         }
     }
@@ -85,7 +82,6 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
             continue;
         }
     }
-    tracing::warn!("[get_pid()]: Not found");
     Err(io::Error::new(
         ErrorKind::NotFound,
         "Cannot find such a process",

@@ -1,64 +1,59 @@
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU8};
-use std::sync::Arc;
-use std::time;
 use std::time::Instant;
 
-#[derive(Debug, Clone)]
-pub enum SessionCtl {
-    TCP(TcpSessionCtl),
-    UDP(UdpSessionCtl),
+#[derive(Debug, Clone, Copy)]
+pub enum SessionProtocol {
+    TCP,
+    HTTP,
+    TLS(TlsVersion),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TlsVersion {
+    TLS12,
+    TLS13,
+    LEGACY,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum NetworkAddr {
+    IP(SocketAddr),
+    DomainName {
+        domain_name: String,
+        port: u16,
+    },
 }
 
 #[derive(Debug, Clone)]
-pub struct TcpSessionCtl {
-    pub source_addr: SocketAddr,
-    pub dest_addr: SocketAddr,
-    pub available: Arc<AtomicU8>,
-    pub last_time: Instant,
+pub struct SessionInfo {
+    pub start_time: Instant,
+    pub dest: NetworkAddr,
+    pub session_proto: SessionProtocol,
+    pub rule: String,
 }
 
-impl TcpSessionCtl {
-    pub fn new(source_addr: SocketAddr, dest_addr: SocketAddr) -> Self {
-        Self {
-            source_addr,
-            dest_addr,
-            available: Arc::new(AtomicU8::new(2)), // inbound and outbound
-            last_time: Instant::now(),
+/// The packet as argument should be the first packet of the connection
+pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
+    // TLS handshake
+    if packet.len() > 5 && packet[0] == 22 && packet[1] == 3 {
+        match packet[2] {
+            3 => return SessionProtocol::TLS(TlsVersion::TLS12),
+            4 => return SessionProtocol::TLS(TlsVersion::TLS13),
+            0 | 1 | 2 => return SessionProtocol::TLS(TlsVersion::LEGACY),
+            _ => {}
         }
     }
-
-    pub fn is_expired(&self, threshold: time::Duration) -> bool {
-        Instant::now() - self.last_time < threshold
-    }
-
-    pub fn update_time(&mut self) {
-        self.last_time = Instant::now();
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UdpSessionCtl {
-    internal_port: u16,
-    iface_port: u16,
-    last_time: Instant,
-    // todo add some statistics
-}
-
-impl UdpSessionCtl {
-    pub fn new(internal_port: u16, iface_port: u16) -> Self {
-        Self {
-            internal_port,
-            iface_port,
-            last_time: Instant::now(),
+    // HTTP request line
+    if let Some(idx) = packet.iter().position(|&b| b == b'\r') {
+        if idx + 1 < packet.len() && packet[idx + 1] == b'\n' {
+            // contains a request line
+            let request_line = packet.slice(0, idx);
+            if request_line.ends_with("HTTP/1.1".as_bytes()) {
+                // we just ignore legacy versions
+                return SessionProtocol::HTTP;
+            }
         }
     }
-
-    pub fn is_expired(&self, threshold: time::Duration) -> bool {
-        Instant::now() - self.last_time < threshold
-    }
-
-    pub fn update_time(&mut self) {
-        self.last_time = Instant::now();
-    }
+    // Unknown
+    SessionProtocol::TCP
 }
