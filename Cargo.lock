@@ -85,7 +85,6 @@ dependencies = [
  "byteorder",
  "bytes",
  "dashmap",
- "dns-parser",
  "errno",
  "ioctl-sys",
  "ipnet",
@@ -94,6 +93,7 @@ dependencies = [
  "netlink-packet-sock-diag",
  "netlink-sys",
  "serde",
+ "simple-dns",
  "smoltcp",
  "thiserror",
  "tokio",
@@ -154,16 +154,6 @@ name = "data-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ee2393c4a91429dffb4bedf19f4d6abf27d8a732c8ce4980305d782e5426d57"
-
-[[package]]
-name = "dns-parser"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4d33be9473d06f75f58220f71f7a9317aca647dc061dbd3c361b0bef505fbea"
-dependencies = [
- "byteorder",
- "quick-error",
-]
 
 [[package]]
 name = "enum-as-inner"
@@ -743,6 +733,12 @@ name = "shlex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
+
+[[package]]
+name = "simple-dns"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80cc2e35476add878c71a3c55fecdc888c8bb92b9883397e87b34d7cdc1de212"
 
 [[package]]
 name = "slab"

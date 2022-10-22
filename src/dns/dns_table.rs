@@ -95,7 +95,9 @@ impl DnsTable {
 
     fn flush_expiration(inner: &mut DnsTableInner, threshold: Duration) {
         let now = Instant::now();
-        inner.dn_table.retain(|_, v| now - *v.last_time.lock().unwrap() > threshold);
+        inner
+            .dn_table
+            .retain(|_, v| now - *v.last_time.lock().unwrap() > threshold);
         inner.ip_table.retain(|_, v| {
             let cond = now - *v.last_time.lock().unwrap() > threshold;
             if !cond {
@@ -121,7 +123,9 @@ impl DnsTable {
             }
         }
         // remove those older than that
-        inner.dn_table.retain(|_, v| *v.last_time.lock().unwrap() > min_ts);
+        inner
+            .dn_table
+            .retain(|_, v| *v.last_time.lock().unwrap() > min_ts);
         inner.ip_table.retain(|_, v| {
             let cond = *v.last_time.lock().unwrap() > min_ts;
             if !cond {

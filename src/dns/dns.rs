@@ -2,6 +2,8 @@ use crate::dns::dns_table::DnsTable;
 use crate::network::get_iface_address;
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
+use simple_dns::{QTYPE, ResourceRecord};
+use simple_dns::rdata::RData;
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::Resolver;
 
@@ -54,7 +56,32 @@ impl Dns {
         }
     }
 
-    pub fn respond_to_query(&self, pkt: &dns_parser::Packet) -> Vec<u8> {
-        todo!()
+    pub fn respond_to_query(&self, pkt: &simple_dns::Packet) -> Option<Vec<u8>> {
+        // https://stackoverflow.com/questions/55092830/how-to-perform-dns-lookup-with-multiple-questions
+        // There should be no >1 questions in on query
+        for q in &pkt.questions {
+            let domain = q.qname.to_string();
+            if q.qtype != QTYPE::TYPE(simple_dns::TYPE::A) {
+                continue;
+            }
+            let fake_ip = match self.query_by_domain(&domain) {
+                IpAddr::V4(addr) => addr,
+                IpAddr::V6(_) => return None,
+            };
+            let mut resp = simple_dns::Packet::new_reply(pkt.header.id);
+            resp.header.authoritative_answer = true;
+            resp.answers.push(ResourceRecord {
+                name: match simple_dns::Name::new(&domain) {
+                    Ok(v) => v,
+                    Err(_) => return None,
+                },
+                class: simple_dns::CLASS::IN,
+                ttl: 60,
+                rdata: RData::A(simple_dns::rdata::A::from(fake_ip)),
+                cache_flush: true,
+            });
+            return resp.build_bytes_vec().ok();
+        }
+        None
     }
 }

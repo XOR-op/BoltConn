@@ -8,7 +8,7 @@ use netlink_sys::protocols::NETLINK_SOCK_DIAG;
 use netlink_sys::Socket;
 use std::{
     fs::DirEntry,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
 };
 use std::{io, mem::MaybeUninit};
@@ -36,9 +36,13 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
             socket_id: SocketId {
                 source_port: addr.port(),
                 source_address: addr.ip(),
-                ..Default::default()
+                destination_port: 0,
+                destination_address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+                interface_id: 0,
+                cookie: [0xff; 8],
             },
-        }),
+        })
+        .into(),
     };
     packet.finalize();
     let mut buf = vec![0; packet.header.length as usize];
@@ -56,7 +60,7 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
                 NetlinkPayload::InnerMessage(SockDiagMessage::InetResponse(response)) => {
                     return Ok((response.header.inode, response.header.uid));
                 }
-                _ => return Err(io::ErrorKind::InvalidData),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "sock_diag read")),
             }
 
             offset += rx_packet.header.length as usize;
@@ -66,7 +70,7 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
             }
         }
     }
-    Err(io::ErrorKind::InvalidData)
+    Err(io::Error::new(io::ErrorKind::InvalidData, "sock_diag read"))
 }
 
 fn read_proc(fd: Result<DirEntry>, name: &str) -> Result<bool> {
@@ -99,7 +103,7 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
                     continue;
                 }
                 // read fds to search for socket:[]
-                let fd_path = proc.path();
+                let mut fd_path = proc.path();
                 fd_path.push("fd");
                 if let Ok(internal) = std::fs::read_dir(fd_path) {
                     for fd in internal {
@@ -117,6 +121,7 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
             }
         }
     }
+    Err(io::Error::new(io::ErrorKind::NotFound, "sock_diag read"))
 }
 
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
@@ -127,7 +132,7 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
             return Some(ProcessInfo {
                 pid,
                 path,
-                name: String::from_utf8_lossy(name.as_slice()),
+                name: String::from_utf8_lossy(name.as_slice()).into_owned(),
             });
         }
     }

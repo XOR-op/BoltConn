@@ -79,9 +79,9 @@ impl TunDevice {
         receiver.read(raw_buffer.as_mut_slice()).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-        let start_offset = 4;
+            let start_offset = 4;
         #[cfg(target_os = "linux")]
-        let start_offset = 0;
+            let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -191,7 +191,7 @@ impl TunDevice {
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
-                            self.session_mgr.query_tcp_by_token(pkt.dst_port())
+                        self.session_mgr.query_tcp_by_token(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
                             // tracing::trace!(
@@ -241,20 +241,25 @@ impl TunDevice {
                     let pkt = UdpPkt::new(pkt);
                     tracing::trace!("[TUN] UDP packet: {} -> {}", src, dst);
                     if pkt.dst_port() == 53 {
+                        let mut success = false;
                         // fake ip
-                        if let Ok(parsed_dns) = dns_parser::Packet::parse(pkt.packet_payload()) {
-                            let answer = self.dns_resolver.respond_to_query(&parsed_dns);
-                            let mut new_pkt = pkt.set_payload(answer.as_slice());
-                            new_pkt.rewrite_addr(
-                                SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
-                                SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
-                            );
-                            if let Err(_) = Self::send_ip(&mut fd_write, new_pkt.ip_pkt()).await {
-                                tracing::warn!("Send to NAT failed");
-                                continue;
+                        if let Ok(parsed_dns) = simple_dns::Packet::parse(pkt.packet_payload()) {
+                            if let Some(answer) = self.dns_resolver.respond_to_query(&parsed_dns) {
+                                let mut new_pkt = pkt.set_payload(answer.as_slice());
+                                new_pkt.rewrite_addr(
+                                    SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
+                                    SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
+                                );
+                                success = true;
+                                if let Err(_) = Self::send_ip(&mut fd_write, new_pkt.ip_pkt()).await
+                                {
+                                    tracing::warn!("Send to NAT failed");
+                                    continue;
+                                }
                             }
-                        } else {
-                            tracing::warn!("Failed to parse DNS");
+                        }
+                        if !success{
+                            tracing::warn!("fake ip failed");
                         }
                     } else {
                         if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
