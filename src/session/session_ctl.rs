@@ -29,7 +29,7 @@ impl TcpSessionCtl {
     }
 
     pub fn is_expired(&self, threshold: time::Duration) -> bool {
-        Instant::now() - self.last_time < threshold
+        Instant::now() - self.last_time > threshold
     }
 
     pub fn update_time(&mut self) {
@@ -55,7 +55,7 @@ impl UdpSessionCtl {
     }
 
     pub fn is_expired(&self, threshold: time::Duration) -> bool {
-        Instant::now() - self.last_time < threshold
+        Instant::now() - self.last_time > threshold
     }
 
     pub fn update_time(&mut self) {
