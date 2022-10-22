@@ -4,7 +4,7 @@ use io::Result;
 use std::io;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
@@ -33,12 +33,12 @@ impl DirectOutbound {
         let ingoing_indicator = self.conn.available.clone();
         let outgoing_indicator = self.conn.available.clone();
         let outbound = match self.conn.dst {
-            SocketAddr::V4(v4) => {
+            SocketAddr::V4(_) => {
                 let socket = TcpSocket::new_v4()?;
                 bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
                 socket.connect(self.conn.dst).await?
             }
-            SocketAddr::V6(v6) => {
+            SocketAddr::V6(_) => {
                 let socket = TcpSocket::new_v6()?;
                 bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
                 socket.connect(self.conn.dst).await?

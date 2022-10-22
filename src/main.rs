@@ -1,7 +1,9 @@
-extern crate core;
+#![allow(unused_imports)]
+#![allow(unused_variables)]
 
+extern crate core;
 use crate::dispatch::Dispatcher;
-#[allow(unused_imports)]
+use crate::dns::Dns;
 use crate::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
 use crate::resource::buf_slab::PktBufPool;
 use crate::session::{Nat, SessionManager};
@@ -16,6 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tracing::{event, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod config;
 mod dispatch;
 mod dns;
 mod network;
@@ -35,9 +38,12 @@ async fn main() -> std::io::Result<()> {
     let real_iface_name = "en0";
     #[cfg(target_os = "linux")]
     let real_iface_name = "ens18";
+
     let pool = PktBufPool::new(512, 4096);
     let manager = Arc::new(SessionManager::new());
-    let raw_tun = TunDevice::open(manager.clone(), pool.clone(), real_iface_name);
+    let dns = Arc::new(Dns::new(real_iface_name)?);
+    let raw_tun = TunDevice::open(manager.clone(), pool.clone(), real_iface_name, dns.clone());
+
     match raw_tun {
         Ok(mut tun) => {
             event!(Level::INFO, "TUN Device {} opened.", tun.get_name());

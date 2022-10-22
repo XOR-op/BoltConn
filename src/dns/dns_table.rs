@@ -1,18 +1,19 @@
+use ipnet::Ipv4Net;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use ipnet::Ipv4Net;
 
 pub struct DnsRecord {
     pub domain_name: String,
     pub ip: IpAddr,
-    last_time: Instant,
+    last_time: Mutex<Instant>,
 }
 
 impl DnsRecord {
-    fn update(&mut self) {
-        self.last_time = Instant::now();
+    fn update(&self) {
+        *self.last_time.lock().unwrap() = Instant::now();
     }
 }
 
@@ -28,7 +29,7 @@ impl DnsTableInner {
         let range: Ipv4Net = "198.19.0.0/16".parse().unwrap();
         for i in range.hosts() {
             ip_vec.push(IpAddr::V4(i))
-        };
+        }
         DnsTableInner {
             dn_table: Default::default(),
             ip_table: Default::default(),
@@ -51,14 +52,14 @@ impl DnsTable {
     }
 
     pub fn query_by_ip(&self, addr: IpAddr) -> Option<Arc<DnsRecord>> {
-        let inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         inner.ip_table.get_mut(&addr).map(|rec| {
             rec.update();
             rec.clone()
         })
     }
 
-    pub fn query_by_domain_name(&self, domain: String) -> Arc<DnsRecord> {
+    pub fn query_by_domain_name(&self, domain: &str) -> Arc<DnsRecord> {
         let mut inner = self.inner.lock().unwrap();
         if inner.available_ips.len() < 1024 {
             Self::flush_expiration(&mut inner, self.stale_time);
@@ -66,15 +67,17 @@ impl DnsTable {
                 Self::flush_older(&mut inner);
             }
         }
-        match inner.dn_table.get_mut(&domain) {
+        match inner.dn_table.get_mut(&String::from(domain)) {
             None => {
                 let ip = inner.available_ips.pop().unwrap();
                 let record = Arc::new(DnsRecord {
-                    domain_name: domain.clone(),
+                    domain_name: domain.parse().unwrap(),
                     ip,
-                    last_time: Instant::now(),
+                    last_time: Mutex::new(Instant::now()),
                 });
-                inner.dn_table.insert(domain, record.clone());
+                inner
+                    .dn_table
+                    .insert(domain.parse().unwrap(), record.clone());
                 inner.ip_table.insert(ip, record.clone());
                 record
             }
@@ -90,11 +93,11 @@ impl DnsTable {
         Self::flush_expiration(&mut inner, self.stale_time);
     }
 
-    fn flush_expiration(inner: &mut MutexGuard<DnsTableInner>, threshold: Duration) {
+    fn flush_expiration(inner: &mut DnsTableInner, threshold: Duration) {
         let now = Instant::now();
-        inner.dn_table.retain(|_, v| now - v.last_time > threshold);
+        inner.dn_table.retain(|_, v| now - *v.last_time.lock().unwrap() > threshold);
         inner.ip_table.retain(|_, v| {
-            let cond = now - v.last_time > threshold;
+            let cond = now - *v.last_time.lock().unwrap() > threshold;
             if !cond {
                 inner.available_ips.push(v.ip);
             }
@@ -103,23 +106,24 @@ impl DnsTable {
     }
 
     // remove at least 1 entry
-    fn flush_older(inner: &mut MutexGuard<DnsTableInner>) {
-        let stop = inner.ip_table.len() * 0.3;
+    fn flush_older(inner: &mut DnsTableInner) {
+        let stop = (inner.ip_table.len() as f64 * 0.3) as usize;
         let mut cnt = 0;
         let mut min_ts = Instant::now();
         for pair in inner.ip_table.iter() {
             if cnt < stop {
                 // find mininum of first 30%
                 cnt += 1;
-                if pair.1.last_time < min_ts {
-                    min_ts = pair.1.last_time;
+                let t = *pair.1.last_time.lock().unwrap();
+                if t < min_ts {
+                    min_ts = t;
                 }
             }
         }
         // remove those older than that
-        inner.dn_table.retain(|_, v| v.last_time > min_ts);
+        inner.dn_table.retain(|_, v| *v.last_time.lock().unwrap() > min_ts);
         inner.ip_table.retain(|_, v| {
-            let cond = v.last_time > min_ts;
+            let cond = *v.last_time.lock().unwrap() > min_ts;
             if !cond {
                 inner.available_ips.push(v.ip);
             }

@@ -4,7 +4,7 @@ use io::Result;
 use std::io;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -65,7 +65,9 @@ impl SessionManager {
     /// Evict all expired sessions.
     /// TCP session expires when closed; UDP session expires when timeout.
     pub fn flush(&self) {
-        self.tcp_records.retain(|_, v| v.available.load(Ordering::Relaxed) > 0);
-        self.udp_records.retain(|_, v| v.is_expired(self.stale_time));
+        self.tcp_records
+            .retain(|_, v| v.available.load(Ordering::Relaxed) > 0);
+        self.udp_records
+            .retain(|_, v| v.is_expired(self.stale_time));
     }
 }

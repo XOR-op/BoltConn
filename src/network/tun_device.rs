@@ -1,24 +1,24 @@
+use crate::dns::Dns;
 use crate::network::async_socket::AsyncRawSocket;
 use crate::network::route::setup_ipv4_routing_table;
 use crate::network::{
     create_v4_raw_socket, errno_err, interface_up, platform, set_address, AsyncRawFd,
 };
 use crate::packet::ip::IPPkt;
-use crate::resource::buf_slab::{PktBufHandle, PktBufPool, MAX_PKT_SIZE};
+use crate::resource::buf_slab::{PktBufHandle, PktBufPool};
 use crate::session::SessionManager;
-use crate::{TcpPkt, TransLayerPkt};
+use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use byteorder::{ByteOrder, NetworkEndian};
 use ipnet::Ipv4Net;
-use smoltcp::wire;
 use smoltcp::wire::IpProtocol;
+use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex};
-use std::{io, mem, slice};
+use std::sync::Arc;
 use tokio::io::split;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 
 pub struct TunDevice {
     fd: Option<AsyncRawFd>,
@@ -29,6 +29,7 @@ pub struct TunDevice {
     addr: Option<Ipv4Net>,
     pool: PktBufPool,
     session_mgr: Arc<SessionManager>,
+    dns_resolver: Arc<Dns>,
 }
 
 impl TunDevice {
@@ -36,6 +37,7 @@ impl TunDevice {
         session_mgr: Arc<SessionManager>,
         pool: PktBufPool,
         outbound_iface: &str,
+        dns_resolver: Arc<Dns>,
     ) -> io::Result<TunDevice> {
         let mut name_buffer: Vec<c_char> = Vec::new();
         name_buffer.resize(36, 0);
@@ -57,6 +59,7 @@ impl TunDevice {
             addr: None,
             pool,
             session_mgr,
+            dns_resolver,
         })
     }
 
@@ -235,7 +238,30 @@ impl TunDevice {
                     }
                 }
                 IpProtocol::Udp => {
+                    let pkt = UdpPkt::new(pkt);
                     tracing::trace!("[TUN] UDP packet: {} -> {}", src, dst);
+                    if pkt.dst_port() == 53 {
+                        // fake ip
+                        if let Ok(parsed_dns) = dns_parser::Packet::parse(pkt.packet_payload()) {
+                            let answer = self.dns_resolver.respond_to_query(&parsed_dns);
+                            let mut new_pkt = pkt.set_payload(answer.as_slice());
+                            new_pkt.rewrite_addr(
+                                SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
+                                SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
+                            );
+                            if let Err(_) = Self::send_ip(&mut fd_write, new_pkt.ip_pkt()).await {
+                                tracing::warn!("Send to NAT failed");
+                                continue;
+                            }
+                        } else {
+                            tracing::warn!("Failed to parse DNS");
+                        }
+                    } else {
+                        if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
+                            tracing::warn!("Send to NAT failed");
+                            continue;
+                        }
+                    }
                 }
                 _ => {
                     tracing::trace!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);

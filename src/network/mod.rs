@@ -2,7 +2,7 @@ use ipnet::Ipv4Net;
 use libc::{c_char, c_int};
 use std::ffi::OsStr;
 use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::process::{Command, Stdio};
 use std::{io, mem, ptr};
 

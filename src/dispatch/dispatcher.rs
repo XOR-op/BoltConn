@@ -1,9 +1,9 @@
 use crate::outbound::DirectOutbound;
+use crate::process;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use crate::process;
 
 pub struct Dispatcher {
     iface_name: String,
@@ -29,14 +29,29 @@ impl Dispatcher {
             if let Ok(pid) = r {
                 process::get_process_info(pid)
             } else {
-                tracing::info!("[Dispatcher] ({} -> {}) get_pid() failed: {:?}",src_addr,dst_addr,r);
+                tracing::info!(
+                    "[Dispatcher] ({} -> {}) get_pid() failed: {:?}",
+                    src_addr,
+                    dst_addr,
+                    r
+                );
                 None
             }
         };
         if let Some(info) = info {
-            tracing::trace!("[Dispatcher] ({} -> {}) Name:{}, Path:{}",src_addr,dst_addr,info.name,info.path)
-        }else {
-            tracing::info!("[Dispatcher] ({} -> {}) get_process_info() failed",src_addr,dst_addr);
+            tracing::trace!(
+                "[Dispatcher] ({} -> {}) Name:{}, Path:{}",
+                src_addr,
+                dst_addr,
+                info.name,
+                info.path
+            )
+        } else {
+            tracing::info!(
+                "[Dispatcher] ({} -> {}) get_process_info() failed",
+                src_addr,
+                dst_addr
+            );
         }
         tokio::spawn(async move {
             let mut direct = DirectOutbound::new(name.as_str(), src_addr, dst_addr, indicator);

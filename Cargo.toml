@@ -23,7 +23,8 @@ dashmap = "5.4.0"
 arrayref = "0.3.6"
 libproc = "0.12.0"
 trust-dns-resolver = "0.22.0"
+serde = { version = "1.0.147", features = ["derive"] }
+toml = "0.5.9"
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-sys = "0.8.3"
-[target.'cfg(target_os = "linux")'.dependencies]
 netlink-packet-sock-diag = "0.4.0"

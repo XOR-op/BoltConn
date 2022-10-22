@@ -8,3 +8,4 @@ Features:
 Enhancement:
 - [ ] on-demand privilege elevation  
 - [ ] better IPv6 support
+- [ ] fix dns when disconnected to internet

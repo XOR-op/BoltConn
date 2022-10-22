@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 
 mod direct;

@@ -1,8 +1,7 @@
 use crate::resource::buf_slab::PktBufHandle;
-use smoltcp::phy::ChecksumCapabilities;
-use smoltcp::wire::{IpProtocol, IpRepr, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr};
+use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet};
 use std::fmt::{Display, Formatter};
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 
 pub struct IPPktContent {
     pub handle: PktBufHandle,
@@ -38,7 +37,6 @@ impl Display for IPPkt {
                     d.next_header(),
                 )
             }
-            _ => unreachable!(),
         };
         write!(
             f,
@@ -80,12 +78,12 @@ impl IPPkt {
 
     pub fn dst_addr(&self) -> IpAddr {
         match self {
-            IPPkt::V4(inner) => IpAddr::V4(
+            IPPkt::V4(_) => IpAddr::V4(
                 Ipv4Packet::new_unchecked(self.packet_data())
                     .dst_addr()
                     .into(),
             ),
-            IPPkt::V6(inner) => IpAddr::V6(
+            IPPkt::V6(_) => IpAddr::V6(
                 Ipv6Packet::new_unchecked(self.packet_data())
                     .dst_addr()
                     .into(),
@@ -95,8 +93,22 @@ impl IPPkt {
 
     pub fn protocol(&self) -> IpProtocol {
         match self {
-            IPPkt::V4(inner) => Ipv4Packet::new_unchecked(self.packet_data()).protocol(),
-            IPPkt::V6(inner) => Ipv6Packet::new_unchecked(self.packet_data()).next_header(),
+            IPPkt::V4(_) => Ipv4Packet::new_unchecked(self.packet_data()).protocol(),
+            IPPkt::V6(_) => Ipv6Packet::new_unchecked(self.packet_data()).next_header(),
+        }
+    }
+
+    pub fn pkt_total_len(&self) -> usize {
+        match self {
+            IPPkt::V4(_) => Ipv4Packet::new_unchecked(self.packet_data()).total_len() as usize,
+            IPPkt::V6(_) => Ipv6Packet::new_unchecked(self.packet_data()).total_len(),
+        }
+    }
+
+    pub fn raw_start_offset(&self) -> usize {
+        match self {
+            IPPkt::V4(inner) => inner.pkt_start_offset,
+            IPPkt::V6(inner) => inner.pkt_start_offset,
         }
     }
 

@@ -1,10 +1,10 @@
 use crate::process::{NetworkType, ProcessInfo};
-use libc::{c_char, c_int, vnode_info, PROC_PIDTASKALLINFO};
+use libc::{c_char, c_int};
 use std::ffi::{CStr, CString};
 use std::io::{ErrorKind, Result};
+use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{io, mem};
-use std::mem::MaybeUninit;
 
 const TCP_SYSCTL_NAME: &str = "net.inet.tcp.pcblist_n";
 const UDP_SYSCTL_NAME: &str = "net.inet.udp.pcblist_n";
@@ -89,7 +89,8 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
 }
 
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
-    let mut bsd_info: libc::proc_bsdinfo = unsafe{MaybeUninit::<libc::proc_bsdinfo>::zeroed().assume_init()};
+    let mut bsd_info: libc::proc_bsdinfo =
+        unsafe { MaybeUninit::<libc::proc_bsdinfo>::zeroed().assume_init() };
     if unsafe {
         libc::proc_pidinfo(
             pid as c_int,
@@ -103,7 +104,8 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
         // partial read
         return None;
     }
-    let mut vpath_info: libc::proc_vnodepathinfo = unsafe{MaybeUninit::<libc::proc_vnodepathinfo>::zeroed().assume_init()};
+    let mut vpath_info: libc::proc_vnodepathinfo =
+        unsafe { MaybeUninit::<libc::proc_vnodepathinfo>::zeroed().assume_init() };
     if unsafe {
         libc::proc_pidinfo(
             pid as c_int,

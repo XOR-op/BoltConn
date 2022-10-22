@@ -1,15 +1,10 @@
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::PktBufHandle;
-use crate::{ip_packet_data_mut, ip_packet_payload, ip_packet_payload_mut};
-use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
-    IpAddress, IpProtocol, IpRepr, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket,
-    TcpRepr, UdpPacket,
+    IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
 };
 use std::fmt::{Display, Formatter};
-use std::io;
-use std::io::ErrorKind;
-use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::SocketAddr;
 
 pub trait TransLayerPkt {
     fn src_port(&self) -> u16;
@@ -187,5 +182,46 @@ impl UdpPkt {
     pub fn new(ip_pkt: IPPkt) -> Self {
         assert_eq!(ip_pkt.protocol(), IpProtocol::Udp);
         Self { ip_pkt }
+    }
+
+    pub fn set_payload(self, payload: &[u8]) -> UdpPkt {
+        let old_payload_len = self.packet_payload().len();
+        let old_ip_total_len = self.ip_pkt.pkt_total_len();
+        let delta = payload.len() as i64 - old_payload_len as i64;
+        let pkt_start_offset = self.ip_pkt.raw_start_offset();
+        let is_v4 = match self.ip_pkt {
+            IPPkt::V4(_) => true,
+            IPPkt::V6(_) => false,
+        };
+        let mut handle = self.ip_pkt.into_handle();
+        // copy data
+        handle.len = (handle.len as i64 + delta) as usize;
+        handle.data[handle.len - payload.len()..].clone_from_slice(payload);
+
+        // set udp fields
+        let mut ip_pkt = if is_v4 {
+            IPPkt::from_v4(handle, pkt_start_offset)
+        } else {
+            IPPkt::from_v6(handle, pkt_start_offset)
+        };
+        let (src_ip,dst_ip) = (ip_pkt.src_addr(),ip_pkt.dst_addr());
+        let mut raw_udp = UdpPacket::new_unchecked(ip_pkt.packet_payload_mut());
+        raw_udp.set_len((raw_udp.len() as i64 + delta) as u16);
+        raw_udp.fill_checksum(
+            &IpAddress::from(src_ip),
+            &IpAddress::from(dst_ip),
+        );
+        let udp_len = raw_udp.len();
+        drop(raw_udp);
+        // set ip fields
+        if is_v4 {
+            let mut raw_ip = Ipv4Packet::new_unchecked(ip_pkt.packet_data_mut());
+            raw_ip.set_total_len((old_ip_total_len as i64 + delta) as u16);
+            raw_ip.fill_checksum();
+        } else {
+            let mut raw_ip = Ipv6Packet::new_unchecked(ip_pkt.packet_data_mut());
+            raw_ip.set_payload_len(udp_len);
+        }
+        UdpPkt { ip_pkt }
     }
 }
