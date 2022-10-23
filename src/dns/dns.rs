@@ -1,9 +1,10 @@
 use crate::dns::dns_table::DnsTable;
 use crate::network::get_iface_address;
+use std::io;
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
-use simple_dns::{QTYPE, ResourceRecord};
-use simple_dns::rdata::RData;
+use trust_dns_proto::op::{Message, MessageType, ResponseCode};
+use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::Resolver;
 
@@ -56,32 +57,36 @@ impl Dns {
         }
     }
 
-    pub fn respond_to_query(&self, pkt: &simple_dns::Packet) -> Option<Vec<u8>> {
+    pub fn respond_to_query(&self, pkt: &[u8]) -> Result<Vec<u8>> {
         // https://stackoverflow.com/questions/55092830/how-to-perform-dns-lookup-with-multiple-questions
         // There should be no >1 questions in on query
-        for q in &pkt.questions {
-            let domain = q.qname.to_string();
-            if q.qtype != QTYPE::TYPE(simple_dns::TYPE::A) {
-                continue;
-            }
-            let fake_ip = match self.query_by_domain(&domain) {
-                IpAddr::V4(addr) => addr,
-                IpAddr::V6(_) => return None,
-            };
-            let mut resp = simple_dns::Packet::new_reply(pkt.header.id);
-            resp.header.authoritative_answer = true;
-            resp.answers.push(ResourceRecord {
-                name: match simple_dns::Name::new(&domain) {
-                    Ok(v) => v,
-                    Err(_) => return None,
-                },
-                class: simple_dns::CLASS::IN,
-                ttl: 60,
-                rdata: RData::A(simple_dns::rdata::A::from(fake_ip)),
-                cache_flush: true,
-            });
-            return resp.build_bytes_vec().ok();
+        let err = Err(io::Error::new(io::ErrorKind::InvalidData, "fail to answer"));
+        let req = Message::from_vec(pkt)?;
+        if req.queries().is_empty() {
+            return err;
         }
-        None
+        let q = &req.queries()[0];
+        // validate
+        let domain = q.name().to_string();
+        if q.query_type() != RecordType::A {
+            return err;
+        }
+        let fake_ip = match self.query_by_domain(&domain) {
+            IpAddr::V4(addr) => addr,
+            IpAddr::V6(_) => return err,
+        };
+        let mut resp = Message::new();
+        resp.set_id(req.id())
+            .set_message_type(MessageType::Response)
+            .set_op_code(req.op_code())
+            .set_response_code(ResponseCode::NoError);
+        let mut ans = Record::new();
+        ans.set_name(domain.parse()?)
+            .set_rr_type(RecordType::A)
+            .set_dns_class(DNSClass::IN)
+            .set_ttl(60)
+            .set_data(Some(RData::A(fake_ip)));
+        resp.add_answer(ans);
+        Ok(resp.to_vec()?)
     }
 }

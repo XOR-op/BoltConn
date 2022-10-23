@@ -61,6 +61,19 @@ impl IPPkt {
         })
     }
 
+    pub(crate) fn set_len(&mut self, len: u16) {
+        match self {
+            IPPkt::V4(inner) => {
+                let mut pkt = Ipv4Packet::new_unchecked(self.packet_data_mut());
+                pkt.set_total_len(len);
+            }
+            IPPkt::V6(inner) => {
+                let mut pkt = Ipv6Packet::new_unchecked(self.packet_data_mut());
+                pkt.set_payload_len(len - pkt.header_len() as u16);
+            }
+        }
+    }
+
     pub fn src_addr(&self) -> IpAddr {
         match self {
             IPPkt::V4(inner) => IpAddr::V4(

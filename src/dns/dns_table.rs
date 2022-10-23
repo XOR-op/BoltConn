@@ -30,6 +30,7 @@ impl DnsTableInner {
         for i in range.hosts() {
             ip_vec.push(IpAddr::V4(i))
         }
+        ip_vec.reverse();
         DnsTableInner {
             dn_table: Default::default(),
             ip_table: Default::default(),

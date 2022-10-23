@@ -184,7 +184,7 @@ impl UdpPkt {
         Self { ip_pkt }
     }
 
-    pub fn set_payload(self, payload: &[u8]) -> UdpPkt {
+    pub fn set_payload(mut self, payload: &[u8]) -> UdpPkt {
         let old_payload_len = self.packet_payload().len();
         let old_ip_total_len = self.ip_pkt.pkt_total_len();
         let delta = payload.len() as i64 - old_payload_len as i64;
@@ -193,10 +193,12 @@ impl UdpPkt {
             IPPkt::V4(_) => true,
             IPPkt::V6(_) => false,
         };
+        self.ip_pkt.set_len((old_ip_total_len as i64 + delta) as u16);
+
         let mut handle = self.ip_pkt.into_handle();
         // copy data
         handle.len = (handle.len as i64 + delta) as usize;
-        handle.data[handle.len - payload.len()..].clone_from_slice(payload);
+        handle.data[handle.len - payload.len()..handle.len].copy_from_slice(payload);
 
         // set udp fields
         let mut ip_pkt = if is_v4 {
@@ -213,11 +215,7 @@ impl UdpPkt {
         // set ip fields
         if is_v4 {
             let mut raw_ip = Ipv4Packet::new_unchecked(ip_pkt.packet_data_mut());
-            raw_ip.set_total_len((old_ip_total_len as i64 + delta) as u16);
             raw_ip.fill_checksum();
-        } else {
-            let mut raw_ip = Ipv6Packet::new_unchecked(ip_pkt.packet_data_mut());
-            raw_ip.set_payload_len(udp_len);
         }
         UdpPkt { ip_pkt }
     }

@@ -2,6 +2,7 @@
 #![allow(unused_variables)]
 
 extern crate core;
+
 use crate::dispatch::Dispatcher;
 use crate::dns::Dns;
 use crate::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
@@ -13,10 +14,12 @@ use smoltcp::wire;
 use smoltcp::wire::IpProtocol;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tracing::{event, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use nix::sys::signal;
 
 mod config;
 mod dispatch;
@@ -35,9 +38,9 @@ async fn main() -> std::io::Result<()> {
         .with(EnvFilter::new("catalyst=trace"))
         .init();
     #[cfg(target_os = "macos")]
-    let real_iface_name = "en0";
+        let real_iface_name = "en0";
     #[cfg(target_os = "linux")]
-    let real_iface_name = "ens18";
+        let real_iface_name = "ens18";
 
     let pool = PktBufPool::new(512, 4096);
     let manager = Arc::new(SessionManager::new());

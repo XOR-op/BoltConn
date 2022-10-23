@@ -16,6 +16,7 @@ use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::split;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -170,7 +171,7 @@ impl TunDevice {
             let pkt = Self::recv_ip(&mut fd_read, handle).await?;
             if pkt.src_addr().is_ipv6() {
                 // not supported now
-                tracing::trace!("[TUN] drop IPv6: {} -> {} ", pkt.src_addr(), pkt.dst_addr());
+                // tracing::trace!("[TUN] drop IPv6: {} -> {} ", pkt.src_addr(), pkt.dst_addr());
                 continue;
             }
             let (src, dst) = match (pkt.src_addr(), pkt.dst_addr()) {
@@ -239,33 +240,22 @@ impl TunDevice {
                 }
                 IpProtocol::Udp => {
                     let pkt = UdpPkt::new(pkt);
-                    tracing::trace!("[TUN] UDP packet: {} -> {}", src, dst);
+                    tracing::trace!("[TUN] UDP packet: {}:{} -> {}:{}", src,pkt.src_port(),dst,pkt.dst_port());
                     if pkt.dst_port() == 53 {
-                        let mut success = false;
                         // fake ip
-                        if let Ok(parsed_dns) = simple_dns::Packet::parse(pkt.packet_payload()) {
-                            if let Some(answer) = self.dns_resolver.respond_to_query(&parsed_dns) {
-                                let mut new_pkt = pkt.set_payload(answer.as_slice());
-                                new_pkt.rewrite_addr(
-                                    SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
-                                    SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
-                                );
-                                success = true;
-                                if let Err(_) = Self::send_ip(&mut fd_write, new_pkt.ip_pkt()).await
-                                {
-                                    tracing::warn!("Send to NAT failed");
-                                    continue;
-                                }
-                            }
-                        }
-                        if !success{
-                            tracing::warn!("fake ip failed");
+                        if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload())
+                        {
+                            let mut new_pkt = pkt.set_payload(answer.as_slice());
+                            new_pkt.rewrite_addr(
+                                SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
+                                SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
+                            );
+                            let _ = Self::send_ip(&mut fd_write, new_pkt.ip_pkt()).await;
+                        } else {
+                            tracing::warn!("Not valid DNS query");
                         }
                     } else {
-                        if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
-                            tracing::warn!("Send to NAT failed");
-                            continue;
-                        }
+                        let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
                     }
                 }
                 _ => {
@@ -274,5 +264,6 @@ impl TunDevice {
                 }
             }
         }
+        Ok(())
     }
 }
