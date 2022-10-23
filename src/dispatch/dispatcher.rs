@@ -24,8 +24,10 @@ impl Dispatcher {
         stream: TcpStream,
     ) {
         let name = self.iface_name.clone();
+        tracing::debug!("Here!");
         let info = {
             let r = process::get_pid(src_addr, process::NetworkType::TCP);
+            tracing::debug!("get pid done");
             if let Ok(pid) = r {
                 process::get_process_info(pid)
             } else {

@@ -22,13 +22,14 @@ mod linux;
 #[cfg(target_os = "linux")]
 use linux as platform;
 
+mod async_raw_fd;
 pub mod outbound;
 
 use platform::c_ffi;
 
 pub use platform::bind_to_device;
 
-pub type AsyncRawFd = tokio_fd::AsyncFd;
+pub use async_raw_fd::AsyncRawFd;
 
 pub fn errno_err(msg: &str) -> io::Error {
     io::Error::new(io::Error::last_os_error().kind(), msg)

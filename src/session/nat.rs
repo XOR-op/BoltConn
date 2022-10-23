@@ -24,7 +24,7 @@ impl Nat {
         }
     }
 
-    pub async fn run_tcp(&self) -> Result<()> {
+    pub async fn run_tcp(&self, mut rx: tokio::sync::broadcast::Receiver<bool>) -> Result<()> {
         let tcp_listener = TcpListener::bind(self.nat_addr).await?;
         tracing::event!(
             tracing::Level::INFO,
@@ -32,7 +32,12 @@ impl Nat {
             self.nat_addr
         );
         loop {
-            let (socket, addr) = tcp_listener.accept().await?;
+            let (socket, addr) = tokio::select! {
+                r = tcp_listener.accept() => r?,
+                _=rx.recv()=>{
+                    return Ok(());
+                }
+            };
             if let Ok((src_addr, dst_addr, indicator)) =
                 self.session_mgr.query_tcp_by_token(addr.port())
             {

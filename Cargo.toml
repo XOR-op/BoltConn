@@ -8,9 +8,7 @@ edition = "2021"
 [dependencies]
 thiserror = "1.0.34"
 libc = "0.2.132"
-nix = "0.25.0"
-tokio = { version = "1.21.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros"] }
-tokio-fd = "0.3.0"
+tokio = { version = "1.21.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros","signal"] }
 errno = "0.2.8"
 tracing = "0.1.36"
 tracing-subscriber = { version = "0.3.15", features = ["env-filter", "std"] }

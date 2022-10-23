@@ -2,7 +2,7 @@ use crate::dns::Dns;
 use crate::network::async_socket::AsyncRawSocket;
 use crate::network::route::setup_ipv4_routing_table;
 use crate::network::{
-    create_v4_raw_socket, errno_err, interface_up, platform, set_address, AsyncRawFd,
+    async_raw_fd, create_v4_raw_socket, errno_err, interface_up, platform, set_address, AsyncRawFd,
 };
 use crate::packet::ip::IPPkt;
 use crate::resource::buf_slab::{PktBufHandle, PktBufPool};
@@ -80,9 +80,9 @@ impl TunDevice {
         receiver.read(raw_buffer.as_mut_slice()).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-            let start_offset = 4;
+        let start_offset = 4;
         #[cfg(target_os = "linux")]
-            let start_offset = 0;
+        let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -157,7 +157,11 @@ impl TunDevice {
         Ok(())
     }
 
-    pub async fn run(mut self, nat_addr: SocketAddr) -> io::Result<()> {
+    pub async fn run(
+        mut self,
+        nat_addr: SocketAddr,
+        mut rx: tokio::sync::broadcast::Receiver<bool>,
+    ) -> io::Result<()> {
         let nat_addr = if let SocketAddr::V4(addr) = nat_addr {
             addr
         } else {
@@ -168,7 +172,12 @@ impl TunDevice {
         loop {
             // read a ip packet from tun device
             let handle = self.pool.obtain().await;
-            let pkt = Self::recv_ip(&mut fd_read, handle).await?;
+            let pkt = tokio::select! {
+                pkt = Self::recv_ip(&mut fd_read, handle) =>pkt?,
+                _ = rx.recv() =>{
+                    return Ok(());
+                }
+            };
             if pkt.src_addr().is_ipv6() {
                 // not supported now
                 // tracing::trace!("[TUN] drop IPv6: {} -> {} ", pkt.src_addr(), pkt.dst_addr());
@@ -192,7 +201,7 @@ impl TunDevice {
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
-                        self.session_mgr.query_tcp_by_token(pkt.dst_port())
+                            self.session_mgr.query_tcp_by_token(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
                             // tracing::trace!(
@@ -240,7 +249,13 @@ impl TunDevice {
                 }
                 IpProtocol::Udp => {
                     let pkt = UdpPkt::new(pkt);
-                    tracing::trace!("[TUN] UDP packet: {}:{} -> {}:{}", src,pkt.src_port(),dst,pkt.dst_port());
+                    tracing::trace!(
+                        "[TUN] UDP packet: {}:{} -> {}:{}",
+                        src,
+                        pkt.src_port(),
+                        dst,
+                        pkt.dst_port()
+                    );
                     if pkt.dst_port() == 53 {
                         // fake ip
                         if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload())
@@ -264,6 +279,5 @@ impl TunDevice {
                 }
             }
         }
-        Ok(())
     }
 }

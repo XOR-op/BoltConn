@@ -86,20 +86,22 @@ impl PktBufPool {
 
     pub async fn obtain(&mut self) -> PktBufHandle {
         loop {
-            let mut vec = self.free.lock().unwrap();
-            if !vec.is_empty() {
-                let mut handle = vec.pop().unwrap();
-                handle.len = 0;
-                return handle;
-            } else if self.extra_len < self.extra_capacity {
-                self.extra_len += 1;
-                return PktBufHandle {
-                    // data: Arc::new(get_default_pkt_buffer()),
-                    data: Box::new(get_default_pkt_buffer()),
-                    len: 0,
-                };
+            // drop vec manually
+            {
+                let mut vec = self.free.lock().unwrap();
+                if !vec.is_empty() {
+                    let mut handle = vec.pop().unwrap();
+                    handle.len = 0;
+                    return handle;
+                } else if self.extra_len < self.extra_capacity {
+                    self.extra_len += 1;
+                    return PktBufHandle {
+                        // data: Arc::new(get_default_pkt_buffer()),
+                        data: Box::new(get_default_pkt_buffer()),
+                        len: 0,
+                    };
+                }
             }
-            drop(vec);
             self.notify.notified().await;
         }
     }

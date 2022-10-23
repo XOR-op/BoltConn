@@ -193,7 +193,8 @@ impl UdpPkt {
             IPPkt::V4(_) => true,
             IPPkt::V6(_) => false,
         };
-        self.ip_pkt.set_len((old_ip_total_len as i64 + delta) as u16);
+        self.ip_pkt
+            .set_len((old_ip_total_len as i64 + delta) as u16);
 
         let mut handle = self.ip_pkt.into_handle();
         // copy data
