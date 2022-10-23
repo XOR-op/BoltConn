@@ -47,6 +47,7 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
     packet.finalize();
     let mut buf = vec![0; packet.header.length as usize];
     packet.serialize(&mut buf[..]);
+    diag_sock.send(&buf[..],0)?;
 
     let mut receive_buffer = vec![0; 4096];
     let mut offset = 0;
@@ -87,6 +88,7 @@ fn read_proc(fd: Result<DirEntry>, name: &str) -> Result<bool> {
 
 pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
     let (inode, uid) = get_inode_and_uid(addr, net_type)?;
+    tracing::debug!("Get inode&uid!");
     let target_name = format!("socket:[{}]", inode);
     for proc in std::fs::read_dir("/proc")? {
         if let Ok(proc) = proc {
