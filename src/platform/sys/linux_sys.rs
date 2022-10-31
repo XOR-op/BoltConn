@@ -1,15 +1,14 @@
+use super::linux_ffi::*;
 use crate::common::async_raw_fd;
-use crate::platform::create_req;
-use c_ffi::*;
+use crate::platform::run_command;
+use crate::platform::{create_req, linux_ffi};
 use ipnet::IpNet;
 use libc::{bind, c_int, sockaddr, sockaddr_in, socklen_t, O_RDWR};
 use std::ffi::CStr;
 use std::os::unix::io::RawFd;
 use std::{io, mem};
 
-pub mod c_ffi;
-
-use super::errno_err;
+use super::super::errno_err;
 
 pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     let mut req: ifreq = mem::zeroed();
@@ -35,7 +34,7 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
 
 pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     // todo: do not use external commands
-    super::run_command("ip", ["route", "add", &format!("{}", subnet), "dev", name])
+    run_command("ip", ["route", "add", &format!("{}", subnet), "dev", name])
 }
 
 pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
@@ -45,7 +44,7 @@ pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
             fd,
             libc::SOL_SOCKET,
             libc::SO_BINDTODEVICE,
-            &req as *const c_ffi::ifreq as *const libc::c_void,
+            &req as *const linux_ffi::ifreq as *const libc::c_void,
             mem::size_of_val(&req) as socklen_t,
         ) < 0
         {

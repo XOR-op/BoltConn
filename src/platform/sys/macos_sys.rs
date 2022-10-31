@@ -1,11 +1,12 @@
-use super::errno_err;
-use crate::platform::macos::c_ffi::*;
+use super::macos_ffi::*;
+use crate::platform::{errno_err, get_command_output, run_command};
 use ipnet::IpNet;
 use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
+use std::collections::HashMap;
 use std::ffi::CStr;
+use std::net::{IpAddr, Ipv4Addr};
+use std::str::FromStr;
 use std::{io, mem};
-
-pub mod c_ffi;
 
 pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     let mut name_buf = [0u8; 32];
@@ -79,7 +80,7 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
 
 pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     // todo: do not use external commands
-    super::run_command(
+    run_command(
         "route",
         [
             "-n",
@@ -108,4 +109,58 @@ pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+pub struct SystemDnsHandle {
+    old_dns: Vec<Vec<String>>,
+}
+
+impl SystemDnsHandle {
+    pub fn new(ip: Ipv4Addr) -> io::Result<Self> {
+        let services: Vec<String> =
+            get_command_output("networksetup", ["-listallnetworkservices"])?
+                .split("\n")
+                .map(|s| {
+                    if s.len() > 0 && !s.contains("*") {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                })
+                .filter_map(|x| x.and_then(|s| Some(s.to_string())))
+                .collect();
+        let mut old_dns = Vec::new();
+        // get old records
+        for s in services.iter() {
+            let dns_list = get_command_output("networksetup", ["-getdnsservers", s])?;
+            let mut v = vec![s.clone()];
+            if !dns_list.starts_with("There") {
+                v.extend(
+                    dns_list
+                        .split("\n")
+                        .map(|s| if s.len() > 0 { Some(s) } else { None })
+                        .filter_map(|x| x.and_then(|s| Some(String::from(s)))),
+                );
+            } else {
+                v.push("empty".parse().unwrap());
+            }
+            old_dns.push(v);
+        }
+
+        // overwrite them
+        for s in services.iter() {
+            run_command("networksetup", ["-setdnsservers", s, &ip.to_string()])?
+        }
+        Ok(Self { old_dns })
+    }
+}
+
+impl Drop for SystemDnsHandle {
+    fn drop(&mut self) {
+        for args in self.old_dns.iter() {
+            let mut v = vec![String::from("-setdnsservers")];
+            v.extend_from_slice(args);
+            run_command("networksetup", v).unwrap_or(());
+        }
+    }
 }

@@ -8,22 +8,10 @@ use std::{io, mem, ptr};
 
 pub mod route;
 
-#[cfg(target_os = "macos")]
-mod macos;
-
-#[cfg(target_os = "macos")]
-pub use macos::*;
-
-#[cfg(target_os = "linux")]
-mod linux;
-
-#[cfg(target_os = "linux")]
-pub use linux::*;
-
-pub mod egress;
 pub mod process;
-
-use c_ffi;
+mod sys;
+use sys::ffi;
+pub use sys::*;
 
 pub use crate::common::async_raw_fd::AsyncRawFd;
 
@@ -53,8 +41,28 @@ where
     }
 }
 
-unsafe fn create_req(name: &str) -> c_ffi::ifreq {
-    let mut req: c_ffi::ifreq = mem::zeroed();
+fn get_command_output<I, S>(cmd: &str, args: I) -> io::Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()?;
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|e| io::Error::new(ErrorKind::Other, "not utf-8"))
+    } else {
+        Err(io::Error::new(
+            ErrorKind::Other,
+            format!("Subcommand exit status: {}", output.status),
+        ))
+    }
+}
+
+unsafe fn create_req(name: &str) -> ffi::ifreq {
+    let mut req: ffi::ifreq = mem::zeroed();
     ptr::copy_nonoverlapping(
         name.as_ptr() as *const c_char,
         req.ifrn.name.as_mut_ptr(),
@@ -66,11 +74,11 @@ unsafe fn create_req(name: &str) -> c_ffi::ifreq {
 pub fn interface_up(fd: c_int, name: &str) -> io::Result<()> {
     unsafe {
         let mut req = create_req(name);
-        if c_ffi::siocgifflags(fd, &mut req) < 0 {
+        if ffi::siocgifflags(fd, &mut req) < 0 {
             return Err(errno_err("Failed to read ifflags"));
         }
-        req.ifru.flags |= c_ffi::IFF_UP | c_ffi::IFF_RUNNING;
-        if c_ffi::siocsifflags(fd, &req) < 0 {
+        req.ifru.flags |= ffi::IFF_UP | ffi::IFF_RUNNING;
+        if ffi::siocsifflags(fd, &req) < 0 {
             return Err(errno_err("Failed to up tun"));
         }
         Ok(())
@@ -91,7 +99,7 @@ unsafe fn get_sockaddr(v4: Ipv4Addr) -> libc::sockaddr_in {
 unsafe fn set_dest(fd: c_int, name: &str, addr: Ipv4Addr) -> io::Result<()> {
     let mut addr_req = create_req(name);
     addr_req.ifru.dstaddr = mem::transmute(get_sockaddr(addr));
-    if c_ffi::siocsifdstaddr(fd, &addr_req) < 0 {
+    if ffi::siocsifdstaddr(fd, &addr_req) < 0 {
         return Err(errno_err("Failed to set tun dst addr"));
     }
     Ok(())
@@ -114,7 +122,7 @@ pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
     unsafe {
         let mut addr_req = create_req(name);
         addr_req.ifru.addr = mem::transmute(get_sockaddr(addr.addr()));
-        if c_ffi::siocsifaddr(fd, &addr_req) < 0 {
+        if ffi::siocsifaddr(fd, &addr_req) < 0 {
             return Err(errno_err("Failed to set tun addr"));
         }
         // only useful for macos; for linux, this is a nop
@@ -123,7 +131,7 @@ pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
         // set subnet mask
         let mut mask_req = create_req(name);
         mask_req.ifru.addr = mem::transmute(get_sockaddr(addr.netmask()));
-        if c_ffi::siocsifnetmask(fd, &mask_req) < 0 {
+        if ffi::siocsifnetmask(fd, &mask_req) < 0 {
             return Err(errno_err("Failed to set tun mask"));
         }
         Ok(())
@@ -140,7 +148,7 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
     };
     let mut req = unsafe { create_req(iface_name) };
     req.ifru.addr.sa_family = libc::AF_INET as libc::sa_family_t;
-    if unsafe { c_ffi::siocgifaddr(ctl_fd, &mut req) } < 0 {
+    if unsafe { ffi::siocgifaddr(ctl_fd, &mut req) } < 0 {
         return Err(io::Error::last_os_error());
     }
     let addr = unsafe { req.ifru.addr };
