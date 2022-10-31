@@ -80,9 +80,9 @@ impl TunDevice {
         receiver.read(raw_buffer.as_mut_slice()).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-        let start_offset = 4;
+            let start_offset = 4;
         #[cfg(target_os = "linux")]
-        let start_offset = 0;
+            let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -160,7 +160,6 @@ impl TunDevice {
     pub async fn run(
         mut self,
         nat_addr: SocketAddr,
-        mut rx: tokio::sync::broadcast::Receiver<bool>,
     ) -> io::Result<()> {
         let nat_addr = if let SocketAddr::V4(addr) = nat_addr {
             addr
@@ -172,12 +171,7 @@ impl TunDevice {
         loop {
             // read a ip packet from tun device
             let handle = self.pool.obtain().await;
-            let pkt = tokio::select! {
-                pkt = Self::recv_ip(&mut fd_read, handle) =>pkt?,
-                _ = rx.recv() =>{
-                    return Ok(());
-                }
-            };
+            let pkt = Self::recv_ip(&mut fd_read, handle).await?;
             if pkt.src_addr().is_ipv6() {
                 // not supported now
                 // tracing::trace!("[TUN] drop IPv6: {} -> {} ", pkt.src_addr(), pkt.dst_addr());
@@ -201,7 +195,7 @@ impl TunDevice {
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
-                            self.session_mgr.query_tcp_by_token(pkt.dst_port())
+                        self.session_mgr.query_tcp_by_token(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
                             // tracing::trace!(
@@ -267,7 +261,7 @@ impl TunDevice {
                             );
                             let _ = Self::send_ip(&mut fd_write, new_pkt.ip_pkt()).await;
                         } else {
-                            tracing::warn!("Not valid DNS query");
+                            // tracing::warn!("Not valid DNS query");
                         }
                     } else {
                         let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;

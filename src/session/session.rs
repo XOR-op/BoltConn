@@ -1,23 +1,23 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SessionProtocol {
     TCP,
     HTTP,
     TLS(TlsVersion),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TlsVersion {
     TLS12,
     TLS13,
     LEGACY,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NetworkAddr {
-    IP(SocketAddr),
+    Raw(SocketAddr),
     DomainName { domain_name: String, port: u16 },
 }
 
@@ -27,6 +27,24 @@ pub struct SessionInfo {
     pub dest: NetworkAddr,
     pub session_proto: SessionProtocol,
     pub rule: String,
+}
+
+impl SessionInfo {
+    pub fn new(dst: NetworkAddr, rule: &str) -> Self {
+        Self {
+            start_time: Instant::now(),
+            dest: dst,
+            session_proto: SessionProtocol::TCP,
+            rule: rule.to_string(),
+        }
+    }
+
+    pub fn update_proto(&mut self, packet: &[u8]) {
+        self.session_proto = check_tcp_protocol(packet);
+        if self.session_proto != SessionProtocol::TCP {
+            tracing::trace!("Update info: {:?}",self);
+        }
+    }
 }
 
 /// The packet as argument should be the first packet of the connection

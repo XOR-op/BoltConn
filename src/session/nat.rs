@@ -4,11 +4,13 @@ use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};
+use crate::Dns;
 
 pub struct Nat {
     nat_addr: SocketAddr,
     session_mgr: Arc<SessionManager>,
     dispatcher: Arc<Dispatcher>,
+    dns: Arc<Dns>,
 }
 
 impl Nat {
@@ -16,15 +18,17 @@ impl Nat {
         addr: SocketAddr,
         session_mgr: Arc<SessionManager>,
         dispatcher: Arc<Dispatcher>,
+        dns: Arc<Dns>,
     ) -> Self {
         Self {
             nat_addr: addr,
             session_mgr,
             dispatcher,
+            dns,
         }
     }
 
-    pub async fn run_tcp(&self, mut rx: tokio::sync::broadcast::Receiver<bool>) -> Result<()> {
+    pub async fn run_tcp(&self) -> Result<()> {
         let tcp_listener = TcpListener::bind(self.nat_addr).await?;
         tracing::event!(
             tracing::Level::INFO,
@@ -32,18 +36,14 @@ impl Nat {
             self.nat_addr
         );
         loop {
-            let (socket, addr) = tokio::select! {
-                r = tcp_listener.accept() => r?,
-                _=rx.recv()=>{
-                    return Ok(());
-                }
-            };
+            let (socket, addr) = tcp_listener.accept().await?;
             if let Ok((src_addr, dst_addr, indicator)) =
-                self.session_mgr.query_tcp_by_token(addr.port())
+            self.session_mgr.query_tcp_by_token(addr.port())
             {
+                let domain_name = self.dns.ip_to_domain(dst_addr.ip());
                 tracing::trace!("[NAT] received new connection {}->{}", src_addr, dst_addr);
                 self.dispatcher
-                    .submit_tcp(src_addr, dst_addr, indicator, socket);
+                    .submit_tcp(src_addr, dst_addr, domain_name, indicator, socket);
             } else {
                 tracing::warn!("Unexpected: no record found by port {}", addr.port())
             }

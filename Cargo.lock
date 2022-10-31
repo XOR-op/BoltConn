@@ -96,7 +96,6 @@ dependencies = [
  "smoltcp",
  "thiserror",
  "tokio",
- "tokio-fd",
  "toml",
  "tracing",
  "tracing-subscriber",
@@ -854,16 +853,6 @@ dependencies = [
  "socket2",
  "tokio-macros",
  "winapi",
-]
-
-[[package]]
-name = "tokio-fd"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cedf0b897610a4baff98bf6116c060c5cfe7574d4339c50e9d23fe09377641d"
-dependencies = [
- "libc",
- "tokio",
 ]
 
 [[package]]

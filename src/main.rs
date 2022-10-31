@@ -34,6 +34,7 @@ mod session;
 
 fn main() -> io::Result<()> {
     let mut rt = tokio::runtime::Runtime::new()?;
+    let handle = rt.handle();
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::new("catalyst=trace"))
@@ -42,31 +43,26 @@ fn main() -> io::Result<()> {
         let real_iface_name = "en0";
     #[cfg(target_os = "linux")]
         let real_iface_name = "ens18";
-    let (fin_tx, nat_rx) = tokio::sync::broadcast::channel::<bool>(8);
-    let tun_rx = fin_tx.subscribe();
+
+    let _guard = rt.enter();
 
     let pool = PktBufPool::new(512, 4096);
     let manager = Arc::new(SessionManager::new());
     let dns = Arc::new(Dns::new(real_iface_name)?);
-    let raw_tun = rt.block_on(async {
+    let mut tun = rt.block_on(async {
         TunDevice::open(manager.clone(), pool.clone(), real_iface_name, dns.clone())
-    });
+    })?;
 
-    match raw_tun {
-        Ok(mut tun) => {
-            event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
-            tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(172, 20, 1, 1), 24).unwrap())?;
-            tun.up()?;
-            let nat_addr = SocketAddr::new(network::get_iface_address(tun.get_name())?, 9961);
-            let dispatcher = Arc::new(Dispatcher::new(real_iface_name));
-            let nat = Nat::new(nat_addr, manager, dispatcher);
-            let nat_handle = rt.spawn(async move { nat.run_tcp(nat_rx).await });
-            let tun_handle = rt.spawn(async move { tun.run(nat_addr, tun_rx).await });
-            rt.block_on(async { tokio::signal::ctrl_c().await })?;
-            rt.spawn(async move{ fin_tx.send(true) });
-            rt.shutdown_timeout(Duration::from_millis(100));
-        }
-        Err(err) => println!("{}", err),
-    }
+    event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
+    tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 24).unwrap())?;
+    tun.up()?;
+    let nat_addr = SocketAddr::new(network::get_iface_address(tun.get_name())?, 9961);
+    let dispatcher = Arc::new(Dispatcher::new(real_iface_name));
+    let nat = Nat::new(nat_addr, manager, dispatcher, dns);
+    let nat_handle = rt.spawn(async move { nat.run_tcp().await });
+    let tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
+    rt.block_on(async { tokio::signal::ctrl_c().await })?;
+    // rt.shutdown_timeout(Duration::from_millis(3000));
+    rt.shutdown_background();
     Ok(())
 }

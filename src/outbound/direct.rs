@@ -5,13 +5,16 @@ use std::io;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
+use crate::network::egress::Egress;
+use crate::session::SessionInfo;
 
 pub struct DirectOutbound {
     iface_name: String,
     conn: TcpConnection,
+    info: Arc<RwLock<SessionInfo>>,
 }
 
 impl DirectOutbound {
@@ -21,11 +24,13 @@ impl DirectOutbound {
         iface_name: &str,
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
+        info: SessionInfo,
         available: Arc<AtomicU8>,
     ) -> Self {
         Self {
             iface_name: iface_name.into(),
             conn: TcpConnection::new(src_addr, dst_addr, available),
+            info: Arc::new(RwLock::new(info)),
         }
     }
 
@@ -33,34 +38,32 @@ impl DirectOutbound {
         let ingoing_indicator = self.conn.available.clone();
         let outgoing_indicator = self.conn.available.clone();
         let outbound = match self.conn.dst {
-            SocketAddr::V4(_) => {
-                let socket = TcpSocket::new_v4()?;
-                bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
-                socket.connect(self.conn.dst).await?
-            }
-            SocketAddr::V6(_) => {
-                let socket = TcpSocket::new_v6()?;
-                bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
-                socket.connect(self.conn.dst).await?
-            }
+            SocketAddr::V4(_) => Egress::new(&self.iface_name).tcpv4_stream(self.conn.dst).await?,
+            SocketAddr::V6(_) => Egress::new(&self.iface_name).tcpv6_stream(self.conn.dst).await?
         };
         tracing::info!(
             "[Direct] Connection {:?} <=> {:?} established",
             outbound.local_addr(),
             outbound.peer_addr()
         );
+        let mut first_packet = true;
         let (mut in_read, mut in_write) = inbound.into_split();
         let (mut out_read, mut out_write) = outbound.into_split();
+        let outgoing_info_arc = self.info.clone();
         // recv from inbound and send to outbound
         tokio::spawn(async move {
             let mut buf = [0u8; Self::BUF_SIZE];
             loop {
                 match in_read.read(&mut buf).await {
                     Ok(0) => {
-                        tracing::trace!("[Direct] in->out closed");
+                        // tracing::trace!("[Direct] in->out closed");
                         break;
                     }
                     Ok(size) => {
+                        if first_packet {
+                            first_packet = false;
+                            outgoing_info_arc.write().unwrap().update_proto(&buf[..size]);
+                        }
                         // tracing::trace!("[Direct] outgoing {} bytes", size);
                         if let Err(err) = out_write.write_all(&buf[..size]).await {
                             tracing::warn!("[Direct] write to outbound failed: {}", err);
@@ -80,7 +83,7 @@ impl DirectOutbound {
         loop {
             match out_read.read(&mut buf).await {
                 Ok(0) => {
-                    tracing::trace!("[Direct] out->in closed");
+                    // tracing::trace!("[Direct] out->in closed");
                     break;
                 }
                 Ok(size) => {

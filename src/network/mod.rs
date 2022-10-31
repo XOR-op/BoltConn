@@ -23,7 +23,7 @@ mod linux;
 use linux as platform;
 
 mod async_raw_fd;
-pub mod outbound;
+pub mod egress;
 
 use platform::c_ffi;
 

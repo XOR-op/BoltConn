@@ -49,11 +49,11 @@ impl SessionManager {
                 Ok((s.source_addr, s.dest_addr, s.available.clone()))
             }
             None => {
-                tracing::debug!(
-                    "[Session] token {} not found; tcp_records = {:?}",
-                    port,
-                    self.tcp_records
-                );
+                // tracing::debug!(
+                //     "[Session] token {} not found; tcp_records = {:?}",
+                //     port,
+                //     self.tcp_records
+                // );
                 Err(io::Error::new(
                     ErrorKind::AddrNotAvailable,
                     format!("No record found"),

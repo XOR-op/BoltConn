@@ -5,6 +5,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+#[derive(Debug)]
 pub struct DnsRecord {
     pub domain_name: String,
     pub ip: IpAddr,
@@ -54,6 +55,10 @@ impl DnsTable {
 
     pub fn query_by_ip(&self, addr: IpAddr) -> Option<Arc<DnsRecord>> {
         let mut inner = self.inner.lock().unwrap();
+        println!("LOG DNS INFO! {}",addr);
+        for i in inner.ip_table.iter() {
+            println!("{:?}=>{:?}", i.0, i.1)
+        }
         inner.ip_table.get_mut(&addr).map(|rec| {
             rec.update();
             rec.clone()

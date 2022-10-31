@@ -37,12 +37,17 @@ impl Dns {
     }
 
     /// Return fake ip for the domain name instantly.
-    pub fn query_by_domain(&self, domain_name: &str) -> IpAddr {
+    pub fn domain_to_ip(&self, domain_name: &str) -> IpAddr {
         self.table.query_by_domain_name(domain_name).ip
     }
 
+    /// Return fake ip for the domain name instantly.
+    pub fn ip_to_domain(&self, fake_ip: IpAddr) -> Option<String> {
+        self.table.query_by_ip(fake_ip).and_then(|record| Some(record.domain_name.clone()))
+    }
+
     /// If no corresponding record, return fake ip itself.
-    pub fn query_real_ip(&self, fake_ip: IpAddr) -> IpAddr {
+    pub fn ip_to_real_ip(&self, fake_ip: IpAddr) -> IpAddr {
         if let Some(record) = self.table.query_by_ip(fake_ip) {
             for r in &self.resolvers {
                 if let Ok(result) = r.ipv4_lookup(&record.domain_name) {
@@ -68,13 +73,15 @@ impl Dns {
         let q = &req.queries()[0];
         // validate
         let domain = q.name().to_string();
+        // todo: return empty answer to AAAA question
         if q.query_type() != RecordType::A {
             return err;
         }
-        let fake_ip = match self.query_by_domain(&domain) {
+        let fake_ip = match self.domain_to_ip(&domain) {
             IpAddr::V4(addr) => addr,
             IpAddr::V6(_) => return err,
         };
+        tracing::debug!("Respond to DNS query: {:?} with {:?} ",domain,fake_ip);
         let mut resp = Message::new();
         resp.set_id(req.id())
             .set_message_type(MessageType::Response)
