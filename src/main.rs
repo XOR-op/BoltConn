@@ -3,13 +3,13 @@
 
 extern crate core;
 
-use crate::dispatch::Dispatcher;
-use crate::dns::Dns;
-use crate::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
-use crate::resource::buf_slab::PktBufPool;
-use crate::session::{Nat, SessionManager};
+use common::buf_slab::PktBufPool;
+use dispatch::Dispatcher;
 use ipnet::Ipv4Net;
+use network::dns::Dns;
+use network::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
 use network::tun_device::TunDevice;
+use session::{Nat, SessionManager};
 use smoltcp::wire;
 use smoltcp::wire::IpProtocol;
 use std::io;
@@ -22,14 +22,12 @@ use tokio::io::AsyncWriteExt;
 use tracing::{event, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod common;
 mod config;
 mod dispatch;
-mod dns;
 mod network;
 mod outbound;
-mod packet;
-mod process;
-mod resource;
+mod platform;
 mod session;
 
 fn main() -> io::Result<()> {
@@ -40,9 +38,9 @@ fn main() -> io::Result<()> {
         .with(EnvFilter::new("catalyst=trace"))
         .init();
     #[cfg(target_os = "macos")]
-        let real_iface_name = "en0";
+    let real_iface_name = "en0";
     #[cfg(target_os = "linux")]
-        let real_iface_name = "ens18";
+    let real_iface_name = "ens18";
 
     let _guard = rt.enter();
 
@@ -56,7 +54,7 @@ fn main() -> io::Result<()> {
     event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
     tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 24).unwrap())?;
     tun.up()?;
-    let nat_addr = SocketAddr::new(network::get_iface_address(tun.get_name())?, 9961);
+    let nat_addr = SocketAddr::new(platform::get_iface_address(tun.get_name())?, 9961);
     let dispatcher = Arc::new(Dispatcher::new(real_iface_name));
     let nat = Nat::new(nat_addr, manager, dispatcher, dns);
     let nat_handle = rt.spawn(async move { nat.run_tcp().await });

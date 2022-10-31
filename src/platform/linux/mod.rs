@@ -1,4 +1,5 @@
-use crate::network::{async_raw_fd, create_req};
+use crate::common::async_raw_fd;
+use crate::platform::create_req;
 use c_ffi::*;
 use ipnet::IpNet;
 use libc::{bind, c_int, sockaddr, sockaddr_in, socklen_t, O_RDWR};

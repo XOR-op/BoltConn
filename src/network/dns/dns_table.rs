@@ -55,7 +55,7 @@ impl DnsTable {
 
     pub fn query_by_ip(&self, addr: IpAddr) -> Option<Arc<DnsRecord>> {
         let mut inner = self.inner.lock().unwrap();
-        println!("LOG DNS INFO! {}",addr);
+        println!("LOG DNS INFO! {}", addr);
         for i in inner.ip_table.iter() {
             println!("{:?}=>{:?}", i.0, i.1)
         }

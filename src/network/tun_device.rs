@@ -1,15 +1,17 @@
-use crate::dns::Dns;
-use crate::network::async_socket::AsyncRawSocket;
-use crate::network::route::setup_ipv4_routing_table;
-use crate::network::{
-    async_raw_fd, create_v4_raw_socket, errno_err, interface_up, platform, set_address, AsyncRawFd,
-};
-use crate::packet::ip::IPPkt;
-use crate::resource::buf_slab::{PktBufHandle, PktBufPool};
+use crate::common::async_raw_fd;
+use crate::common::async_raw_fd::AsyncRawFd;
+use crate::common::async_socket::AsyncRawSocket;
+use crate::common::buf_slab::{PktBufHandle, PktBufPool};
+use crate::network;
+use crate::platform;
+use crate::platform::route::setup_ipv4_routing_table;
+use crate::platform::{create_v4_raw_socket, errno_err, interface_up, set_address};
 use crate::session::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use byteorder::{ByteOrder, NetworkEndian};
 use ipnet::Ipv4Net;
+use network::dns::Dns;
+use network::packet::ip::IPPkt;
 use smoltcp::wire::IpProtocol;
 use std::io;
 use std::io::ErrorKind;
@@ -80,9 +82,9 @@ impl TunDevice {
         receiver.read(raw_buffer.as_mut_slice()).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-            let start_offset = 4;
+        let start_offset = 4;
         #[cfg(target_os = "linux")]
-            let start_offset = 0;
+        let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -157,10 +159,7 @@ impl TunDevice {
         Ok(())
     }
 
-    pub async fn run(
-        mut self,
-        nat_addr: SocketAddr,
-    ) -> io::Result<()> {
+    pub async fn run(mut self, nat_addr: SocketAddr) -> io::Result<()> {
         let nat_addr = if let SocketAddr::V4(addr) = nat_addr {
             addr
         } else {
@@ -195,7 +194,7 @@ impl TunDevice {
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
-                        self.session_mgr.query_tcp_by_token(pkt.dst_port())
+                            self.session_mgr.query_tcp_by_token(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
                             // tracing::trace!(

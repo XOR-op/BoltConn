@@ -1,4 +1,4 @@
-use crate::resource::buf_slab::PktBufHandle;
+use crate::common::buf_slab::PktBufHandle;
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet};
 use std::fmt::{Display, Formatter};
 use std::net::IpAddr;

@@ -1,4 +1,4 @@
-use crate::process::{NetworkType, ProcessInfo};
+use crate::platform::process::{NetworkType, ProcessInfo};
 use netlink_packet_sock_diag::{
     constants::*,
     inet::{ExtensionFlags, InetRequest, SocketId, StateFlags},
@@ -47,7 +47,7 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
     packet.finalize();
     let mut buf = vec![0; packet.header.length as usize];
     packet.serialize(&mut buf[..]);
-    diag_sock.send(&buf[..],0)?;
+    diag_sock.send(&buf[..], 0)?;
 
     let mut receive_buffer = vec![0; 4096];
     let mut offset = 0;

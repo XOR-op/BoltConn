@@ -1,5 +1,7 @@
-use crate::network::bind_to_device;
 use crate::outbound::TcpConnection;
+use crate::platform::bind_to_device;
+use crate::platform::egress::Egress;
+use crate::session::SessionInfo;
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
@@ -8,8 +10,6 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
-use crate::network::egress::Egress;
-use crate::session::SessionInfo;
 
 pub struct DirectOutbound {
     iface_name: String,
@@ -38,8 +38,16 @@ impl DirectOutbound {
         let ingoing_indicator = self.conn.available.clone();
         let outgoing_indicator = self.conn.available.clone();
         let outbound = match self.conn.dst {
-            SocketAddr::V4(_) => Egress::new(&self.iface_name).tcpv4_stream(self.conn.dst).await?,
-            SocketAddr::V6(_) => Egress::new(&self.iface_name).tcpv6_stream(self.conn.dst).await?
+            SocketAddr::V4(_) => {
+                Egress::new(&self.iface_name)
+                    .tcpv4_stream(self.conn.dst)
+                    .await?
+            }
+            SocketAddr::V6(_) => {
+                Egress::new(&self.iface_name)
+                    .tcpv6_stream(self.conn.dst)
+                    .await?
+            }
         };
         tracing::info!(
             "[Direct] Connection {:?} <=> {:?} established",
@@ -62,7 +70,10 @@ impl DirectOutbound {
                     Ok(size) => {
                         if first_packet {
                             first_packet = false;
-                            outgoing_info_arc.write().unwrap().update_proto(&buf[..size]);
+                            outgoing_info_arc
+                                .write()
+                                .unwrap()
+                                .update_proto(&buf[..size]);
                         }
                         // tracing::trace!("[Direct] outgoing {} bytes", size);
                         if let Err(err) = out_write.write_all(&buf[..size]).await {

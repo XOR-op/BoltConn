@@ -1,4 +1,4 @@
-use crate::process::{NetworkType, ProcessInfo};
+use crate::platform::process::{NetworkType, ProcessInfo};
 use libc::{c_char, c_int};
 use std::ffi::{CStr, CString};
 use std::io::{ErrorKind, Result};

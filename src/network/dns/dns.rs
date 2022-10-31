@@ -1,5 +1,5 @@
-use crate::dns::dns_table::DnsTable;
-use crate::network::get_iface_address;
+use crate::network::dns::dns_table::DnsTable;
+use crate::platform::get_iface_address;
 use std::io;
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
@@ -43,7 +43,9 @@ impl Dns {
 
     /// Return fake ip for the domain name instantly.
     pub fn ip_to_domain(&self, fake_ip: IpAddr) -> Option<String> {
-        self.table.query_by_ip(fake_ip).and_then(|record| Some(record.domain_name.clone()))
+        self.table
+            .query_by_ip(fake_ip)
+            .and_then(|record| Some(record.domain_name.clone()))
     }
 
     /// If no corresponding record, return fake ip itself.
@@ -81,7 +83,7 @@ impl Dns {
             IpAddr::V4(addr) => addr,
             IpAddr::V6(_) => return err,
         };
-        tracing::debug!("Respond to DNS query: {:?} with {:?} ",domain,fake_ip);
+        tracing::debug!("Respond to DNS query: {:?} with {:?} ", domain, fake_ip);
         let mut resp = Message::new();
         resp.set_id(req.id())
             .set_message_type(MessageType::Response)

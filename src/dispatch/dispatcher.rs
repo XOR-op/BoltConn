@@ -1,17 +1,17 @@
 use crate::outbound::DirectOutbound;
-use crate::process;
+use crate::platform::process;
+use crate::session::{NetworkAddr, SessionInfo};
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use crate::session::{NetworkAddr, SessionInfo};
 
 pub struct Dispatcher {
     iface_name: String,
 }
 
 impl Dispatcher {
-    pub fn new( iface_name: &str) -> Self {
+    pub fn new(iface_name: &str) -> Self {
         Self {
             iface_name: iface_name.into(),
         }
@@ -55,12 +55,19 @@ impl Dispatcher {
                 dst_addr
             );
         }
-        let info = SessionInfo::new(match dst_domain {
-            Some(dn) => NetworkAddr::DomainName { domain_name: dn, port: dst_addr.port() },
-            None => NetworkAddr::Raw(dst_addr)
-        }, "direct");
+        let info = SessionInfo::new(
+            match dst_domain {
+                Some(dn) => NetworkAddr::DomainName {
+                    domain_name: dn,
+                    port: dst_addr.port(),
+                },
+                None => NetworkAddr::Raw(dst_addr),
+            },
+            "direct",
+        );
         tokio::spawn(async move {
-            let mut direct = DirectOutbound::new(name.as_str(), src_addr, dst_addr, info, indicator);
+            let mut direct =
+                DirectOutbound::new(name.as_str(), src_addr, dst_addr, info, indicator);
             if let Err(err) = direct.run(stream).await {
                 tracing::error!("[Dispatcher] create Direct failed: {}", err)
             }

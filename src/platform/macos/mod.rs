@@ -1,5 +1,5 @@
 use super::errno_err;
-use crate::network::macos::c_ffi::*;
+use crate::platform::macos::c_ffi::*;
 use ipnet::IpNet;
 use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
 use std::ffi::CStr;

@@ -1,5 +1,5 @@
-use super::platform;
-use crate::network::get_iface_address;
+use crate::platform;
+use crate::platform::get_iface_address;
 use std::io::Result;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
@@ -10,9 +10,9 @@ pub struct Egress {
 }
 
 impl Egress {
-    pub fn new(name:&str)->Self{
-        Self{
-            iface_name: name.to_string()
+    pub fn new(name: &str) -> Self {
+        Self {
+            iface_name: name.to_string(),
         }
     }
 

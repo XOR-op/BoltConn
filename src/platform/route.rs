@@ -1,4 +1,4 @@
-use crate::network::platform;
+use crate::platform;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use std::io;
 
