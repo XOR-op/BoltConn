@@ -30,8 +30,8 @@ mod outbound;
 mod platform;
 mod session;
 
-fn main() -> io::Result<()> {
-    let mut rt = tokio::runtime::Runtime::new()?;
+fn main() {
+    let mut rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
     let handle = rt.handle();
     tracing_subscriber::registry()
         .with(fmt::layer())
@@ -46,21 +46,20 @@ fn main() -> io::Result<()> {
 
     let pool = PktBufPool::new(512, 4096);
     let manager = Arc::new(SessionManager::new());
-    let dns = Arc::new(Dns::new(real_iface_name)?);
+    let dns = Arc::new(Dns::new(real_iface_name).expect("DNS failed to initialize"));
     let mut tun = rt.block_on(async {
         TunDevice::open(manager.clone(), pool.clone(), real_iface_name, dns.clone())
-    })?;
+    }).expect("fail to create TUN");
 
     event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
-    tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 24).unwrap())?;
-    tun.up()?;
-    let nat_addr = SocketAddr::new(platform::get_iface_address(tun.get_name())?, 9961);
+    tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 24).unwrap()).expect("TUN failed to set address");
+    tun.up().expect("TUN failed to up");
+    let nat_addr = SocketAddr::new(platform::get_iface_address(tun.get_name()).expect("failed to get tun address"), 9961);
     let dispatcher = Arc::new(Dispatcher::new(real_iface_name));
     let nat = Nat::new(nat_addr, manager, dispatcher, dns);
     let nat_handle = rt.spawn(async move { nat.run_tcp().await });
     let tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
-    rt.block_on(async { tokio::signal::ctrl_c().await })?;
+    rt.block_on(async { tokio::signal::ctrl_c().await }).expect("Tokio runtime error");
     // rt.shutdown_timeout(Duration::from_millis(3000));
     rt.shutdown_background();
-    Ok(())
 }
