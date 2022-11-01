@@ -6,17 +6,18 @@ use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
-use trust_dns_resolver::Resolver;
+use trust_dns_resolver::{TokioAsyncResolver};
 
 pub struct Dns {
     table: DnsTable,
-    resolvers: Vec<Resolver>,
+    resolvers: Vec<TokioAsyncResolver>,
 }
 
 impl Dns {
     pub fn new(gw: &str) -> Result<Dns> {
         // todo: by config
         let gw_ip = get_iface_address(gw)?;
+        tracing::debug!("GW IP:{}",gw_ip);
         let nameserver_cfg = NameServerConfig {
             socket_addr: SocketAddr::V4(SocketAddrV4::new("114.114.114.114".parse().unwrap(), 53)),
             protocol: Protocol::Udp,
@@ -29,7 +30,7 @@ impl Dns {
             vec![],
             NameServerConfigGroup::from(vec![nameserver_cfg]),
         );
-        let resolver = Resolver::new(cfg, ResolverOpts::default())?;
+        let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
         Ok(Dns {
             table: DnsTable::new(),
             resolvers: vec![resolver],
@@ -49,11 +50,12 @@ impl Dns {
     }
 
     /// If no corresponding record, return fake ip itself.
-    pub fn ip_to_real_ip(&self, fake_ip: IpAddr) -> IpAddr {
+    pub async fn ip_to_real_ip(&self, fake_ip: IpAddr) -> IpAddr {
         if let Some(record) = self.table.query_by_ip(fake_ip) {
             for r in &self.resolvers {
-                if let Ok(result) = r.ipv4_lookup(&record.domain_name) {
+                if let Ok(result) = r.ipv4_lookup(&record.domain_name).await {
                     for i in result {
+                        tracing::trace!("Fake ip:{}, real ip:{}",fake_ip,i);
                         return IpAddr::V4(i);
                     }
                 }
@@ -75,27 +77,40 @@ impl Dns {
         let q = &req.queries()[0];
         // validate
         let domain = q.name().to_string();
-        // todo: return empty answer to AAAA question
-        if q.query_type() != RecordType::A {
-            return err;
-        }
-        let fake_ip = match self.domain_to_ip(&domain) {
-            IpAddr::V4(addr) => addr,
-            IpAddr::V6(_) => return err,
-        };
-        tracing::debug!("Respond to DNS query: {:?} with {:?} ", domain, fake_ip);
+
         let mut resp = Message::new();
         resp.set_id(req.id())
             .set_message_type(MessageType::Response)
             .set_op_code(req.op_code())
-            .set_response_code(ResponseCode::NoError);
-        let mut ans = Record::new();
-        ans.set_name(domain.parse()?)
-            .set_rr_type(RecordType::A)
-            .set_dns_class(DNSClass::IN)
-            .set_ttl(60)
-            .set_data(Some(RData::A(fake_ip)));
-        resp.add_answer(ans);
-        Ok(resp.to_vec()?)
+            .set_response_code(ResponseCode::NoError)
+            .set_recursion_desired(req.recursion_desired())
+            .set_recursion_available(req.recursion_desired()) // not a typo
+            .set_checking_disabled(req.checking_disabled())
+            .add_query(q.clone());
+        match q.query_type() {
+            RecordType::A => {
+                let fake_ip = match self.domain_to_ip(&domain) {
+                    IpAddr::V4(addr) => addr,
+                    IpAddr::V6(_) => return err,
+                };
+                tracing::debug!("Respond to DNS query: {:?} with {:?} ", domain, fake_ip);
+                let mut ans = Record::new();
+                ans.set_name(domain.parse()?)
+                    .set_rr_type(RecordType::A)
+                    .set_dns_class(DNSClass::IN)
+                    .set_ttl(60)
+                    .set_data(Some(RData::A(fake_ip)));
+                resp.add_answer(ans);
+                // println!("==============\n{:?}\n>>>>>>>>>>", req);
+                // println!("{:?}\n<<<<<<<<<<<<<", Message::from_vec(&resp.to_vec()?));
+                Ok(resp.to_vec()?)
+            }
+            RecordType::AAAA => {
+                Ok(resp.to_vec()?)
+            }
+            _ => {
+                err
+            }
+        }
     }
 }

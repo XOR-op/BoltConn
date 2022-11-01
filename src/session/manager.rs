@@ -25,7 +25,8 @@ impl SessionManager {
         }
     }
 
-    pub fn query_tcp_by_addr(&self, src_addr: SocketAddr, dst_addr: SocketAddr) -> u16 {
+    /// inbound->outbound, return inbound.port
+    pub fn register_session(&self, src_addr: SocketAddr, dst_addr: SocketAddr) -> u16 {
         let entry = self.tcp_records.entry(src_addr.port());
         let mut pair = entry.or_insert(TcpSessionCtl::new(src_addr, dst_addr));
         // If original connection silently expired
@@ -37,8 +38,9 @@ impl SessionManager {
         pair.key().clone()
     }
 
-    pub fn query_tcp_by_token(&self, port: u16) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
-        match self.tcp_records.get(&port) {
+    /// Use inbound.port to query session
+    pub fn lookup_session(&self, inbound_port: u16) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
+        match self.tcp_records.get(&inbound_port) {
             Some(s) => {
                 // tracing::trace!(
                 //     "[Session] success = ({})=>({},{})",

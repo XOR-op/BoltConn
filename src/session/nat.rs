@@ -37,10 +37,18 @@ impl Nat {
         );
         loop {
             let (socket, addr) = tcp_listener.accept().await?;
+            tracing::trace!("[NAT] received new !");
             if let Ok((src_addr, dst_addr, indicator)) =
-                self.session_mgr.query_tcp_by_token(addr.port())
+            self.session_mgr.lookup_session(addr.port())
             {
                 let domain_name = self.dns.ip_to_domain(dst_addr.ip());
+                let dst_addr = match domain_name {
+                    None => { dst_addr }
+                    Some(_) => {
+                        // translate fake ip
+                        SocketAddr::new(self.dns.ip_to_real_ip(dst_addr.ip()).await, dst_addr.port())
+                    }
+                };
                 tracing::trace!("[NAT] received new connection {}->{}", src_addr, dst_addr);
                 self.dispatcher
                     .submit_tcp(src_addr, dst_addr, domain_name, indicator, socket);

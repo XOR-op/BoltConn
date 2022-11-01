@@ -15,7 +15,7 @@ use network::packet::ip::IPPkt;
 use smoltcp::wire::IpProtocol;
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -194,7 +194,7 @@ impl TunDevice {
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
-                            self.session_mgr.query_tcp_by_token(pkt.dst_port())
+                            self.session_mgr.lookup_session(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
                             // tracing::trace!(
@@ -216,18 +216,18 @@ impl TunDevice {
                         }
                     } else {
                         // inbound->outbound
-                        let port = self.session_mgr.query_tcp_by_addr(
+                        let inbound_port = self.session_mgr.register_session(
                             SocketAddr::V4(SocketAddrV4::new(src, pkt.src_port())),
                             SocketAddr::V4(SocketAddrV4::new(dst, pkt.dst_port())),
                         );
-                        // (dst_ip, session_port, nat_ip, nat_port)
+                        // (_, session_port, nat_ip, nat_port)
                         pkt.rewrite_addr(
-                            SocketAddr::from(SocketAddrV4::new(dst, port)),
+                            SocketAddr::from(SocketAddrV4::new(dst, inbound_port)),
                             SocketAddr::from(nat_addr),
                         );
                         // tracing::trace!(
                         //     "[TUN] outbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
-                        //     SocketAddr::from(SocketAddrV4::new(dst, port)),
+                        //     SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(254,254,254,254), inbound_port)),
                         //     SocketAddr::from(nat_addr),
                         //     pkt.packet_payload().len(),
                         //     pkt.as_tcp_packet().syn(),

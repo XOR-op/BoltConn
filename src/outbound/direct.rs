@@ -37,6 +37,10 @@ impl DirectOutbound {
     pub async fn run(&mut self, inbound: TcpStream) -> Result<()> {
         let ingoing_indicator = self.conn.available.clone();
         let outgoing_indicator = self.conn.available.clone();
+        tracing::info!(
+            "[Direct] Connection => {:?} handshaking",
+            self.conn.dst
+        );
         let outbound = match self.conn.dst {
             SocketAddr::V4(_) => {
                 Egress::new(&self.iface_name)

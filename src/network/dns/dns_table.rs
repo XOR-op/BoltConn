@@ -55,10 +55,6 @@ impl DnsTable {
 
     pub fn query_by_ip(&self, addr: IpAddr) -> Option<Arc<DnsRecord>> {
         let mut inner = self.inner.lock().unwrap();
-        println!("LOG DNS INFO! {}", addr);
-        for i in inner.ip_table.iter() {
-            println!("{:?}=>{:?}", i.0, i.1)
-        }
         inner.ip_table.get_mut(&addr).map(|rec| {
             rec.update();
             rec.clone()
@@ -73,6 +69,12 @@ impl DnsTable {
                 Self::flush_older(&mut inner);
             }
         }
+        // remove trailing "."
+        let domain = if domain.ends_with("."){
+            &domain[..domain.len()]
+        }else {
+            domain
+        };
         match inner.dn_table.get_mut(&String::from(domain)) {
             None => {
                 let ip = inner.available_ips.pop().unwrap();

@@ -43,6 +43,7 @@ fn main() {
     let real_iface_name = "ens18";
 
     let _guard = rt.enter();
+    let dns_guard = platform::SystemDnsHandle::new("198.18.99.88".parse().unwrap()).expect("fail to replace /etc/resolv.conf");
 
     let pool = PktBufPool::new(512, 4096);
     let manager = Arc::new(SessionManager::new());
@@ -60,6 +61,7 @@ fn main() {
     let nat_handle = rt.spawn(async move { nat.run_tcp().await });
     let tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     rt.block_on(async { tokio::signal::ctrl_c().await }).expect("Tokio runtime error");
+    drop(dns_guard);
     // rt.shutdown_timeout(Duration::from_millis(3000));
     rt.shutdown_background();
 }
