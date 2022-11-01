@@ -1,7 +1,7 @@
 use crate::network::egress::Egress;
 use crate::outbound::TcpConnection;
 use crate::platform::bind_to_device;
-use crate::session::SessionInfo;
+use crate::session::{SessionInfo, SessionProtocol};
 use io::Result;
 use std::io;
 use std::net::SocketAddr;

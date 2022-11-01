@@ -49,27 +49,28 @@ impl Dns {
 
     /// Return fake ip for the domain name instantly.
     pub fn ip_to_domain(&self, fake_ip: IpAddr) -> Option<String> {
-        self.table
-            .query_by_ip(fake_ip)
-            .and_then(|record| {
-                let domain = &record.domain_name;
-                Some(if domain.ends_with(".") {
-                    domain[..domain.len()-1].to_string()
-                } else {
-                    domain.clone()
-                })
+        self.table.query_by_ip(fake_ip).and_then(|record| {
+            let domain = &record.domain_name;
+            Some(if domain.ends_with(".") {
+                domain[..domain.len() - 1].to_string()
+            } else {
+                domain.clone()
             })
+        })
     }
 
     /// If no corresponding record, return fake ip itself.
     pub async fn ip_to_real_ip(&self, fake_ip: IpAddr) -> IpAddr {
         if let Some(record) = self.table.query_by_ip(fake_ip) {
             for r in &self.resolvers {
-                tracing::trace!("Resolve {}", &record.domain_name);
                 if let Ok(result) = r.ipv4_lookup(&record.domain_name).await {
-                    tracing::trace!("Resolve {} done", &record.domain_name);
                     for i in result {
-                        tracing::trace!("Fake ip:{}, real ip:{}", fake_ip, i);
+                        tracing::trace!(
+                            "{} => Fake ip:{}, real ip:{}",
+                            &record.domain_name,
+                            fake_ip,
+                            i
+                        );
                         return IpAddr::V4(i);
                     }
                 }

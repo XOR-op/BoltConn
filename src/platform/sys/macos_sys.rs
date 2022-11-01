@@ -127,7 +127,7 @@ pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
 pub fn get_default_route() -> io::Result<(IpAddr, String)> {
     let lines: Vec<String> = get_command_output("route", ["-n", "get", "1.1.1.1"])?
         .split("\n")
-        .map(|s|s.to_string())
+        .map(|s| s.to_string())
         .collect();
     if lines.len() >= 5 {
         let gw: IpAddr = {

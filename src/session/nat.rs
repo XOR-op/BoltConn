@@ -37,12 +37,10 @@ impl Nat {
         );
         loop {
             let (socket, addr) = tcp_listener.accept().await?;
-            tracing::trace!("[NAT] received new !");
             if let Ok((src_addr, dst_addr, indicator)) =
-            self.session_mgr.lookup_session(addr.port())
+                self.session_mgr.lookup_session(addr.port())
             {
                 let domain_name = self.dns.ip_to_domain(dst_addr.ip());
-                tracing::debug!("Domain name:{:?}",domain_name);
                 let dst_addr = match domain_name {
                     None => dst_addr,
                     Some(_) => {

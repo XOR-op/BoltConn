@@ -88,7 +88,6 @@ fn read_proc(fd: Result<DirEntry>, name: &str) -> Result<bool> {
 
 pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
     let (inode, uid) = get_inode_and_uid(addr, net_type)?;
-    tracing::debug!("Get inode&uid!");
     let target_name = format!("socket:[{}]", inode);
     for proc in std::fs::read_dir("/proc")? {
         if let Ok(proc) = proc {

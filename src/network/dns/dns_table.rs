@@ -71,7 +71,7 @@ impl DnsTable {
         }
         // remove trailing "."
         let domain = if domain.ends_with(".") {
-            &domain[..domain.len()-1]
+            &domain[..domain.len() - 1]
         } else {
             domain
         };
