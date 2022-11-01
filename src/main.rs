@@ -21,6 +21,8 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tracing::{event, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use crate::config::DnsConfig;
+use crate::network::dns::DnsRoutingHandle;
 
 mod common;
 mod config;
@@ -38,16 +40,20 @@ fn main() {
         .with(EnvFilter::new("catalyst=trace"))
         .init();
     #[cfg(target_os = "macos")]
-    let real_iface_name = "en0";
+        let real_iface_name = "en0";
     #[cfg(target_os = "linux")]
-    let real_iface_name = "ens18";
+        let real_iface_name = "ens18";
+
+    let dns_config = DnsConfig { list: vec!["114.114.114.114:53".parse().unwrap()] };
 
     let _guard = rt.enter();
     let dns_guard = platform::SystemDnsHandle::new("198.18.99.88".parse().unwrap()).expect("fail to replace /etc/resolv.conf");
 
+    let dns_routing_guard = DnsRoutingHandle::new(real_iface_name, dns_config.clone()).expect("fail to add dns route table");
+
     let pool = PktBufPool::new(512, 4096);
     let manager = Arc::new(SessionManager::new());
-    let dns = Arc::new(Dns::new(real_iface_name).expect("DNS failed to initialize"));
+    let dns = Arc::new(Dns::new(real_iface_name, &dns_config).expect("DNS failed to initialize"));
     let mut tun = rt.block_on(async {
         TunDevice::open(manager.clone(), pool.clone(), real_iface_name, dns.clone())
     }).expect("fail to create TUN");
@@ -62,6 +68,7 @@ fn main() {
     let tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     rt.block_on(async { tokio::signal::ctrl_c().await }).expect("Tokio runtime error");
     drop(dns_guard);
+    drop(dns_routing_guard);
     // rt.shutdown_timeout(Duration::from_millis(3000));
     rt.shutdown_background();
 }

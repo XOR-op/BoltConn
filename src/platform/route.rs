@@ -73,7 +73,7 @@ pub fn ipv6_private_addresses() -> Vec<Ipv6Net> {
 
 pub fn setup_ipv4_routing_table(name: &str) -> io::Result<()> {
     for item in ipv4_relay_addresses() {
-        unsafe { platform::add_route_entry(IpNet::V4(item), name) }?;
+        platform::add_route_entry(IpNet::V4(item), name)?;
     }
     Ok(())
 }

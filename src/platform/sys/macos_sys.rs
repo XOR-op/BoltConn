@@ -78,7 +78,7 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     Err(errno_err("No available sc_unit"))
 }
 
-pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
+pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     // todo: do not use external commands
     run_command(
         "route",
@@ -89,6 +89,18 @@ pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
             &format!("{}", subnet),
             "-interface",
             name,
+        ],
+    )
+}
+
+pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
+    // todo: do not use external commands
+    run_command(
+        "route",
+        [
+            "-n",
+            "delete",
+            &format!("{}", addr),
         ],
     )
 }

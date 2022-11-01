@@ -1,12 +1,15 @@
 use crate::network::dns::dns_table::DnsTable;
-use crate::platform::get_iface_address;
+use crate::platform::{add_route_entry, get_iface_address, run_command};
 use std::io;
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
+use ipnet::{IpNet, Ipv4Net};
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
 use trust_dns_resolver::{TokioAsyncResolver};
+use crate::config::DnsConfig;
+use crate::platform;
 
 pub struct Dns {
     table: DnsTable,
@@ -14,21 +17,23 @@ pub struct Dns {
 }
 
 impl Dns {
-    pub fn new(gw: &str) -> Result<Dns> {
-        // todo: by config
+    pub fn new(gw: &str, config: &DnsConfig) -> Result<Dns> {
         let gw_ip = get_iface_address(gw)?;
-        tracing::debug!("GW IP:{}",gw_ip);
-        let nameserver_cfg = NameServerConfig {
-            socket_addr: SocketAddr::V4(SocketAddrV4::new("114.114.114.114".parse().unwrap(), 53)),
-            protocol: Protocol::Udp,
-            tls_dns_name: None,
-            trust_nx_responses: false,
-            bind_addr: Some(SocketAddr::new(gw_ip, 1101)),
-        };
+        let ns_vec: Vec<NameServerConfig> =
+            config.list.iter().map(|e| {
+                NameServerConfig {
+                    socket_addr: e.clone(),
+                    protocol: Protocol::Udp,
+                    tls_dns_name: None,
+                    trust_nx_responses: false,
+                    bind_addr: Some(SocketAddr::new(gw_ip, 1101)),
+                }
+            }).collect();
+
         let cfg = ResolverConfig::from_parts(
             None,
             vec![],
-            NameServerConfigGroup::from(vec![nameserver_cfg]),
+            NameServerConfigGroup::from(ns_vec),
         );
         let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
         Ok(Dns {

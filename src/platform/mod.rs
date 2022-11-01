@@ -19,7 +19,7 @@ pub fn errno_err(msg: &str) -> io::Error {
     io::Error::new(io::Error::last_os_error().kind(), msg)
 }
 
-fn run_command<I, S>(cmd: &str, args: I) -> io::Result<()>
+pub fn run_command<I, S>(cmd: &str, args: I) -> io::Result<()>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,

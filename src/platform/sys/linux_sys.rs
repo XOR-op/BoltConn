@@ -9,7 +9,7 @@ use std::os::unix::io::RawFd;
 use std::{io, mem};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, IpAddr};
 
 use super::super::errno_err;
 
@@ -35,10 +35,23 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     ))
 }
 
-pub unsafe fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
+pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     // todo: do not use external commands
     run_command("ip", ["route", "add", &format!("{}", subnet), "dev", name])
 }
+
+pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
+    // todo: do not use external commands
+    run_command(
+        "ip",
+        [
+            "route",
+            "delete",
+            &format!("{}", addr),
+        ],
+    )
+}
+
 
 pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
     unsafe {
