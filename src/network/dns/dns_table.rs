@@ -70,9 +70,9 @@ impl DnsTable {
             }
         }
         // remove trailing "."
-        let domain = if domain.ends_with("."){
-            &domain[..domain.len()]
-        }else {
+        let domain = if domain.ends_with(".") {
+            &domain[..domain.len()-1]
+        } else {
             domain
         };
         match inner.dn_table.get_mut(&String::from(domain)) {

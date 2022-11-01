@@ -1,15 +1,15 @@
 use super::linux_ffi::*;
 use crate::common::async_raw_fd;
-use crate::platform::run_command;
-use crate::platform::{create_req, linux_ffi};
+use crate::common::io_err;
+use crate::platform::{create_req, linux_ffi,get_command_output,run_command};
 use ipnet::IpNet;
 use libc::{bind, c_int, sockaddr, sockaddr_in, socklen_t, O_RDWR};
 use std::ffi::CStr;
-use std::os::unix::io::RawFd;
-use std::{io, mem};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::net::{Ipv4Addr, IpAddr};
+use std::net::{IpAddr, Ipv4Addr};
+use std::os::unix::io::RawFd;
+use std::{io, mem};
 
 use super::super::errno_err;
 
@@ -40,18 +40,38 @@ pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     run_command("ip", ["route", "add", &format!("{}", subnet), "dev", name])
 }
 
-pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
-    // todo: do not use external commands
+pub fn add_route_entry_via_gateway(dst: IpAddr, gw: IpAddr, name: &str) -> io::Result<()> {
     run_command(
         "ip",
         [
             "route",
-            "delete",
-            &format!("{}", addr),
+            "add",
+            &format!("{}", dst),
+            "dev",
+            name,
+            "via",
+            &format!("{}", gw),
         ],
     )
 }
 
+pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
+    run_command("ip", ["route", "delete", &format!("{}", addr)])
+}
+
+pub fn get_default_route() -> io::Result<(IpAddr, String)> {
+    let words: Vec<String> = get_command_output("ip", ["-s", "route", "get", "1.1.1.1"])?
+        .split(" ")
+        .map(|s|s.to_string())
+        .collect();
+    // example: 1.1.1.1 via 192.168.0.1 dev en0 src 192.168.0.100 uid 1000
+    if words.len() >= 5 && words[1] == "via" && words[3] == "dev" && words[0] == "1.1.1.1" {
+        let gw = words[2].parse().map_err(|e| io_err("Invalid gateway"))?;
+        Ok((gw, words[4].clone()))
+    } else {
+        Err(io_err("Invalid parse"))
+    }
+}
 
 pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
     unsafe {
@@ -77,7 +97,11 @@ impl SystemDnsHandle {
     const RESOLV: &str = "/etc/resolv.conf";
     pub fn new(ip: Ipv4Addr) -> io::Result<Self> {
         let mut output = File::create(Self::PATH).unwrap_or(
-            OpenOptions::new().read(true).write(true).truncate(true).open(Self::PATH)?
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(true)
+                .open(Self::PATH)?,
         );
         output.write_all(format!("nameserver {}\n", ip).as_bytes())?;
         run_command("mount", ["--bind", Self::PATH, Self::RESOLV])?;

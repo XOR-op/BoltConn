@@ -242,13 +242,13 @@ impl TunDevice {
                 }
                 IpProtocol::Udp => {
                     let pkt = UdpPkt::new(pkt);
-                    tracing::trace!(
-                        "[TUN] UDP packet: {}:{} -> {}:{}",
-                        src,
-                        pkt.src_port(),
-                        dst,
-                        pkt.dst_port()
-                    );
+                    // tracing::trace!(
+                    //     "[TUN] UDP packet: {}:{} -> {}:{}",
+                    //     src,
+                    //     pkt.src_port(),
+                    //     dst,
+                    //     pkt.dst_port()
+                    // );
                     if pkt.dst_port() == 53 {
                         // fake ip
                         if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload())

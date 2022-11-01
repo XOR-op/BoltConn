@@ -42,11 +42,15 @@ impl Nat {
             self.session_mgr.lookup_session(addr.port())
             {
                 let domain_name = self.dns.ip_to_domain(dst_addr.ip());
+                tracing::debug!("Domain name:{:?}",domain_name);
                 let dst_addr = match domain_name {
-                    None => { dst_addr }
+                    None => dst_addr,
                     Some(_) => {
                         // translate fake ip
-                        SocketAddr::new(self.dns.ip_to_real_ip(dst_addr.ip()).await, dst_addr.port())
+                        SocketAddr::new(
+                            self.dns.ip_to_real_ip(dst_addr.ip()).await,
+                            dst_addr.port(),
+                        )
                     }
                 };
                 tracing::trace!("[NAT] received new connection {}->{}", src_addr, dst_addr);

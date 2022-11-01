@@ -1,15 +1,15 @@
+use crate::config::DnsConfig;
 use crate::network::dns::dns_table::DnsTable;
+use crate::platform;
 use crate::platform::{add_route_entry, get_iface_address, run_command};
+use ipnet::{IpNet, Ipv4Net};
 use std::io;
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
-use ipnet::{IpNet, Ipv4Net};
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
-use trust_dns_resolver::{TokioAsyncResolver};
-use crate::config::DnsConfig;
-use crate::platform;
+use trust_dns_resolver::TokioAsyncResolver;
 
 pub struct Dns {
     table: DnsTable,
@@ -17,24 +17,24 @@ pub struct Dns {
 }
 
 impl Dns {
-    pub fn new(gw: &str, config: &DnsConfig) -> Result<Dns> {
-        let gw_ip = get_iface_address(gw)?;
-        let ns_vec: Vec<NameServerConfig> =
-            config.list.iter().map(|e| {
+    pub fn new(iface: &str, config: &DnsConfig) -> Result<Dns> {
+        let gw_ip = get_iface_address(iface)?;
+        let ns_vec: Vec<NameServerConfig> = config
+            .list
+            .iter()
+            .map(|e| {
                 NameServerConfig {
                     socket_addr: e.clone(),
                     protocol: Protocol::Udp,
                     tls_dns_name: None,
                     trust_nx_responses: false,
-                    bind_addr: Some(SocketAddr::new(gw_ip, 1101)),
+                    bind_addr: None,
+                    // bind_addr: Some(SocketAddr::new(gw_ip, 1101)),
                 }
-            }).collect();
+            })
+            .collect();
 
-        let cfg = ResolverConfig::from_parts(
-            None,
-            vec![],
-            NameServerConfigGroup::from(ns_vec),
-        );
+        let cfg = ResolverConfig::from_parts(None, vec![], NameServerConfigGroup::from(ns_vec));
         let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
         Ok(Dns {
             table: DnsTable::new(),
@@ -51,16 +51,25 @@ impl Dns {
     pub fn ip_to_domain(&self, fake_ip: IpAddr) -> Option<String> {
         self.table
             .query_by_ip(fake_ip)
-            .and_then(|record| Some(record.domain_name.clone()))
+            .and_then(|record| {
+                let domain = &record.domain_name;
+                Some(if domain.ends_with(".") {
+                    domain[..domain.len()-1].to_string()
+                } else {
+                    domain.clone()
+                })
+            })
     }
 
     /// If no corresponding record, return fake ip itself.
     pub async fn ip_to_real_ip(&self, fake_ip: IpAddr) -> IpAddr {
         if let Some(record) = self.table.query_by_ip(fake_ip) {
             for r in &self.resolvers {
+                tracing::trace!("Resolve {}", &record.domain_name);
                 if let Ok(result) = r.ipv4_lookup(&record.domain_name).await {
+                    tracing::trace!("Resolve {} done", &record.domain_name);
                     for i in result {
-                        tracing::trace!("Fake ip:{}, real ip:{}",fake_ip,i);
+                        tracing::trace!("Fake ip:{}, real ip:{}", fake_ip, i);
                         return IpAddr::V4(i);
                     }
                 }
@@ -98,7 +107,7 @@ impl Dns {
                     IpAddr::V4(addr) => addr,
                     IpAddr::V6(_) => return err,
                 };
-                tracing::debug!("Respond to DNS query: {:?} with {:?} ", domain, fake_ip);
+                // tracing::debug!("Respond to DNS query: {:?} with {:?} ", domain, fake_ip);
                 let mut ans = Record::new();
                 ans.set_name(domain.parse()?)
                     .set_rr_type(RecordType::A)
@@ -110,12 +119,8 @@ impl Dns {
                 // println!("{:?}\n<<<<<<<<<<<<<", Message::from_vec(&resp.to_vec()?));
                 Ok(resp.to_vec()?)
             }
-            RecordType::AAAA => {
-                Ok(resp.to_vec()?)
-            }
-            _ => {
-                err
-            }
+            RecordType::AAAA => Ok(resp.to_vec()?),
+            _ => err,
         }
     }
 }

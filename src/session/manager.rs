@@ -39,7 +39,10 @@ impl SessionManager {
     }
 
     /// Use inbound.port to query session
-    pub fn lookup_session(&self, inbound_port: u16) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
+    pub fn lookup_session(
+        &self,
+        inbound_port: u16,
+    ) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
         match self.tcp_records.get(&inbound_port) {
             Some(s) => {
                 // tracing::trace!(

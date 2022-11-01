@@ -1,4 +1,5 @@
 use super::macos_ffi::*;
+use crate::common::io_err;
 use crate::platform::{errno_err, get_command_output, run_command};
 use ipnet::IpNet;
 use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
@@ -93,16 +94,16 @@ pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     )
 }
 
-pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
-    // todo: do not use external commands
+pub fn add_route_entry_via_gateway(dst: IpAddr, gw: IpAddr, _name: &str) -> io::Result<()> {
     run_command(
         "route",
-        [
-            "-n",
-            "delete",
-            &format!("{}", addr),
-        ],
+        ["-n", "add", &format!("{}", dst), &format!("{}", gw)],
     )
+}
+
+pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
+    // todo: do not use external commands
+    run_command("route", ["-n", "delete", &format!("{}", addr)])
 }
 
 pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
@@ -121,6 +122,32 @@ pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn get_default_route() -> io::Result<(IpAddr, String)> {
+    let lines: Vec<String> = get_command_output("route", ["-n", "get", "1.1.1.1"])?
+        .split("\n")
+        .map(|s|s.to_string())
+        .collect();
+    if lines.len() >= 5 {
+        let gw: IpAddr = {
+            let gw_str: Vec<&str> = lines[3].split(": ").collect();
+            if gw_str.len() != 2 {
+                return Err(io_err("Invalid format"));
+            }
+            gw_str[1].parse().map_err(|e| io_err("Invalid gateway"))?
+        };
+        let iface = {
+            let iface_str: Vec<&str> = lines[4].split(": ").collect();
+            if iface_str.len() != 2 {
+                return Err(io_err("Invalid format"));
+            }
+            iface_str[1].clone()
+        };
+        Ok((gw, iface.to_string()))
+    } else {
+        Err(io_err("Invalid parse"))
+    }
 }
 
 pub struct SystemDnsHandle {

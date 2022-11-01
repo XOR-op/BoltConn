@@ -1,5 +1,5 @@
-use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]

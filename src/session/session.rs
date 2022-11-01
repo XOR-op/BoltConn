@@ -10,9 +10,11 @@ pub enum SessionProtocol {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TlsVersion {
+    SSL30,
+    TLS10,
+    TLS11,
     TLS12,
     TLS13,
-    LEGACY,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,12 +53,14 @@ impl SessionInfo {
 pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
     // TLS handshake
     if packet.len() > 5 && packet[0] == 22 && packet[1] == 3 {
-        match packet[2] {
-            3 => return SessionProtocol::TLS(TlsVersion::TLS12),
-            4 => return SessionProtocol::TLS(TlsVersion::TLS13),
-            0 | 1 | 2 => return SessionProtocol::TLS(TlsVersion::LEGACY),
-            _ => {}
-        }
+        return match packet[2] {
+            3 => SessionProtocol::TLS(TlsVersion::TLS12),
+            4 => SessionProtocol::TLS(TlsVersion::TLS13),
+            2 => SessionProtocol::TLS(TlsVersion::TLS11),
+            1 => SessionProtocol::TLS(TlsVersion::TLS10),
+            0 => SessionProtocol::TLS(TlsVersion::SSL30),
+            _ => SessionProtocol::TCP // unknown
+        };
     }
     // HTTP request line
     if let Some(idx) = packet.iter().position(|&b| b == b'\r') {
