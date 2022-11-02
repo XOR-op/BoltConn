@@ -21,9 +21,12 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use chrono::Timelike;
 use tokio::io::AsyncWriteExt;
 use tracing::{event, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::FormatTime;
 
 mod common;
 mod config;
@@ -32,18 +35,31 @@ mod network;
 mod outbound;
 mod platform;
 mod session;
+mod inspect;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+pub struct SystemTime;
+
+impl FormatTime for SystemTime {
+    fn format_time(&self, w: &mut Writer<'_>) -> core::fmt::Result {
+        let time = chrono::prelude::Local::now();
+        write!(
+            w,
+            "{:02}:{:02}:{:02}.{:03}",
+            (time.hour()+8)%24,time.minute(),time.second(),time.timestamp_subsec_millis()
+        )
+    }
+}
 
 fn main() {
     let mut rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
     let handle = rt.handle();
+    let formatting_layer = fmt::layer().compact().with_writer(std::io::stdout)
+        .with_timer(SystemTime::default());
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(formatting_layer)
         .with(EnvFilter::new("catalyst=trace"))
         .init();
-    #[cfg(target_os = "macos")]
-    let real_iface_name = "en0";
-    #[cfg(target_os = "linux")]
-    let real_iface_name = "ens18";
 
     let (gateway_address, real_iface_name) =
         get_default_route().expect("failed to get default route");
@@ -72,7 +88,7 @@ fn main() {
         .expect("fail to create TUN");
 
     event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
-    tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 24).unwrap())
+    tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 16).unwrap())
         .expect("TUN failed to set address");
     tun.up().expect("TUN failed to up");
     let nat_addr = SocketAddr::new(

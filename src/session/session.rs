@@ -41,7 +41,7 @@ impl SessionInfo {
     pub fn update_proto(&mut self, packet: &[u8]) {
         self.session_proto = check_tcp_protocol(packet);
         if self.session_proto != SessionProtocol::TCP {
-            tracing::trace!("Update info: {:?}", self);
+            tracing::trace!("Update info: dst={:?}, proto={:?}, rule={:?}", self.dest,self.session_proto,self.rule);
         }
     }
 }
