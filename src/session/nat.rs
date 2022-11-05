@@ -53,7 +53,7 @@ impl Nat {
                 };
                 tracing::trace!("[NAT] received new connection {}->{}", src_addr, dst_addr);
                 self.dispatcher
-                    .submit_tcp(src_addr, dst_addr, domain_name, indicator, socket);
+                    .submit_tun_tcp(src_addr, dst_addr, domain_name, indicator, socket);
             } else {
                 tracing::warn!("Unexpected: no record found by port {}", addr.port())
             }

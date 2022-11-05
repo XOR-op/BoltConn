@@ -28,14 +28,14 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 
+mod adapter;
 mod common;
 mod config;
 mod dispatch;
 mod network;
-mod outbound;
 mod platform;
 mod session;
-mod inspect;
+mod sniff;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct SystemTime;
@@ -46,7 +46,7 @@ impl FormatTime for SystemTime {
         write!(
             w,
             "{:02}:{:02}:{:02}.{:03}",
-            (time.hour()+8)%24,time.minute(),time.second(),time.timestamp_subsec_millis()
+            (time.hour() + 8) % 24, time.minute(), time.second(), time.timestamp_subsec_millis()
         )
     }
 }
@@ -95,7 +95,9 @@ fn main() {
         platform::get_iface_address(tun.get_name()).expect("failed to get tun address"),
         9961,
     );
-    let dispatcher = Arc::new(Dispatcher::new(real_iface_name));
+    let proxy_allocator = PktBufPool::new(512, 4096);
+
+    let dispatcher = Arc::new(Dispatcher::new(real_iface_name, proxy_allocator.clone()));
     let nat = Nat::new(nat_addr, manager, dispatcher, dns);
 
     // run

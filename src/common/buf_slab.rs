@@ -2,9 +2,12 @@ use std::future::Future;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
-use std::thread;
+use std::{io, thread};
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::Notify;
 
 pub const MAX_PKT_SIZE: usize = 65576;
@@ -21,6 +24,27 @@ pub struct PktBufHandle {
     pub len: usize,
 }
 
+impl PktBufHandle {
+    pub fn as_ready(&self) -> &[u8] {
+        &self.data[..self.len]
+    }
+
+    pub fn as_uninited(&mut self) -> &mut [u8] {
+        self.data.as_mut_slice()
+    }
+
+    pub async fn read(&mut self, read: &mut OwnedReadHalf) -> io::Result<usize> {
+        assert_eq!(self.len, 0);
+        match read.read(self.as_uninited()).await {
+            Ok(s) => {
+                self.len = s;
+                Ok(s)
+            }
+            Err(e) => Err(e)
+        }
+    }
+}
+
 type PktBufPoolInner = Arc<Mutex<Vec<PktBufHandle>>>;
 
 /// Fixed capacity for performace; extra capacity for burst traffic but not exhaust system resources
@@ -29,7 +53,7 @@ pub struct PktBufPool {
     free: PktBufPoolInner,
     fixed_capacity: usize,
     extra_capacity: usize,
-    extra_len: usize,
+    extra_len: Arc<AtomicUsize>,
     notify: Arc<Notify>,
 }
 
@@ -79,22 +103,21 @@ impl PktBufPool {
             free: Arc::new(Mutex::new(free)),
             fixed_capacity: lower_bound,
             extra_capacity: upper_bound,
-            extra_len: 0,
+            extra_len: Arc::new(AtomicUsize::new(0)),
             notify: Arc::new(Notify::new()),
         }
     }
 
-    pub async fn obtain(&mut self) -> PktBufHandle {
+    pub async fn obtain(&self) -> PktBufHandle {
         loop {
             // drop vec manually
             {
                 let mut vec = self.free.lock().unwrap();
                 if !vec.is_empty() {
-                    let mut handle = vec.pop().unwrap();
-                    handle.len = 0;
-                    return handle;
-                } else if self.extra_len < self.extra_capacity {
-                    self.extra_len += 1;
+                    return vec.pop().unwrap();
+                } else if self.extra_len.load(Ordering::Relaxed) < self.extra_capacity {
+                    // no need for strict constraint
+                    self.extra_len.fetch_add(1, Ordering::Relaxed);
                     return PktBufHandle {
                         // data: Arc::new(get_default_pkt_buffer()),
                         data: Box::new(get_default_pkt_buffer()),
@@ -106,13 +129,13 @@ impl PktBufPool {
         }
     }
 
-    pub fn release(&mut self, handle: PktBufHandle) {
+    pub fn release(&self, mut handle: PktBufHandle) {
         let mut vec = self.free.lock().unwrap();
         if vec.len() < self.fixed_capacity {
+            handle.len = 0;
             vec.push(handle);
         } else {
-            assert!(self.extra_len > 0);
-            self.extra_len -= 1;
+            self.extra_len.fetch_sub(1, Ordering::Relaxed);
         }
         self.notify.notify_one();
     }
