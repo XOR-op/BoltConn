@@ -9,7 +9,7 @@ mod tun_adapter;
 
 pub use direct::*;
 pub use tun_adapter::*;
-use crate::common::buf_slab::PktBufHandle;
+use crate::common::buf_pool::PktBufHandle;
 
 pub struct TcpStatus {
     src: SocketAddr,

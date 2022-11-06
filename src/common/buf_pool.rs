@@ -110,23 +110,28 @@ impl PktBufPool {
 
     pub async fn obtain(&self) -> PktBufHandle {
         loop {
-            // drop vec manually
-            {
-                let mut vec = self.free.lock().unwrap();
-                if !vec.is_empty() {
-                    return vec.pop().unwrap();
-                } else if self.extra_len.load(Ordering::Relaxed) < self.extra_capacity {
-                    // no need for strict constraint
-                    self.extra_len.fetch_add(1, Ordering::Relaxed);
-                    return PktBufHandle {
-                        // data: Arc::new(get_default_pkt_buffer()),
-                        data: Box::new(get_default_pkt_buffer()),
-                        len: 0,
-                    };
-                }
+            match self.try_obtain() {
+                Some(v) => return v,
+                None => {}
             }
             self.notify.notified().await;
         }
+    }
+
+    pub fn try_obtain(&self) -> Option<PktBufHandle> {
+        let mut vec = self.free.lock().unwrap();
+        if !vec.is_empty() {
+            return Some(vec.pop().unwrap());
+        } else if self.extra_len.load(Ordering::Relaxed) < self.extra_capacity {
+            // no need for strict constraint
+            self.extra_len.fetch_add(1, Ordering::Relaxed);
+            return Some(PktBufHandle {
+                // data: Arc::new(get_default_pkt_buffer()),
+                data: Box::new(get_default_pkt_buffer()),
+                len: 0,
+            });
+        }
+        None
     }
 
     pub fn release(&self, mut handle: PktBufHandle) {

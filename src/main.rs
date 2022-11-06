@@ -6,7 +6,7 @@ extern crate core;
 use crate::config::DnsConfig;
 use crate::network::dns::DnsRoutingHandle;
 use crate::platform::get_default_route;
-use common::buf_slab::PktBufPool;
+use common::buf_pool::PktBufPool;
 use dispatch::Dispatcher;
 use ipnet::Ipv4Net;
 use network::dns::Dns;

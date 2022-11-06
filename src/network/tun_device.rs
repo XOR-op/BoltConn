@@ -1,7 +1,7 @@
 use crate::common::async_raw_fd;
 use crate::common::async_raw_fd::AsyncRawFd;
 use crate::common::async_socket::AsyncRawSocket;
-use crate::common::buf_slab::{PktBufHandle, PktBufPool};
+use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::network;
 use crate::platform;
 use crate::platform::route::setup_ipv4_routing_table;

@@ -1,4 +1,4 @@
-use crate::common::buf_slab::PktBufHandle;
+use crate::common::buf_pool::PktBufHandle;
 use crate::network::packet::ip::IPPkt;
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
