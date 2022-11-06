@@ -15,6 +15,7 @@ tracing = "0.1.36"
 tracing-subscriber = { version = "0.3.15", features = ["env-filter", "std", "fmt"] }
 bytes = "1.2.1"
 byteorder = "1.4.3"
+scopeguard = "1.1.0"
 ipnet = "2.5.0"
 ioctl-sys = "0.8.0"
 smoltcp = "0.8.1"
@@ -27,7 +28,7 @@ serde = { version = "1.0.147", features = ["derive"] }
 toml = "0.5.9"
 chrono = "0.4.22"
 http = "0.2.8"
-hyper = { version = "0.14.20", features = ["stream"] }
+hyper = { version = "0.14.20", features = ["stream", "server", "client", "http1", "http2"] }
 httparse = "1.8.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-sys = "0.8.3"
