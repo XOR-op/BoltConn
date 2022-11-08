@@ -1,14 +1,14 @@
-use std::io::Error;
-use std::pin::Pin;
-use std::sync::mpsc::TryRecvError;
-use std::task::{Context, Poll};
-use std::task::Poll::Ready;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
+use crate::adapter::Connector;
 use crate::common::buf_pool::PktBufHandle;
 use crate::common::io_err;
 use crate::PktBufPool;
+use std::io::Error;
+use std::pin::Pin;
+use std::task::Poll::Ready;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 
 pub struct DuplexChan {
     allocator: PktBufPool,
@@ -17,28 +17,53 @@ pub struct DuplexChan {
     pending_read: Option<(PktBufHandle, usize)>,
 }
 
+impl DuplexChan {
+    pub fn new(alloc: PktBufPool, conn: Connector) -> Self {
+        Self {
+            allocator: alloc,
+            tx: conn.tx,
+            rx: conn.rx,
+            pending_read: None,
+        }
+    }
+}
+
 impl AsyncWrite for DuplexChan {
-    fn poll_write(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, Error>> {
-        let Some(mut buffer) = self.allocator.try_obtain()else {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, Error>> {
+        let Some(mut handle) = self.allocator.try_obtain() else {
+            cx.waker().wake_by_ref();
             return Poll::Pending;
         };
-        let size = if buf.len() > buffer.data.len() {
-            buffer.data.as_mut_slice().copy_from_slice(&buf[..buffer.data.len()]);
-            buffer.len = buffer.data.len();
-            buffer.data.len()
+        if self.tx.capacity() == 0 {
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        let handle_data_len = handle.data.len();
+        let size = if buf.len() > handle_data_len {
+            handle
+                .data
+                .as_mut_slice()
+                .copy_from_slice(&buf[..handle_data_len]);
+            handle.len = handle_data_len;
+            handle_data_len
         } else {
-            buffer.data.as_mut_slice()[..buf.len()].copy_from_slice(buf);
-            buffer.len = buf.len();
+            handle.data.as_mut_slice()[..buf.len()].copy_from_slice(buf);
+            handle.len = buf.len();
             buf.len()
         };
-        return match self.tx.try_send(buffer) {
+        return match self.tx.try_send(handle) {
             Ok(_) => Ready(Ok(size)),
             Err(TrySendError::Full(b)) => {
                 // a large performance loss, but have to do this
                 self.allocator.release(b);
+                cx.waker().wake_by_ref();
                 Poll::Pending
             }
-            Err(TrySendError::Closed(_)) => Ready(Err(io_err("chan closed")))
+            Err(TrySendError::Closed(_)) => Ready(Err(io_err("chan closed"))),
         };
     }
 
@@ -52,37 +77,53 @@ impl AsyncWrite for DuplexChan {
 }
 
 impl AsyncRead for DuplexChan {
-    fn poll_read(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
         if let Some((buffer, offset)) = self.pending_read.take() {
             let remaining = buffer.len - offset;
             if remaining <= buf.remaining() {
-                buf.initialize_unfilled()[..remaining].copy_from_slice(&buffer.as_ready()[offset..]);
+                buf.initialize_unfilled()[..remaining]
+                    .copy_from_slice(&buffer.as_ready()[offset..]);
                 buf.advance(remaining);
                 self.pending_read = None;
                 Ready(Ok(()))
             } else {
-                buf.initialize_unfilled()[..buf.remaining()].copy_from_slice(&v.as_ready()[offset..offset + buf.remaining()]);
-                self.pending_read = Some((v, offset + buf.remaining()));
-                buf.advance(buf.remaining());
+                let remaining = buf.remaining();
+                buf.initialize_unfilled()[..remaining]
+                    .copy_from_slice(&buffer.as_ready()[offset..offset + remaining]);
+                self.pending_read = Some((buffer, offset + remaining));
+                buf.advance(remaining);
                 Ready(Ok(()))
             }
         } else {
-            return match self.rx.try_recv() {
-                Ok(v) => {
+            return match self.rx.poll_recv(cx) {
+                Ready(Some(v)) => {
                     if v.len <= buf.remaining() {
                         buf.initialize_unfilled()[..v.len].copy_from_slice(v.as_ready());
                         buf.advance(v.len);
                         Ready(Ok(()))
                     } else {
-                        buf.initialize_unfilled()[..buf.remaining()].copy_from_slice(&v.as_ready()[..buf.remaining()]);
-                        self.pending_read = Some((v, buf.remaining()));
-                        buf.advance(buf.remaining());
+                        let remaining = buf.remaining();
+                        buf.initialize_unfilled()[..remaining]
+                            .copy_from_slice(&v.as_ready()[..remaining]);
+                        self.pending_read = Some((v, remaining));
+                        buf.advance(remaining);
                         Ready(Ok(()))
                     }
                 }
-                TryRecvError::Disconnected() => Ready(Err(io_err("done"))),
-                TryRecvError::Empty() => Poll::Pending
+                Ready(None) => {
+                    Ready(Err(io_err("done")))
+                }
+                Poll::Pending => Poll::Pending,
             };
         }
     }
+}
+
+#[tokio::test]
+async fn test_correctness() {
+    todo!()
 }

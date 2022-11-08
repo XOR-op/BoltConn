@@ -7,9 +7,9 @@ use tokio::sync::mpsc;
 mod direct;
 mod tun_adapter;
 
+use crate::common::buf_pool::PktBufHandle;
 pub use direct::*;
 pub use tun_adapter::*;
-use crate::common::buf_pool::PktBufHandle;
 
 pub struct TcpStatus {
     src: SocketAddr,
@@ -33,11 +33,14 @@ pub struct Connector {
 }
 
 impl Connector {
-    pub fn new(tx: mpsc::Sender<PktBufHandle>,rx: mpsc::Receiver<PktBufHandle>)->Self{
-        Self{
-            tx,
-            rx
-        }
+    pub fn new(tx: mpsc::Sender<PktBufHandle>, rx: mpsc::Receiver<PktBufHandle>) -> Self {
+        Self { tx, rx }
+    }
+
+    pub fn new_pair(size: usize) -> (Self, Self) {
+        let (utx, urx) = mpsc::channel(10);
+        let (dtx, drx) = mpsc::channel(10);
+        (Connector::new(utx, drx), Connector::new(dtx, urx))
     }
 }
 

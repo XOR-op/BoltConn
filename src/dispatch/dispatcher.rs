@@ -1,11 +1,13 @@
 use crate::adapter::{Connector, DirectOutbound, TunAdapter};
+use crate::common::duplex_chan::DuplexChan;
 use crate::platform::process;
 use crate::session::{NetworkAddr, SessionInfo};
+use crate::sniff::http::HttpMocker;
+use crate::PktBufPool;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use crate::PktBufPool;
 
 pub struct Dispatcher {
     iface_name: String,
@@ -67,23 +69,53 @@ impl Dispatcher {
             },
             "direct",
         );
-        let (utx, urx) = tokio::sync::mpsc::channel(10);
-        let (dtx, drx) = tokio::sync::mpsc::channel(10);
-        let (tun_conn, tun_alloc) = (Connector::new(utx, drx), self.allocator.clone());
-        let (out_conn, out_alloc) = (Connector::new(dtx, urx), self.allocator.clone());
-        let out_dst_addr = dst_addr.clone();
-        tokio::spawn(async move {
-            let mut tun = TunAdapter::new(src_addr, dst_addr, info, stream, indicator, tun_alloc, tun_conn);
-            if let Err(err) = tun.run().await {
-                tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
-            }
-        });
-        let name = self.iface_name.clone();
-        tokio::spawn(async move {
-            let mut direct = DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc, out_conn);
-            if let Err(err) = direct.run().await {
-                tracing::error!("[Dispatcher] create Direct failed: {}", err)
-            }
-        });
+        if dst_addr.port() == 80 {
+            // hijack
+            tracing::debug!("HTTP sniff");
+            let (tun_conn, http_in) = Connector::new_pair(10);
+            let (tun_alloc, http_alloc, out_alloc) = (
+                self.allocator.clone(),
+                self.allocator.clone(),
+                self.allocator.clone(),
+            );
+            let out_dst_addr = dst_addr.clone();
+            tokio::spawn(async move {
+                let tun = TunAdapter::new(
+                    src_addr, dst_addr, info, stream, indicator, tun_alloc, tun_conn,
+                );
+                if let Err(err) = tun.run().await {
+                    tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
+                }
+            });
+            let name = self.iface_name.clone();
+            tokio::spawn(async move {
+                let mocker = HttpMocker::new(DuplexChan::new(http_alloc, http_in), move|| {
+                    let direct = DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
+                    direct.as_async().0
+                });
+                if let Err(err) = mocker.run().await {
+                    tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+                }
+            });
+        } else {
+            let (tun_conn, out_conn) = Connector::new_pair(10);
+            let (tun_alloc, out_alloc) = (self.allocator.clone(), self.allocator.clone());
+            let out_dst_addr = dst_addr.clone();
+            tokio::spawn(async move {
+                let tun = TunAdapter::new(
+                    src_addr, dst_addr, info, stream, indicator, tun_alloc, tun_conn,
+                );
+                if let Err(err) = tun.run().await {
+                    tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
+                }
+            });
+            let name = self.iface_name.clone();
+            tokio::spawn(async move {
+                let direct = DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc);
+                if let Err(err) = direct.run(out_conn).await {
+                    tracing::error!("[Dispatcher] create Direct failed: {}", err)
+                }
+            });
+        }
     }
 }

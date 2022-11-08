@@ -1,11 +1,11 @@
 use std::future::Future;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use std::{io, thread};
 use std::time::Duration;
+use std::{io, thread};
 use tokio::io::AsyncReadExt;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::Notify;
@@ -40,7 +40,7 @@ impl PktBufHandle {
                 self.len = s;
                 Ok(s)
             }
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         }
     }
 }

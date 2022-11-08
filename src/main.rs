@@ -6,6 +6,7 @@ extern crate core;
 use crate::config::DnsConfig;
 use crate::network::dns::DnsRoutingHandle;
 use crate::platform::get_default_route;
+use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use dispatch::Dispatcher;
 use ipnet::Ipv4Net;
@@ -21,12 +22,11 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use chrono::Timelike;
 use tokio::io::AsyncWriteExt;
 use tracing::{event, Level};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod adapter;
 mod common;
@@ -46,15 +46,20 @@ impl FormatTime for SystemTime {
         write!(
             w,
             "{:02}:{:02}:{:02}.{:03}",
-            (time.hour() + 8) % 24, time.minute(), time.second(), time.timestamp_subsec_millis()
+            (time.hour() + 8) % 24,
+            time.minute(),
+            time.second(),
+            time.timestamp_subsec_millis()
         )
     }
 }
 
 fn main() {
-    let mut rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
+    let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
     let handle = rt.handle();
-    let formatting_layer = fmt::layer().compact().with_writer(std::io::stdout)
+    let formatting_layer = fmt::layer()
+        .compact()
+        .with_writer(std::io::stdout)
         .with_timer(SystemTime::default());
     tracing_subscriber::registry()
         .with(formatting_layer)

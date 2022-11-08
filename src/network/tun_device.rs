@@ -82,9 +82,9 @@ impl TunDevice {
         receiver.read(raw_buffer.as_mut_slice()).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
-            let start_offset = 4;
+        let start_offset = 4;
         #[cfg(target_os = "linux")]
-            let start_offset = 0;
+        let start_offset = 0;
         let buffer = &raw_buffer[start_offset..];
         match buffer[0] >> 4 {
             4 => {
@@ -196,7 +196,7 @@ impl TunDevice {
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
-                        self.session_mgr.lookup_session(pkt.dst_port())
+                            self.session_mgr.lookup_session(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
                             // tracing::trace!(
