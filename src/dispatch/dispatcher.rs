@@ -2,23 +2,28 @@ use crate::adapter::{Connector, DirectOutbound, TunAdapter};
 use crate::common::duplex_chan::DuplexChan;
 use crate::platform::process;
 use crate::session::{NetworkAddr, SessionInfo};
-use crate::sniff::http::HttpMocker;
+use crate::sniff::{HttpSniffer, HttpsSniffer};
 use crate::PktBufPool;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio_rustls::rustls::{Certificate, PrivateKey};
 
 pub struct Dispatcher {
     iface_name: String,
     allocator: PktBufPool,
+    certificate: Vec<Certificate>,
+    priv_key: PrivateKey,
 }
 
 impl Dispatcher {
-    pub fn new(iface_name: &str, allocator: PktBufPool) -> Self {
+    pub fn new(iface_name: &str, allocator: PktBufPool, certificate: Vec<Certificate>, priv_key: PrivateKey) -> Self {
         Self {
             iface_name: iface_name.into(),
             allocator,
+            certificate,
+            priv_key,
         }
     }
 
@@ -69,53 +74,59 @@ impl Dispatcher {
             },
             "direct",
         );
-        if dst_addr.port() == 80 {
-            // hijack
-            tracing::debug!("HTTP sniff");
-            let (tun_conn, http_in) = Connector::new_pair(10);
-            let (tun_alloc, http_alloc, out_alloc) = (
-                self.allocator.clone(),
-                self.allocator.clone(),
-                self.allocator.clone(),
+
+        let (tun_conn, tun_next) = Connector::new_pair(10);
+        let (tun_alloc, out_alloc) = (self.allocator.clone(), self.allocator.clone());
+        let name = self.iface_name.clone();
+        let out_dst_addr = dst_addr.clone();
+        tokio::spawn(async move {
+            let tun = TunAdapter::new(
+                src_addr, dst_addr, info, stream, indicator, tun_alloc, tun_conn,
             );
-            let out_dst_addr = dst_addr.clone();
-            tokio::spawn(async move {
-                let tun = TunAdapter::new(
-                    src_addr, dst_addr, info, stream, indicator, tun_alloc, tun_conn,
-                );
-                if let Err(err) = tun.run().await {
-                    tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
-                }
-            });
-            let name = self.iface_name.clone();
-            tokio::spawn(async move {
-                let mocker = HttpMocker::new(DuplexChan::new(http_alloc, http_in), move|| {
-                    let direct = DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
-                    direct.as_async().0
+            if let Err(err) = tun.run().await {
+                tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
+            }
+        });
+        match dst_addr.port() {
+            80 => {
+                // hijack
+                tracing::debug!("HTTP sniff");
+                let http_alloc = self.allocator.clone();
+                tokio::spawn(async move {
+                    let mocker = HttpSniffer::new(DuplexChan::new(http_alloc, tun_next), move || {
+                        let direct =
+                            DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
+                        direct.as_async().0
+                    });
+                    if let Err(err) = mocker.run().await {
+                        tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+                    }
                 });
-                if let Err(err) = mocker.run().await {
-                    tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
-                }
-            });
-        } else {
-            let (tun_conn, out_conn) = Connector::new_pair(10);
-            let (tun_alloc, out_alloc) = (self.allocator.clone(), self.allocator.clone());
-            let out_dst_addr = dst_addr.clone();
-            tokio::spawn(async move {
-                let tun = TunAdapter::new(
-                    src_addr, dst_addr, info, stream, indicator, tun_alloc, tun_conn,
-                );
-                if let Err(err) = tun.run().await {
-                    tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
-                }
-            });
-            let name = self.iface_name.clone();
-            tokio::spawn(async move {
-                let direct = DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc);
-                if let Err(err) = direct.run(out_conn).await {
-                    tracing::error!("[Dispatcher] create Direct failed: {}", err)
-                }
-            });
+            }
+            443 if dst_domain.is_some() => {
+                tracing::debug!("HTTP sniff");
+                let http_alloc = self.allocator.clone();
+                let cert = self.certificate.clone();
+                let key = self.priv_key.clone();
+                tokio::spawn(async move {
+                    let mocker = HttpsSniffer::new(cert, key, dst_domain.unwrap(), DuplexChan::new(http_alloc, tun_next), move || {
+                        let direct =
+                            DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
+                        direct.as_async().0
+                    });
+                    if let Err(err) = mocker.run().await {
+                        tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+                    }
+                });
+            }
+            _ => {
+                tokio::spawn(async move {
+                    let direct = DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc);
+                    if let Err(err) = direct.run(out_conn).await {
+                        tracing::error!("[Dispatcher] create Direct failed: {}", err)
+                    }
+                });
+            }
         }
     }
 }

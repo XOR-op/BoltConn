@@ -34,6 +34,7 @@ impl AsyncWrite for DuplexChan {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, Error>> {
+        // todo: decide if waker logic should be rewritten
         let Some(mut handle) = self.allocator.try_obtain() else {
             cx.waker().wake_by_ref();
             return Poll::Pending;
@@ -114,9 +115,7 @@ impl AsyncRead for DuplexChan {
                         Ready(Ok(()))
                     }
                 }
-                Ready(None) => {
-                    Ready(Err(io_err("done")))
-                }
+                Ready(None) => Ready(Err(io_err("done"))),
                 Poll::Pending => Poll::Pending,
             };
         }
