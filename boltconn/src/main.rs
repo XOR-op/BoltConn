@@ -78,7 +78,7 @@ fn main() {
         .with_timer(SystemTime::default());
     tracing_subscriber::registry()
         .with(formatting_layer)
-        .with(EnvFilter::new("catalyst=trace"))
+        .with(EnvFilter::new("boltconn=trace"))
         .init();
 
     let (gateway_address, real_iface_name) =
