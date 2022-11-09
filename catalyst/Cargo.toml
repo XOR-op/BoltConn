@@ -1,0 +1,37 @@
+[package]
+name = "catalyst"
+version = "0.1.1"
+edition = "2021"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+thiserror = "1.0.34"
+libc = "0.2.132"
+tokio = { version = "1.21.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal"] }
+tokio-rustls = "0.23.4"
+webpki-roots = "0.22.5"
+errno = "0.2.8"
+tracing = "0.1.36"
+tracing-subscriber = { version = "0.3.15", features = ["env-filter", "std", "fmt"] }
+bytes = "1.2.1"
+byteorder = "1.4.3"
+scopeguard = "1.1.0"
+ipnet = "2.5.0"
+ioctl-sys = "0.8.0"
+smoltcp = "0.8.1"
+dashmap = "5.4.0"
+arrayref = "0.3.6"
+libproc = "0.12.0"
+trust-dns-proto = "0.22.0"
+trust-dns-resolver = "0.22.0"
+serde = { version = "1.0.147", features = ["derive"] }
+toml = "0.5.9"
+chrono = "0.4.22"
+http = "0.2.8"
+hyper = { version = "0.14.20", features = ["stream", "server", "client", "http1", "http2"] }
+httparse = "1.8.0"
+[target.'cfg(target_os = "linux")'.dependencies]
+netlink-sys = "0.8.3"
+netlink-packet-sock-diag = "0.4.0"
