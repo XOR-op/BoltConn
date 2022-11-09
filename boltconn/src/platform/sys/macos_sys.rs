@@ -135,7 +135,7 @@ pub fn get_default_route() -> io::Result<(IpAddr, String)> {
             if gw_str.len() != 2 {
                 return Err(io_err("Invalid format"));
             }
-            gw_str[1].parse().map_err(|e| io_err("Invalid gateway"))?
+            gw_str[1].parse().map_err(|_| io_err("Invalid gateway"))?
         };
         let iface = {
             let iface_str: Vec<&str> = lines[4].split(": ").collect();

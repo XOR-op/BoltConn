@@ -8,17 +8,18 @@ mod direct;
 mod tun_adapter;
 
 use crate::common::buf_pool::PktBufHandle;
+use crate::session::NetworkAddr;
 pub use direct::*;
 pub use tun_adapter::*;
 
 pub struct TcpStatus {
     src: SocketAddr,
-    dst: SocketAddr,
+    dst: NetworkAddr,
     available: Arc<AtomicU8>,
 }
 
 impl TcpStatus {
-    pub fn new(src: SocketAddr, dst: SocketAddr, available: Arc<AtomicU8>) -> Self {
+    pub fn new(src: SocketAddr, dst: NetworkAddr, available: Arc<AtomicU8>) -> Self {
         Self {
             src,
             dst,

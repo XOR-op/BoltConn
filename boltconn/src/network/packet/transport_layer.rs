@@ -211,7 +211,6 @@ impl UdpPkt {
         let mut raw_udp = UdpPacket::new_unchecked(ip_pkt.packet_payload_mut());
         raw_udp.set_len((raw_udp.len() as i64 + delta) as u16);
         raw_udp.fill_checksum(&IpAddress::from(src_ip), &IpAddress::from(dst_ip));
-        let udp_len = raw_udp.len();
         drop(raw_udp);
         // set ip fields
         if is_v4 {

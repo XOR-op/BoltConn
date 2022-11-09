@@ -1,5 +1,6 @@
 use crate::adapter::{Connector, DirectOutbound, TunAdapter};
 use crate::common::duplex_chan::DuplexChan;
+use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::session::{NetworkAddr, SessionInfo};
 use crate::sniff::{HttpSniffer, HttpsSniffer};
@@ -13,6 +14,7 @@ use tokio_rustls::rustls::{Certificate, PrivateKey};
 pub struct Dispatcher {
     iface_name: String,
     allocator: PktBufPool,
+    dns: Arc<Dns>,
     certificate: Vec<Certificate>,
     priv_key: PrivateKey,
 }
@@ -21,12 +23,14 @@ impl Dispatcher {
     pub fn new(
         iface_name: &str,
         allocator: PktBufPool,
+        dns: Arc<Dns>,
         certificate: Vec<Certificate>,
         priv_key: PrivateKey,
     ) -> Self {
         Self {
             iface_name: iface_name.into(),
             allocator,
+            dns,
             certificate,
             priv_key,
         }
@@ -35,8 +39,7 @@ impl Dispatcher {
     pub fn submit_tun_tcp(
         &self,
         src_addr: SocketAddr,
-        dst_addr: SocketAddr,
-        dst_domain: Option<String>,
+        dst_addr: NetworkAddr,
         indicator: Arc<AtomicU8>,
         stream: TcpStream,
     ) {
@@ -46,7 +49,7 @@ impl Dispatcher {
                 process::get_process_info(pid)
             } else {
                 tracing::info!(
-                    "[Dispatcher] ({} -> {}) get_pid() failed: {:?}",
+                    "[Dispatcher] ({} -> {:?}) get_pid() failed: {:?}",
                     src_addr,
                     dst_addr,
                     r
@@ -56,7 +59,7 @@ impl Dispatcher {
         };
         if let Some(info) = info {
             tracing::trace!(
-                "[Dispatcher] ({} -> {}) Name:{}, Path:{}",
+                "[Dispatcher] ({} -> {:?}) Name:{}, Path:{}",
                 src_addr,
                 dst_addr,
                 info.name,
@@ -64,29 +67,28 @@ impl Dispatcher {
             )
         } else {
             tracing::info!(
-                "[Dispatcher] ({} -> {}) get_process_info() failed",
+                "[Dispatcher] ({} -> {:?}) get_process_info() failed",
                 src_addr,
                 dst_addr
             );
         }
-        let info = SessionInfo::new(
-            match dst_domain.clone() {
-                Some(dn) => NetworkAddr::DomainName {
-                    domain_name: dn,
-                    port: dst_addr.port(),
-                },
-                None => NetworkAddr::Raw(dst_addr),
-            },
-            "direct",
-        );
+        let info = SessionInfo::new(dst_addr.clone(), "direct");
 
         let (tun_conn, tun_next) = Connector::new_pair(10);
         let (tun_alloc, out_alloc) = (self.allocator.clone(), self.allocator.clone());
         let name = self.iface_name.clone();
         let out_dst_addr = dst_addr.clone();
+        let out_dst_addr2 = dst_addr.clone();
+        let dns = self.dns.clone();
         tokio::spawn(async move {
             let tun = TunAdapter::new(
-                src_addr, dst_addr, info, stream, indicator, tun_alloc, tun_conn,
+                src_addr,
+                out_dst_addr,
+                info,
+                stream,
+                indicator,
+                tun_alloc,
+                tun_conn,
             );
             if let Err(err) = tun.run().await {
                 tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
@@ -100,8 +102,12 @@ impl Dispatcher {
                 tokio::spawn(async move {
                     let mocker =
                         HttpSniffer::new(DuplexChan::new(http_alloc, tun_next), move || {
-                            let direct =
-                                DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
+                            let direct = DirectOutbound::new(
+                                name.as_str(),
+                                dst_addr.clone(),
+                                out_alloc.clone(),
+                                dns.clone(),
+                            );
                             direct.as_async().0
                         });
                     if let Err(err) = mocker.run().await {
@@ -109,20 +115,28 @@ impl Dispatcher {
                     }
                 });
             }
-            443 if dst_domain.is_some() => {
+            443 if matches!(dst_addr, NetworkAddr::DomainName { .. }) => {
                 tracing::debug!("HTTP sniff");
                 let http_alloc = self.allocator.clone();
                 let cert = self.certificate.clone();
                 let key = self.priv_key.clone();
+                let domain_name = match out_dst_addr2.clone() {
+                    NetworkAddr::Raw(_) => unreachable!(),
+                    NetworkAddr::DomainName { domain_name, .. } => domain_name,
+                };
                 tokio::spawn(async move {
                     let mocker = HttpsSniffer::new(
                         cert,
                         key,
-                        dst_domain.unwrap(),
+                        domain_name,
                         DuplexChan::new(http_alloc, tun_next),
                         move || {
-                            let direct =
-                                DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
+                            let direct = DirectOutbound::new(
+                                name.as_str(),
+                                out_dst_addr2.clone(),
+                                out_alloc.clone(),
+                                dns.clone(),
+                            );
                             direct.as_async().0
                         },
                     );
@@ -133,7 +147,8 @@ impl Dispatcher {
             }
             _ => {
                 tokio::spawn(async move {
-                    let direct = DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc);
+                    let direct =
+                        DirectOutbound::new(name.as_str(), out_dst_addr2, out_alloc, dns.clone());
                     if let Err(err) = direct.run(tun_next).await {
                         tracing::error!("[Dispatcher] create Direct failed: {}", err)
                     }

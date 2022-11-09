@@ -56,22 +56,17 @@ impl FormatTime for SystemTime {
 }
 
 fn load_cert_and_key() -> io::Result<(Vec<Certificate>, PrivateKey)> {
-    let cert_raw = fs::read("_private/ca/cert.crt")?;
+    let cert_raw = fs::read("_private/ca/crt.pem")?;
     let mut cert_bytes = cert_raw.as_slice();
-    let key_raw= fs::read("_private/ca/private.key")?;
+    let key_raw = fs::read("_private/ca/key.pem")?;
     let mut key_bytes = key_raw.as_slice();
-    let cert = Certificate(
-        rustls_pemfile::certs(&mut cert_bytes)?.remove(0),
-    );
-    let key = PrivateKey(
-        rustls_pemfile::pkcs8_private_keys(&mut key_bytes)?.remove(0),
-    );
+    let cert = Certificate(rustls_pemfile::certs(&mut cert_bytes)?.remove(0));
+    let key = PrivateKey(rustls_pemfile::pkcs8_private_keys(&mut key_bytes)?.remove(0));
     Ok((vec![cert], key))
 }
 
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
-    let handle = rt.handle();
     let formatting_layer = fmt::layer()
         .compact()
         .with_writer(std::io::stdout)
@@ -102,7 +97,7 @@ fn main() {
     // initialize resources
     let pool = PktBufPool::new(512, 4096);
     let manager = Arc::new(SessionManager::new());
-    let dns = Arc::new(Dns::new(real_iface_name, &dns_config).expect("DNS failed to initialize"));
+    let dns = Arc::new(Dns::new(&dns_config).expect("DNS failed to initialize"));
     let mut tun = rt
         .block_on(async {
             TunDevice::open(manager.clone(), pool.clone(), real_iface_name, dns.clone())
@@ -122,14 +117,15 @@ fn main() {
     let dispatcher = Arc::new(Dispatcher::new(
         real_iface_name,
         proxy_allocator.clone(),
+        dns.clone(),
         cert,
         priv_key,
     ));
     let nat = Nat::new(nat_addr, manager, dispatcher, dns);
 
     // run
-    let nat_handle = rt.spawn(async move { nat.run_tcp().await });
-    let tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
+    let _nat_handle = rt.spawn(async move { nat.run_tcp().await });
+    let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     rt.block_on(async { tokio::signal::ctrl_c().await })
         .expect("Tokio runtime error");
     drop(dns_guard);

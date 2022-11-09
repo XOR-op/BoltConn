@@ -23,10 +23,10 @@ fn main() {
     let cert = Certificate::from_params(params).expect("Failed to generate certificate");
     let cert_crt = cert.serialize_pem().unwrap();
     let private_key = cert.serialize_private_key_pem();
-    if let Err(err) = fs::write("_private/ca/cert.crt", cert_crt) {
+    if let Err(err) = fs::write("_private/ca/crt.pem", cert_crt) {
         eprintln!("Fail to write cert: {}", err);
     }
-    if let Err(err) = fs::write("_private/ca/private.key", private_key) {
+    if let Err(err) = fs::write("_private/ca/key.pem", private_key) {
         eprintln!("Fail to write private key: {}", err);
     }
     println!("Generated certificate and private key.")

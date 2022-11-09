@@ -11,8 +11,6 @@ const UDP_SYSCTL_NAME: &str = "net.inet.udp.pcblist_n";
 
 pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
     // http://newosxbook.com/bonus/vol1ch16.html search for 'net.inet.tcp.pcblist_n'
-    let ret_val = 0;
-
     /*
     from bsd/netinet/in_pcblist.c:
 

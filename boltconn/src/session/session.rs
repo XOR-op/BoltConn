@@ -20,6 +20,18 @@ pub enum NetworkAddr {
     DomainName { domain_name: String, port: u16 },
 }
 
+impl NetworkAddr {
+    pub fn port(&self) -> u16 {
+        match self {
+            NetworkAddr::Raw(ad) => ad.port(),
+            NetworkAddr::DomainName {
+                domain_name: _,
+                port,
+            } => port.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub start_time: Instant,

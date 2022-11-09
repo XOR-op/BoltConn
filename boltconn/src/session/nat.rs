@@ -1,5 +1,6 @@
 use crate::dispatch::Dispatcher;
 use crate::session::manager::SessionManager;
+use crate::session::NetworkAddr;
 use crate::Dns;
 use std::io::Result;
 use std::net::SocketAddr;
@@ -40,20 +41,16 @@ impl Nat {
             if let Ok((src_addr, dst_addr, indicator)) =
                 self.session_mgr.lookup_session(addr.port())
             {
-                let domain_name = self.dns.ip_to_domain(dst_addr.ip());
-                let dst_addr = match domain_name {
-                    None => dst_addr,
-                    Some(_) => {
-                        // translate fake ip
-                        SocketAddr::new(
-                            self.dns.ip_to_real_ip(dst_addr.ip()).await,
-                            dst_addr.port(),
-                        )
-                    }
-                };
                 tracing::trace!("[NAT] received new connection {}->{}", src_addr, dst_addr);
+                let dst_addr = match self.dns.fake_ip_to_domain(dst_addr.ip()) {
+                    None => NetworkAddr::Raw(dst_addr),
+                    Some(s) => NetworkAddr::DomainName {
+                        domain_name: s,
+                        port: dst_addr.port(),
+                    },
+                };
                 self.dispatcher
-                    .submit_tun_tcp(src_addr, dst_addr, domain_name, indicator, socket);
+                    .submit_tun_tcp(src_addr, dst_addr, indicator, socket);
             } else {
                 tracing::warn!("Unexpected: no record found by port {}", addr.port())
             }

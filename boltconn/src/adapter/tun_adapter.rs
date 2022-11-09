@@ -1,7 +1,7 @@
 use crate::adapter::{Connector, TcpStatus};
 use crate::network::egress::Egress;
 use crate::platform::bind_to_device;
-use crate::session::{SessionInfo, SessionProtocol};
+use crate::session::{NetworkAddr, SessionInfo, SessionProtocol};
 use crate::PktBufPool;
 use bytes::BytesMut;
 use io::Result;
@@ -26,7 +26,7 @@ impl TunAdapter {
 
     pub fn new(
         src_addr: SocketAddr,
-        dst_addr: SocketAddr,
+        dst_addr: NetworkAddr,
         info: SessionInfo,
         inbound: TcpStream,
         available: Arc<AtomicU8>,
@@ -58,7 +58,7 @@ impl TunAdapter {
                     Ok(0) => {
                         break;
                     }
-                    Ok(size) => {
+                    Ok(_) => {
                         if first_packet {
                             first_packet = false;
                             outgoing_info_arc

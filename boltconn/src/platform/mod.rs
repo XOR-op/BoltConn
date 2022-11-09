@@ -52,7 +52,7 @@ where
         .stderr(Stdio::null())
         .output()?;
     if output.status.success() {
-        String::from_utf8(output.stdout).map_err(|e| io::Error::new(ErrorKind::Other, "not utf-8"))
+        String::from_utf8(output.stdout).map_err(|e| io::Error::new(ErrorKind::Other, e))
     } else {
         Err(io::Error::new(
             ErrorKind::Other,

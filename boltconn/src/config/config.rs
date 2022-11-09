@@ -4,7 +4,8 @@ use std::net::SocketAddr;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RootConfig {
-    pub iface_name: String,
+    pub interface: String,
+    pub dns: DnsConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

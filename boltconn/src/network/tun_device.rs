@@ -148,7 +148,7 @@ impl TunDevice {
                         _ => unreachable!(),
                     },
                 )?;
-                let size = outbound.write(pkt.packet_data()).await?;
+                let _ = outbound.write(pkt.packet_data()).await?;
                 // tracing::trace!("IPv4 send done: {}", size);
             }
             _ => {

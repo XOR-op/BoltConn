@@ -17,8 +17,7 @@ pub struct Dns {
 }
 
 impl Dns {
-    pub fn new(iface: &str, config: &DnsConfig) -> Result<Dns> {
-        let gw_ip = get_iface_address(iface)?;
+    pub fn new(config: &DnsConfig) -> Result<Dns> {
         let ns_vec: Vec<NameServerConfig> = config
             .list
             .iter()
@@ -43,12 +42,12 @@ impl Dns {
     }
 
     /// Return fake ip for the domain name instantly.
-    pub fn domain_to_ip(&self, domain_name: &str) -> IpAddr {
+    pub fn domain_to_fake_ip(&self, domain_name: &str) -> IpAddr {
         self.table.query_by_domain_name(domain_name).ip
     }
 
     /// Return fake ip for the domain name instantly.
-    pub fn ip_to_domain(&self, fake_ip: IpAddr) -> Option<String> {
+    pub fn fake_ip_to_domain(&self, fake_ip: IpAddr) -> Option<String> {
         self.table.query_by_ip(fake_ip).and_then(|record| {
             let domain = &record.domain_name;
             Some(if domain.ends_with(".") {
@@ -59,23 +58,23 @@ impl Dns {
         })
     }
 
+    pub async fn domain_to_real_ip(&self, domain_name: &str) -> Option<IpAddr> {
+        for r in &self.resolvers {
+            if let Ok(result) = r.ipv4_lookup(domain_name).await {
+                for i in result {
+                    return Some(IpAddr::V4(i));
+                }
+            }
+        }
+        None
+    }
+
     /// If no corresponding record, return fake ip itself.
     pub async fn ip_to_real_ip(&self, fake_ip: IpAddr) -> IpAddr {
         if let Some(record) = self.table.query_by_ip(fake_ip) {
-            for r in &self.resolvers {
-                if let Ok(result) = r.ipv4_lookup(&record.domain_name).await {
-                    for i in result {
-                        tracing::trace!(
-                            "{} => Fake ip:{}, real ip:{}",
-                            &record.domain_name,
-                            fake_ip,
-                            i
-                        );
-                        return IpAddr::V4(i);
-                    }
-                }
-            }
-            fake_ip
+            self.domain_to_real_ip(&record.domain_name)
+                .await
+                .unwrap_or(fake_ip)
         } else {
             fake_ip
         }
@@ -104,7 +103,7 @@ impl Dns {
             .add_query(q.clone());
         match q.query_type() {
             RecordType::A => {
-                let fake_ip = match self.domain_to_ip(&domain) {
+                let fake_ip = match self.domain_to_fake_ip(&domain) {
                     IpAddr::V4(addr) => addr,
                     IpAddr::V6(_) => return err,
                 };
