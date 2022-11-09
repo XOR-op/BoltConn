@@ -1,4 +1,4 @@
-use crate::adapter::{Connector, TcpStatus};
+use crate::adapter::{Connector, established_tcp, TcpStatus};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
@@ -57,47 +57,8 @@ impl DirectOutbound {
             outbound.local_addr(),
             outbound.peer_addr()
         );
-        let (mut out_read, mut out_write) = outbound.into_split();
-        let allocator = self.allocator.clone();
-        let Connector { tx, mut rx } = inbound;
-        // recv from inbound and send to outbound
-        tokio::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Some(buf) => {
-                        if let Err(err) = out_write.write_all(buf.as_ready()).await {
-                            tracing::warn!("[Direct] write to outbound failed: {}", err);
-                            allocator.release(buf);
-                            break;
-                        } else {
-                            allocator.release(buf);
-                        }
-                    }
-                    None => {
-                        break;
-                    }
-                }
-            }
-        });
-        // recv from outbound and send to inbound
-        loop {
-            let mut buf = self.allocator.obtain().await;
-            match buf.read(&mut out_read).await {
-                Ok(0) => {
-                    break;
-                }
-                Ok(_) => {
-                    if let Err(err) = tx.send(buf).await {
-                        tracing::warn!("[Direct] write to inbound failed: {}", err);
-                        break;
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!("[Direct] encounter error: {}", err);
-                    break;
-                }
-            }
-        }
+
+        established_tcp(inbound, outbound, self.allocator).await;
         Ok(())
     }
 

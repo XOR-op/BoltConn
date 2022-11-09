@@ -5,9 +5,10 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 mod direct;
+mod socks5;
 mod tun_adapter;
 
-use crate::common::buf_pool::PktBufHandle;
+use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::session::NetworkAddr;
 pub use direct::*;
 pub use tun_adapter::*;
@@ -47,4 +48,49 @@ impl Connector {
 
 pub enum Outbound {
     Direct(DirectOutbound),
+}
+
+
+async fn established_tcp<T>(inbound: Connector, outbound: T, allocator: PktBufPool) {
+    let (mut out_read, mut out_write) = outbound.into_split();
+    let allocator2 = allocator.clone();
+    let Connector { tx, mut rx } = inbound;
+    // recv from inbound and send to outbound
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Some(buf) => {
+                    if let Err(err) = out_write.write_all(buf.as_ready()).await {
+                        tracing::warn!("write to outbound failed: {}", err);
+                        allocator2.release(buf);
+                        break;
+                    } else {
+                        allocator2.release(buf);
+                    }
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+    });
+    // recv from outbound and send to inbound
+    loop {
+        let mut buf = allocator.obtain().await;
+        match buf.read(&mut out_read).await {
+            Ok(0) => {
+                break;
+            }
+            Ok(_) => {
+                if let Err(err) = tx.send(buf).await {
+                    tracing::warn!("write to inbound failed: {}", err);
+                    break;
+                }
+            }
+            Err(err) => {
+                tracing::warn!("[Direct] encounter error: {}", err);
+                break;
+            }
+        }
+    }
 }

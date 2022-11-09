@@ -10,6 +10,4 @@ pub struct RootConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct DnsConfig {
-    pub list: Vec<SocketAddr>,
-}
+pub struct DnsConfig(Vec<SocketAddr>);
