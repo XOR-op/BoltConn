@@ -18,7 +18,12 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-    pub fn new(iface_name: &str, allocator: PktBufPool, certificate: Vec<Certificate>, priv_key: PrivateKey) -> Self {
+    pub fn new(
+        iface_name: &str,
+        allocator: PktBufPool,
+        certificate: Vec<Certificate>,
+        priv_key: PrivateKey,
+    ) -> Self {
         Self {
             iface_name: iface_name.into(),
             allocator,
@@ -65,7 +70,7 @@ impl Dispatcher {
             );
         }
         let info = SessionInfo::new(
-            match dst_domain {
+            match dst_domain.clone() {
                 Some(dn) => NetworkAddr::DomainName {
                     domain_name: dn,
                     port: dst_addr.port(),
@@ -93,11 +98,12 @@ impl Dispatcher {
                 tracing::debug!("HTTP sniff");
                 let http_alloc = self.allocator.clone();
                 tokio::spawn(async move {
-                    let mocker = HttpSniffer::new(DuplexChan::new(http_alloc, tun_next), move || {
-                        let direct =
-                            DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
-                        direct.as_async().0
-                    });
+                    let mocker =
+                        HttpSniffer::new(DuplexChan::new(http_alloc, tun_next), move || {
+                            let direct =
+                                DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
+                            direct.as_async().0
+                        });
                     if let Err(err) = mocker.run().await {
                         tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
                     }
@@ -109,11 +115,17 @@ impl Dispatcher {
                 let cert = self.certificate.clone();
                 let key = self.priv_key.clone();
                 tokio::spawn(async move {
-                    let mocker = HttpsSniffer::new(cert, key, dst_domain.unwrap(), DuplexChan::new(http_alloc, tun_next), move || {
-                        let direct =
-                            DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
-                        direct.as_async().0
-                    });
+                    let mocker = HttpsSniffer::new(
+                        cert,
+                        key,
+                        dst_domain.unwrap(),
+                        DuplexChan::new(http_alloc, tun_next),
+                        move || {
+                            let direct =
+                                DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc.clone());
+                            direct.as_async().0
+                        },
+                    );
                     if let Err(err) = mocker.run().await {
                         tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
                     }
@@ -122,7 +134,7 @@ impl Dispatcher {
             _ => {
                 tokio::spawn(async move {
                     let direct = DirectOutbound::new(name.as_str(), out_dst_addr, out_alloc);
-                    if let Err(err) = direct.run(out_conn).await {
+                    if let Err(err) = direct.run(tun_next).await {
                         tracing::error!("[Dispatcher] create Direct failed: {}", err)
                     }
                 });

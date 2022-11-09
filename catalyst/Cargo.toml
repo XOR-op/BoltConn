@@ -11,6 +11,7 @@ thiserror = "1.0.34"
 libc = "0.2.132"
 tokio = { version = "1.21.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal"] }
 tokio-rustls = "0.23.4"
+rustls-pemfile = "1.0.1"
 webpki-roots = "0.22.5"
 errno = "0.2.8"
 tracing = "0.1.36"

@@ -4,7 +4,7 @@ members = [
     "catalystctl",
     "catalyst-helper"
 ]
-default-members = ["catalyst"]
+#default-members = ["catalyst"]
 
 [profile.release]
 opt-level = 3

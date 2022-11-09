@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-#![allow(unused_variables)]
+#![allow(dead_code)]
 
 extern crate core;
 
@@ -16,12 +16,12 @@ use network::tun_device::TunDevice;
 use session::{Nat, SessionManager};
 use smoltcp::wire;
 use smoltcp::wire::IpProtocol;
-use std::{fs, io};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fs, io};
 use tokio::io::AsyncWriteExt;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tracing::{event, Level};
@@ -56,7 +56,17 @@ impl FormatTime for SystemTime {
 }
 
 fn load_cert_and_key() -> io::Result<(Vec<Certificate>, PrivateKey)> {
-    todo!()
+    let cert_raw = fs::read("_private/ca/cert.crt")?;
+    let mut cert_bytes = cert_raw.as_slice();
+    let key_raw= fs::read("_private/ca/private.key")?;
+    let mut key_bytes = key_raw.as_slice();
+    let cert = Certificate(
+        rustls_pemfile::certs(&mut cert_bytes)?.remove(0),
+    );
+    let key = PrivateKey(
+        rustls_pemfile::pkcs8_private_keys(&mut key_bytes)?.remove(0),
+    );
+    Ok((vec![cert], key))
 }
 
 fn main() {
@@ -75,7 +85,7 @@ fn main() {
         get_default_route().expect("failed to get default route");
     let real_iface_name = real_iface_name.as_str();
 
-    let (cert, priv_key) = load_cert_and_key().expect("Failed to load cert&key");
+    let (cert, priv_key) = load_cert_and_key().expect("Failed to parse cert & key");
 
     let dns_config = DnsConfig {
         list: vec!["114.114.114.114:53".parse().unwrap()],
@@ -109,7 +119,12 @@ fn main() {
     );
     let proxy_allocator = PktBufPool::new(512, 4096);
 
-    let dispatcher = Arc::new(Dispatcher::new(real_iface_name, proxy_allocator.clone(), cert, priv_key));
+    let dispatcher = Arc::new(Dispatcher::new(
+        real_iface_name,
+        proxy_allocator.clone(),
+        cert,
+        priv_key,
+    ));
     let nat = Nat::new(nat_addr, manager, dispatcher, dns);
 
     // run

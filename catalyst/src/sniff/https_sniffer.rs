@@ -57,12 +57,12 @@ where
     where
         T: AsyncRead + AsyncWrite + 'static + Send + Unpin,
     {
+        modifier.modify_request(&mut req);
         let outbound = client_tls.connect(server_name, outbound).await?;
         let (mut sender, connection) = conn::Builder::new()
             .handshake(outbound)
             .await
             .map_err(|e| io_err(e.to_string().as_str()))?;
-        modifier.modify_request(&mut req);
         tokio::spawn(async move { connection.await });
         let mut resp = sender
             .send_request(req)
@@ -113,7 +113,7 @@ where
         });
 
         // start running
-        let mut inbound = acceptor.accept(self.inbound).await?;
+        let inbound = acceptor.accept(self.inbound).await?;
         if let Err(http_err) = Http::new().serve_connection(inbound, service).await {
             tracing::warn!("Sniff err {}", http_err);
         }
