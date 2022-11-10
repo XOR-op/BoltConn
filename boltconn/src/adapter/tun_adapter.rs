@@ -46,7 +46,7 @@ impl TunAdapter {
         let ingoing_indicator = self.stat.available.clone();
         let outgoing_indicator = self.stat.available.clone();
         let mut first_packet = true;
-        let (mut in_read, mut in_write) = self.inbound.into_split();
+        let (mut in_read, mut in_write) = tokio::io::split(self.inbound);
         let outgoing_info_arc = self.info.clone();
         let allocator = self.allocator.clone();
         let Connector { tx, mut rx } = self.connector;

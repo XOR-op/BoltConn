@@ -1,6 +1,7 @@
 # BoltConn
 BoltConn is a transparent proxy for domain name/application level routing.
 
+*Warning: Since this project is under development, no guarantee for compatibility and availability.*
 ## Features
 - [x] TLS mitm
 - [x] modification of http/s requests and responses
@@ -21,8 +22,8 @@ cargo build --release && cargo rr --bin boltconn-helper
 ## TO-DO
 - multiple outbound protocols support
   - [x] direct
+  - [x] socks5
   - [ ] http connect
-  - [ ] socks5
   - [ ] wireguard
   - [ ] openvpn
   - [ ] shadowsocks

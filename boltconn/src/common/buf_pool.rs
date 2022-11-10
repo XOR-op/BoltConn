@@ -6,8 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 use std::{io, thread};
-use tokio::io::AsyncReadExt;
-use tokio::net::tcp::OwnedReadHalf;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadHalf};
 use tokio::sync::Notify;
 
 pub const MAX_PKT_SIZE: usize = 65576;
@@ -33,7 +32,8 @@ impl PktBufHandle {
         self.data.as_mut_slice()
     }
 
-    pub async fn read(&mut self, read: &mut OwnedReadHalf) -> io::Result<usize> {
+    pub async fn read<T>(&mut self, read: &mut ReadHalf<T>) -> io::Result<usize>
+        where T: AsyncRead + AsyncWrite {
         assert_eq!(self.len, 0);
         match read.read(self.as_uninited()).await {
             Ok(s) => {

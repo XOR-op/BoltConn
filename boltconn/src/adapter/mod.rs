@@ -2,6 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 mod direct;
@@ -50,9 +51,11 @@ pub enum Outbound {
     Direct(DirectOutbound),
 }
 
-
-async fn established_tcp<T>(inbound: Connector, outbound: T, allocator: PktBufPool) {
-    let (mut out_read, mut out_write) = outbound.into_split();
+async fn established_tcp<T>(inbound: Connector, outbound: T, allocator: PktBufPool)
+    where
+        T: AsyncWrite + AsyncRead + Unpin + Send +'static,
+{
+    let (mut out_read, mut out_write) = tokio::io::split(outbound);
     let allocator2 = allocator.clone();
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound

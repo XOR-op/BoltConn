@@ -1,4 +1,4 @@
-use crate::adapter::{Connector, established_tcp, TcpStatus};
+use crate::adapter::{established_tcp, Connector, TcpStatus};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
