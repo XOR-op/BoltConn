@@ -3,7 +3,7 @@
 
 extern crate core;
 
-use crate::config::DnsConfig;
+use crate::config::RawDnsCfg;
 use crate::network::dns::DnsRoutingHandle;
 use crate::platform::get_default_route;
 use chrono::Timelike;
@@ -82,7 +82,7 @@ fn main() {
 
     let (cert, priv_key) = load_cert_and_key().expect("Failed to parse cert & key");
 
-    let dns_config = DnsConfig {
+    let dns_config = RawDnsCfg {
         list: vec!["114.114.114.114:53".parse().unwrap()],
     };
 

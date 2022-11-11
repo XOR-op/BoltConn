@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, transmute};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,8 +13,9 @@ pub const MAX_PKT_SIZE: usize = 65576;
 
 pub type PktBuffer = [u8; MAX_PKT_SIZE];
 
+#[inline(always)]
 fn get_default_pkt_buffer() -> PktBuffer {
-    unsafe { MaybeUninit::uninit().assume_init() }
+    unsafe { transmute::<_, PktBuffer>(MaybeUninit::<PktBuffer>::uninit()) }
 }
 
 pub struct PktBufHandle {

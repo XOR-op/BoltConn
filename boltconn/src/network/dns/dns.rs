@@ -1,4 +1,4 @@
-use crate::config::DnsConfig;
+use crate::config::RawDnsCfg;
 use crate::network::dns::dns_table::DnsTable;
 use crate::platform;
 use crate::platform::{add_route_entry, get_iface_address, run_command};
@@ -17,7 +17,7 @@ pub struct Dns {
 }
 
 impl Dns {
-    pub fn new(config: &DnsConfig) -> Result<Dns> {
+    pub fn new(config: &RawDnsCfg) -> Result<Dns> {
         let ns_vec: Vec<NameServerConfig> = config
             .list
             .iter()
