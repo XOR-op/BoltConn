@@ -3,16 +3,17 @@
 
 extern crate core;
 
-use crate::config::RawDnsCfg;
-use crate::network::dns::DnsRoutingHandle;
-use crate::platform::get_default_route;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
-use dispatch::Dispatcher;
+use config::RawDnsCfg;
 use ipnet::Ipv4Net;
-use network::dns::Dns;
-use network::packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt};
 use network::tun_device::TunDevice;
+use network::{
+    dns::{Dns, DnsRoutingHandle},
+    packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt},
+};
+use platform::get_default_route;
+use session::Dispatcher;
 use session::{Nat, SessionManager};
 use smoltcp::wire;
 use smoltcp::wire::IpProtocol;
@@ -76,12 +77,18 @@ fn main() {
         .with(EnvFilter::new("boltconn=trace"))
         .init();
 
+    // configuration
+    let dispatching = Arc::new(dispatch::Dispatching {});
+
+    // interface
     let (gateway_address, real_iface_name) =
         get_default_route().expect("failed to get default route");
     let real_iface_name = real_iface_name.as_str();
 
+    // tls mitm
     let (cert, priv_key) = load_cert_and_key().expect("Failed to parse cert & key");
 
+    // dns
     let dns_config = RawDnsCfg {
         list: vec!["114.114.114.114:53".parse().unwrap()],
     };
@@ -118,6 +125,7 @@ fn main() {
         real_iface_name,
         proxy_allocator.clone(),
         dns.clone(),
+        dispatching.clone(),
         cert,
         priv_key,
     ));

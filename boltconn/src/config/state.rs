@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -10,12 +10,9 @@ pub struct RawState {
 }
 
 impl RawState {
-    pub fn into_state(self) ->State{
-
+    pub fn into_state(self) -> State {
+        todo!()
     }
 }
 
-pub struct State{
-    
-}
-
+pub struct State {}

@@ -13,29 +13,24 @@ use tokio_rustls::rustls::{
     ServerName,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
+use crate::adapter::OutBound;
 
-pub struct HttpsSniffer<F>
-where
-    F: Fn() -> DuplexChan + 'static,
-{
+pub struct HttpsSniffer {
     cert: Vec<Certificate>,
     priv_key: PrivateKey,
     server_name: String,
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
-    creator: F,
+    creator: Box<dyn OutBound>,
 }
 
-impl<F> HttpsSniffer<F>
-where
-    F: Fn() -> DuplexChan + 'static,
-{
+impl HttpsSniffer {
     pub fn new(
         cert: Vec<Certificate>,
         priv_key: PrivateKey,
         server_name: String,
         inbound: DuplexChan,
-        creator: F,
+        creator: Box<dyn OutBound>,
     ) -> Self {
         Self {
             cert,
@@ -47,16 +42,13 @@ where
         }
     }
 
-    async fn proxy<T>(
+    async fn proxy(
         client_tls: TlsConnector,
         server_name: ServerName,
-        outbound: T,
+        outbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         mut req: Request<Body>,
-    ) -> io::Result<Response<Body>>
-    where
-        T: AsyncRead + AsyncWrite + 'static + Send + Unpin,
-    {
+    ) -> io::Result<Response<Body>> {
         modifier.modify_request(&mut req);
         let outbound = client_tls.connect(server_name, outbound).await?;
         let (mut sender, connection) = conn::Builder::new()
@@ -102,7 +94,7 @@ where
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
 
         let service = service_fn(|req| {
-            let conn = (self.creator)();
+            let (conn, _) = self.creator.spawn_with_chan();
             Self::proxy(
                 client_tls.clone(),
                 server_name.clone(),

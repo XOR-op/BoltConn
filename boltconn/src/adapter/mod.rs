@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 mod direct;
 mod socks5;
@@ -12,7 +13,9 @@ mod tun_adapter;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::session::NetworkAddr;
 pub use direct::*;
+pub use socks5::*;
 pub use tun_adapter::*;
+use crate::common::duplex_chan::DuplexChan;
 
 pub struct TcpStatus {
     src: SocketAddr,
@@ -47,7 +50,7 @@ impl Connector {
     }
 }
 
-pub enum Outbound {
+pub enum OutboundType {
     Direct,
     Socks5,
     Http,
@@ -55,6 +58,14 @@ pub enum Outbound {
     Openvpn,
     Shadowsocks,
     Trojan,
+}
+
+pub trait OutBound: Send + Sync {
+    /// Run with tokio::spawn.
+    fn spawn(&self, inbound: Connector) -> JoinHandle<io::Result<()>>;
+
+    /// Run with tokio::spawn, returning handle and a duplex channel
+    fn spawn_with_chan(&self) -> (DuplexChan, JoinHandle<io::Result<()>>);
 }
 
 async fn established_tcp<T>(inbound: Connector, outbound: T, allocator: PktBufPool)

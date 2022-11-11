@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::mem::{MaybeUninit, transmute};
+use std::mem::{transmute, MaybeUninit};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -34,7 +34,9 @@ impl PktBufHandle {
     }
 
     pub async fn read<T>(&mut self, read: &mut ReadHalf<T>) -> io::Result<usize>
-        where T: AsyncRead + AsyncWrite {
+    where
+        T: AsyncRead + AsyncWrite,
+    {
         assert_eq!(self.len, 0);
         match read.read(self.as_uninited()).await {
             Ok(s) => {

@@ -10,8 +10,8 @@ pub fn io_err(msg: &str) -> std::io::Error {
 }
 
 pub fn as_io_err<E>(err: E) -> std::io::Error
-    where
-        E: Error,
+where
+    E: Error,
 {
     std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
 }

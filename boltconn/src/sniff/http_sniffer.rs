@@ -7,21 +7,16 @@ use hyper::{Body, Request, Response};
 use std::io;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
+use crate::adapter::OutBound;
 
-pub struct HttpSniffer<F>
-where
-    F: Fn() -> DuplexChan + 'static,
-{
+pub struct HttpSniffer {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
-    creator: F,
+    creator: Box<dyn OutBound>,
 }
 
-impl<F> HttpSniffer<F>
-where
-    F: Fn() -> DuplexChan + 'static,
-{
-    pub fn new(inbound: DuplexChan, creator: F) -> Self {
+impl HttpSniffer {
+    pub fn new(inbound: DuplexChan, creator: Box<dyn OutBound>) -> Self {
         Self {
             inbound,
             modifier: Arc::new(Logger::default()),
@@ -44,7 +39,7 @@ where
 
     pub async fn run(self) -> io::Result<()> {
         let service = service_fn(|req| {
-            let conn = (self.creator)();
+            let (conn, _) = self.creator.spawn_with_chan();
             Self::proxy(conn, self.modifier.clone(), req)
         });
         if let Err(http_err) = Http::new().serve_connection(self.inbound, service).await {

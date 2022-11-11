@@ -1,6 +1,5 @@
-use crate::dispatch::Dispatcher;
 use crate::session::manager::SessionManager;
-use crate::session::NetworkAddr;
+use crate::session::{Dispatcher, NetworkAddr};
 use crate::Dns;
 use std::io::Result;
 use std::net::SocketAddr;

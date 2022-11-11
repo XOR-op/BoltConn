@@ -1,7 +1,8 @@
-use std::net::SocketAddr;
-use crate::adapter::Outbound;
+use crate::adapter::OutboundType;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::session::NetworkAddr;
+use std::net::SocketAddr;
+use crate::dispatch::configuration::ProxyImpl;
 
 pub struct ConnInfo {
     pub src: SocketAddr,
@@ -13,8 +14,8 @@ pub struct ConnInfo {
 pub struct Dispatching {}
 
 impl Dispatching {
-    pub fn matches(&self, info: ConnInfo) -> Outbound {
+    pub fn matches(&self, info: ConnInfo) -> ProxyImpl {
         // todo
-        Outbound::Direct
+        ProxyImpl::Direct
     }
 }

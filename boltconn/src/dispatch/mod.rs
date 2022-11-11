@@ -1,5 +1,6 @@
+mod configuration;
 mod dispatch;
 mod rule;
-mod configuration;
 
-pub use dispatcher::*;
+pub use dispatch::*;
+pub use configuration::*;

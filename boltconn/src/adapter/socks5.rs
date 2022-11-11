@@ -1,4 +1,4 @@
-use crate::adapter::{established_tcp, Connector};
+use crate::adapter::{established_tcp, Connector, OutBound};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{as_io_err, io_err};
@@ -12,6 +12,7 @@ use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
+use crate::dispatch::ProxyImpl;
 
 #[derive(Debug)]
 pub struct Socks5Config {
@@ -59,7 +60,7 @@ impl Socks5Outbound {
         }
     }
 
-    pub async fn run(self, inbound: Connector) -> Result<()> {
+    async fn run(self, inbound: Connector) -> Result<()> {
         let socks_conn = match self.config.server_addr {
             SocketAddr::V4(_) => {
                 Egress::new(&self.iface_name)
@@ -89,8 +90,14 @@ impl Socks5Outbound {
         established_tcp(inbound, socks_stream, self.allocator).await;
         Ok(())
     }
+}
 
-    pub fn as_async(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+impl OutBound for Socks5Outbound {
+    fn spawn(&self, inbound: Connector) -> JoinHandle<Result<()>> {
+        tokio::spawn(self.clone().run(inbound))
+    }
+
+    fn spawn_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),

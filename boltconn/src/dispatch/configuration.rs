@@ -1,6 +1,7 @@
+use ipnet::IpNet;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use ipnet::IpNet;
+use crate::adapter::Socks5Config;
 
 /// Single proxy configuation.
 pub struct Proxy {
@@ -8,12 +9,10 @@ pub struct Proxy {
     detail: ProxyImpl,
 }
 
-pub(crate) enum ProxyImpl {
+#[derive(Debug, Clone)]
+pub enum ProxyImpl {
     Direct,
-    Socks5 {
-        server: SocketAddr,
-        credential: fast_socks5::AuthenticationMethod,
-    },
+    Socks5(Arc<Socks5Config>),
 }
 
 /// A group of proxies
@@ -34,7 +33,6 @@ pub enum RuleImpl {
     DomainSuffix(String),
     Ip(IpAddr),
     IpCidr(IpNet),
-
 }
 
 pub struct Rule {

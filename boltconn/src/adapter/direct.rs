@@ -1,4 +1,4 @@
-use crate::adapter::{established_tcp, Connector, TcpStatus};
+use crate::adapter::{established_tcp, Connector, TcpStatus, OutBound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
@@ -34,7 +34,8 @@ impl DirectOutbound {
         }
     }
 
-    pub async fn run(self, inbound: Connector) -> Result<()> {
+
+    async fn run(self, inbound: Connector) -> Result<()> {
         let dst_addr = match self.dst {
             NetworkAddr::DomainName { domain_name, port } => {
                 // translate fake ip
@@ -61,8 +62,14 @@ impl DirectOutbound {
         established_tcp(inbound, outbound, self.allocator).await;
         Ok(())
     }
+}
 
-    pub fn as_async(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+impl OutBound for DirectOutbound {
+    fn spawn(&self, inbound: Connector) -> JoinHandle<Result<()>> {
+        tokio::spawn(self.clone().run(inbound))
+    }
+
+    fn spawn_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
