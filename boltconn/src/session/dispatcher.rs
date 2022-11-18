@@ -57,7 +57,7 @@ impl Dispatcher {
             process_info,
         };
 
-        let outbounding: Box<dyn OutBound> = match self.dispatching.matches(conn_info) {
+        let outbounding: Box<dyn OutBound> = match self.dispatching.matches(&conn_info) {
             ProxyImpl::Direct => Box::new(DirectOutbound::new(
                 &self.iface_name, dst_addr.clone(), self.allocator.clone(), self.dns.clone())),
             ProxyImpl::Socks5(cfg) => Box::new(Socks5Outbound::new(
