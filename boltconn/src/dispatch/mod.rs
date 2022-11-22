@@ -1,5 +1,5 @@
-mod proxy;
 mod dispatch;
+mod proxy;
 mod rule;
 
 pub use dispatch::*;

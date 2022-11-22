@@ -1,3 +1,4 @@
+use crate::adapter::OutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::sniff::modifier::{Logger, Modifier};
 use hyper::client::conn;
@@ -7,7 +8,6 @@ use hyper::{Body, Request, Response};
 use std::io;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
-use crate::adapter::OutBound;
 
 pub struct HttpSniffer {
     inbound: DuplexChan,

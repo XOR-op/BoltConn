@@ -8,6 +8,7 @@ readme = "README.md"
 
 [dependencies]
 thiserror = "1.0.34"
+anyhow = "1.0.66"
 libc = "0.2.132"
 tokio = { version = "1.21.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal"] }
 tokio-rustls = "0.23.4"
@@ -28,6 +29,7 @@ libproc = "0.12.0"
 trust-dns-proto = "0.22.0"
 trust-dns-resolver = "0.22.0"
 serde = { version = "1.0.147", features = ["derive"] }
+serde_yaml = "0.9.14"
 toml = "0.5.9"
 chrono = "0.4.22"
 http = "0.2.8"

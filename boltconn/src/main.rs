@@ -3,9 +3,9 @@
 
 extern crate core;
 
+use crate::dispatch::DispatchingBuilder;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
-use config::RawDnsCfg;
 use ipnet::Ipv4Net;
 use network::tun_device::TunDevice;
 use network::{
@@ -78,7 +78,8 @@ fn main() {
         .init();
 
     // configuration
-    let dispatching = Arc::new(dispatch::Dispatching {});
+    let builder = DispatchingBuilder::new();
+    let dispatching = Arc::new(builder.build());
 
     // interface
     let (gateway_address, real_iface_name) =
@@ -89,17 +90,14 @@ fn main() {
     let (cert, priv_key) = load_cert_and_key().expect("Failed to parse cert & key");
 
     // dns
-    let dns_config = RawDnsCfg {
-        list: vec!["114.114.114.114:53".parse().unwrap()],
-    };
+    let dns_config = vec!["114.114.114.114".parse().unwrap()];
 
     let _guard = rt.enter();
     let dns_guard = platform::SystemDnsHandle::new("198.18.99.88".parse().unwrap())
         .expect("fail to replace /etc/resolv.conf");
 
-    let dns_routing_guard =
-        DnsRoutingHandle::new(gateway_address, real_iface_name, dns_config.clone())
-            .expect("fail to add dns route table");
+    let dns_routing_guard = DnsRoutingHandle::new(gateway_address, real_iface_name, &dns_config)
+        .expect("fail to add dns route table");
 
     // initialize resources
     let pool = PktBufPool::new(512, 4096);

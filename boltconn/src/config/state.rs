@@ -4,9 +4,8 @@ use std::collections::HashMap;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RawState {
-    pub proxy_group: String,
     pub proxy: String,
-    pub rule: HashMap<String, String>,
+    pub group: HashMap<String, String>,
 }
 
 impl RawState {

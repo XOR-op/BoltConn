@@ -151,6 +151,7 @@ dependencies = [
 name = "boltconn"
 version = "0.1.2"
 dependencies = [
+ "anyhow",
  "arrayref",
  "byteorder",
  "bytes",
@@ -170,6 +171,7 @@ dependencies = [
  "rustls-pemfile",
  "scopeguard",
  "serde",
+ "serde_yaml",
  "shadowsocks",
  "smoltcp",
  "thiserror",
@@ -1752,6 +1754,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d232d893b10de3eb7258ff01974d6ee20663d8e833263c99409d4b13a0209da"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2339,6 +2354,12 @@ dependencies = [
  "generic-array",
  "subtle",
 ]
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1e5fa573d8ac5f1a856f8d7be41d390ee973daf97c806b2c1a465e4e1406e68"
 
 [[package]]
 name = "untrusted"

@@ -1,4 +1,4 @@
-use crate::adapter::{established_tcp, Connector, TcpStatus, OutBound};
+use crate::adapter::{established_tcp, Connector, OutBound, TcpStatus};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
@@ -33,7 +33,6 @@ impl DirectOutbound {
             dns,
         }
     }
-
 
     async fn run(self, inbound: Connector) -> Result<()> {
         let dst_addr = match self.dst {

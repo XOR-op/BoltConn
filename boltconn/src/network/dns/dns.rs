@@ -1,4 +1,3 @@
-use crate::config::RawDnsCfg;
 use crate::network::dns::dns_table::DnsTable;
 use crate::platform;
 use crate::platform::{add_route_entry, get_iface_address, run_command};
@@ -17,13 +16,12 @@ pub struct Dns {
 }
 
 impl Dns {
-    pub fn new(config: &RawDnsCfg) -> Result<Dns> {
+    pub fn new(config: &Vec<IpAddr>) -> Result<Dns> {
         let ns_vec: Vec<NameServerConfig> = config
-            .list
             .iter()
             .map(|e| {
                 NameServerConfig {
-                    socket_addr: e.clone(),
+                    socket_addr: SocketAddr::new(*e, 53),
                     protocol: Protocol::Udp,
                     tls_dns_name: None,
                     trust_nx_responses: false,

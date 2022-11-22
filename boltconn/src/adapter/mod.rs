@@ -11,11 +11,11 @@ mod socks5;
 mod tun_adapter;
 
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
+use crate::common::duplex_chan::DuplexChan;
 use crate::session::NetworkAddr;
 pub use direct::*;
 pub use socks5::*;
 pub use tun_adapter::*;
-use crate::common::duplex_chan::DuplexChan;
 
 pub struct TcpStatus {
     src: SocketAddr,
@@ -69,8 +69,8 @@ pub trait OutBound: Send + Sync {
 }
 
 async fn established_tcp<T>(inbound: Connector, outbound: T, allocator: PktBufPool)
-    where
-        T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
+where
+    T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
     let allocator2 = allocator.clone();

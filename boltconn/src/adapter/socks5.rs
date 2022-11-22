@@ -2,6 +2,7 @@ use crate::adapter::{established_tcp, Connector, OutBound};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{as_io_err, io_err};
+use crate::dispatch::ProxyImpl;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::session::NetworkAddr;
@@ -12,12 +13,11 @@ use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use crate::dispatch::ProxyImpl;
 
 #[derive(Debug)]
 pub struct Socks5Config {
-    server_addr: SocketAddr,
-    auth: AuthenticationMethod,
+    pub(crate) server_addr: SocketAddr,
+    pub(crate) auth: AuthenticationMethod,
 }
 
 impl Socks5Config {

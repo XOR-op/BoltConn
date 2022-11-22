@@ -1,7 +1,7 @@
+use crate::adapter::Socks5Config;
 use ipnet::IpNet;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use crate::adapter::Socks5Config;
 
 /// Single proxy configuation.
 pub struct Proxy {
@@ -10,15 +10,23 @@ pub struct Proxy {
 }
 
 impl Proxy {
-    pub fn get_impl(&self)->ProxyImpl{
+    pub fn new<S: Into<String>>(name: S, detail: ProxyImpl) -> Self {
+        Self {
+            name: name.into(),
+            detail,
+        }
+    }
+
+    pub fn get_impl(&self) -> ProxyImpl {
         self.detail.clone()
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ProxyImpl {
     Direct,
-    Socks5(Arc<Socks5Config>),
+    Drop,
+    Socks5(Socks5Config),
 }
 
 /// A group of proxies
@@ -29,10 +37,21 @@ pub struct ProxyGroup {
 }
 
 impl ProxyGroup {
+    pub fn new<S: Into<String>>(
+        name: S,
+        proxies: Vec<Arc<GeneralProxy>>,
+        selection: Arc<GeneralProxy>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            proxies,
+            selection,
+        }
+    }
     pub fn get_selection(&self) -> Arc<Proxy> {
-        match &self.selection {
+        match self.selection.as_ref() {
             GeneralProxy::Single(p) => p.clone(),
-            GeneralProxy::Group(g) => g.get_selection()
+            GeneralProxy::Group(g) => g.get_selection(),
         }
     }
 }

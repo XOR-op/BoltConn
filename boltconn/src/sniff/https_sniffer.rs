@@ -1,3 +1,4 @@
+use crate::adapter::OutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::sniff::modifier::{Logger, Modifier};
@@ -13,7 +14,6 @@ use tokio_rustls::rustls::{
     ServerName,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use crate::adapter::OutBound;
 
 pub struct HttpsSniffer {
     cert: Vec<Certificate>,

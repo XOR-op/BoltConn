@@ -3,6 +3,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
 use crate::network::dns::Dns;
 use crate::platform::process;
+use crate::platform::process::NetworkType;
 use crate::session::{NetworkAddr, SessionInfo};
 use crate::sniff::{HttpSniffer, HttpsSniffer};
 use crate::PktBufPool;
@@ -11,7 +12,6 @@ use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
-use crate::platform::process::NetworkType;
 
 pub struct Dispatcher {
     iface_name: String,
@@ -59,10 +59,19 @@ impl Dispatcher {
 
         let outbounding: Box<dyn OutBound> = match self.dispatching.matches(&conn_info) {
             ProxyImpl::Direct => Box::new(DirectOutbound::new(
-                &self.iface_name, dst_addr.clone(), self.allocator.clone(), self.dns.clone())),
+                &self.iface_name,
+                dst_addr.clone(),
+                self.allocator.clone(),
+                self.dns.clone(),
+            )),
+            ProxyImpl::Drop => unimplemented!(),
             ProxyImpl::Socks5(cfg) => Box::new(Socks5Outbound::new(
-                &self.iface_name, dst_addr.clone(), self.allocator.clone(), self.dns.clone(), cfg,
-            ))
+                &self.iface_name,
+                dst_addr.clone(),
+                self.allocator.clone(),
+                self.dns.clone(),
+                cfg,
+            )),
         };
 
         let info = SessionInfo::new(dst_addr.clone(), "direct");
@@ -90,7 +99,8 @@ impl Dispatcher {
                 tracing::debug!("HTTP sniff");
                 let http_alloc = self.allocator.clone();
                 tokio::spawn(async move {
-                    let mocker = HttpSniffer::new(DuplexChan::new(http_alloc, tun_next), outbounding);
+                    let mocker =
+                        HttpSniffer::new(DuplexChan::new(http_alloc, tun_next), outbounding);
                     if let Err(err) = mocker.run().await {
                         tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
                     }
