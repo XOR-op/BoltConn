@@ -1,7 +1,7 @@
 use crate::adapter::{OutboundType, Socks5Config};
 use crate::config::{RawRootCfg, RawState};
 use crate::dispatch::proxy::ProxyImpl;
-use crate::dispatch::rule::Rule;
+use crate::dispatch::rule::{Rule, RuleBuilder};
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::session::NetworkAddr;
@@ -27,7 +27,7 @@ pub struct Dispatching {
 }
 
 impl Dispatching {
-    pub fn matches(&self, info: &ConnInfo) -> ProxyImpl {
+    pub fn matches(&self, info: &ConnInfo) -> Arc<ProxyImpl> {
         for v in &self.rules {
             if let Some(proxy) = v.matches(&info) {
                 return match proxy.as_ref() {
@@ -59,7 +59,7 @@ impl DispatchingBuilder {
             fallback: None,
         }
     }
-    pub fn add_proxy<S: Into<String>>(&mut self, name: S, cfg: ProxyImpl) -> &mut Self {
+    pub fn add_proxy<S: Into<String>>(&mut self, name: S, cfg: Arc<Proxy>) -> &mut Self {
         self.proxies.insert(name.into(), cfg);
         self
     }
@@ -113,12 +113,12 @@ impl DispatchingBuilder {
                             ));
                         }
                         let auth = if proxy.username.is_some() || proxy.password.is_some() {
-                            AuthenticationMethod::Password {
-                                username: proxy.username.as_ref().unwrap().clone(),
-                                password: proxy.password.as_ref().unwrap_or(&String::new()).clone(),
-                            }
+                            Some((
+                                proxy.username.as_ref().unwrap().clone(),
+                                proxy.password.as_ref().unwrap_or(&String::new()).clone(),
+                            ))
                         } else {
-                            AuthenticationMethod::None
+                            None
                         };
                         e.insert(Arc::new(Proxy::new(
                             name.clone(),
@@ -166,7 +166,13 @@ impl DispatchingBuilder {
             );
         }
         // read rules
-        for r in &cfg.rule_local {}
+        let rule_builder = RuleBuilder { proxies: &builder.proxies, groups: &builder.groups };
+        for r in &cfg.rule_local {
+            let Some(rule) = rule_builder.parse_literal(r.as_str()) else {
+                return Err(anyhow!("Failed to parse rule:{}",r));
+            };
+            builder.rules.push(rule);
+        }
         Ok(builder)
     }
 }

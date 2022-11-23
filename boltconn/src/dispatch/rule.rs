@@ -3,6 +3,7 @@ use crate::session::NetworkAddr;
 use ipnet::IpNet;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
 pub enum RuleImpl {
@@ -19,7 +20,7 @@ pub(crate) struct RuleBuilder<'a> {
     pub(crate) groups: &'a HashMap<String, Arc<ProxyGroup>>,
 }
 
-impl RuleBuilder {
+impl RuleBuilder<'_> {
     pub fn parse_literal(&self, s: &str) -> Option<Rule> {
         let list: Vec<&str> = s.split(',').collect();
         if list.len() != 3 {
@@ -35,11 +36,10 @@ impl RuleBuilder {
             }
         };
         return match *list.get(0).unwrap() {
-            "DOMAIN-SUFFIX" =>
-                Some(Rule {
-                    rule: RuleImpl::DomainSuffix(String::from(*list.get(1).unwrap())),
-                    policy: general,
-                }),
+            "DOMAIN-SUFFIX" => Some(Rule {
+                rule: RuleImpl::DomainSuffix(String::from(*list.get(1).unwrap())),
+                policy: general,
+            }),
             "DOMAIN" => Some(Rule {
                 rule: RuleImpl::Domain(String::from(*list.get(1).unwrap())),
                 policy: general,
@@ -49,7 +49,7 @@ impl RuleBuilder {
                 policy: general,
             }),
             "IP-CIDR" => {
-                if let Ok(cidr) = IpNet::try_from(*list.get(1).unwrap()) {
+                if let Ok(cidr) = IpNet::from_str(*list.get(1).unwrap()) {
                     Some(Rule {
                         rule: RuleImpl::IpCidr(cidr),
                         policy: general,

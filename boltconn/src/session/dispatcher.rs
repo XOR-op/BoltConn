@@ -57,7 +57,7 @@ impl Dispatcher {
             process_info,
         };
 
-        let outbounding: Box<dyn OutBound> = match self.dispatching.matches(&conn_info) {
+        let outbounding: Box<dyn OutBound> = match self.dispatching.matches(&conn_info).as_ref() {
             ProxyImpl::Direct => Box::new(DirectOutbound::new(
                 &self.iface_name,
                 dst_addr.clone(),
@@ -70,7 +70,7 @@ impl Dispatcher {
                 dst_addr.clone(),
                 self.allocator.clone(),
                 self.dns.clone(),
-                cfg,
+                cfg.clone(),
             )),
         };
 

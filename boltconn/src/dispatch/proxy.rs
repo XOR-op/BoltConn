@@ -6,18 +6,18 @@ use std::sync::Arc;
 /// Single proxy configuation.
 pub struct Proxy {
     name: String,
-    detail: ProxyImpl,
+    detail: Arc<ProxyImpl>,
 }
 
 impl Proxy {
     pub fn new<S: Into<String>>(name: S, detail: ProxyImpl) -> Self {
         Self {
             name: name.into(),
-            detail,
+            detail: Arc::new(detail),
         }
     }
 
-    pub fn get_impl(&self) -> ProxyImpl {
+    pub fn get_impl(&self) -> Arc<ProxyImpl> {
         self.detail.clone()
     }
 }

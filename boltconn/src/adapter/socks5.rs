@@ -14,22 +14,20 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Socks5Config {
     pub(crate) server_addr: SocketAddr,
-    pub(crate) auth: AuthenticationMethod,
+    pub(crate) auth: Option<(String, String)>,
 }
 
 impl Socks5Config {
     fn get_auth(&self) -> AuthenticationMethod {
         match &self.auth {
-            AuthenticationMethod::None => AuthenticationMethod::None,
-            AuthenticationMethod::Password { username, password } => {
-                AuthenticationMethod::Password {
-                    username: username.clone(),
-                    password: password.clone(),
-                }
-            }
+            None => AuthenticationMethod::None,
+            Some((username, password)) => AuthenticationMethod::Password {
+                username: username.clone(),
+                password: password.clone(),
+            },
         }
     }
 }
@@ -40,7 +38,7 @@ pub struct Socks5Outbound {
     dst: NetworkAddr,
     allocator: PktBufPool,
     dns: Arc<Dns>,
-    config: Arc<Socks5Config>,
+    config: Socks5Config,
 }
 
 impl Socks5Outbound {
@@ -49,7 +47,7 @@ impl Socks5Outbound {
         dst: NetworkAddr,
         allocator: PktBufPool,
         dns: Arc<Dns>,
-        config: Arc<Socks5Config>,
+        config: Socks5Config,
     ) -> Self {
         Self {
             iface_name: iface_name.to_string(),

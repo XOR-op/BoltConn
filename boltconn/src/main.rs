@@ -3,7 +3,7 @@
 
 extern crate core;
 
-use crate::dispatch::DispatchingBuilder;
+use crate::dispatch::{Dispatching, DispatchingBuilder};
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
@@ -29,6 +29,7 @@ use tracing::{event, Level};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use crate::config::{RawRootCfg, RawState};
 
 mod adapter;
 mod common;
@@ -66,6 +67,15 @@ fn load_cert_and_key() -> io::Result<(Vec<Certificate>, PrivateKey)> {
     Ok((vec![cert], key))
 }
 
+fn initialize_dispatching() -> anyhow::Result<Arc<Dispatching>> {
+    let config_text = fs::read_to_string("../_private/config/config.yml")?;
+    let raw_config: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
+    let state_text = fs::read_to_string("../_private/config/state.yml")?;
+    let raw_state: RawState = serde_yaml::from_str(&state_text).unwrap();
+    let builder = DispatchingBuilder::new_from_config(&raw_config, &raw_state)?;
+    Ok(Arc::new(builder.build()))
+}
+
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
     let formatting_layer = fmt::layer()
@@ -78,8 +88,7 @@ fn main() {
         .init();
 
     // configuration
-    let builder = DispatchingBuilder::new();
-    let dispatching = Arc::new(builder.build());
+    let dispatching = initialize_dispatching().expect("Failed to load config");
 
     // interface
     let (gateway_address, real_iface_name) =
