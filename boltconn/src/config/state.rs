@@ -6,7 +6,7 @@ use std::fs;
 #[serde(deny_unknown_fields)]
 pub struct RawState {
     pub proxy: String,
-    pub group: HashMap<String, String>,
+    pub group_selection: HashMap<String, String>,
 }
 
 

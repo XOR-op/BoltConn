@@ -30,12 +30,14 @@ impl Dispatching {
     pub fn matches(&self, info: &ConnInfo) -> Arc<ProxyImpl> {
         for v in &self.rules {
             if let Some(proxy) = v.matches(&info) {
+                tracing::trace!("Matches policy {:?}",v);
                 return match proxy.as_ref() {
                     GeneralProxy::Single(p) => p.get_impl(),
                     GeneralProxy::Group(g) => g.get_selection().get_impl(),
                 };
             }
         }
+        tracing::trace!("Fallback policy");
         match &self.fallback {
             GeneralProxy::Single(p) => p.get_impl(),
             GeneralProxy::Group(g) => g.get_selection().get_impl(),
@@ -149,7 +151,7 @@ impl DispatchingBuilder {
                         })?
                         .clone(),
                 ));
-                if p == state.group.get(name).unwrap_or(&String::new()) {
+                if p == state.group_selection.get(name).unwrap_or(&String::new()) {
                     selection = Some(content.clone());
                 }
                 arr.push(content);
@@ -173,6 +175,7 @@ impl DispatchingBuilder {
             };
             builder.rules.push(rule);
         }
+        tracing::info!("Loaded config successfully");
         Ok(builder)
     }
 }

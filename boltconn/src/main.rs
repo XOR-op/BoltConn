@@ -68,9 +68,9 @@ fn load_cert_and_key() -> io::Result<(Vec<Certificate>, PrivateKey)> {
 }
 
 fn initialize_dispatching() -> anyhow::Result<Arc<Dispatching>> {
-    let config_text = fs::read_to_string("../_private/config/config.yml")?;
+    let config_text = fs::read_to_string("./_private/config/config.yml")?;
     let raw_config: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
-    let state_text = fs::read_to_string("../_private/config/state.yml")?;
+    let state_text = fs::read_to_string("./_private/config/state.yml")?;
     let raw_state: RawState = serde_yaml::from_str(&state_text).unwrap();
     let builder = DispatchingBuilder::new_from_config(&raw_config, &raw_state)?;
     Ok(Arc::new(builder.build()))

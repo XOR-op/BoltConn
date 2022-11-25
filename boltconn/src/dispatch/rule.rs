@@ -2,10 +2,12 @@ use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
 use crate::session::NetworkAddr;
 use ipnet::IpNet;
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter, Pointer};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
 pub enum RuleImpl {
     ProcessName(String),
     Domain(String),
@@ -22,7 +24,8 @@ pub(crate) struct RuleBuilder<'a> {
 
 impl RuleBuilder<'_> {
     pub fn parse_literal(&self, s: &str) -> Option<Rule> {
-        let list: Vec<&str> = s.split(',').collect();
+        let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
+        let list: Vec<&str> = processed_str.split(',').collect();
         if list.len() != 3 {
             return None;
         }
@@ -123,5 +126,11 @@ impl Rule {
             }
         }
         None
+    }
+}
+
+impl Debug for Rule {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.rule.fmt(f)
     }
 }
