@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone)]
 pub struct Socks5Config {
-    pub(crate) server_addr: SocketAddr,
+    pub(crate) server_addr: NetworkAddr,
     pub(crate) auth: Option<(String, String)>,
 }
 
@@ -59,15 +59,22 @@ impl Socks5Outbound {
     }
 
     async fn run(self, inbound: Connector) -> Result<()> {
-        let socks_conn = match self.config.server_addr {
+        let server_addr = match self.config.server_addr {
+            NetworkAddr::Raw(addr) => addr,
+            NetworkAddr::DomainName { ref domain_name, port } => {
+                let resp = self.dns.genuine_lookup(domain_name.as_str()).await.ok_or(io_err("dns not found"))?;
+                SocketAddr::new(resp, port)
+            }
+        };
+        let socks_conn = match server_addr {
             SocketAddr::V4(_) => {
                 Egress::new(&self.iface_name)
-                    .tcpv4_stream(self.config.server_addr)
+                    .tcpv4_stream(server_addr)
                     .await?
             }
             SocketAddr::V6(_) => {
                 Egress::new(&self.iface_name)
-                    .tcpv6_stream(self.config.server_addr)
+                    .tcpv6_stream(server_addr)
                     .await?
             }
         };

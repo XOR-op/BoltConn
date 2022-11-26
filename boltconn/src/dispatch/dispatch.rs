@@ -125,7 +125,7 @@ impl DispatchingBuilder {
                         e.insert(Arc::new(Proxy::new(
                             name.clone(),
                             ProxyImpl::Socks5(Socks5Config {
-                                server_addr: SocketAddr::new(proxy.ip, proxy.port),
+                                server_addr: NetworkAddr::Raw(SocketAddr::new(proxy.ip, proxy.port)),
                                 auth,
                             }),
                         )));

@@ -40,7 +40,7 @@ impl DirectOutbound {
                 // translate fake ip
                 SocketAddr::new(
                     self.dns
-                        .domain_to_real_ip(domain_name.as_str())
+                        .genuine_lookup(domain_name.as_str())
                         .await
                         .ok_or(io_err("DNS failed"))?,
                     port,

@@ -9,6 +9,7 @@ use tokio::task::JoinHandle;
 mod direct;
 mod socks5;
 mod tun_adapter;
+mod shadowsocks;
 
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;

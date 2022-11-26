@@ -56,7 +56,7 @@ impl Dns {
         })
     }
 
-    pub async fn domain_to_real_ip(&self, domain_name: &str) -> Option<IpAddr> {
+    pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
         for r in &self.resolvers {
             if let Ok(result) = r.ipv4_lookup(domain_name).await {
                 for i in result {
@@ -70,7 +70,7 @@ impl Dns {
     /// If no corresponding record, return fake ip itself.
     pub async fn ip_to_real_ip(&self, fake_ip: IpAddr) -> IpAddr {
         if let Some(record) = self.table.query_by_ip(fake_ip) {
-            self.domain_to_real_ip(&record.domain_name)
+            self.genuine_lookup(&record.domain_name)
                 .await
                 .unwrap_or(fake_ip)
         } else {
