@@ -1,5 +1,5 @@
 use crate::adapter::{OutboundType, Socks5Config};
-use crate::config::{RawRootCfg, RawState};
+use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder};
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
@@ -7,6 +7,8 @@ use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::session::NetworkAddr;
 use anyhow::anyhow;
 use fast_socks5::AuthenticationMethod;
+use shadowsocks::crypto::v1::CipherKind;
+use shadowsocks::{ServerAddr, ServerConfig};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -30,7 +32,7 @@ impl Dispatching {
     pub fn matches(&self, info: &ConnInfo) -> Arc<ProxyImpl> {
         for v in &self.rules {
             if let Some(proxy) = v.matches(&info) {
-                tracing::trace!("Matches policy {:?}",v);
+                tracing::trace!("Matches policy {:?}", v);
                 return match proxy.as_ref() {
                     GeneralProxy::Single(p) => p.get_impl(),
                     GeneralProxy::Group(g) => g.get_selection().get_impl(),
@@ -106,31 +108,65 @@ impl DispatchingBuilder {
                 Entry::Occupied(_) => {
                     return Err(anyhow!("Duplicate proxy name:{}", *name));
                 }
-                Entry::Vacant(e) => match proxy.proto.as_str() {
-                    "socks5" => {
-                        if proxy.password.is_some() && proxy.username.is_none() {
-                            return Err(anyhow!(
-                                "Bad Socks5 {}: empty username but non-empty password",
-                                *name
-                            ));
-                        }
-                        let auth = if proxy.username.is_some() || proxy.password.is_some() {
-                            Some((
-                                proxy.username.as_ref().unwrap().clone(),
-                                proxy.password.as_ref().unwrap_or(&String::new()).clone(),
-                            ))
-                        } else {
-                            None
+                Entry::Vacant(e) => match proxy {
+                    RawProxyLocalCfg::Socks5 {
+                        server,
+                        port,
+                        username,
+                        password,
+                    } => {
+                        let auth = {
+                            if let (Some(username), Some(passwd)) = (username, password) {
+                                Some((username.clone(), passwd.clone()))
+                            } else if let (None, None) = (username, password) {
+                                None
+                            } else {
+                                return Err(anyhow!("Bad Socks5 {}: invalid configuration", *name));
+                            }
                         };
+
                         e.insert(Arc::new(Proxy::new(
                             name.clone(),
                             ProxyImpl::Socks5(Socks5Config {
-                                server_addr: NetworkAddr::Raw(SocketAddr::new(proxy.ip, proxy.port)),
+                                server_addr: NetworkAddr::from(server, *port),
                                 auth,
                             }),
                         )));
                     }
-                    _ => unimplemented!(),
+                    RawProxyLocalCfg::Shadowsocks {
+                        server,
+                        port,
+                        password,
+                        cipher,
+                    } => {
+                        let cipher_kind = match cipher.as_str() {
+                            "chacha20-ietf-poly1305" => CipherKind::CHACHA20_POLY1305,
+                            "aes-256-gcm" => CipherKind::AES_256_GCM,
+                            "aes-128-gcm" => CipherKind::AES_128_GCM,
+                            _ => {
+                                return Err(anyhow!(
+                                    "Bad Shadowsocks {}: unsupported cipher",
+                                    *name
+                                ));
+                            }
+                        };
+                        let addr = match server {
+                            RawServerAddr::IpAddr(ip) => {
+                                ServerAddr::SocketAddr(SocketAddr::new(ip.clone(), *port))
+                            }
+                            RawServerAddr::DomainName(dn) => {
+                                ServerAddr::DomainName(dn.clone(), *port)
+                            }
+                        };
+                        e.insert(Arc::new(Proxy::new(
+                            name.clone(),
+                            ProxyImpl::Shadowsocks(ServerConfig::new(
+                                addr,
+                                password.clone(),
+                                cipher_kind,
+                            )),
+                        )));
+                    }
                 },
             }
         }
@@ -168,7 +204,10 @@ impl DispatchingBuilder {
             );
         }
         // read rules
-        let rule_builder = RuleBuilder { proxies: &builder.proxies, groups: &builder.groups };
+        let rule_builder = RuleBuilder {
+            proxies: &builder.proxies,
+            groups: &builder.groups,
+        };
         for r in &cfg.rule_local {
             let Some(rule) = rule_builder.parse_literal(r.as_str()) else {
                 return Err(anyhow!("Failed to parse rule:{}",r));

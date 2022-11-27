@@ -14,13 +14,29 @@ pub struct RawRootCfg {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct RawProxyLocalCfg {
-    pub proto: String,
-    pub ip: IpAddr,
-    pub port: u16,
-    pub username: Option<String>,
-    pub password: Option<String>,
+#[serde(untagged)]
+pub enum RawServerAddr {
+    IpAddr(IpAddr),
+    DomainName(String),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, tag = "proto")]
+pub enum RawProxyLocalCfg {
+    #[serde(alias = "socks5")]
+    Socks5 {
+        server: RawServerAddr,
+        port: u16,
+        username: Option<String>,
+        password: Option<String>,
+    },
+    #[serde(alias = "ss")]
+    Shadowsocks {
+        server: RawServerAddr,
+        port: u16,
+        password: String,
+        cipher: String,
+    },
 }
 
 #[ignore]

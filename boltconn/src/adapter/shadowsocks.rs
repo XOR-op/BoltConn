@@ -1,20 +1,19 @@
-use std::io;
-use std::sync::Arc;
-use shadowsocks::{ProxyClientStream, ServerAddr, ServerConfig};
-use crate::adapter::{Connector, established_tcp, OutBound};
+use crate::adapter::{established_tcp, Connector, OutBound};
 use crate::common::buf_pool::PktBufPool;
-use crate::network::dns::Dns;
-use crate::session::NetworkAddr;
-use io::Result;
-use std::net::SocketAddr;
-use fast_socks5::util::target_addr::TargetAddr;
-use shadowsocks::config::ServerType;
-use shadowsocks::context::SharedContext;
-use tokio::task::JoinHandle;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
+use crate::network::dns::Dns;
 use crate::network::egress::Egress;
-
+use crate::session::NetworkAddr;
+use fast_socks5::util::target_addr::TargetAddr;
+use io::Result;
+use shadowsocks::config::ServerType;
+use shadowsocks::context::SharedContext;
+use shadowsocks::{ProxyClientStream, ServerAddr, ServerConfig};
+use std::io;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct SSOutbound {
@@ -45,16 +44,25 @@ impl SSOutbound {
     async fn run(self, inbound: Connector) -> Result<()> {
         let target_addr = match self.dst {
             NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(s),
-            NetworkAddr::DomainName { domain_name, port } => shadowsocks::relay::Address::from((domain_name, port))
+            NetworkAddr::DomainName { domain_name, port } => {
+                shadowsocks::relay::Address::from((domain_name, port))
+            }
         };
         // ss configs
         let context = shadowsocks::context::Context::new_shared(ServerType::Local);
         let (resolved_config, server_addr) = match self.config.addr().clone() {
             ServerAddr::SocketAddr(p) => (self.config, p),
             ServerAddr::DomainName(domain_name, port) => {
-                let resp = self.dns.genuine_lookup(domain_name.as_str()).await.ok_or(io_err("dns not found"))?;
+                let resp = self
+                    .dns
+                    .genuine_lookup(domain_name.as_str())
+                    .await
+                    .ok_or(io_err("dns not found"))?;
                 let addr = SocketAddr::new(resp, port);
-                (ServerConfig::new(addr, self.config.password(), self.config.method()), addr.clone())
+                (
+                    ServerConfig::new(addr, self.config.password(), self.config.method()),
+                    addr.clone(),
+                )
             }
         };
         let tcp_conn = match server_addr {
@@ -69,7 +77,8 @@ impl SSOutbound {
                     .await?
             }
         };
-        let ss_stream = ProxyClientStream::from_stream(context, tcp_conn, &resolved_config, target_addr);
+        let ss_stream =
+            ProxyClientStream::from_stream(context, tcp_conn, &resolved_config, target_addr);
         established_tcp(inbound, ss_stream, self.allocator).await;
         Ok(())
     }

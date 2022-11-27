@@ -3,6 +3,7 @@
 
 extern crate core;
 
+use crate::config::{RawRootCfg, RawState};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
@@ -29,7 +30,6 @@ use tracing::{event, Level};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use crate::config::{RawRootCfg, RawState};
 
 mod adapter;
 mod common;

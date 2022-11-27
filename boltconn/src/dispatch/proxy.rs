@@ -1,5 +1,6 @@
 use crate::adapter::Socks5Config;
 use ipnet::IpNet;
+use shadowsocks::ServerConfig;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
@@ -27,6 +28,7 @@ pub enum ProxyImpl {
     Direct,
     Drop,
     Socks5(Socks5Config),
+    Shadowsocks(ServerConfig),
 }
 
 /// A group of proxies

@@ -5,10 +5,8 @@ use std::fs;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RawState {
-    pub proxy: String,
     pub group_selection: HashMap<String, String>,
 }
-
 
 #[ignore]
 #[test]

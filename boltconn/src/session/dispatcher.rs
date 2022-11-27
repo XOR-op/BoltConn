@@ -1,10 +1,10 @@
-use crate::adapter::{Connector, DirectOutbound, OutBound, Socks5Outbound, TunAdapter};
+use crate::adapter::{Connector, DirectOutbound, OutBound, SSOutbound, Socks5Outbound, TunAdapter};
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
-use crate::session::{NetworkAddr, SessionInfo};
+use crate::session::{NetworkAddr, ProxyType, SessionInfo};
 use crate::sniff::{HttpSniffer, HttpsSniffer};
 use crate::PktBufPool;
 use std::net::SocketAddr;
@@ -57,24 +57,31 @@ impl Dispatcher {
             process_info,
         };
 
-        let outbounding: Box<dyn OutBound> = match self.dispatching.matches(&conn_info).as_ref() {
-            ProxyImpl::Direct => Box::new(DirectOutbound::new(
+        let (outbounding, proxy_type): (Box<dyn OutBound>, ProxyType) = match self.dispatching.matches(&conn_info).as_ref() {
+            ProxyImpl::Direct => (Box::new(DirectOutbound::new(
                 &self.iface_name,
                 dst_addr.clone(),
                 self.allocator.clone(),
                 self.dns.clone(),
-            )),
+            )), ProxyType::Direct),
             ProxyImpl::Drop => unimplemented!(),
-            ProxyImpl::Socks5(cfg) => Box::new(Socks5Outbound::new(
+            ProxyImpl::Socks5(cfg) => (Box::new(Socks5Outbound::new(
                 &self.iface_name,
                 dst_addr.clone(),
                 self.allocator.clone(),
                 self.dns.clone(),
                 cfg.clone(),
-            )),
+            )), ProxyType::Socks5),
+            ProxyImpl::Shadowsocks(cfg) => (Box::new(SSOutbound::new(
+                &self.iface_name,
+                dst_addr.clone(),
+                self.allocator.clone(),
+                self.dns.clone(),
+                cfg.clone(),
+            )), ProxyType::SS)
         };
 
-        let info = SessionInfo::new(dst_addr.clone(), "direct");
+        let info = SessionInfo::new(dst_addr.clone(), proxy_type);
 
         let (tun_conn, tun_next) = Connector::new_pair(10);
         let tun_alloc = self.allocator.clone();

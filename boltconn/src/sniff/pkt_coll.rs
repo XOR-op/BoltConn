@@ -1,3 +1,1 @@
-pub struct PacketColl{
-
-}
+pub struct PacketColl {}

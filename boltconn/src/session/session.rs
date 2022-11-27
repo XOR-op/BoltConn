@@ -1,3 +1,4 @@
+use crate::config::RawServerAddr;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
@@ -30,6 +31,23 @@ impl NetworkAddr {
             } => port.clone(),
         }
     }
+
+    pub fn from(addr: &RawServerAddr, port: u16) -> Self {
+        match addr {
+            RawServerAddr::IpAddr(ip) => Self::Raw(SocketAddr::new(ip.clone(), port)),
+            RawServerAddr::DomainName(dn) => Self::DomainName {
+                domain_name: dn.clone(),
+                port,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ProxyType {
+    Direct,
+    Socks5,
+    SS
 }
 
 #[derive(Debug, Clone)]
@@ -37,16 +55,16 @@ pub struct SessionInfo {
     pub start_time: Instant,
     pub dest: NetworkAddr,
     pub session_proto: SessionProtocol,
-    pub rule: String,
+    pub rule: ProxyType,
 }
 
 impl SessionInfo {
-    pub fn new(dst: NetworkAddr, rule: &str) -> Self {
+    pub fn new(dst: NetworkAddr, rule: ProxyType) -> Self {
         Self {
             start_time: Instant::now(),
             dest: dst,
             session_proto: SessionProtocol::TCP,
-            rule: rule.to_string(),
+            rule,
         }
     }
 

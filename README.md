@@ -8,6 +8,7 @@ Support platforms: Macos, Linux.
 - [x] TLS mitm
 - [x] modification of http/s requests and responses
 - [x] graceful shutdown
+- [x] socks5 & ss support
 
 ## Design
 See [design.md](./docs/design.md).
@@ -23,12 +24,9 @@ cargo build --release && cargo rr --bin boltconn-helper
 ```
 ## TO-DO
 - multiple outbound protocols support
-  - [x] direct
-  - [x] socks5
-  - [ ] http connect
+  - [ ] http
   - [ ] wireguard
   - [ ] openvpn
-  - [ ] shadowsocks
   - [ ] trojan
   - [ ] other local interfaces
 - [ ] configurations

@@ -61,8 +61,15 @@ impl Socks5Outbound {
     async fn run(self, inbound: Connector) -> Result<()> {
         let server_addr = match self.config.server_addr {
             NetworkAddr::Raw(addr) => addr,
-            NetworkAddr::DomainName { ref domain_name, port } => {
-                let resp = self.dns.genuine_lookup(domain_name.as_str()).await.ok_or(io_err("dns not found"))?;
+            NetworkAddr::DomainName {
+                ref domain_name,
+                port,
+            } => {
+                let resp = self
+                    .dns
+                    .genuine_lookup(domain_name.as_str())
+                    .await
+                    .ok_or(io_err("dns not found"))?;
                 SocketAddr::new(resp, port)
             }
         };
