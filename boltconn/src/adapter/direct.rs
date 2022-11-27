@@ -4,7 +4,7 @@ use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::platform::bind_to_device;
-use crate::session::{NetworkAddr, SessionInfo, SessionProtocol};
+use crate::proxy::{NetworkAddr, SessionInfo, SessionProtocol};
 use crate::PktBufPool;
 use io::Result;
 use std::io;

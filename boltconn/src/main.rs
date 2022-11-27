@@ -14,8 +14,8 @@ use network::{
     packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt},
 };
 use platform::get_default_route;
-use session::Dispatcher;
-use session::{Nat, SessionManager};
+use proxy::Dispatcher;
+use proxy::{Nat, SessionManager};
 use smoltcp::wire;
 use smoltcp::wire::IpProtocol;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -37,7 +37,7 @@ mod config;
 mod dispatch;
 mod network;
 mod platform;
-mod session;
+mod proxy;
 mod sniff;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]

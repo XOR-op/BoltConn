@@ -4,7 +4,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
-use crate::session::NetworkAddr;
+use crate::proxy::NetworkAddr;
 use fast_socks5::util::target_addr::TargetAddr;
 use io::Result;
 use shadowsocks::config::ServerType;

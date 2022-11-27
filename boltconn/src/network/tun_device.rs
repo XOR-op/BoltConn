@@ -6,7 +6,7 @@ use crate::network;
 use crate::platform;
 use crate::platform::route::setup_ipv4_routing_table;
 use crate::platform::{create_v4_raw_socket, errno_err, interface_up, set_address};
-use crate::session::SessionManager;
+use crate::proxy::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use byteorder::{ByteOrder, NetworkEndian};
 use ipnet::Ipv4Net;

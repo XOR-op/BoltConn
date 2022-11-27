@@ -4,7 +4,7 @@ use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
-use crate::session::{NetworkAddr, ProxyType, SessionInfo};
+use crate::proxy::{NetworkAddr, ProxyType, SessionInfo};
 use crate::sniff::{HttpSniffer, HttpsSniffer};
 use crate::PktBufPool;
 use std::net::SocketAddr;

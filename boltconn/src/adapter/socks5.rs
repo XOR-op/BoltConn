@@ -5,7 +5,7 @@ use crate::common::{as_io_err, io_err};
 use crate::dispatch::ProxyImpl;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
-use crate::session::NetworkAddr;
+use crate::proxy::NetworkAddr;
 use fast_socks5::client::Socks5Stream;
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{AuthenticationMethod, Socks5Command};

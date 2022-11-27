@@ -14,7 +14,7 @@ mod tun_adapter;
 pub use crate::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;
-use crate::session::NetworkAddr;
+use crate::proxy::NetworkAddr;
 pub use direct::*;
 pub use socks5::*;
 pub use tun_adapter::*;

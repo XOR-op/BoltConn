@@ -1,5 +1,5 @@
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
-use crate::session::NetworkAddr;
+use crate::proxy::NetworkAddr;
 use ipnet::IpNet;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Pointer};

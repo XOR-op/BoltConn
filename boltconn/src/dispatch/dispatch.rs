@@ -4,7 +4,7 @@ use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder};
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
-use crate::session::NetworkAddr;
+use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
 use fast_socks5::AuthenticationMethod;
 use shadowsocks::crypto::v1::CipherKind;
