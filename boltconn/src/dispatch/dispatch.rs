@@ -1,4 +1,4 @@
-use crate::adapter::{OutboundType, Socks5Config};
+use crate::adapter::{Socks5Config};
 use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder};
@@ -6,7 +6,6 @@ use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
-use fast_socks5::AuthenticationMethod;
 use shadowsocks::crypto::v1::CipherKind;
 use shadowsocks::{ServerAddr, ServerConfig};
 use std::collections::hash_map::Entry;

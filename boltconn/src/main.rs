@@ -16,15 +16,9 @@ use network::{
 use platform::get_default_route;
 use proxy::Dispatcher;
 use proxy::{Nat, SessionManager};
-use smoltcp::wire;
-use smoltcp::wire::IpProtocol;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use std::{fs, io};
-use tokio::io::AsyncWriteExt;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tracing::{event, Level};
 use tracing_subscriber::fmt::format::Writer;

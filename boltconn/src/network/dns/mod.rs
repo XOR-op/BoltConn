@@ -1,11 +1,10 @@
 mod dns;
 mod dns_table;
 
-use crate::platform::{add_route_entry, add_route_entry_via_gateway, delete_route_entry};
+use crate::platform::{add_route_entry_via_gateway, delete_route_entry};
 pub use dns::Dns;
-use ipnet::IpNet;
 use std::io::Result;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, };
 
 #[derive(Clone, Debug)]
 pub struct DnsRoutingHandle(Vec<DnsConfig>);

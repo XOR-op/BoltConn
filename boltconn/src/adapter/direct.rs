@@ -1,19 +1,14 @@
-use crate::adapter::{established_tcp, Connector, OutBound, TcpStatus};
+use crate::adapter::{established_tcp, Connector, OutBound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
-use crate::platform::bind_to_device;
-use crate::proxy::{NetworkAddr, SessionInfo, SessionProtocol};
+use crate::proxy::{NetworkAddr};
 use crate::PktBufPool;
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
-use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, RwLock};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpSocket, TcpStream};
+use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 #[derive(Clone)]

@@ -2,7 +2,6 @@ use crate::adapter::{established_tcp, Connector, OutBound};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{as_io_err, io_err};
-use crate::dispatch::ProxyImpl;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::NetworkAddr;

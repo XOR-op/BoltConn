@@ -1,7 +1,5 @@
 use crate::adapter::Socks5Config;
-use ipnet::IpNet;
 use shadowsocks::ServerConfig;
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 /// Single proxy configuation.

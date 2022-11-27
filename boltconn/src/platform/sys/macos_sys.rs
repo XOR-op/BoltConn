@@ -3,10 +3,8 @@ use crate::common::io_err;
 use crate::platform::{errno_err, get_command_output, run_command};
 use ipnet::IpNet;
 use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
-use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr};
-use std::str::FromStr;
 use std::{io, mem};
 
 pub unsafe fn open_tun() -> io::Result<(i32, String)> {

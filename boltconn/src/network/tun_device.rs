@@ -1,4 +1,3 @@
-use crate::common::async_raw_fd;
 use crate::common::async_raw_fd::AsyncRawFd;
 use crate::common::async_socket::AsyncRawSocket;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
@@ -15,10 +14,9 @@ use network::packet::ip::IPPkt;
 use smoltcp::wire::IpProtocol;
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr,  SocketAddr, SocketAddrV4};
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::split;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};

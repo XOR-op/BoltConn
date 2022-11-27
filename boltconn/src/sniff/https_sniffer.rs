@@ -8,7 +8,6 @@ use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 use std::io;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::rustls::{
     Certificate, ClientConfig, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig,
     ServerName,

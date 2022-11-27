@@ -1,17 +1,13 @@
 use crate::adapter::{Connector, TcpStatus};
-use crate::network::egress::Egress;
-use crate::platform::bind_to_device;
-use crate::proxy::{NetworkAddr, SessionInfo, SessionProtocol};
+use crate::proxy::{NetworkAddr, SessionInfo};
 use crate::PktBufPool;
-use bytes::BytesMut;
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
-use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpSocket, TcpStream};
+use std::sync::{Arc, RwLock};
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 
 pub struct TunAdapter {
     stat: TcpStatus,

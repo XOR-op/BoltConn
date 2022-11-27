@@ -2,7 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -52,6 +52,7 @@ impl Connector {
     }
 }
 
+#[derive(Debug,Clone)]
 pub enum OutboundType {
     Direct,
     Socks5,

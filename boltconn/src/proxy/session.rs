@@ -1,5 +1,6 @@
+use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{ SocketAddr};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,27 +45,24 @@ impl NetworkAddr {
 }
 
 #[derive(Debug, Clone)]
-pub enum ProxyType {
-    Direct,
-    Socks5,
-    SS
-}
-
-#[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub start_time: Instant,
     pub dest: NetworkAddr,
     pub session_proto: SessionProtocol,
-    pub rule: ProxyType,
+    pub rule: OutboundType,
+    pub upload_traffic: u64,
+    pub download_traffic: u64,
 }
 
 impl SessionInfo {
-    pub fn new(dst: NetworkAddr, rule: ProxyType) -> Self {
+    pub fn new(dst: NetworkAddr, rule: OutboundType) -> Self {
         Self {
             start_time: Instant::now(),
             dest: dst,
             session_proto: SessionProtocol::TCP,
             rule,
+            upload_traffic: 0,
+            download_traffic: 0,
         }
     }
 
@@ -78,6 +76,14 @@ impl SessionInfo {
                 self.rule
             );
         }
+    }
+
+    pub fn more_upload(&mut self, size: u64) {
+        self.upload_traffic += size
+    }
+
+    pub fn more_download(&mut self, size: u64) {
+        self.download_traffic += size
     }
 }
 

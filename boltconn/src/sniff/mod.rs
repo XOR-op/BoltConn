@@ -1,8 +1,3 @@
-use crate::common::duplex_chan::DuplexChan;
-use http::{Request, Response};
-use hyper::client::conn;
-use hyper::Body;
-
 mod http_sniffer;
 mod https_sniffer;
 mod modifier;

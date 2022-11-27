@@ -7,7 +7,6 @@ use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 use std::io;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 pub struct HttpSniffer {
     inbound: DuplexChan,
