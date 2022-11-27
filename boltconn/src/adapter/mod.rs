@@ -52,7 +52,7 @@ impl Connector {
     }
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum OutboundType {
     Direct,
     Socks5,

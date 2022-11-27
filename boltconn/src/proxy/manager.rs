@@ -1,6 +1,7 @@
 use super::session_ctl::{TcpSessionCtl, UdpSessionCtl};
 use dashmap::DashMap;
 use io::Result;
+use std::collections::HashSet;
 use std::io;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -74,5 +75,12 @@ impl SessionManager {
             .retain(|_, v| v.available.load(Ordering::Relaxed) > 0);
         self.udp_records
             .retain(|_, v| v.is_expired(self.stale_time));
+    }
+
+    pub fn get_all_tcp_sessions(&self) -> Vec<TcpSessionCtl> {
+        self.tcp_records.iter().map(|p| p.value().clone()).collect()
+    }
+    pub fn get_all_udp_sessions(&self) -> Vec<UdpSessionCtl> {
+        self.udp_records.iter().map(|p| p.value().clone()).collect()
     }
 }

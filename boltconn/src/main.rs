@@ -5,6 +5,8 @@ extern crate core;
 
 use crate::config::{RawRootCfg, RawState};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
+use crate::external::ApiServer;
+use crate::proxy::StatCenter;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
@@ -16,7 +18,7 @@ use network::{
 use platform::get_default_route;
 use proxy::Dispatcher;
 use proxy::{Nat, SessionManager};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::{fs, io};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
@@ -29,6 +31,7 @@ mod adapter;
 mod common;
 mod config;
 mod dispatch;
+mod external;
 mod network;
 mod platform;
 mod proxy;
@@ -61,11 +64,18 @@ fn load_cert_and_key() -> io::Result<(Vec<Certificate>, PrivateKey)> {
     Ok((vec![cert], key))
 }
 
-fn initialize_dispatching() -> anyhow::Result<Arc<Dispatching>> {
+fn load_config() -> anyhow::Result<(RawRootCfg, RawState)> {
     let config_text = fs::read_to_string("./_private/config/config.yml")?;
     let raw_config: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
     let state_text = fs::read_to_string("./_private/config/state.yml")?;
     let raw_state: RawState = serde_yaml::from_str(&state_text).unwrap();
+    Ok((raw_config, raw_state))
+}
+
+fn initialize_dispatching(
+    raw_config: &RawRootCfg,
+    raw_state: &RawState,
+) -> anyhow::Result<Arc<Dispatching>> {
     let builder = DispatchingBuilder::new_from_config(&raw_config, &raw_state)?;
     Ok(Arc::new(builder.build()))
 }
@@ -82,7 +92,9 @@ fn main() {
         .init();
 
     // configuration
-    let dispatching = initialize_dispatching().expect("Failed to load config");
+    let (config, state) = load_config().expect("Failed to load config");
+    let dispatching =
+        initialize_dispatching(&config, &state).expect("Failed to initialize dispatching");
 
     // interface
     let (gateway_address, real_iface_name) =
@@ -93,11 +105,15 @@ fn main() {
     let (cert, priv_key) = load_cert_and_key().expect("Failed to parse cert & key");
 
     // dns
-    let dns_config = vec!["114.114.114.114".parse().unwrap()];
-
     let _guard = rt.enter();
     let dns_guard = platform::SystemDnsHandle::new("198.18.99.88".parse().unwrap())
         .expect("fail to replace /etc/resolv.conf");
+    let dns_config = config
+        .dns
+        .iter()
+        .map(|s| s.parse().ok())
+        .flatten()
+        .collect();
 
     let dns_routing_guard = DnsRoutingHandle::new(gateway_address, real_iface_name, &dns_config)
         .expect("fail to add dns route table");
@@ -122,10 +138,16 @@ fn main() {
     );
     let proxy_allocator = PktBufPool::new(512, 4096);
 
+    let stat_center = Arc::new(StatCenter::new());
+
+    let api_server = ApiServer::new(manager.clone(), stat_center.clone());
+    let api_port = config.api_port;
+
     let dispatcher = Arc::new(Dispatcher::new(
         real_iface_name,
         proxy_allocator.clone(),
         dns.clone(),
+        stat_center,
         dispatching.clone(),
         cert,
         priv_key,
@@ -135,6 +157,7 @@ fn main() {
     // run
     let _nat_handle = rt.spawn(async move { nat.run_tcp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
+    let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
     rt.block_on(async { tokio::signal::ctrl_c().await })
         .expect("Tokio runtime error");
     drop(dns_guard);

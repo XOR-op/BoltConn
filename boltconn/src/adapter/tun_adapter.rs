@@ -1,5 +1,5 @@
 use crate::adapter::{Connector, TcpStatus};
-use crate::proxy::{NetworkAddr, SessionInfo};
+use crate::proxy::{NetworkAddr, StatisticsInfo};
 use crate::PktBufPool;
 use io::Result;
 use std::io;
@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 
 pub struct TunAdapter {
     stat: TcpStatus,
-    info: Arc<RwLock<SessionInfo>>,
+    info: Arc<RwLock<StatisticsInfo>>,
     inbound: TcpStream,
     allocator: PktBufPool,
     connector: Connector,
@@ -23,7 +23,7 @@ impl TunAdapter {
     pub fn new(
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
-        info: SessionInfo,
+        info: Arc<RwLock<StatisticsInfo>>,
         inbound: TcpStream,
         available: Arc<AtomicU8>,
         allocator: PktBufPool,
@@ -31,7 +31,7 @@ impl TunAdapter {
     ) -> Self {
         Self {
             stat: TcpStatus::new(src_addr, dst_addr, available),
-            info: Arc::new(RwLock::new(info)),
+            info,
             inbound,
             allocator,
             connector,
@@ -54,7 +54,7 @@ impl TunAdapter {
                     Ok(0) => {
                         break;
                     }
-                    Ok(_) => {
+                    Ok(size) => {
                         if first_packet {
                             first_packet = false;
                             outgoing_info_arc
@@ -62,6 +62,7 @@ impl TunAdapter {
                                 .unwrap()
                                 .update_proto(buf.as_ready());
                         }
+                        outgoing_info_arc.write().unwrap().more_upload(size);
                         if let Err(err) = tx.send(buf).await {
                             tracing::warn!("TunAdapter send: {}", err);
                             break;
@@ -80,6 +81,7 @@ impl TunAdapter {
             match rx.recv().await {
                 Some(buf) => {
                     // tracing::trace!("[Direct] ingoing {} bytes", size);
+                    self.info.write().unwrap().more_download(buf.len);
                     if let Err(err) = in_write.write_all(buf.as_ready()).await {
                         tracing::warn!("TunAdapter write to inbound failed: {}", err);
                         self.allocator.release(buf);

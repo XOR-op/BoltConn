@@ -120,9 +120,11 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
         pid,
         path: unsafe { CStr::from_ptr(&vpath_info.pvi_cdir.vip_path as *const _ as *const c_char) }
             .to_string_lossy()
-            .into_owned(),
+            .into_owned()
+            .replace("\n", ""),
         name: unsafe { CStr::from_ptr(&bsd_info.pbi_name as *const c_char) }
             .to_string_lossy()
-            .into_owned(),
+            .into_owned()
+            .replace("\n", ""),
     })
 }

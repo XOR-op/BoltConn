@@ -1,7 +1,7 @@
 use crate::network::dns::dns_table::DnsTable;
 use std::io;
 use std::io::Result;
-use std::net::{IpAddr, SocketAddr, };
+use std::net::{IpAddr, SocketAddr};
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;

@@ -14,7 +14,7 @@ use network::packet::ip::IPPkt;
 use smoltcp::wire::IpProtocol;
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr,  SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;

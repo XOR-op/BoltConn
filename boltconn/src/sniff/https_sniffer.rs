@@ -1,7 +1,7 @@
 use crate::adapter::OutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
-use crate::sniff::modifier::{Logger, Modifier};
+use crate::sniff::modifier::{Logger, Modifier, Nooper};
 use hyper::client::conn;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
@@ -36,7 +36,7 @@ impl HttpsSniffer {
             priv_key,
             server_name,
             inbound,
-            modifier: Arc::new(Logger::default()),
+            modifier: Arc::new(Nooper::default()),
             creator,
         }
     }

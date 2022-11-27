@@ -3,7 +3,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
-use crate::proxy::{NetworkAddr};
+use crate::proxy::NetworkAddr;
 use crate::PktBufPool;
 use io::Result;
 use std::io;

@@ -1,4 +1,4 @@
-use crate::adapter::{Socks5Config};
+use crate::adapter::Socks5Config;
 use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder};

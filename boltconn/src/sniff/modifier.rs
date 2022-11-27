@@ -17,3 +17,12 @@ impl Modifier for Logger {
         println!("{:?}", resp);
     }
 }
+
+#[derive(Default)]
+pub struct Nooper;
+
+impl Modifier for Nooper {
+    fn modify_request(&self, _req: &mut Request<Body>) {}
+
+    fn modify_response(&self, _resp: &mut Response<Body>) {}
+}

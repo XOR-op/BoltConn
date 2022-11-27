@@ -1,6 +1,6 @@
 use crate::adapter::OutBound;
 use crate::common::duplex_chan::DuplexChan;
-use crate::sniff::modifier::{Logger, Modifier};
+use crate::sniff::modifier::{Logger, Modifier, Nooper};
 use hyper::client::conn;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
@@ -18,7 +18,7 @@ impl HttpSniffer {
     pub fn new(inbound: DuplexChan, creator: Box<dyn OutBound>) -> Self {
         Self {
             inbound,
-            modifier: Arc::new(Logger::default()),
+            modifier: Arc::new(Nooper::default()),
             creator,
         }
     }

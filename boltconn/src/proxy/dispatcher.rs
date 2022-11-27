@@ -6,12 +6,12 @@ use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
-use crate::proxy::{NetworkAddr, SessionInfo};
+use crate::proxy::{NetworkAddr, StatCenter, StatisticsInfo};
 use crate::sniff::{HttpSniffer, HttpsSniffer};
 use crate::PktBufPool;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 
@@ -19,6 +19,7 @@ pub struct Dispatcher {
     iface_name: String,
     allocator: PktBufPool,
     dns: Arc<Dns>,
+    stat_center: Arc<StatCenter>,
     dispatching: Arc<Dispatching>,
     certificate: Vec<Certificate>,
     priv_key: PrivateKey,
@@ -29,6 +30,7 @@ impl Dispatcher {
         iface_name: &str,
         allocator: PktBufPool,
         dns: Arc<Dns>,
+        stat_center: Arc<StatCenter>,
         dispatching: Arc<Dispatching>,
         certificate: Vec<Certificate>,
         priv_key: PrivateKey,
@@ -37,6 +39,7 @@ impl Dispatcher {
             iface_name: iface_name.into(),
             allocator,
             dns,
+            stat_center,
             dispatching,
             certificate,
             priv_key,
@@ -56,7 +59,7 @@ impl Dispatcher {
             src: src_addr,
             dst: dst_addr.clone(),
             connection_type: NetworkType::TCP,
-            process_info,
+            process_info: process_info.clone(),
         };
 
         let (outbounding, proxy_type): (Box<dyn OutBound>, OutboundType) =
@@ -93,7 +96,12 @@ impl Dispatcher {
                 ),
             };
 
-        let info = SessionInfo::new(dst_addr.clone(), proxy_type);
+        let info = Arc::new(RwLock::new(StatisticsInfo::new(
+            dst_addr.clone(),
+            process_info,
+            proxy_type,
+        )));
+        self.stat_center.push(info.clone());
 
         let (tun_conn, tun_next) = Connector::new_pair(10);
         let tun_alloc = self.allocator.clone();

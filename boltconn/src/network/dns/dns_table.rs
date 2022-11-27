@@ -1,7 +1,7 @@
 use ipnet::Ipv4Net;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex, };
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]

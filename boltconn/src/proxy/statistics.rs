@@ -1,6 +1,9 @@
 use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
-use std::net::{ SocketAddr};
+use crate::platform::process::ProcessInfo;
+use std::fmt::{Display, Formatter, Write};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -8,6 +11,16 @@ pub enum SessionProtocol {
     TCP,
     HTTP,
     TLS(TlsVersion),
+}
+
+impl Display for SessionProtocol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionProtocol::TCP => f.write_str("tcp"),
+            SessionProtocol::HTTP => f.write_str("http"),
+            SessionProtocol::TLS(_) => f.write_str("tls"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -20,6 +33,17 @@ pub enum TlsVersion {
 pub enum NetworkAddr {
     Raw(SocketAddr),
     DomainName { domain_name: String, port: u16 },
+}
+
+impl Display for NetworkAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkAddr::Raw(addr) => f.write_str(format!("{}", addr).as_str()),
+            NetworkAddr::DomainName { domain_name, port } => {
+                f.write_str(format!("{}:{}", domain_name, port).as_str())
+            }
+        }
+    }
 }
 
 impl NetworkAddr {
@@ -45,20 +69,22 @@ impl NetworkAddr {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionInfo {
+pub struct StatisticsInfo {
     pub start_time: Instant,
     pub dest: NetworkAddr,
+    pub process_info: Option<ProcessInfo>,
     pub session_proto: SessionProtocol,
     pub rule: OutboundType,
-    pub upload_traffic: u64,
-    pub download_traffic: u64,
+    pub upload_traffic: usize,
+    pub download_traffic: usize,
 }
 
-impl SessionInfo {
-    pub fn new(dst: NetworkAddr, rule: OutboundType) -> Self {
+impl StatisticsInfo {
+    pub fn new(dst: NetworkAddr, process_info: Option<ProcessInfo>, rule: OutboundType) -> Self {
         Self {
             start_time: Instant::now(),
             dest: dst,
+            process_info,
             session_proto: SessionProtocol::TCP,
             rule,
             upload_traffic: 0,
@@ -78,11 +104,11 @@ impl SessionInfo {
         }
     }
 
-    pub fn more_upload(&mut self, size: u64) {
+    pub fn more_upload(&mut self, size: usize) {
         self.upload_traffic += size
     }
 
-    pub fn more_download(&mut self, size: u64) {
+    pub fn more_download(&mut self, size: usize) {
         self.download_traffic += size
     }
 }
@@ -110,4 +136,24 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
     }
     // Unknown
     SessionProtocol::TCP
+}
+
+pub struct StatCenter {
+    content: RwLock<Vec<Arc<RwLock<StatisticsInfo>>>>,
+}
+
+impl StatCenter {
+    pub fn new() -> Self {
+        Self {
+            content: RwLock::new(Vec::new()),
+        }
+    }
+
+    pub fn push(&self, info: Arc<RwLock<StatisticsInfo>>) {
+        self.content.write().unwrap().push(info);
+    }
+
+    pub fn get_copy(&self) -> Vec<Arc<RwLock<StatisticsInfo>>> {
+        self.content.read().unwrap().clone()
+    }
 }

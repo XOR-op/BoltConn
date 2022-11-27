@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::{IpAddr, };
+use std::net::IpAddr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RawRootCfg {
     pub interface: String,
+    pub api_port: u16,
     pub dns: Vec<String>,
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
     pub proxy_group: HashMap<String, Vec<String>>,

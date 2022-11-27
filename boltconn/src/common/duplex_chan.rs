@@ -8,7 +8,7 @@ use std::task::Poll::Ready;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::{TrySendError};
+use tokio::sync::mpsc::error::TrySendError;
 
 pub struct DuplexChan {
     allocator: PktBufPool,

@@ -132,8 +132,10 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
         if let Ok(name) = std::fs::read(format!("/proc/{}/comm", pid)) {
             return Some(ProcessInfo {
                 pid,
-                path,
-                name: String::from_utf8_lossy(name.as_slice()).into_owned(),
+                path: path.replace("\n", ""),
+                name: String::from_utf8_lossy(name.as_slice())
+                    .into_owned()
+                    .replace("\n", ""),
             });
         }
     }
