@@ -2,10 +2,11 @@
 
 API for external controlling.
 
-| Method | Path    | Description                 |
-|--------|---------|-----------------------------|
-| GET    | /active | Get all active connections. |
-| GET    | /logs   | Get all logs.               |
+| Method | Path      | Description                    |
+|--------|-----------|--------------------------------|
+| GET    | /active   | Get all active connections.    |
+| GET    | /logs     | Get all logs.                  |
+| GET    | /captured | Get all captured http packets. |
 
 API for debugging.
 

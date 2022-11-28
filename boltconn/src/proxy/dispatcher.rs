@@ -7,7 +7,7 @@ use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
 use crate::proxy::{NetworkAddr, StatCenter, StatisticsInfo};
-use crate::sniff::{HttpSniffer, HttpsSniffer};
+use crate::sniff::{HttpSniffer, HttpsSniffer, Modifier};
 use crate::PktBufPool;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
@@ -23,6 +23,7 @@ pub struct Dispatcher {
     dispatching: Arc<Dispatching>,
     certificate: Vec<Certificate>,
     priv_key: PrivateKey,
+    modifier: Arc<dyn Modifier>,
 }
 
 impl Dispatcher {
@@ -34,6 +35,7 @@ impl Dispatcher {
         dispatching: Arc<Dispatching>,
         certificate: Vec<Certificate>,
         priv_key: PrivateKey,
+        modifier: Arc<dyn Modifier>,
     ) -> Self {
         Self {
             iface_name: iface_name.into(),
@@ -43,6 +45,7 @@ impl Dispatcher {
             dispatching,
             certificate,
             priv_key,
+            modifier,
         }
     }
 
@@ -106,6 +109,7 @@ impl Dispatcher {
         let (tun_conn, tun_next) = Connector::new_pair(10);
         let tun_alloc = self.allocator.clone();
         let out_dst_addr = dst_addr.clone();
+        let info_clone = info.clone();
         tokio::spawn(async move {
             let tun = TunAdapter::new(
                 src_addr,
@@ -120,14 +124,19 @@ impl Dispatcher {
                 tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
             }
         });
+        let modifier = self.modifier.clone();
         match dst_addr.port() {
             80 => {
                 // hijack
                 tracing::debug!("HTTP sniff");
                 let http_alloc = self.allocator.clone();
                 tokio::spawn(async move {
-                    let mocker =
-                        HttpSniffer::new(DuplexChan::new(http_alloc, tun_next), outbounding);
+                    let mocker = HttpSniffer::new(
+                        DuplexChan::new(http_alloc, tun_next),
+                        modifier,
+                        outbounding,
+                        info_clone,
+                    );
                     if let Err(err) = mocker.run().await {
                         tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
                     }
@@ -148,7 +157,9 @@ impl Dispatcher {
                         key,
                         domain_name,
                         DuplexChan::new(http_alloc, tun_next),
+                        modifier,
                         outbounding,
+                        info_clone,
                     );
                     if let Err(err) = mocker.run().await {
                         tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)

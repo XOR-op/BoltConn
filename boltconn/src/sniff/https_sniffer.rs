@@ -1,13 +1,16 @@
 use crate::adapter::OutBound;
 use crate::common::duplex_chan::DuplexChan;
+use crate::common::id_gen::IdGenerator;
 use crate::common::io_err;
+use crate::proxy::StatisticsInfo;
 use crate::sniff::modifier::{Logger, Modifier, Nooper};
+use crate::sniff::ModifierContext;
 use hyper::client::conn;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio_rustls::rustls::{
     Certificate, ClientConfig, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig,
     ServerName,
@@ -21,6 +24,7 @@ pub struct HttpsSniffer {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Box<dyn OutBound>,
+    conn_info: Arc<RwLock<StatisticsInfo>>,
 }
 
 impl HttpsSniffer {
@@ -29,15 +33,18 @@ impl HttpsSniffer {
         priv_key: PrivateKey,
         server_name: String,
         inbound: DuplexChan,
+        modifier: Arc<dyn Modifier>,
         creator: Box<dyn OutBound>,
+        conn_info: Arc<RwLock<StatisticsInfo>>,
     ) -> Self {
         Self {
             cert,
             priv_key,
             server_name,
             inbound,
-            modifier: Arc::new(Nooper::default()),
+            modifier,
             creator,
+            conn_info,
         }
     }
 
@@ -46,20 +53,15 @@ impl HttpsSniffer {
         server_name: ServerName,
         outbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
-        mut req: Request<Body>,
-    ) -> io::Result<Response<Body>> {
-        modifier.modify_request(&mut req);
+        req: Request<Body>,
+        ctx: ModifierContext,
+    ) -> anyhow::Result<Response<Body>> {
+        let req = modifier.modify_request(req, &ctx).await?;
         let outbound = client_tls.connect(server_name, outbound).await?;
-        let (mut sender, connection) = conn::Builder::new()
-            .handshake(outbound)
-            .await
-            .map_err(|e| io_err(e.to_string().as_str()))?;
+        let (mut sender, connection) = conn::Builder::new().handshake(outbound).await?;
         tokio::spawn(async move { connection.await });
-        let mut resp = sender
-            .send_request(req)
-            .await
-            .map_err(|e| io_err(e.to_string().as_str()))?;
-        modifier.modify_response(&mut resp);
+        let mut resp = sender.send_request(req).await?;
+        let resp = modifier.modify_response(resp, &ctx).await?;
         Ok(resp)
     }
 
@@ -91,7 +93,7 @@ impl HttpsSniffer {
         let client_tls = TlsConnector::from(Arc::new(client_cfg));
         let server_name = ServerName::try_from(self.server_name.as_str())
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-
+        let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
             let (conn, _) = self.creator.spawn_with_chan();
             Self::proxy(
@@ -100,6 +102,10 @@ impl HttpsSniffer {
                 conn,
                 self.modifier.clone(),
                 req,
+                ModifierContext {
+                    tag: id_gen.get(),
+                    conn_info: self.conn_info.clone(),
+                },
             )
         });
 

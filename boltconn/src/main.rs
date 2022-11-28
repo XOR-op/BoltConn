@@ -6,7 +6,8 @@ extern crate core;
 use crate::config::{RawRootCfg, RawState};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
-use crate::proxy::StatCenter;
+use crate::proxy::{HttpCapturer, StatCenter};
+use crate::sniff::Recorder;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
@@ -138,9 +139,15 @@ fn main() {
     );
     let proxy_allocator = PktBufPool::new(512, 4096);
 
+    // statistics
     let stat_center = Arc::new(StatCenter::new());
+    let http_capturer = Arc::new(HttpCapturer::new());
 
-    let api_server = ApiServer::new(manager.clone(), stat_center.clone());
+    let api_server = ApiServer::new(
+        manager.clone(),
+        stat_center.clone(),
+        Some(http_capturer.clone()),
+    );
     let api_port = config.api_port;
 
     let dispatcher = Arc::new(Dispatcher::new(
@@ -151,6 +158,7 @@ fn main() {
         dispatching.clone(),
         cert,
         priv_key,
+        Arc::new(Recorder::new(http_capturer)),
     ));
     let nat = Nat::new(nat_addr, manager, dispatcher, dns);
 

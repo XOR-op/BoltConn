@@ -75,6 +75,9 @@ impl TunAdapter {
                 }
             }
             outgoing_indicator.fetch_sub(1, Ordering::Relaxed);
+            if outgoing_indicator.load(Ordering::Relaxed) == 0 {
+                outgoing_info_arc.write().unwrap().mark_fin();
+            }
         });
         // recv from outbound and send to inbound
         loop {
@@ -96,6 +99,9 @@ impl TunAdapter {
             }
         }
         ingoing_indicator.fetch_sub(1, Ordering::Relaxed);
+        if ingoing_indicator.load(Ordering::Relaxed) == 0 {
+            self.info.write().unwrap().mark_fin();
+        }
         Ok(())
     }
 }

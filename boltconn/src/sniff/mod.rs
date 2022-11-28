@@ -5,3 +5,4 @@ mod pkt_coll;
 
 pub use http_sniffer::HttpSniffer;
 pub use https_sniffer::HttpsSniffer;
+pub use modifier::*;

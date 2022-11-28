@@ -1,6 +1,8 @@
 use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
 use crate::platform::process::ProcessInfo;
+use http::{Request, Response};
+use hyper::Body;
 use std::fmt::{Display, Formatter, Write};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, RwLock};
@@ -77,6 +79,7 @@ pub struct StatisticsInfo {
     pub rule: OutboundType,
     pub upload_traffic: usize,
     pub download_traffic: usize,
+    pub done: bool,
 }
 
 impl StatisticsInfo {
@@ -89,6 +92,7 @@ impl StatisticsInfo {
             rule,
             upload_traffic: 0,
             download_traffic: 0,
+            done: false,
         }
     }
 
@@ -110,6 +114,10 @@ impl StatisticsInfo {
 
     pub fn more_download(&mut self, size: usize) {
         self.download_traffic += size
+    }
+
+    pub fn mark_fin(&mut self) {
+        self.done = true;
     }
 }
 
@@ -155,5 +163,44 @@ impl StatCenter {
 
     pub fn get_copy(&self) -> Vec<Arc<RwLock<StatisticsInfo>>> {
         self.content.read().unwrap().clone()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DumpedRequest {
+    pub uri: http::Uri,
+    pub method: http::Method,
+    pub version: http::Version,
+    pub headers: http::HeaderMap<http::HeaderValue>,
+    pub body: hyper::body::Bytes,
+    pub time: Instant,
+}
+
+#[derive(Clone, Debug)]
+pub struct DumpedResponse {
+    pub status: http::StatusCode,
+    pub version: http::Version,
+    pub headers: http::HeaderMap<http::HeaderValue>,
+    pub body: hyper::body::Bytes,
+    pub time: Instant,
+}
+
+pub struct HttpCapturer {
+    contents: Mutex<Vec<(String, DumpedRequest, DumpedResponse)>>,
+}
+
+impl HttpCapturer {
+    pub fn new() -> Self {
+        Self {
+            contents: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn push(&self, pair: (DumpedRequest, DumpedResponse), host: String) {
+        self.contents.lock().unwrap().push((host, pair.0, pair.1))
+    }
+
+    pub fn get_copy(&self) -> Vec<(String, DumpedRequest, DumpedResponse)> {
+        self.contents.lock().unwrap().clone()
     }
 }

@@ -1,8 +1,9 @@
 [workspace]
 members = [
     "boltconn",
-    "boltconnctl",
-    "boltconn-helper"
+    "boltctl",
+    "bolthelper",
+    "boltapi"
 ]
 
 [profile.release]
