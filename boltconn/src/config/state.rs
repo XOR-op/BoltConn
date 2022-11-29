@@ -8,6 +8,12 @@ pub struct RawState {
     pub group_selection: HashMap<String, String>,
 }
 
+#[derive(Debug)]
+pub struct LinkedState {
+    pub state_path: String,
+    pub state: RawState,
+}
+
 #[ignore]
 #[test]
 fn test_raw_state() {

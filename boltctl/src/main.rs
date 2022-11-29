@@ -1,9 +1,9 @@
 mod request;
 
-use std::process::exit;
-use colored::Colorize;
-use structopt::StructOpt;
 use crate::request::Requester;
+use colored::Colorize;
+use std::process::exit;
+use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "boltctl", about = "Controller for BoltConn")]
@@ -18,10 +18,7 @@ struct Args {
 #[derive(Debug, StructOpt)]
 enum ProxyOptions {
     /// Set group's proxy
-    Set {
-        group: String,
-        proxy: String,
-    },
+    Set { group: String, proxy: String },
     /// List all groups
     List,
 }
@@ -61,25 +58,19 @@ async fn main() {
     let args: Args = Args::from_args();
     let requestor = Requester { port: args.port };
     let result = match args.cmd {
-        SubCommand::Proxy(opt) => {
-            match opt {
-                ProxyOptions::Set { group, proxy } => {
-                    requestor.set_group_proxy(group, proxy).await
-                }
-                ProxyOptions::List => {
-                    requestor.get_group_list().await
-                }
-            }
-        }
-        SubCommand::Conn(opt) => {
-            match opt { ConnOptions::List => { Ok(()) } }
-        }
-        SubCommand::Log(opt) => {
-            match opt { LogOptions::List => { Ok(()) } }
-        }
-        SubCommand::Debug(opt) => {
-            match opt { DebugOptions::Session => { Ok(()) } }
-        }
+        SubCommand::Proxy(opt) => match opt {
+            ProxyOptions::Set { group, proxy } => requestor.set_group_proxy(group, proxy).await,
+            ProxyOptions::List => requestor.get_group_list().await,
+        },
+        SubCommand::Conn(opt) => match opt {
+            ConnOptions::List => Ok(()),
+        },
+        SubCommand::Log(opt) => match opt {
+            LogOptions::List => Ok(()),
+        },
+        SubCommand::Debug(opt) => match opt {
+            DebugOptions::Session => Ok(()),
+        },
     };
     match result {
         Ok(_) => exit(0),

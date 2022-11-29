@@ -3,7 +3,6 @@ use colored::Colorize;
 
 pub struct Requester {
     pub port: u16,
-
 }
 
 impl Requester {
@@ -20,8 +19,17 @@ impl Requester {
     }
 
     pub async fn set_group_proxy(&self, group: String, proxy: String) -> Result<()> {
-        let req = boltapi::SetGroupReqSchema { group, selected: proxy };
-        let result = reqwest::Client::new().put(self.route("/groups")).json(&req).send().await?.text().await?;
+        let req = boltapi::SetGroupReqSchema {
+            group,
+            selected: proxy,
+        };
+        let result = reqwest::Client::new()
+            .put(self.route("/groups"))
+            .json(&req)
+            .send()
+            .await?
+            .text()
+            .await?;
         match result.as_str() {
             "true" => {
                 println!("{}", "Success".green());
@@ -42,10 +50,19 @@ impl Requester {
         let data = reqwest::get(self.route("/active")).await?.text().await?;
         let result: Vec<boltapi::ConnectionSchema> = serde_json::from_str(data.as_str())?;
         for conn in result {
-            println!("{} ({},{}) {} [up:{},down:{},time:{}]", conn.destination.cyan(), conn.protocol, conn.proxy.italic(), match conn.process {
-                Some(s) => format!("<{}>", s),
-                None => "".to_string()
-            }, conn.upload, conn.download, conn.time);
+            println!(
+                "{} ({},{}) {} [up:{},down:{},time:{}]",
+                conn.destination.cyan(),
+                conn.protocol,
+                conn.proxy.italic(),
+                match conn.process {
+                    Some(s) => format!("<{}>", s),
+                    None => "".to_string(),
+                },
+                conn.upload,
+                conn.download,
+                conn.time
+            );
         }
         Ok(())
     }
@@ -54,17 +71,23 @@ impl Requester {
         let data = reqwest::get(self.route("/sessions")).await?.text().await?;
         let result: Vec<boltapi::SessionSchema> = serde_json::from_str(data.as_str())?;
         for sess in result {
-            println!("{} [{}{}]", sess.pair, sess.time, match sess.tcp_open {
-                None => "".to_string(),
-                Some(n) => {
-                    ", ".to_string() + match n {
-                        0 => "closed",
-                        1 => "half-closed",
-                        2 => "established",
-                        _ => ""
+            println!(
+                "{} [{}{}]",
+                sess.pair,
+                sess.time,
+                match sess.tcp_open {
+                    None => "".to_string(),
+                    Some(n) => {
+                        ", ".to_string()
+                            + match n {
+                                0 => "closed",
+                                1 => "half-closed",
+                                2 => "established",
+                                _ => "",
+                            }
                     }
                 }
-            });
+            );
         }
         Ok(())
     }

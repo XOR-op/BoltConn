@@ -1,3 +1,4 @@
+use crate::config::{LinkedState, RawState};
 use crate::dispatch::{Dispatching, GeneralProxy};
 use crate::proxy::{HttpCapturer, SessionManager, StatCenter};
 use axum::extract::State;
@@ -8,7 +9,7 @@ use boltapi::{GetGroupRespSchema, SetGroupReqSchema};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
@@ -17,6 +18,7 @@ pub struct ApiServer {
     stat_center: Arc<StatCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
     dispatching: Arc<Dispatching>,
+    state: Arc<Mutex<LinkedState>>,
 }
 
 impl ApiServer {
@@ -25,12 +27,14 @@ impl ApiServer {
         stat_center: Arc<StatCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
         dispatching: Arc<Dispatching>,
+        state: LinkedState,
     ) -> Self {
         Self {
             manager,
             stat_center,
             http_capturer,
             dispatching,
+            state: Arc::new(Mutex::new(state)),
         }
     }
 
@@ -140,13 +144,24 @@ impl ApiServer {
         State(server): State<Self>,
         Json(args): Json<SetGroupReqSchema>,
     ) -> Json<serde_json::Value> {
-        Json(json!(match server
+        let r = match server
             .dispatching
             .set_group_selection(args.group.as_str(), args.selected.as_str())
         {
             Ok(_) => true,
             Err(_) => false,
-        }))
+        };
+        if r {
+            let mut state = server.state.lock().unwrap();
+            if let Some(val) = state.state.group_selection.get_mut(&args.group) {
+                *val = args.selected;
+                if let Ok(content) = serde_yaml::to_string(&state.state) {
+                    let _ = std::fs::write(&state.state_path, content);
+                }
+            }
+        }
+
+        Json(json!(r))
     }
 }
 

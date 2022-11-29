@@ -3,7 +3,7 @@
 
 extern crate core;
 
-use crate::config::{RawRootCfg, RawState};
+use crate::config::{LinkedState, RawRootCfg, RawState};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
 use crate::proxy::{HttpCapturer, StatCenter};
@@ -55,20 +55,23 @@ impl FormatTime for SystemTime {
     }
 }
 
-fn load_cert_and_key() -> io::Result<(Vec<Certificate>, PrivateKey)> {
-    let cert_raw = fs::read("_private/ca/crt.pem")?;
+fn load_cert_and_key(
+    cert_path: &str,
+    key_path: &str,
+) -> io::Result<(Vec<Certificate>, PrivateKey)> {
+    let cert_raw = fs::read(cert_path)?;
     let mut cert_bytes = cert_raw.as_slice();
-    let key_raw = fs::read("_private/ca/key.pem")?;
+    let key_raw = fs::read(key_path)?;
     let mut key_bytes = key_raw.as_slice();
     let cert = Certificate(rustls_pemfile::certs(&mut cert_bytes)?.remove(0));
     let key = PrivateKey(rustls_pemfile::pkcs8_private_keys(&mut key_bytes)?.remove(0));
     Ok((vec![cert], key))
 }
 
-fn load_config() -> anyhow::Result<(RawRootCfg, RawState)> {
-    let config_text = fs::read_to_string("./_private/config/config.yml")?;
+fn load_config(config_path: &str, state_path: &str) -> anyhow::Result<(RawRootCfg, RawState)> {
+    let config_text = fs::read_to_string(config_path)?;
     let raw_config: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
-    let state_text = fs::read_to_string("./_private/config/state.yml")?;
+    let state_text = fs::read_to_string(state_path)?;
     let raw_state: RawState = serde_yaml::from_str(&state_text).unwrap();
     Ok((raw_config, raw_state))
 }
@@ -82,6 +85,12 @@ fn initialize_dispatching(
 }
 
 fn main() {
+    let config_path = "./_private/config/config.yml";
+    let state_path = "./_private/config/state.yml";
+    let crt_path = "_private/ca/crt.pem";
+    let privkey_path = "_private/ca/key.pem";
+
+    // tokio and tracing
     let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
     let formatting_layer = fmt::layer()
         .compact()
@@ -93,67 +102,60 @@ fn main() {
         .init();
 
     // configuration
-    let (config, state) = load_config().expect("Failed to load config");
-    let dispatching =
-        initialize_dispatching(&config, &state).expect("Failed to initialize dispatching");
-
-    // interface
-    let (gateway_address, real_iface_name) =
-        get_default_route().expect("failed to get default route");
-    let real_iface_name = real_iface_name.as_str();
-
-    // tls mitm
-    let (cert, priv_key) = load_cert_and_key().expect("Failed to parse cert & key");
-
-    // dns
-    let _guard = rt.enter();
-    let dns_guard = platform::SystemDnsHandle::new("198.18.99.88".parse().unwrap())
-        .expect("fail to replace /etc/resolv.conf");
+    let (config, state) = load_config(config_path, state_path).expect("Failed to load config");
     let dns_config = config
         .dns
         .iter()
         .map(|s| s.parse().ok())
         .flatten()
         .collect();
+    let dispatching =
+        initialize_dispatching(&config, &state).expect("Failed to initialize dispatching");
 
-    let dns_routing_guard = DnsRoutingHandle::new(gateway_address, real_iface_name, &dns_config)
+    // interface
+    let (gateway_address, real_iface_name) = get_default_route().expect("failed to get default route");
+
+    // guards
+    let _guard = rt.enter();
+    let dns_guard = platform::SystemDnsHandle::new("198.18.99.88".parse().unwrap())
+        .expect("fail to replace /etc/resolv.conf");
+    let dns_routing_guard = DnsRoutingHandle::new(gateway_address, real_iface_name.as_str(), &dns_config)
         .expect("fail to add dns route table");
 
     // initialize resources
-    let pool = PktBufPool::new(512, 4096);
     let manager = Arc::new(SessionManager::new());
     let dns = Arc::new(Dns::new(&dns_config).expect("DNS failed to initialize"));
-    let mut tun = rt
-        .block_on(async {
-            TunDevice::open(manager.clone(), pool.clone(), real_iface_name, dns.clone())
-        })
-        .expect("fail to create TUN");
+    let tun = rt.block_on(async {
+        let pool = PktBufPool::new(512, 4096);
+        let mut tun = TunDevice::open(manager.clone(), pool, real_iface_name.as_str(), dns.clone())
+            .expect("fail to create TUN");
+        // create tun device
+        event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
+        tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 16).unwrap())
+            .expect("TUN failed to set address");
+        tun.up().expect("TUN failed to up");
+        tun
+    });
 
-    event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
-    tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 16).unwrap())
-        .expect("TUN failed to set address");
-    tun.up().expect("TUN failed to up");
-    let nat_addr = SocketAddr::new(
-        platform::get_iface_address(tun.get_name()).expect("failed to get tun address"),
-        9961,
-    );
-    let proxy_allocator = PktBufPool::new(512, 4096);
-
-    // statistics
+    // dispatcher and statistics
     let stat_center = Arc::new(StatCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
-
-    let dispatcher = Arc::new(Dispatcher::new(
-        real_iface_name,
-        proxy_allocator.clone(),
-        dns.clone(),
-        stat_center.clone(),
-        dispatching.clone(),
-        cert,
-        priv_key,
-        Arc::new(Recorder::new(http_capturer.clone())),
-    ));
-    let nat = Nat::new(nat_addr, manager.clone(), dispatcher, dns);
+    let dispatcher = {
+        // tls mitm
+        let (cert, priv_key) =
+            load_cert_and_key(crt_path, privkey_path).expect("Failed to parse cert & key");
+        let proxy_allocator = PktBufPool::new(512, 4096);
+        Arc::new(Dispatcher::new(
+            real_iface_name.as_str(),
+            proxy_allocator,
+            dns.clone(),
+            stat_center.clone(),
+            dispatching.clone(),
+            cert,
+            priv_key,
+            Arc::new(Recorder::new(http_capturer.clone())),
+        ))
+    };
 
     // external controller
     let api_server = ApiServer::new(
@@ -161,10 +163,19 @@ fn main() {
         stat_center.clone(),
         Some(http_capturer.clone()),
         dispatching.clone(),
+        LinkedState {
+            state_path: state_path.to_string(),
+            state,
+        },
     );
     let api_port = config.api_port;
 
     // run
+    let nat_addr = SocketAddr::new(
+        platform::get_iface_address(tun.get_name()).expect("failed to get tun address"),
+        9961,
+    );
+    let nat = Nat::new(nat_addr, manager.clone(), dispatcher, dns);
     let _nat_handle = rt.spawn(async move { nat.run_tcp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
