@@ -29,3 +29,18 @@ pub struct HttpCaptureSchema {
     pub size: String,
     pub time: String,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct GetGroupRespSchema {
+    pub name: String,
+    pub selected: String,
+    pub list: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct SetGroupReqSchema {
+    pub group: String,
+    pub selected: String,
+}

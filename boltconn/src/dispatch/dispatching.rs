@@ -34,15 +34,28 @@ impl Dispatching {
                 tracing::trace!("Matches policy {:?}", v);
                 return match proxy.as_ref() {
                     GeneralProxy::Single(p) => p.get_impl(),
-                    GeneralProxy::Group(g) => g.get_selection().get_impl(),
+                    GeneralProxy::Group(g) => g.get_proxy().get_impl(),
                 };
             }
         }
         tracing::trace!("Fallback policy");
         match &self.fallback {
             GeneralProxy::Single(p) => p.get_impl(),
-            GeneralProxy::Group(g) => g.get_selection().get_impl(),
+            GeneralProxy::Group(g) => g.get_proxy().get_impl(),
         }
+    }
+
+    pub fn set_group_selection(&self, group: &str, proxy: &str) -> anyhow::Result<()> {
+        for (name, g) in self.groups.iter() {
+            if name == group {
+                return g.set_selection(proxy);
+            }
+        }
+        Err(anyhow!("Group not found"))
+    }
+
+    pub fn get_group_list(&self) -> Vec<Arc<ProxyGroup>> {
+        self.groups.iter().map(|(_, g)| g.clone()).collect()
     }
 }
 
@@ -174,7 +187,7 @@ impl DispatchingBuilder {
             let mut arr = Vec::new();
             let mut selection = None;
             for p in group {
-                let content = Arc::new(GeneralProxy::Single(
+                let content = GeneralProxy::Single(
                     builder
                         .proxies
                         .get(p)
@@ -185,7 +198,7 @@ impl DispatchingBuilder {
                             )
                         })?
                         .clone(),
-                ));
+                );
                 if p == state.group_selection.get(name).unwrap_or(&String::new()) {
                     selection = Some(content.clone());
                 }

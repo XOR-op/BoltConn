@@ -1,8 +1,10 @@
+use crate::dispatch::{Dispatching, GeneralProxy};
 use crate::proxy::{HttpCapturer, SessionManager, StatCenter};
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post, put};
 use axum::{Json, Router, ServiceExt};
+use boltapi::{GetGroupRespSchema, SetGroupReqSchema};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
@@ -14,6 +16,7 @@ pub struct ApiServer {
     manager: Arc<SessionManager>,
     stat_center: Arc<StatCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
+    dispatching: Arc<Dispatching>,
 }
 
 impl ApiServer {
@@ -21,11 +24,13 @@ impl ApiServer {
         manager: Arc<SessionManager>,
         stat_center: Arc<StatCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
+        dispatching: Arc<Dispatching>,
     ) -> Self {
         Self {
             manager,
             stat_center,
             http_capturer,
+            dispatching,
         }
     }
 
@@ -35,6 +40,10 @@ impl ApiServer {
             .route("/active", get(Self::get_active_conn))
             .route("/sessions", get(Self::get_sessions))
             .route("/captured", get(Self::get_captured))
+            .route(
+                "/groups",
+                get(Self::get_group_list).put(Self::set_selection),
+            )
             .with_state(self);
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
         axum::Server::bind(&addr)
@@ -107,6 +116,44 @@ impl ApiServer {
         } else {
             Json(serde_json::Value::Null)
         }
+    }
+
+    async fn get_group_list(State(server): State<Self>) -> Json<serde_json::Value> {
+        let list = server.dispatching.get_group_list();
+        let mut result = Vec::new();
+        for g in list.iter() {
+            let item = GetGroupRespSchema {
+                name: g.get_name(),
+                selected: pretty_proxy(g.get_selection()),
+                list: g
+                    .get_members()
+                    .iter()
+                    .map(|p| pretty_proxy(p.clone()))
+                    .collect(),
+            };
+            result.push(item);
+        }
+        Json(json!(result))
+    }
+
+    async fn set_selection(
+        State(server): State<Self>,
+        Json(args): Json<SetGroupReqSchema>,
+    ) -> Json<serde_json::Value> {
+        Json(json!(match server
+            .dispatching
+            .set_group_selection(args.group.as_str(), args.selected.as_str())
+        {
+            Ok(_) => true,
+            Err(_) => false,
+        }))
+    }
+}
+
+fn pretty_proxy(g: GeneralProxy) -> String {
+    match g {
+        GeneralProxy::Single(p) => "(P)".to_string() + p.get_name().as_str(),
+        GeneralProxy::Group(g) => "(G)".to_string() + g.get_name().as_str(),
     }
 }
 

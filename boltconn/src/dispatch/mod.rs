@@ -1,6 +1,6 @@
-mod dispatch;
+mod dispatching;
 mod proxy;
 mod rule;
 
-pub use dispatch::*;
+pub use dispatching::*;
 pub use proxy::*;

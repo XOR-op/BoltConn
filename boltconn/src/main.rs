@@ -143,24 +143,26 @@ fn main() {
     let stat_center = Arc::new(StatCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
 
-    let api_server = ApiServer::new(
-        manager.clone(),
-        stat_center.clone(),
-        Some(http_capturer.clone()),
-    );
-    let api_port = config.api_port;
-
     let dispatcher = Arc::new(Dispatcher::new(
         real_iface_name,
         proxy_allocator.clone(),
         dns.clone(),
-        stat_center,
+        stat_center.clone(),
         dispatching.clone(),
         cert,
         priv_key,
-        Arc::new(Recorder::new(http_capturer)),
+        Arc::new(Recorder::new(http_capturer.clone())),
     ));
-    let nat = Nat::new(nat_addr, manager, dispatcher, dns);
+    let nat = Nat::new(nat_addr, manager.clone(), dispatcher, dns);
+
+    // external controller
+    let api_server = ApiServer::new(
+        manager.clone(),
+        stat_center.clone(),
+        Some(http_capturer.clone()),
+        dispatching.clone(),
+    );
+    let api_port = config.api_port;
 
     // run
     let _nat_handle = rt.spawn(async move { nat.run_tcp().await });
