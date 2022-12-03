@@ -7,7 +7,7 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-boltapi = {path = "../boltapi"}
+boltapi = { path = "../boltapi" }
 thiserror = "1.0.37"
 anyhow = "1.0.66"
 async-trait = "0.1.58"
@@ -41,6 +41,9 @@ httparse = "1.8.0"
 fast-socks5 = "0.8.1"
 shadowsocks = "1.14.2"
 axum = "0.6.0"
+radix_trie = "0.2.1"
+aho-corasick = "0.7.20"
+reqwest = "0.11.13"
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-sys = "0.8.3"
 netlink-packet-sock-diag = "0.4.0"

@@ -3,7 +3,7 @@
 
 extern crate core;
 
-use crate::config::{LinkedState, RawRootCfg, RawState};
+use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
 use crate::proxy::{HttpCapturer, StatCenter};
@@ -19,6 +19,7 @@ use network::{
 use platform::get_default_route;
 use proxy::Dispatcher;
 use proxy::{Nat, SessionManager};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::{fs, io};
@@ -68,19 +69,24 @@ fn load_cert_and_key(
     Ok((vec![cert], key))
 }
 
-fn load_config(config_path: &str, state_path: &str) -> anyhow::Result<(RawRootCfg, RawState)> {
+async fn load_config(
+    config_path: &str,
+    state_path: &str,
+) -> anyhow::Result<(RawRootCfg, RawState, HashMap<String, RuleSchema>)> {
     let config_text = fs::read_to_string(config_path)?;
     let raw_config: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
     let state_text = fs::read_to_string(state_path)?;
     let raw_state: RawState = serde_yaml::from_str(&state_text).unwrap();
-    Ok((raw_config, raw_state))
+    let schema = tokio::join!(config::read_schema(&raw_config.rule_provider, false)).0?;
+    Ok((raw_config, raw_state, schema))
 }
 
 fn initialize_dispatching(
     raw_config: &RawRootCfg,
     raw_state: &RawState,
+    schema: HashMap<String, RuleSchema>,
 ) -> anyhow::Result<Arc<Dispatching>> {
-    let builder = DispatchingBuilder::new_from_config(&raw_config, &raw_state)?;
+    let builder = DispatchingBuilder::new_from_config(&raw_config, &raw_state, schema)?;
     Ok(Arc::new(builder.build()))
 }
 
@@ -102,7 +108,7 @@ fn main() {
         .init();
 
     // configuration
-    let (config, state) = load_config(config_path, state_path).expect("Failed to load config");
+    let (config, state, schema) = rt.block_on(load_config(config_path, state_path)).expect("Failed to load config");
     let dns_config = config
         .dns
         .iter()
@@ -110,17 +116,19 @@ fn main() {
         .flatten()
         .collect();
     let dispatching =
-        initialize_dispatching(&config, &state).expect("Failed to initialize dispatching");
+        initialize_dispatching(&config, &state, schema).expect("Failed to initialize dispatching");
 
     // interface
-    let (gateway_address, real_iface_name) = get_default_route().expect("failed to get default route");
+    let (gateway_address, real_iface_name) =
+        get_default_route().expect("failed to get default route");
 
     // guards
     let _guard = rt.enter();
     let dns_guard = platform::SystemDnsHandle::new("198.18.99.88".parse().unwrap())
         .expect("fail to replace /etc/resolv.conf");
-    let dns_routing_guard = DnsRoutingHandle::new(gateway_address, real_iface_name.as_str(), &dns_config)
-        .expect("fail to add dns route table");
+    let dns_routing_guard =
+        DnsRoutingHandle::new(gateway_address, real_iface_name.as_str(), &dns_config)
+            .expect("fail to add dns route table");
 
     // initialize resources
     let manager = Arc::new(SessionManager::new());

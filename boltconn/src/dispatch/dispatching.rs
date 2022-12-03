@@ -1,7 +1,8 @@
 use crate::adapter::Socks5Config;
-use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState};
+use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState, RuleSchema};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder};
+use crate::dispatch::ruleset::RuleSetBuilder;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
@@ -32,7 +33,7 @@ impl Dispatching {
         for v in &self.rules {
             if let Some(proxy) = v.matches(&info) {
                 tracing::trace!("Matches policy {:?}", v);
-                return match proxy.as_ref() {
+                return match &proxy {
                     GeneralProxy::Single(p) => p.get_impl(),
                     GeneralProxy::Group(g) => g.get_proxy().get_impl(),
                 };
@@ -104,7 +105,11 @@ impl DispatchingBuilder {
 }
 
 impl DispatchingBuilder {
-    pub fn new_from_config(cfg: &RawRootCfg, state: &RawState) -> anyhow::Result<Self> {
+    pub fn new_from_config(
+        cfg: &RawRootCfg,
+        state: &RawState,
+        schema: HashMap<String, RuleSchema>,
+    ) -> anyhow::Result<Self> {
         let mut builder = Self::new();
         builder.proxies.insert(
             "DIRECT".into(),
@@ -216,16 +221,18 @@ impl DispatchingBuilder {
             );
         }
         // read rules
-        let rule_builder = RuleBuilder {
-            proxies: &builder.proxies,
-            groups: &builder.groups,
-        };
-        for r in &cfg.rule_local {
-            let Some(rule) = rule_builder.parse_literal(r.as_str()) else {
-                return Err(anyhow!("Failed to parse rule:{}",r));
+        let mut ruleset = HashMap::new();
+        for (name, schema) in schema {
+            let Some(builder) = RuleSetBuilder::new(schema)else {
+                return Err(anyhow!("Failed to parse provider {}",name));
             };
-            builder.rules.push(rule);
+            ruleset.insert(name, builder);
         }
+        let mut rule_builder = RuleBuilder::new(&builder.proxies, &builder.groups, ruleset);
+        for r in &cfg.rule_local {
+            rule_builder.append_literal(r.as_str())?;
+        }
+        builder.rules = rule_builder.build().ok_or(anyhow!("Fail to build rules"))?;
         tracing::info!("Loaded config successfully");
         Ok(builder)
     }

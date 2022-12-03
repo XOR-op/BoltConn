@@ -1,5 +1,7 @@
+use crate::dispatch::ruleset::{RuleSet, RuleSetBuilder};
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
 use crate::proxy::NetworkAddr;
+use anyhow::anyhow;
 use ipnet::IpNet;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -7,52 +9,96 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RuleImpl {
     ProcessName(String),
     Domain(String),
     DomainSuffix(String),
-    Ip(IpAddr),
+    DomainKeyword(String),
     IpCidr(IpNet),
     Port(u16),
+    RuleSet(RuleSet),
 }
 
+
 pub(crate) struct RuleBuilder<'a> {
-    pub(crate) proxies: &'a HashMap<String, Arc<Proxy>>,
-    pub(crate) groups: &'a HashMap<String, Arc<ProxyGroup>>,
+    proxies: &'a HashMap<String, Arc<Proxy>>,
+    groups: &'a HashMap<String, Arc<ProxyGroup>>,
+    rulesets: HashMap<String, RuleSetBuilder>,
+    buffer: Vec<(String, String, GeneralProxy)>,
 }
 
 impl RuleBuilder<'_> {
-    pub fn parse_literal(&self, s: &str) -> Option<Rule> {
+    pub fn new<'a>(
+        proxies: &'a HashMap<String, Arc<Proxy>>,
+        groups: &'a HashMap<String, Arc<ProxyGroup>>,
+        rulesets: HashMap<String, RuleSetBuilder>,
+    ) -> RuleBuilder<'a> {
+        RuleBuilder {
+            proxies,
+            groups,
+            rulesets,
+            buffer: vec![],
+        }
+    }
+
+    pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
         if list.len() != 3 {
-            return None;
+            return Err(anyhow!("Invalid length"));
         }
         let general = {
             if let Some(p) = self.proxies.get(*list.get(2).unwrap()) {
-                Arc::new(GeneralProxy::Single(p.clone()))
+                GeneralProxy::Single(p.clone())
             } else if let Some(p) = self.groups.get(*list.get(2).unwrap()) {
-                Arc::new(GeneralProxy::Group(p.clone()))
+                GeneralProxy::Group(p.clone())
             } else {
-                return None;
+                return Err(anyhow!("Group not found"));
             }
         };
-        return match *list.get(0).unwrap() {
+        let (prefix, content) = (
+            String::from(*list.get(0).unwrap()),
+            String::from(*list.get(1).unwrap()),
+        );
+
+        self.buffer.push((prefix, content, general));
+        Ok(())
+    }
+
+    pub fn parse_ruleset(s: &str, general: GeneralProxy) -> Option<Rule> {
+        let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
+        let list: Vec<&str> = processed_str.split(',').collect();
+        if list.len() != 2 {
+            return None;
+        }
+        let (prefix, content) = (
+            String::from(*list.get(0).unwrap()),
+            String::from(*list.get(1).unwrap()),
+        );
+        Self::parse(prefix, content, general)
+    }
+
+    fn parse(prefix: String, content: String, general: GeneralProxy) -> Option<Rule> {
+        match prefix.as_str() {
             "DOMAIN-SUFFIX" => Some(Rule {
-                rule: RuleImpl::DomainSuffix(String::from(*list.get(1).unwrap())),
+                rule: RuleImpl::DomainSuffix(content),
+                policy: general,
+            }),
+            "DOMAIN-KEYWORD" => Some(Rule {
+                rule: RuleImpl::DomainKeyword(content),
                 policy: general,
             }),
             "DOMAIN" => Some(Rule {
-                rule: RuleImpl::Domain(String::from(*list.get(1).unwrap())),
+                rule: RuleImpl::Domain(content),
                 policy: general,
             }),
             "PROCESS-NAME" => Some(Rule {
-                rule: RuleImpl::ProcessName(String::from(*list.get(1).unwrap())),
+                rule: RuleImpl::ProcessName(content),
                 policy: general,
             }),
             "IP-CIDR" => {
-                if let Ok(cidr) = IpNet::from_str(*list.get(1).unwrap()) {
+                if let Ok(cidr) = IpNet::from_str(content.as_str()) {
                     Some(Rule {
                         rule: RuleImpl::IpCidr(cidr),
                         policy: general,
@@ -62,7 +108,7 @@ impl RuleBuilder<'_> {
                 }
             }
             "PORT" => {
-                if let Ok(port) = (*list.get(1).unwrap()).parse::<u16>() {
+                if let Ok(port) = content.parse::<u16>() {
                     Some(Rule {
                         rule: RuleImpl::Port(port),
                         policy: general,
@@ -72,17 +118,59 @@ impl RuleBuilder<'_> {
                 }
             }
             _ => None,
-        };
+        }
+    }
+
+    pub fn build(mut self) -> Option<Vec<Rule>> {
+        let mut ret = Vec::new();
+        // compress adjacent ruleset
+        let mut compressed: Option<(RuleSetBuilder, GeneralProxy)> = None;
+        for (prefix, content, target) in self.buffer {
+            if prefix == "RULESET" {
+                let Some(ruleset) = self.rulesets.remove(&content) else {
+                    return None;
+                };
+                // determine if we can compress them
+                compressed = match compressed {
+                    None => Some((ruleset, target)),
+                    Some((prev_ruleset, prev_target)) => {
+                        if prev_target == target {
+                            Some((prev_ruleset.merge(ruleset), prev_target))
+                        } else {
+                            // push old, leave new
+                            ret.push(Rule {
+                                rule: RuleImpl::RuleSet(prev_ruleset.build()),
+                                policy: prev_target,
+                            });
+                            Some((ruleset, target))
+                        }
+                    }
+                };
+            } else {
+                // not able to merge next, push
+                if let Some((builder, dest)) = compressed.take() {
+                    ret.push(Rule {
+                        rule: RuleImpl::RuleSet(builder.build()),
+                        policy: dest,
+                    });
+                }
+                match Self::parse(prefix, content, target) {
+                    None => return None,
+                    Some(r) => ret.push(r),
+                }
+            }
+        }
+        Some(ret)
     }
 }
 
 pub struct Rule {
     rule: RuleImpl,
-    policy: Arc<GeneralProxy>,
+    policy: GeneralProxy,
 }
 
 impl Rule {
-    pub fn matches(&self, info: &ConnInfo) -> Option<Arc<GeneralProxy>> {
+    pub fn matches(&self, info: &ConnInfo) -> Option<GeneralProxy> {
         match &self.rule {
             RuleImpl::Domain(d) => {
                 if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
@@ -98,9 +186,9 @@ impl Rule {
                     }
                 }
             }
-            RuleImpl::Ip(ip) => {
-                if let NetworkAddr::Raw(addr) = &info.dst {
-                    if addr.ip() == *ip {
+            RuleImpl::DomainKeyword(kw) => {
+                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
+                    if domain_name.contains(kw) {
                         return Some(self.policy.clone());
                     }
                 }
@@ -124,8 +212,17 @@ impl Rule {
                     }
                 }
             }
+            RuleImpl::RuleSet(rs) => {
+                if rs.matches(info) {
+                    return Some(self.policy.clone());
+                }
+            }
         }
         None
+    }
+
+    pub fn get_impl(&self) -> &RuleImpl {
+        &self.rule
     }
 }
 

@@ -1,5 +1,7 @@
+use crate::config::RuleProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::net::IpAddr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -11,6 +13,7 @@ pub struct RawRootCfg {
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
     pub proxy_group: HashMap<String, Vec<String>>,
     pub rule_local: Vec<String>,
+    pub rule_provider: HashMap<String, RuleProvider>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

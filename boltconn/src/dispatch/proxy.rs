@@ -35,7 +35,6 @@ pub enum ProxyImpl {
 }
 
 /// A group of proxies
-
 #[derive(Debug)]
 pub struct ProxyGroup {
     name: String,
@@ -101,4 +100,22 @@ impl ProxyGroup {
 pub enum GeneralProxy {
     Single(Arc<Proxy>),
     Group(Arc<ProxyGroup>),
+}
+
+impl PartialEq for GeneralProxy {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            GeneralProxy::Single(s) => {
+                if let GeneralProxy::Single(rhs) = other {
+                    return s.name == rhs.name;
+                }
+            }
+            GeneralProxy::Group(g) => {
+                if let GeneralProxy::Group(rhs) = other {
+                    return g.name == rhs.name;
+                }
+            }
+        }
+        false
+    }
 }
