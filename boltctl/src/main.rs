@@ -1,7 +1,6 @@
 mod request;
 
 use crate::request::Requester;
-use colored::Colorize;
 use std::process::exit;
 use structopt::StructOpt;
 
@@ -63,13 +62,13 @@ async fn main() {
             ProxyOptions::List => requestor.get_group_list().await,
         },
         SubCommand::Conn(opt) => match opt {
-            ConnOptions::List => Ok(()),
+            ConnOptions::List => requestor.get_active_conn().await,
         },
         SubCommand::Log(opt) => match opt {
             LogOptions::List => Ok(()),
         },
         SubCommand::Debug(opt) => match opt {
-            DebugOptions::Session => Ok(()),
+            DebugOptions::Session => requestor.get_sessions().await,
         },
     };
     match result {

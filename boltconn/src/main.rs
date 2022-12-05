@@ -21,6 +21,8 @@ use proxy::Dispatcher;
 use proxy::{Nat, SessionManager};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{fs, io};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
@@ -77,7 +79,18 @@ async fn load_config(
     let raw_config: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
     let state_text = fs::read_to_string(state_path)?;
     let raw_state: RawState = serde_yaml::from_str(&state_text).unwrap();
-    let schema = tokio::join!(config::read_schema(&raw_config.rule_provider, false)).0?;
+    let config_folder = PathBuf::from_str(config_path)
+        .unwrap()
+        .parent()
+        .unwrap()
+        .display()
+        .to_string();
+    let schema = tokio::join!(config::read_schema(
+        config_folder.as_str(),
+        &raw_config.rule_provider,
+        false
+    ))
+    .0?;
     Ok((raw_config, raw_state, schema))
 }
 
@@ -108,7 +121,9 @@ fn main() {
         .init();
 
     // configuration
-    let (config, state, schema) = rt.block_on(load_config(config_path, state_path)).expect("Failed to load config");
+    let (config, state, schema) = rt
+        .block_on(load_config(config_path, state_path))
+        .expect("Failed to load config");
     let dns_config = config
         .dns
         .iter()

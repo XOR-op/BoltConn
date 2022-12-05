@@ -56,7 +56,7 @@ impl ApiServer {
             .unwrap();
     }
 
-    async fn get_logs(State(server): State<Self>) -> Json<serde_json::Value> {
+    async fn get_logs(State(_server): State<Self>) -> Json<serde_json::Value> {
         Json(serde_json::Value::Null)
     }
 

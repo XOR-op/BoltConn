@@ -64,7 +64,7 @@ impl Dispatcher {
             connection_type: NetworkType::TCP,
             process_info: process_info.clone(),
         };
-
+        // match outbound proxy
         let (outbounding, proxy_type): (Box<dyn OutBound>, OutboundType) =
             match self.dispatching.matches(&conn_info).as_ref() {
                 ProxyImpl::Direct => (
@@ -99,6 +99,7 @@ impl Dispatcher {
                 ),
             };
 
+        // conn info
         let info = Arc::new(RwLock::new(StatisticsInfo::new(
             dst_addr.clone(),
             process_info,

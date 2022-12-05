@@ -66,7 +66,9 @@ pub fn get_default_route() -> io::Result<(IpAddr, String)> {
         .collect();
     // example: 1.1.1.1 via 192.168.0.1 dev en0 src 192.168.0.100 uid 1000
     if words.len() >= 5 && words[1] == "via" && words[3] == "dev" && words[0] == "1.1.1.1" {
-        let gw = words[2].parse().map_err(|e| io_err("Invalid gateway"))?;
+        let gw = words[2]
+            .parse()
+            .map_err(|e| io_err(format!("Invalid gateway:{:?}", e).as_str()))?;
         Ok((gw, words[4].clone()))
     } else {
         Err(io_err("Invalid parse"))

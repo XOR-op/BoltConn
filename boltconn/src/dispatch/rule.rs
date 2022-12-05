@@ -20,7 +20,6 @@ pub enum RuleImpl {
     RuleSet(RuleSet),
 }
 
-
 pub(crate) struct RuleBuilder<'a> {
     proxies: &'a HashMap<String, Arc<Proxy>>,
     groups: &'a HashMap<String, Arc<ProxyGroup>>,
@@ -45,7 +44,12 @@ impl RuleBuilder<'_> {
     pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
-        if list.len() != 3 {
+        // ignore IP-CIDR,#ip#,#out#,no-resolve
+        if list.len() != 3
+            && !(list.len() == 4
+                && (*list.get(0).unwrap() == "IP-CIDR" || *list.get(0).unwrap() == "IP-CIDR6")
+                && *list.get(3).unwrap() == "no-resolve")
+        {
             return Err(anyhow!("Invalid length"));
         }
         let general = {
@@ -69,7 +73,17 @@ impl RuleBuilder<'_> {
     pub fn parse_ruleset(s: &str, general: GeneralProxy) -> Option<Rule> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
-        if list.len() != 2 {
+        // ignore no-resolve
+        // if list.len() != 2
+        //     && !(list.len() == 3
+        //     && (*list.get(0).unwrap() == "IP-CIDR"
+        //     || *list.get(0).unwrap() == "IP-CIDR6")
+        //     && *list.get(2).unwrap() == "no-resolve")
+        // {
+        //     return None;
+        // }
+        // For compatibility with Clash, we cannot have strict syntax constraint on ruleset rules.
+        if list.len() < 2 {
             return None;
         }
         let (prefix, content) = (
@@ -97,7 +111,7 @@ impl RuleBuilder<'_> {
                 rule: RuleImpl::ProcessName(content),
                 policy: general,
             }),
-            "IP-CIDR" => {
+            "IP-CIDR" | "IP-CIDR6" => {
                 if let Ok(cidr) = IpNet::from_str(content.as_str()) {
                     Some(Rule {
                         rule: RuleImpl::IpCidr(cidr),
@@ -107,7 +121,7 @@ impl RuleBuilder<'_> {
                     None
                 }
             }
-            "PORT" => {
+            "DST-PORT" => {
                 if let Ok(port) = content.parse::<u16>() {
                     Some(Rule {
                         rule: RuleImpl::Port(port),
@@ -126,7 +140,7 @@ impl RuleBuilder<'_> {
         // compress adjacent ruleset
         let mut compressed: Option<(RuleSetBuilder, GeneralProxy)> = None;
         for (prefix, content, target) in self.buffer {
-            if prefix == "RULESET" {
+            if prefix == "RULE-SET" {
                 let Some(ruleset) = self.rulesets.remove(&content) else {
                     return None;
                 };
@@ -159,6 +173,13 @@ impl RuleBuilder<'_> {
                     Some(r) => ret.push(r),
                 }
             }
+        }
+        // push remaining
+        if let Some((builder, dest)) = compressed.take() {
+            ret.push(Rule {
+                rule: RuleImpl::RuleSet(builder.build()),
+                policy: dest,
+            });
         }
         Some(ret)
     }

@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tokio::task::JoinHandle;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -25,33 +26,38 @@ pub struct RuleSchema {
 }
 
 pub async fn read_schema(
+    config_path: &str,
     providers: &HashMap<String, RuleProvider>,
     force_update: bool,
 ) -> anyhow::Result<HashMap<String, RuleSchema>> {
     let mut table = HashMap::new();
     // concurrently download rules
+    let config_path = PathBuf::from_str(config_path).unwrap();
+    // println!("{:?}", fs::canonicalize(config_path.as_path()));
     let tasks: Vec<JoinHandle<anyhow::Result<(String, RuleSchema)>>> = providers
         .clone()
         .into_iter()
         .map(|(name, item)| {
+            let relative_path = config_path.clone();
             tokio::spawn(async move {
                 match item {
                     RuleProvider::File { path } => {
-                        let content: RuleSchema =
-                            serde_yaml::from_str(fs::read_to_string(path)?.as_str())?;
+                        let content: RuleSchema = serde_yaml::from_str(
+                            fs::read_to_string(relative_path.join(path))?.as_str(),
+                        )?;
                         Ok((name.clone(), content))
                     }
                     RuleProvider::Http { url, path, .. } => {
-                        let content: RuleSchema =
-                            if !force_update && Path::new(path.as_str()).exists() {
-                                serde_yaml::from_str(fs::read_to_string(path)?.as_str())?
-                            } else {
-                                let resp = reqwest::get(url).await?;
-                                let text = resp.text().await?;
-                                let content: RuleSchema = serde_yaml::from_str(text.as_str())?;
-                                fs::write(path, text)?;
-                                content
-                            };
+                        let full_path = relative_path.join(path);
+                        let content: RuleSchema = if !force_update && full_path.as_path().exists() {
+                            serde_yaml::from_str(fs::read_to_string(full_path.as_path())?.as_str())?
+                        } else {
+                            let resp = reqwest::get(url).await?;
+                            let text = resp.text().await?;
+                            let content: RuleSchema = serde_yaml::from_str(text.as_str())?;
+                            fs::write(full_path.as_path(), text)?;
+                            content
+                        };
                         Ok((name.clone(), content))
                     }
                 }

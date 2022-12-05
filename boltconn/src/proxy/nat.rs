@@ -56,7 +56,7 @@ impl Nat {
         }
     }
     pub async fn run_udp(&self) -> Result<()> {
-        let udp_listener = UdpSocket::bind(self.nat_addr).await?;
+        let _udp_listener = UdpSocket::bind(self.nat_addr).await?;
         todo!()
     }
 }

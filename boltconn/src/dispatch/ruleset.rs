@@ -1,13 +1,15 @@
 use crate::config::RuleSchema;
 use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup, ProxyImpl};
+use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
 use aho_corasick::AhoCorasick;
 use ipnet::{IpNet, Ipv4Net};
 use radix_trie::{Trie, TrieCommon};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
-use std::net::{IpAddr, Ipv4Addr};
+use std::fs;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
@@ -83,7 +85,7 @@ impl RuleSet {
                                 }
                             }
                             TrieResult::Suffix => {
-                                if result.key().unwrap().len() < rev_dn.len() {
+                                if result.key().unwrap().len() <= rev_dn.len() {
                                     // DOMAIN-SUFFIX rule
                                     return true;
                                 }
@@ -144,7 +146,9 @@ impl RuleSetBuilder {
                         IpNet::V4(v4) => retval.ip_cidr.push((ip4net_to_vec(v4.clone()), true)),
                         IpNet::V6(_) => tracing::warn!("IpCidr6 is not supported now: {:?}", rule),
                     },
-                    RuleImpl::Port(p) => { retval.port.insert(*p); }
+                    RuleImpl::Port(p) => {
+                        retval.port.insert(*p);
+                    }
                     _ => return None,
                 }
             } else {
@@ -172,4 +176,56 @@ impl RuleSetBuilder {
             process_name: AhoCorasick::new_auto_configured(self.process_name.as_slice()),
         }
     }
+}
+
+#[ignore]
+#[test]
+fn test_rule_provider() {
+    let config_text = fs::read_to_string("../_private/config/Rules/Apple").unwrap();
+    let deserialized: RuleSchema = serde_yaml::from_str(&config_text).unwrap();
+    println!("{:?}", deserialized);
+    let builder = RuleSetBuilder::new(deserialized);
+    assert!(builder.is_some());
+    let ruleset = builder.unwrap().build();
+    // println!("kw:{}, domain:{}", ruleset.domain_keyword.pattern_count(), ruleset.domain.len());
+    let info1 = ConnInfo {
+        src: "127.0.0.1:12345".parse().unwrap(),
+        dst: NetworkAddr::DomainName {
+            domain_name: "kb.apple.com".to_string(),
+            port: 1234,
+        },
+        connection_type: NetworkType::TCP,
+        process_info: None,
+    };
+    assert!(ruleset.matches(&info1));
+    let info2 = ConnInfo {
+        src: "127.0.0.1:12345".parse().unwrap(),
+        dst: NetworkAddr::DomainName {
+            domain_name: "apple.com".to_string(),
+            port: 1234,
+        },
+        connection_type: NetworkType::TCP,
+        process_info: None,
+    };
+    assert!(ruleset.matches(&info2));
+    let info3 = ConnInfo {
+        src: "127.0.0.1:12345".parse().unwrap(),
+        dst: NetworkAddr::DomainName {
+            domain_name: "icloud.com.akadns.net.com".to_string(),
+            port: 1234,
+        },
+        connection_type: NetworkType::TCP,
+        process_info: None,
+    };
+    assert!(ruleset.matches(&info3));
+    let info4 = ConnInfo {
+        src: "127.0.0.1:12345".parse().unwrap(),
+        dst: NetworkAddr::DomainName {
+            domain_name: "apple.io".to_string(),
+            port: 1234,
+        },
+        connection_type: NetworkType::TCP,
+        process_info: None,
+    };
+    assert!(!ruleset.matches(&info4));
 }
