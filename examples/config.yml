@@ -1,0 +1,34 @@
+interface: auto
+api_port: 18086
+dns:
+  - 114.114.114.114
+proxy_local:
+  lan_socks:
+    proto: socks5
+    server: 192.168.1.100
+    port: 5678
+  ss_server:
+    proto: ss
+    server: 4.3.2.1
+    port: 9999
+    password: qwertyuiop
+    cipher: aes-128-gcm
+
+proxy_group:
+  Relay:
+    - lan_socks
+    - ss_server
+
+rule_provider:
+  APPLE:
+    type: file
+    path: ./Rules/Apple
+  TELEGRAM:
+    type: file
+    path: ./Rules/Telegram
+
+rule_local:
+  - DOMAIN-SUFFIX, google.com, Relay
+  - DOMAIN-SUFFIX, twitter.com, Relay
+  - RULE-SET, APPLE, DIRECT
+  - RULE-SET, TELEGRAM, Relay
