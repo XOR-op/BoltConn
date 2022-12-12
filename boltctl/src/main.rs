@@ -1,3 +1,4 @@
+mod cert;
 mod request;
 
 use crate::request::Requester;
@@ -41,6 +42,12 @@ enum DebugOptions {
 }
 
 #[derive(Debug, StructOpt)]
+struct CertOptions {
+    #[structopt(short, long, default_value = "./_private/ca")]
+    path: String,
+}
+
+#[derive(Debug, StructOpt)]
 enum SubCommand {
     /// Proxy Settings
     Proxy(ProxyOptions),
@@ -50,6 +57,8 @@ enum SubCommand {
     Log(LogOptions),
     /// API for Debugging
     Debug(DebugOptions),
+    /// Generate Certificates
+    Cert(CertOptions),
 }
 
 #[tokio::main]
@@ -70,6 +79,7 @@ async fn main() {
         SubCommand::Debug(opt) => match opt {
             DebugOptions::Session => requestor.get_sessions().await,
         },
+        SubCommand::Cert(opt) => cert::generate_cert(opt.path),
     };
     match result {
         Ok(_) => exit(0),

@@ -2,7 +2,6 @@
 members = [
     "boltconn",
     "boltctl",
-    "bolthelper",
     "boltapi"
 ]
 

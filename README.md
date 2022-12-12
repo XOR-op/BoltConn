@@ -2,7 +2,7 @@
 
 BoltConn is a transparent proxy for domain name/application level routing.
 
-Support platforms: Macos, Linux.
+Supported platforms: Macos, Linux.
 
 *Warning: Since this project is under heavy development, breaking changes of features or API will happen.*
 
@@ -24,17 +24,23 @@ For RESTful API, see [restful.md](./docs/restful.md).
 
 ## Getting Started
 
+
+Execute `cargo build --release` at the root directory of the project, and cp all
+executables in `target/release` into directory you like.
+
 To run BoltConn:
 
 ```bash
-cargo build --release && cargo rr --bin boltconn
+boltconn
 ```
 
 To generate CA certificate:
 
 ```bash
-cargo build --release && cargo rr --bin bolthelper
+boltctl cert -p <your_desired_path>
 ```
+
+To control a running BoltConn service, use `boltctl`. And you can use `boltctl --help` to see more details.
 
 ## Future Plan
 

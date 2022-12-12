@@ -3,8 +3,9 @@ use rcgen::{
     KeyUsagePurpose,
 };
 use std::fs;
+use std::path::Path;
 
-fn main() {
+pub fn generate_cert<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     // generate ca only now
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::CommonName, "Catalyst-MITM");
@@ -20,14 +21,11 @@ fn main() {
         KeyUsagePurpose::KeyCertSign,
     ];
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let cert = Certificate::from_params(params).expect("Failed to generate certificate");
+    let cert = Certificate::from_params(params)?;
     let cert_crt = cert.serialize_pem().unwrap();
     let private_key = cert.serialize_private_key_pem();
-    if let Err(err) = fs::write("_private/ca/crt.pem", cert_crt) {
-        eprintln!("Fail to write cert: {}", err);
-    }
-    if let Err(err) = fs::write("_private/ca/key.pem", private_key) {
-        eprintln!("Fail to write private key: {}", err);
-    }
-    println!("Generated certificate and private key.")
+    fs::write(path.as_ref().join("crt.pem"), cert_crt)?;
+    fs::write(path.as_ref().join("key.pem"), private_key)?;
+    println!("Successfully generated certificate and private key.");
+    Ok(())
 }
