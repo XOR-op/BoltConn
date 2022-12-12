@@ -22,6 +22,8 @@ For architecture, see [design.md](./docs/design.md).
 
 For RESTful API, see [restful.md](./docs/restful.md).
 
+For comparison with other related projects, see [comparison.md](./docs/comparison.md).
+
 ## Getting Started
 
 
