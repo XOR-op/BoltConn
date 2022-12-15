@@ -30,6 +30,7 @@ use tracing::{event, Level};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 
 mod adapter;
 mod common;
@@ -90,7 +91,7 @@ async fn load_config(
         &raw_config.rule_provider,
         false
     ))
-    .0?;
+        .0?;
     Ok((raw_config, raw_state, schema))
 }
 
@@ -101,6 +102,21 @@ fn initialize_dispatching(
 ) -> anyhow::Result<Arc<Dispatching>> {
     let builder = DispatchingBuilder::new_from_config(&raw_config, &raw_state, schema)?;
     Ok(Arc::new(builder.build()))
+}
+
+fn read_mitm_hosts(arr: &Option<Vec<String>>) -> HostMatcher {
+    let mut builder = HostMatcherBuilder::new();
+    if let Some(arr) = arr.as_ref() {
+        for s in arr {
+            if s.starts_with("*") {
+                let st: String = s.chars().skip(1).collect();
+                builder.add_suffix(st.as_str());
+            } else {
+                builder.add_exact(s.as_str())
+            }
+        }
+    }
+    builder.build()
 }
 
 fn main() {
@@ -177,6 +193,7 @@ fn main() {
             cert,
             priv_key,
             Arc::new(Recorder::new(http_capturer.clone())),
+            read_mitm_hosts(&config.mitm_hosts),
         ))
     };
 

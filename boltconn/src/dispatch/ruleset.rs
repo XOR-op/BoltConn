@@ -11,12 +11,7 @@ use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-
-#[derive(Debug, Clone, Copy)]
-enum TrieResult {
-    Exact,
-    Suffix,
-}
+use crate::common::host_matcher::{HostMatcherBuilder, HostMatcher};
 
 fn ip4_to_vec(ip: Ipv4Addr) -> Vec<u8> {
     let mut ret = vec![0; 32];
@@ -45,7 +40,7 @@ fn ip4net_to_vec(ip: Ipv4Net) -> Vec<u8> {
 
 /// Matcher for rules in the same group
 pub struct RuleSet {
-    domain: Trie<String, TrieResult>,
+    domain: HostMatcher,
     ip: Trie<Vec<u8>, bool>,
     port: HashSet<u16>,
     domain_keyword: AhoCorasick,
@@ -74,27 +69,7 @@ impl RuleSet {
                 addr.port()
             }
             NetworkAddr::DomainName { domain_name, port } => {
-                let rev_dn: String = domain_name.chars().rev().collect();
-                if let Some(result) = self.domain.get_ancestor(rev_dn.as_str()) {
-                    if let Some(val) = result.value() {
-                        match val {
-                            TrieResult::Exact => {
-                                if result.key().unwrap().len() == rev_dn.len() {
-                                    // DOMAIN rule
-                                    return true;
-                                }
-                            }
-                            TrieResult::Suffix => {
-                                if result.key().unwrap().len() <= rev_dn.len() {
-                                    // DOMAIN-SUFFIX rule
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-                if self.domain_keyword.is_match(domain_name.as_str()) {
-                    // DOMAIN rule
+                if self.domain.matches(domain_name) || self.domain_keyword.is_match(domain_name.as_str()) {
                     return true;
                 }
                 port.clone()
@@ -114,7 +89,7 @@ impl RuleSet {
 }
 
 pub struct RuleSetBuilder {
-    domain: Vec<(String, TrieResult)>,
+    domain: HostMatcherBuilder,
     domain_keyword: Vec<String>,
     ip_cidr: Vec<(Vec<u8>, bool)>,
     process_name: Vec<String>,
@@ -124,7 +99,7 @@ pub struct RuleSetBuilder {
 impl RuleSetBuilder {
     pub fn new(payload: RuleSchema) -> Option<Self> {
         let mut retval = Self {
-            domain: vec![],
+            domain: HostMatcherBuilder::new(),
             domain_keyword: vec![],
             ip_cidr: vec![],
             process_name: vec![],
@@ -135,12 +110,8 @@ impl RuleSetBuilder {
             if let Some(rule) = RuleBuilder::parse_ruleset(str, fake.clone()) {
                 match rule.get_impl() {
                     RuleImpl::ProcessName(pn) => retval.process_name.push(pn.clone()),
-                    RuleImpl::Domain(dn) => retval
-                        .domain
-                        .push((dn.chars().rev().collect(), TrieResult::Exact)),
-                    RuleImpl::DomainSuffix(sfx) => retval
-                        .domain
-                        .push((sfx.chars().rev().collect(), TrieResult::Suffix)),
+                    RuleImpl::Domain(dn) => retval.domain.add_exact(dn.as_str()),
+                    RuleImpl::DomainSuffix(sfx) => retval.domain.add_suffix(sfx.as_str()),
                     RuleImpl::DomainKeyword(kw) => retval.domain_keyword.push(kw.clone()),
                     RuleImpl::IpCidr(ip) => match ip {
                         IpNet::V4(v4) => retval.ip_cidr.push((ip4net_to_vec(v4.clone()), true)),
@@ -159,7 +130,7 @@ impl RuleSetBuilder {
     }
 
     pub fn merge(mut self, rhs: Self) -> Self {
-        self.domain.extend(rhs.domain.into_iter());
+        self.domain.merge(rhs.domain);
         self.ip_cidr.extend(rhs.ip_cidr.into_iter());
         self.process_name.extend(rhs.process_name.into_iter());
         self.port.extend(rhs.port.into_iter());
@@ -169,7 +140,7 @@ impl RuleSetBuilder {
 
     pub fn build(self) -> RuleSet {
         RuleSet {
-            domain: Trie::from_iter(self.domain.into_iter()),
+            domain: self.domain.build(),
             ip: Trie::from_iter(self.ip_cidr.into_iter()),
             port: self.port,
             domain_keyword: AhoCorasick::new_auto_configured(self.domain_keyword.as_slice()),

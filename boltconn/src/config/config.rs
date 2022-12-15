@@ -14,6 +14,7 @@ pub struct RawRootCfg {
     pub proxy_group: HashMap<String, Vec<String>>,
     pub rule_local: Vec<String>,
     pub rule_provider: HashMap<String, RuleProvider>,
+    pub mitm_hosts: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

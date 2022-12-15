@@ -5,6 +5,7 @@ pub mod async_socket;
 pub mod buf_pool;
 pub mod duplex_chan;
 pub mod id_gen;
+pub mod host_matcher;
 
 pub fn io_err(msg: &str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Other, msg)

@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, RwLock};
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
+use crate::common::host_matcher::HostMatcher;
 
 pub struct Dispatcher {
     iface_name: String,
@@ -24,6 +25,7 @@ pub struct Dispatcher {
     certificate: Vec<Certificate>,
     priv_key: PrivateKey,
     modifier: Arc<dyn Modifier>,
+    mitm_hosts: HostMatcher,
 }
 
 impl Dispatcher {
@@ -36,6 +38,7 @@ impl Dispatcher {
         certificate: Vec<Certificate>,
         priv_key: PrivateKey,
         modifier: Arc<dyn Modifier>,
+        mitm_hosts: HostMatcher,
     ) -> Self {
         Self {
             iface_name: iface_name.into(),
@@ -46,6 +49,7 @@ impl Dispatcher {
             certificate,
             priv_key,
             modifier,
+            mitm_hosts,
         }
     }
 
@@ -126,54 +130,57 @@ impl Dispatcher {
             }
         });
         let modifier = self.modifier.clone();
-        match dst_addr.port() {
-            80 => {
-                // hijack
-                tracing::debug!("HTTP sniff");
-                let http_alloc = self.allocator.clone();
-                tokio::spawn(async move {
-                    let mocker = HttpSniffer::new(
-                        DuplexChan::new(http_alloc, tun_next),
-                        modifier,
-                        outbounding,
-                        info_clone,
-                    );
-                    if let Err(err) = mocker.run().await {
-                        tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+        if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
+            if self.mitm_hosts.matches(&domain_name) {
+                match port {
+                    80 => {
+                        // hijack
+                        tracing::debug!("HTTP sniff");
+                        let http_alloc = self.allocator.clone();
+                        tokio::spawn(async move {
+                            let mocker = HttpSniffer::new(
+                                DuplexChan::new(http_alloc, tun_next),
+                                modifier,
+                                outbounding,
+                                info_clone,
+                            );
+                            if let Err(err) = mocker.run().await {
+                                tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+                            }
+                        });
+                        return;
                     }
-                });
-            }
-            443 if matches!(dst_addr, NetworkAddr::DomainName { .. }) => {
-                tracing::debug!("HTTP sniff");
-                let http_alloc = self.allocator.clone();
-                let cert = self.certificate.clone();
-                let key = self.priv_key.clone();
-                let domain_name = match dst_addr.clone() {
-                    NetworkAddr::Raw(_) => unreachable!(),
-                    NetworkAddr::DomainName { domain_name, .. } => domain_name,
-                };
-                tokio::spawn(async move {
-                    let mocker = HttpsSniffer::new(
-                        cert,
-                        key,
-                        domain_name,
-                        DuplexChan::new(http_alloc, tun_next),
-                        modifier,
-                        outbounding,
-                        info_clone,
-                    );
-                    if let Err(err) = mocker.run().await {
-                        tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
+                    443 => {
+                        tracing::debug!("HTTP sniff");
+                        let http_alloc = self.allocator.clone();
+                        let cert = self.certificate.clone();
+                        let key = self.priv_key.clone();
+                        tokio::spawn(async move {
+                            let mocker = HttpsSniffer::new(
+                                cert,
+                                key,
+                                domain_name,
+                                DuplexChan::new(http_alloc, tun_next),
+                                modifier,
+                                outbounding,
+                                info_clone,
+                            );
+                            if let Err(err) = mocker.run().await {
+                                tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
+                            }
+                        });
+                        return;
                     }
-                });
-            }
-            _ => {
-                tokio::spawn(async move {
-                    if let Err(err) = outbounding.spawn(tun_next).await {
-                        tracing::error!("[Dispatcher] create failed: {}", err)
+                    _ => {
+                        // fallback
                     }
-                });
+                }
             }
         }
+        tokio::spawn(async move {
+            if let Err(err) = outbounding.spawn(tun_next).await {
+                tracing::error!("[Dispatcher] create failed: {}", err)
+            }
+        });
     }
 }
