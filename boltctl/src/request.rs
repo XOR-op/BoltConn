@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use colored::Colorize;
+use tabular::{Row, Table};
 
 pub struct Requester {
     pub port: u16,
@@ -89,6 +90,37 @@ impl Requester {
                 }
             );
         }
+        Ok(())
+    }
+
+    pub async fn get_captured(&self) -> Result<()> {
+        let data = reqwest::get(self.route("/captured"))
+            .await?
+            .text()
+            .await?;
+        let result: Vec<boltapi::HttpCaptureSchema> = serde_json::from_str(data.as_str())?;
+        let mut table = Table::new("{:<} {:<} {:<} {:<} {:<} {:<}");
+        table.add_row(
+            Row::new()
+                .with_cell("Client")
+                .with_cell("Url")
+                .with_cell("Method")
+                .with_cell("Status")
+                .with_cell("Size")
+                .with_cell("Time"),
+        );
+        for ele in result {
+            table.add_row(
+                Row::new()
+                    .with_cell(ele.client.unwrap_or("".to_string()))
+                    .with_cell(ele.uri)
+                    .with_cell(ele.method)
+                    .with_cell(format!("{}", ele.status))
+                    .with_cell(ele.size)
+                    .with_cell(ele.time),
+            );
+        }
+        println!("{}", table);
         Ok(())
     }
 

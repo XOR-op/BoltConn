@@ -2,19 +2,19 @@ use crate::adapter::{
     Connector, DirectOutbound, OutBound, OutboundType, SSOutbound, Socks5Outbound, TunAdapter,
 };
 use crate::common::duplex_chan::DuplexChan;
+use crate::common::host_matcher::HostMatcher;
 use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
 use crate::proxy::{NetworkAddr, StatCenter, StatisticsInfo};
-use crate::sniff::{HttpSniffer, HttpsSniffer, Modifier};
+use crate::sniff::{HttpSniffer, HttpsSniffer, Modifier, ModifierClosure};
 use crate::PktBufPool;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, RwLock};
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
-use crate::common::host_matcher::HostMatcher;
 
 pub struct Dispatcher {
     iface_name: String,
@@ -24,7 +24,7 @@ pub struct Dispatcher {
     dispatching: Arc<Dispatching>,
     certificate: Vec<Certificate>,
     priv_key: PrivateKey,
-    modifier: Arc<dyn Modifier>,
+    modifier: ModifierClosure,
     mitm_hosts: HostMatcher,
 }
 
@@ -37,7 +37,7 @@ impl Dispatcher {
         dispatching: Arc<Dispatching>,
         certificate: Vec<Certificate>,
         priv_key: PrivateKey,
-        modifier: Arc<dyn Modifier>,
+        modifier: ModifierClosure,
         mitm_hosts: HostMatcher,
     ) -> Self {
         Self {
@@ -106,7 +106,7 @@ impl Dispatcher {
         // conn info
         let info = Arc::new(RwLock::new(StatisticsInfo::new(
             dst_addr.clone(),
-            process_info,
+            process_info.clone(),
             proxy_type,
         )));
         self.stat_center.push(info.clone());
@@ -129,7 +129,7 @@ impl Dispatcher {
                 tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
             }
         });
-        let modifier = self.modifier.clone();
+        let modifier = (self.modifier)(process_info);
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
             if self.mitm_hosts.matches(&domain_name) {
                 match port {
@@ -151,7 +151,7 @@ impl Dispatcher {
                         return;
                     }
                     443 => {
-                        tracing::debug!("HTTP sniff");
+                        tracing::debug!("HTTPs sniff");
                         let http_alloc = self.allocator.clone();
                         let cert = self.certificate.clone();
                         let key = self.priv_key.clone();

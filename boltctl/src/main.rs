@@ -48,6 +48,12 @@ struct CertOptions {
 }
 
 #[derive(Debug, StructOpt)]
+enum CaptureOptions {
+    /// List all captured data
+    List,
+}
+
+#[derive(Debug, StructOpt)]
 enum SubCommand {
     /// Proxy Settings
     Proxy(ProxyOptions),
@@ -59,6 +65,8 @@ enum SubCommand {
     Debug(DebugOptions),
     /// Generate Certificates
     Cert(CertOptions),
+    /// Captured HTTP data
+    Capture(CaptureOptions),
 }
 
 #[tokio::main]
@@ -80,6 +88,9 @@ async fn main() {
             DebugOptions::Session => requestor.get_sessions().await,
         },
         SubCommand::Cert(opt) => cert::generate_cert(opt.path),
+        SubCommand::Capture(opt) => match opt {
+            CaptureOptions::List => requestor.get_captured().await
+        }
     };
     match result {
         Ok(_) => exit(0),

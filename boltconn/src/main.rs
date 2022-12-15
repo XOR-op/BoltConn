@@ -3,6 +3,7 @@
 
 extern crate core;
 
+use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
@@ -30,7 +31,6 @@ use tracing::{event, Level};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 
 mod adapter;
 mod common;
@@ -91,7 +91,7 @@ async fn load_config(
         &raw_config.rule_provider,
         false
     ))
-        .0?;
+    .0?;
     Ok((raw_config, raw_state, schema))
 }
 
@@ -179,6 +179,7 @@ fn main() {
     // dispatcher and statistics
     let stat_center = Arc::new(StatCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
+    let hcap_copy = http_capturer.clone();
     let dispatcher = {
         // tls mitm
         let (cert, priv_key) =
@@ -192,7 +193,7 @@ fn main() {
             dispatching.clone(),
             cert,
             priv_key,
-            Arc::new(Recorder::new(http_capturer.clone())),
+            Box::new(move |pi| Arc::new(Recorder::new(hcap_copy.clone(), pi))),
             read_mitm_hosts(&config.mitm_hosts),
         ))
     };

@@ -106,8 +106,9 @@ impl ApiServer {
         if let Some(capturer) = &server.http_capturer {
             let list = capturer.get_copy();
             let mut result = Vec::new();
-            for (host, req, resp) in list {
+            for (host, proc, req, resp) in list {
                 let item = boltapi::HttpCaptureSchema {
+                    client: proc.map(|proc| proc.name),
                     uri: host + req.uri.to_string().as_str(),
                     method: req.method.to_string(),
                     status: resp.status.as_u16(),

@@ -1,3 +1,4 @@
+use crate::platform::process::ProcessInfo;
 use crate::proxy::{DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr, StatisticsInfo};
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -6,6 +7,8 @@ use hyper::{Body, Request, Response};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::join;
+
+pub type ModifierClosure = Box<dyn Fn(Option<ProcessInfo>) -> Arc<dyn Modifier> + Send + Sync>;
 
 pub struct ModifierContext {
     pub tag: u64,
@@ -73,13 +76,15 @@ impl Modifier for Nooper {
 }
 
 pub struct Recorder {
+    client: Option<ProcessInfo>,
     contents: Arc<HttpCapturer>,
     pending: DashMap<u64, DumpedRequest>,
 }
 
 impl Recorder {
-    pub fn new(contents: Arc<HttpCapturer>) -> Self {
+    pub fn new(contents: Arc<HttpCapturer>, proc: Option<ProcessInfo>) -> Self {
         Self {
+            client: proc,
             contents,
             pending: Default::default(),
         }
@@ -114,6 +119,7 @@ impl Modifier for Recorder {
     ) -> anyhow::Result<Response<Body>> {
         let (parts, body) = resp.into_parts();
         let whole_body = hyper::body::to_bytes(body).await?;
+        // todo: optimize for large body
         let resp_copy = DumpedResponse {
             status: parts.status.clone(),
             version: parts.version.clone(),
@@ -126,7 +132,8 @@ impl Modifier for Recorder {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
         };
-        self.contents.push((req, resp_copy), host);
+        self.contents
+            .push((req, resp_copy), host, self.client.clone());
         Ok(Response::from_parts(parts, Body::from(whole_body)))
     }
 }

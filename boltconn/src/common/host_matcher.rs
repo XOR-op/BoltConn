@@ -6,7 +6,6 @@ enum HostType {
     Suffix,
 }
 
-
 pub struct HostMatcher(Trie<String, HostType>);
 
 impl HostMatcher {
@@ -46,7 +45,8 @@ impl HostMatcherBuilder {
     }
 
     pub fn add_suffix(&mut self, host: &str) {
-        self.0.push((host.chars().rev().collect(), HostType::Suffix))
+        self.0
+            .push((host.chars().rev().collect(), HostType::Suffix))
     }
 
     pub fn build(self) -> HostMatcher {
@@ -57,4 +57,3 @@ impl HostMatcherBuilder {
         self.0.extend(rhs.0.into_iter());
     }
 }
-

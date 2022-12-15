@@ -186,7 +186,7 @@ pub struct DumpedResponse {
 }
 
 pub struct HttpCapturer {
-    contents: Mutex<Vec<(String, DumpedRequest, DumpedResponse)>>,
+    contents: Mutex<Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>>,
 }
 
 impl HttpCapturer {
@@ -196,11 +196,29 @@ impl HttpCapturer {
         }
     }
 
-    pub fn push(&self, pair: (DumpedRequest, DumpedResponse), host: String) {
-        self.contents.lock().unwrap().push((host, pair.0, pair.1))
+    pub fn push(
+        &self,
+        pair: (DumpedRequest, DumpedResponse),
+        host: String,
+        client: Option<ProcessInfo>,
+    ) {
+        self.contents
+            .lock()
+            .unwrap()
+            .push((host, client, pair.0, pair.1))
     }
 
-    pub fn get_copy(&self) -> Vec<(String, DumpedRequest, DumpedResponse)> {
+    pub fn get_copy(&self) -> Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)> {
         self.contents.lock().unwrap().clone()
+    }
+    pub fn get_range_copy(
+        &self,
+        range: (usize, usize),
+    ) -> Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)> {
+        let arr = self.contents.lock().unwrap();
+        arr.as_slice()[range.0..range.1]
+            .iter()
+            .map(|e| e.clone())
+            .collect()
     }
 }

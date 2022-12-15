@@ -23,6 +23,7 @@ pub struct SessionSchema {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct HttpCaptureSchema {
+    pub client: Option<String>,
     pub uri: String,
     pub method: String,
     pub status: u16,

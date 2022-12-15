@@ -1,3 +1,4 @@
+use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::RuleSchema;
 use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup, ProxyImpl};
@@ -11,7 +12,6 @@ use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use crate::common::host_matcher::{HostMatcherBuilder, HostMatcher};
 
 fn ip4_to_vec(ip: Ipv4Addr) -> Vec<u8> {
     let mut ret = vec![0; 32];
@@ -69,7 +69,9 @@ impl RuleSet {
                 addr.port()
             }
             NetworkAddr::DomainName { domain_name, port } => {
-                if self.domain.matches(domain_name) || self.domain_keyword.is_match(domain_name.as_str()) {
+                if self.domain.matches(domain_name)
+                    || self.domain_keyword.is_match(domain_name.as_str())
+                {
                     return true;
                 }
                 port.clone()
