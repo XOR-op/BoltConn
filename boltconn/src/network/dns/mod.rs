@@ -1,9 +1,10 @@
 mod dns;
 mod dns_table;
 
-use crate::platform::{add_route_entry_via_gateway, delete_route_entry};
+use crate::platform::{add_route_entry, add_route_entry_via_gateway, delete_route_entry};
+use anyhow::Result;
 pub use dns::Dns;
-use std::io::Result;
+use ipnet::IpNet;
 use std::net::IpAddr;
 
 #[derive(Clone, Debug)]

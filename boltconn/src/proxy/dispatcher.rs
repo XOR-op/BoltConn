@@ -135,7 +135,6 @@ impl Dispatcher {
                 match port {
                     80 => {
                         // hijack
-                        tracing::debug!("HTTP sniff");
                         let http_alloc = self.allocator.clone();
                         tokio::spawn(async move {
                             let mocker = HttpSniffer::new(
@@ -151,7 +150,6 @@ impl Dispatcher {
                         return;
                     }
                     443 => {
-                        tracing::debug!("HTTPs sniff");
                         let http_alloc = self.allocator.clone();
                         let cert = self.certificate.clone();
                         let key = self.priv_key.clone();

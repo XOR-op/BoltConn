@@ -109,7 +109,16 @@ impl ApiServer {
             for (host, proc, req, resp) in list {
                 let item = boltapi::HttpCaptureSchema {
                     client: proc.map(|proc| proc.name),
-                    uri: host + req.uri.to_string().as_str(),
+                    uri: {
+                        let s = req.uri.to_string();
+                        if s.starts_with("https://") || s.starts_with("http://") {
+                            // http2
+                            s
+                        } else {
+                            // http1.1, with no host in uri field
+                            host + s.as_str()
+                        }
+                    },
                     method: req.method.to_string(),
                     status: resp.status.as_u16(),
                     size: pretty_size(resp.body.len()),

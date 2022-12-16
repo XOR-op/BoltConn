@@ -71,6 +71,7 @@ impl Dns {
                 .await
                 .unwrap_or(fake_ip)
         } else {
+            tracing::debug!("Failed to extract fake_ip: {}", fake_ip);
             fake_ip
         }
     }
@@ -86,6 +87,7 @@ impl Dns {
         let q = &req.queries()[0];
         // validate
         let domain = q.name().to_string();
+        tracing::debug!("Look up {}", domain);
 
         let mut resp = Message::new();
         resp.set_id(req.id())

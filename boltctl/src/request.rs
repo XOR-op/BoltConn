@@ -94,10 +94,7 @@ impl Requester {
     }
 
     pub async fn get_captured(&self) -> Result<()> {
-        let data = reqwest::get(self.route("/captured"))
-            .await?
-            .text()
-            .await?;
+        let data = reqwest::get(self.route("/captured")).await?.text().await?;
         let result: Vec<boltapi::HttpCaptureSchema> = serde_json::from_str(data.as_str())?;
         let mut table = Table::new("{:<} {:<} {:<} {:<} {:<} {:<}");
         table.add_row(

@@ -89,8 +89,8 @@ async fn main() {
         },
         SubCommand::Cert(opt) => cert::generate_cert(opt.path),
         SubCommand::Capture(opt) => match opt {
-            CaptureOptions::List => requestor.get_captured().await
-        }
+            CaptureOptions::List => requestor.get_captured().await,
+        },
     };
     match result {
         Ok(_) => exit(0),
