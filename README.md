@@ -16,6 +16,8 @@ Supported platforms: Macos, Linux.
 - [x] RESTful API controller
 - [x] command-line tool for controlling and monitoring
 
+[//]: # (- [x] symmetric UDP NAT)
+
 ## Documentations
 
 For architecture, see [design.md](./docs/design.md).

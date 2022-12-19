@@ -1,4 +1,4 @@
-use crate::adapter::{established_tcp, Connector, OutBound};
+use crate::adapter::{established_tcp, Connector, TcpOutBound, UdpOutBound};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{as_io_err, io_err};
@@ -11,6 +11,7 @@ use fast_socks5::{AuthenticationMethod, Socks5Command};
 use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone)]
@@ -57,7 +58,7 @@ impl Socks5Outbound {
         }
     }
 
-    async fn run(self, inbound: Connector) -> Result<()> {
+    async fn connect_proxy(&self) -> Result<Socks5Stream<TcpStream>> {
         let server_addr = match self.config.server_addr {
             NetworkAddr::Raw(addr) => addr,
             NetworkAddr::DomainName {
@@ -85,11 +86,13 @@ impl Socks5Outbound {
             }
         };
         let mut conn_cfg = fast_socks5::client::Config::default();
-        conn_cfg.set_connect_timeout(15);
-        let mut socks_stream =
-            Socks5Stream::use_stream(socks_conn, Some(self.config.get_auth()), conn_cfg)
-                .await
-                .map_err(|e| as_io_err(e))?;
+        conn_cfg.set_connect_timeout(8);
+        Socks5Stream::use_stream(socks_conn, Some(self.config.get_auth()), conn_cfg)
+            .await
+            .map_err(|e| as_io_err(e))
+    }
+    async fn run_tcp(self, inbound: Connector) -> Result<()> {
+        let mut socks_stream = self.connect_proxy().await?;
         let target = match self.dst {
             NetworkAddr::Raw(addr) => TargetAddr::Ip(addr),
             NetworkAddr::DomainName { domain_name, port } => TargetAddr::Domain(domain_name, port),
@@ -101,18 +104,48 @@ impl Socks5Outbound {
         established_tcp(inbound, socks_stream, self.allocator).await;
         Ok(())
     }
+
+    async fn run_udp(self, inbound: Connector) -> Result<()> {
+        // todo: use Socks5Datagram
+        let mut socks_stream = self.connect_proxy().await?;
+        let target = match self.dst {
+            NetworkAddr::Raw(addr) => TargetAddr::Ip(addr),
+            NetworkAddr::DomainName { domain_name, port } => TargetAddr::Domain(domain_name, port),
+        };
+        let bound_addr = socks_stream
+            .request(Socks5Command::UDPAssociate, target)
+            .await
+            .map_err(|e| as_io_err(e))?;
+        // established_tcp(inbound, socks_stream, self.allocator).await;
+        todo!();
+        Ok(())
+    }
 }
 
-impl OutBound for Socks5Outbound {
-    fn spawn(&self, inbound: Connector) -> JoinHandle<Result<()>> {
-        tokio::spawn(self.clone().run(inbound))
+impl TcpOutBound for Socks5Outbound {
+    fn spawn_tcp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
+        tokio::spawn(self.clone().run_tcp(inbound))
     }
 
-    fn spawn_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+    fn spawn_tcp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run(outer)),
+            tokio::spawn(self.clone().run_tcp(outer)),
+        )
+    }
+}
+
+impl UdpOutBound for Socks5Outbound {
+    fn spawn_udp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
+        tokio::spawn(self.clone().run_udp(inbound))
+    }
+
+    fn spawn_udp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+        let (inner, outer) = Connector::new_pair(10);
+        (
+            DuplexChan::new(self.allocator.clone(), inner),
+            tokio::spawn(self.clone().run_udp(outer)),
         )
     }
 }

@@ -1,4 +1,4 @@
-use crate::adapter::{established_tcp, Connector, OutBound};
+use crate::adapter::{established_tcp, Connector, TcpOutBound, UdpOutBound};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
@@ -82,16 +82,26 @@ impl SSOutbound {
     }
 }
 
-impl OutBound for SSOutbound {
-    fn spawn(&self, inbound: Connector) -> JoinHandle<Result<()>> {
+impl TcpOutBound for SSOutbound {
+    fn spawn_tcp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
         tokio::spawn(self.clone().run(inbound))
     }
 
-    fn spawn_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+    fn spawn_tcp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
             tokio::spawn(self.clone().run(outer)),
         )
+    }
+}
+
+impl UdpOutBound for SSOutbound {
+    fn spawn_udp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
+        todo!()
+    }
+
+    fn spawn_udp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+        todo!()
     }
 }

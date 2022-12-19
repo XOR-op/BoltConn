@@ -91,7 +91,7 @@ async fn load_config(
         &raw_config.rule_provider,
         false
     ))
-    .0?;
+        .0?;
     Ok((raw_config, raw_state, schema))
 }
 
@@ -180,14 +180,14 @@ fn main() {
     let stat_center = Arc::new(StatCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
     let hcap_copy = http_capturer.clone();
+    let proxy_allocator = PktBufPool::new(512, 4096);
     let dispatcher = {
         // tls mitm
         let (cert, priv_key) =
             load_cert_and_key(crt_path, privkey_path).expect("Failed to parse cert & key");
-        let proxy_allocator = PktBufPool::new(512, 4096);
         Arc::new(Dispatcher::new(
             real_iface_name.as_str(),
-            proxy_allocator,
+            proxy_allocator.clone(),
             dns.clone(),
             stat_center.clone(),
             dispatching.clone(),
@@ -216,7 +216,7 @@ fn main() {
         platform::get_iface_address(tun.get_name()).expect("failed to get tun address"),
         9961,
     );
-    let nat = Nat::new(nat_addr, manager.clone(), dispatcher, dns);
+    let nat = Nat::new(nat_addr, manager.clone(), dispatcher, dns, proxy_allocator);
     let _nat_handle = rt.spawn(async move { nat.run_tcp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });

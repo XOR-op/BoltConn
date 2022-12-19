@@ -194,7 +194,7 @@ impl TunDevice {
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
-                            self.session_mgr.lookup_session(pkt.dst_port())
+                            self.session_mgr.lookup_tcp_session(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
                             // tracing::trace!(
@@ -216,7 +216,7 @@ impl TunDevice {
                         }
                     } else {
                         // inbound->outbound
-                        let inbound_port = self.session_mgr.register_session(
+                        let inbound_port = self.session_mgr.register_tcp_session(
                             SocketAddr::V4(SocketAddrV4::new(src, pkt.src_port())),
                             SocketAddr::V4(SocketAddrV4::new(dst, pkt.dst_port())),
                         );

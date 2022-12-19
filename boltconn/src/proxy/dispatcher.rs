@@ -1,19 +1,24 @@
 use crate::adapter::{
-    Connector, DirectOutbound, OutBound, OutboundType, SSOutbound, Socks5Outbound, TunAdapter,
+    Connector, DirectOutbound, NatAdapter, OutboundType, SSOutbound, Socks5Outbound, TcpOutBound,
+    TunAdapter, UdpOutBound,
 };
+use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::host_matcher::HostMatcher;
 use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
-use crate::proxy::{NetworkAddr, StatCenter, StatisticsInfo};
+use crate::proxy::{NetworkAddr, SessionManager, StatCenter, StatisticsInfo};
 use crate::sniff::{HttpSniffer, HttpsSniffer, Modifier, ModifierClosure};
 use crate::PktBufPool;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::mpsc;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 
 pub struct Dispatcher {
@@ -26,6 +31,7 @@ pub struct Dispatcher {
     priv_key: PrivateKey,
     modifier: ModifierClosure,
     mitm_hosts: HostMatcher,
+    udp_sessions: DashMap<(SocketAddr, NetworkAddr), SendSide>,
 }
 
 impl Dispatcher {
@@ -50,6 +56,7 @@ impl Dispatcher {
             priv_key,
             modifier,
             mitm_hosts,
+            udp_sessions: DashMap::new(),
         }
     }
 
@@ -69,7 +76,7 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let (outbounding, proxy_type): (Box<dyn OutBound>, OutboundType) =
+        let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
             match self.dispatching.matches(&conn_info).as_ref() {
                 ProxyImpl::Direct => (
                     Box::new(DirectOutbound::new(
@@ -80,7 +87,10 @@ impl Dispatcher {
                     )),
                     OutboundType::Direct,
                 ),
-                ProxyImpl::Drop => unimplemented!(),
+                ProxyImpl::Drop => {
+                    indicator.store(0, Ordering::Relaxed);
+                    return;
+                }
                 ProxyImpl::Socks5(cfg) => (
                     Box::new(Socks5Outbound::new(
                         &self.iface_name,
@@ -176,9 +186,113 @@ impl Dispatcher {
             }
         }
         tokio::spawn(async move {
-            if let Err(err) = outbounding.spawn(tun_next).await {
+            if let Err(err) = outbounding.spawn_tcp(tun_next).await {
                 tracing::error!("[Dispatcher] create failed: {}", err)
             }
         });
     }
+
+    pub async fn submit_udp_pkt(
+        &self,
+        pkt: PktBufHandle,
+        src_addr: SocketAddr,
+        dst_addr: NetworkAddr,
+        indicator: Arc<AtomicBool>,
+        socket: &Arc<UdpSocket>,
+        session_mgr: &Arc<SessionManager>,
+    ) {
+        match self.udp_sessions.entry((src_addr, dst_addr.clone())) {
+            Entry::Occupied(val) => {
+                let _ = val.get().sender.send(pkt).await;
+            }
+            Entry::Vacant(entry) => {
+                let process_info = process::get_pid(src_addr, NetworkType::UDP)
+                    .map_or(None, |pid| process::get_process_info(pid));
+                let conn_info = ConnInfo {
+                    src: src_addr,
+                    dst: dst_addr.clone(),
+                    connection_type: NetworkType::UDP,
+                    process_info: process_info.clone(),
+                };
+                let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) =
+                    match self.dispatching.matches(&conn_info).as_ref() {
+                        ProxyImpl::Direct => (
+                            Box::new(DirectOutbound::new(
+                                &self.iface_name,
+                                dst_addr.clone(),
+                                self.allocator.clone(),
+                                self.dns.clone(),
+                            )),
+                            OutboundType::Direct,
+                        ),
+                        ProxyImpl::Drop => {
+                            indicator.store(false, Ordering::Relaxed);
+                            return;
+                        }
+                        ProxyImpl::Socks5(cfg) => (
+                            Box::new(Socks5Outbound::new(
+                                &self.iface_name,
+                                dst_addr.clone(),
+                                self.allocator.clone(),
+                                self.dns.clone(),
+                                cfg.clone(),
+                            )),
+                            OutboundType::Socks5,
+                        ),
+                        ProxyImpl::Shadowsocks(cfg) => (
+                            Box::new(SSOutbound::new(
+                                &self.iface_name,
+                                dst_addr.clone(),
+                                self.allocator.clone(),
+                                self.dns.clone(),
+                                cfg.clone(),
+                            )),
+                            OutboundType::Shadowsocks,
+                        ),
+                    };
+
+                // conn info
+                let info = Arc::new(RwLock::new(StatisticsInfo::new(
+                    dst_addr.clone(),
+                    process_info.clone(),
+                    proxy_type,
+                )));
+                self.stat_center.push(info.clone());
+
+                let (nat_conn, nat_next) = Connector::new_pair(10);
+                let nat_allocator = self.allocator.clone();
+                let (sender, receiver) = mpsc::channel(128);
+                let send_side = SendSide {
+                    sender,
+                    indicator,
+                };
+                entry.insert(send_side);
+                let socket = socket.clone();
+                let session_mgr = session_mgr.clone();
+                tokio::spawn(async move {
+                    let nat_adp = NatAdapter::new(
+                        info,
+                        receiver,
+                        socket,
+                        nat_allocator,
+                        nat_conn,
+                        session_mgr,
+                    );
+                    if let Err(err) = nat_adp.run().await {
+                        tracing::error!("[Dispatcher] run NatAdapter failed: {}", err)
+                    }
+                });
+                tokio::spawn(async move {
+                    if let Err(err) = outbounding.spawn_udp(nat_next).await {
+                        tracing::error!("[Dispatcher] create failed: {}", err)
+                    }
+                });
+            }
+        }
+    }
+}
+
+struct SendSide {
+    sender: tokio::sync::mpsc::Sender<PktBufHandle>,
+    indicator: Arc<AtomicBool>,
 }

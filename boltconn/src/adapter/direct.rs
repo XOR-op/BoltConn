@@ -1,4 +1,6 @@
-use crate::adapter::{established_tcp, Connector, OutBound};
+use crate::adapter::{
+    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketWrapper,
+};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
@@ -29,8 +31,8 @@ impl DirectOutbound {
         }
     }
 
-    async fn run(self, inbound: Connector) -> Result<()> {
-        let dst_addr = match self.dst {
+    async fn get_dst(&self) -> Result<SocketAddr> {
+        Ok(match &self.dst {
             NetworkAddr::DomainName { domain_name, port } => {
                 // translate fake ip
                 SocketAddr::new(
@@ -38,11 +40,15 @@ impl DirectOutbound {
                         .genuine_lookup(domain_name.as_str())
                         .await
                         .ok_or(io_err("DNS failed"))?,
-                    port,
+                    port.clone(),
                 )
             }
-            NetworkAddr::Raw(s) => s,
-        };
+            NetworkAddr::Raw(s) => s.clone(),
+        })
+    }
+
+    async fn run_tcp(self, inbound: Connector) -> Result<()> {
+        let dst_addr = self.get_dst().await?;
         let outbound = match dst_addr {
             SocketAddr::V4(_) => Egress::new(&self.iface_name).tcpv4_stream(dst_addr).await?,
             SocketAddr::V6(_) => Egress::new(&self.iface_name).tcpv6_stream(dst_addr).await?,
@@ -56,18 +62,50 @@ impl DirectOutbound {
         established_tcp(inbound, outbound, self.allocator).await;
         Ok(())
     }
+
+    async fn run_udp(self, inbound: Connector) -> Result<()> {
+        let dst_addr = self.get_dst().await?;
+        let outbound = Arc::new(Egress::new(&self.iface_name).udp_socket().await?);
+        outbound.connect(dst_addr).await?;
+        tracing::info!(
+            "[Direct] UDP Connection {:?} <=> {:?} established",
+            outbound.local_addr(),
+            outbound.peer_addr()
+        );
+        established_udp(
+            inbound,
+            UdpSocketWrapper::Direct(outbound),
+            self.allocator,
+            dst_addr,
+        );
+        Ok(())
+    }
 }
 
-impl OutBound for DirectOutbound {
-    fn spawn(&self, inbound: Connector) -> JoinHandle<Result<()>> {
-        tokio::spawn(self.clone().run(inbound))
+impl TcpOutBound for DirectOutbound {
+    fn spawn_tcp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
+        tokio::spawn(self.clone().run_tcp(inbound))
     }
 
-    fn spawn_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+    fn spawn_tcp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run(outer)),
+            tokio::spawn(self.clone().run_tcp(outer)),
+        )
+    }
+}
+
+impl UdpOutBound for DirectOutbound {
+    fn spawn_udp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
+        tokio::spawn(self.clone().run_udp(inbound))
+    }
+
+    fn spawn_udp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+        let (inner, outer) = Connector::new_pair(10);
+        (
+            DuplexChan::new(self.allocator.clone(), inner),
+            tokio::spawn(self.clone().run_udp(outer)),
         )
     }
 }

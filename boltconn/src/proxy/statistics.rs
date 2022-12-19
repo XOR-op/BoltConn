@@ -31,7 +31,7 @@ pub enum TlsVersion {
     TLS,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NetworkAddr {
     Raw(SocketAddr),
     DomainName { domain_name: String, port: u16 },

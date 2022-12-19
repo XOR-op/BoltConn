@@ -28,9 +28,10 @@ impl Egress {
         socket.connect(addr).await
     }
 
-    pub async fn udp_socket(&self, port: u16) -> Result<UdpSocket> {
+    pub async fn udp_socket(&self) -> Result<UdpSocket> {
         let ip_addr = get_iface_address(self.iface_name.as_str())?;
-        let socket = UdpSocket::bind(SocketAddr::new(ip_addr, port)).await?;
+        // any port
+        let socket = UdpSocket::bind(SocketAddr::new(ip_addr, 0)).await?;
         Ok(socket)
     }
 }

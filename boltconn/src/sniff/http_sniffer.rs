@@ -1,4 +1,4 @@
-use crate::adapter::OutBound;
+use crate::adapter::TcpOutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::proxy::StatisticsInfo;
@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 pub struct HttpSniffer {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
-    creator: Box<dyn OutBound>,
+    creator: Box<dyn TcpOutBound>,
     conn_info: Arc<RwLock<StatisticsInfo>>,
 }
 
@@ -22,7 +22,7 @@ impl HttpSniffer {
     pub fn new(
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
-        creator: Box<dyn OutBound>,
+        creator: Box<dyn TcpOutBound>,
         conn_info: Arc<RwLock<StatisticsInfo>>,
     ) -> Self {
         Self {
@@ -50,7 +50,7 @@ impl HttpSniffer {
     pub async fn run(self) -> io::Result<()> {
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
-            let (conn, _) = self.creator.spawn_with_chan();
+            let (conn, _) = self.creator.spawn_tcp_with_chan();
             Self::proxy(
                 conn,
                 self.modifier.clone(),

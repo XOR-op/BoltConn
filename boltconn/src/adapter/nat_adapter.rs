@@ -1,61 +1,60 @@
-use crate::adapter::{Connector, TcpStatus};
-use crate::proxy::{NetworkAddr, StatisticsInfo};
-use crate::PktBufPool;
+// Adapter to NAT
+
+use crate::adapter::Connector;
+use crate::common::buf_pool::{PktBufHandle, PktBufPool};
+use crate::proxy::{NetworkAddr, SessionManager, StatisticsInfo};
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 
-pub struct TunAdapter {
-    stat: TcpStatus,
+pub struct NatAdapter {
     info: Arc<RwLock<StatisticsInfo>>,
-    inbound: TcpStream,
+    inbound_read: mpsc::Receiver<PktBufHandle>,
+    inbound_write: Arc<UdpSocket>,
     allocator: PktBufPool,
     connector: Connector,
+    session_mgr: Arc<SessionManager>,
 }
 
-impl TunAdapter {
+impl NatAdapter {
     const BUF_SIZE: usize = 65536;
 
     pub fn new(
-        src_addr: SocketAddr,
-        dst_addr: NetworkAddr,
         info: Arc<RwLock<StatisticsInfo>>,
-        inbound: TcpStream,
-        available: Arc<AtomicU8>,
+        inbound_read: mpsc::Receiver<PktBufHandle>,
+        inbound_write: Arc<UdpSocket>,
         allocator: PktBufPool,
         connector: Connector,
+        session_mgr: Arc<SessionManager>,
     ) -> Self {
         Self {
-            stat: TcpStatus::new(src_addr, dst_addr, available),
             info,
-            inbound,
+            inbound_read,
+            inbound_write,
             allocator,
             connector,
+            session_mgr,
         }
     }
 
     pub async fn run(self) -> Result<()> {
-        let ingoing_indicator = self.stat.available.clone();
-        let outgoing_indicator = self.stat.available.clone();
         let mut first_packet = true;
-        let (mut in_read, mut in_write) = tokio::io::split(self.inbound);
         let outgoing_info_arc = self.info.clone();
         let allocator = self.allocator.clone();
+        let mut inbound_read = self.inbound_read;
         let Connector { tx, mut rx } = self.connector;
         // recv from inbound and send to outbound
         tokio::spawn(async move {
             loop {
-                let mut buf = allocator.obtain().await;
-                match buf.read(&mut in_read).await {
-                    Ok(0) => {
-                        allocator.release(buf);
+                match inbound_read.recv().await {
+                    None => {
                         break;
                     }
-                    Ok(size) => {
+                    Some(buf) => {
                         if first_packet {
                             first_packet = false;
                             outgoing_info_arc
@@ -63,23 +62,14 @@ impl TunAdapter {
                                 .unwrap()
                                 .update_proto(buf.as_ready());
                         }
-                        outgoing_info_arc.write().unwrap().more_upload(size);
+                        outgoing_info_arc.write().unwrap().more_upload(buf.len);
                         if let Err(err) = tx.send(buf).await {
                             allocator.release(err.0);
-                            tracing::warn!("TunAdapter tx send err");
+                            tracing::warn!("NatAdapter tx send err");
                             break;
                         }
                     }
-                    Err(err) => {
-                        allocator.release(buf);
-                        tracing::warn!("TunAdapter encounter error: {}", err);
-                        break;
-                    }
                 }
-            }
-            outgoing_indicator.fetch_sub(1, Ordering::Relaxed);
-            if outgoing_indicator.load(Ordering::Relaxed) == 0 {
-                outgoing_info_arc.write().unwrap().mark_fin();
             }
         });
         // recv from outbound and send to inbound
@@ -88,8 +78,8 @@ impl TunAdapter {
                 Some(buf) => {
                     // tracing::trace!("[Direct] ingoing {} bytes", size);
                     self.info.write().unwrap().more_download(buf.len);
-                    if let Err(err) = in_write.write_all(buf.as_ready()).await {
-                        tracing::warn!("TunAdapter write to inbound failed: {}", err);
+                    if let Err(err) = self.inbound_write.send(buf.as_ready()).await {
+                        tracing::warn!("NatAdapter write to inbound failed: {}", err);
                         self.allocator.release(buf);
                         break;
                     }
@@ -100,10 +90,6 @@ impl TunAdapter {
                     break;
                 }
             }
-        }
-        ingoing_indicator.fetch_sub(1, Ordering::Relaxed);
-        if ingoing_indicator.load(Ordering::Relaxed) == 0 {
-            self.info.write().unwrap().mark_fin();
         }
         Ok(())
     }

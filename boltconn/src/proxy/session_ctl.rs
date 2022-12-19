@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::Arc;
 use std::time;
 use std::time::Instant;
@@ -39,17 +39,18 @@ impl TcpSessionCtl {
 
 #[derive(Debug, Clone)]
 pub struct UdpSessionCtl {
-    internal_port: u16,
-    iface_port: u16,
-    last_time: Instant,
-    // todo add some statistics
+    pub source_addr: SocketAddr,
+    pub dest_addr: SocketAddr,
+    pub available: Arc<AtomicBool>,
+    pub last_time: Instant,
 }
 
 impl UdpSessionCtl {
-    pub fn new(internal_port: u16, iface_port: u16) -> Self {
+    pub fn new(source_addr: SocketAddr, dest_addr: SocketAddr) -> Self {
         Self {
-            internal_port,
-            iface_port,
+            source_addr,
+            dest_addr,
+            available: Arc::new(AtomicBool::new(true)),
             last_time: Instant::now(),
         }
     }
