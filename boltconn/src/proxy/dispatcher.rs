@@ -197,6 +197,7 @@ impl Dispatcher {
         pkt: PktBufHandle,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
+        dst_fake_addr: SocketAddr,
         indicator: Arc<AtomicBool>,
         socket: &Arc<UdpSocket>,
         session_mgr: &Arc<SessionManager>,
@@ -262,10 +263,10 @@ impl Dispatcher {
                 let (nat_conn, nat_next) = Connector::new_pair(10);
                 let nat_allocator = self.allocator.clone();
                 let (sender, receiver) = mpsc::channel(128);
-                let send_side = SendSide {
-                    sender,
-                    indicator,
-                };
+                let send_side = SendSide { sender, indicator };
+                // push packet into channel
+                let _ = send_side.sender.send(pkt).await;
+
                 entry.insert(send_side);
                 let socket = socket.clone();
                 let session_mgr = session_mgr.clone();
@@ -274,6 +275,8 @@ impl Dispatcher {
                         info,
                         receiver,
                         socket,
+                        src_addr,
+                        dst_fake_addr,
                         nat_allocator,
                         nat_conn,
                         session_mgr,

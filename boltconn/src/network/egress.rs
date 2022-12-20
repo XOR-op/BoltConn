@@ -1,8 +1,11 @@
+use crate::common::io_err;
 use crate::platform;
 use crate::platform::get_iface_address;
+use libc::socket;
 use std::io::Result;
-use std::net::SocketAddr;
-use std::os::unix::io::AsRawFd;
+use std::mem;
+use std::net::{IpAddr, SocketAddr};
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
 pub struct Egress {
@@ -28,10 +31,39 @@ impl Egress {
         socket.connect(addr).await
     }
 
-    pub async fn udp_socket(&self) -> Result<UdpSocket> {
-        let ip_addr = get_iface_address(self.iface_name.as_str())?;
+    pub async fn udpv4_socket(&self) -> Result<UdpSocket> {
+        let IpAddr::V4(local_addr) = get_iface_address(self.iface_name.as_str())?else {
+            return Err(io_err("not ipv4"));
+        };
+        let std_udp_sock = unsafe {
+            let fd = socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+            if fd < 0 {
+                return Err(io_err("create udp socket failed"));
+            }
+            platform::bind_to_device(fd, self.iface_name.as_str())?;
+
+            // set nonblocking
+            let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+            if flags < 0 {
+                return Err(io_err("udp GETFL failed"));
+            }
+            if libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK | flags) != 0 {
+                return Err(io_err("set udp non-blocking failed"));
+            }
+
+            let sock = platform::get_sockaddr(local_addr);
+            if libc::bind(
+                fd,
+                &sock as *const _ as *const _,
+                mem::size_of_val(&sock) as libc::socklen_t,
+            ) != 0
+            {
+                return Err(io_err("bind  udp socket failed"));
+            }
+            std::net::UdpSocket::from_raw_fd(fd)
+        };
         // any port
-        let socket = UdpSocket::bind(SocketAddr::new(ip_addr, 0)).await?;
+        let socket = UdpSocket::from_std(std_udp_sock)?;
         Ok(socket)
     }
 }

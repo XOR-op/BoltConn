@@ -62,26 +62,34 @@ impl Nat {
 
     pub async fn run_udp(&self) -> Result<()> {
         let udp_listener = Arc::new(UdpSocket::bind(self.nat_addr).await?);
+        tracing::event!(
+            tracing::Level::INFO,
+            "[NAT] Listen UDP at {}, running...",
+            self.nat_addr
+        );
         loop {
             let mut buffer = self.pool.obtain().await;
             let (len, src) = udp_listener.recv_from(buffer.as_uninited()).await?;
             buffer.len = len;
             if let Ok((src, dst, indicator)) = self.session_mgr.lookup_udp_session(src.ip()) {
-                let dst = match self.dns.fake_ip_to_domain(dst.ip()) {
+                let real_dst = match self.dns.fake_ip_to_domain(dst.ip()) {
                     None => NetworkAddr::Raw(dst),
                     Some(s) => NetworkAddr::DomainName {
                         domain_name: s,
                         port: dst.port(),
                     },
                 };
-                self.dispatcher.submit_udp_pkt(
-                    buffer,
-                    src,
-                    dst,
-                    indicator,
-                    &udp_listener,
-                    &self.session_mgr,
-                ).await;
+                self.dispatcher
+                    .submit_udp_pkt(
+                        buffer,
+                        src,
+                        real_dst,
+                        dst,
+                        indicator,
+                        &udp_listener,
+                        &self.session_mgr,
+                    )
+                    .await;
             } else {
                 // no corresponding, drop
                 self.pool.release(buffer);

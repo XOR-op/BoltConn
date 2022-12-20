@@ -80,6 +80,7 @@ impl SessionManager {
     pub fn flush(&self) {
         self.tcp_records
             .retain(|_, v| v.available.load(Ordering::Relaxed) > 0);
+        // todo: need fix
         self.udp_records
             .retain(|_, v| v.is_expired(self.stale_time));
     }
@@ -89,6 +90,20 @@ impl SessionManager {
     }
     pub fn get_all_udp_sessions(&self) -> Vec<UdpSessionCtl> {
         self.udp_records.iter().map(|p| p.value().clone()).collect()
+    }
+
+    pub async fn lookup_udp_token(&self, src: SocketAddr, dst: SocketAddr) -> Option<IpAddr> {
+        match self.udp_session_mapping.entry((src.clone(), dst)) {
+            Entry::Occupied(v) => {
+                let key = v.get().clone();
+                self.udp_records.get_mut(&key).map(|mut p| p.update_time());
+                Some(match src {
+                    SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(key)),
+                    SocketAddr::V6(_) => IpAddr::V6(Ipv4Addr::from(key).to_ipv6_mapped()),
+                })
+            }
+            _ => None,
+        }
     }
 
     pub async fn register_udp_session(&self, src: SocketAddr, dst: SocketAddr) -> IpAddr {
@@ -137,14 +152,14 @@ impl SessionManager {
                     return Err(io::Error::new(
                         ErrorKind::AddrNotAvailable,
                         format!("Invalid key"),
-                    ))
+                    ));
                 }
                 Some(v4) => v4.into(),
             },
         };
-        match self.udp_records.get(&key) {
-            Some(s) => {
-                self.udp_records.get_mut(s.key()).map(|mut p| p.update_time());
+        match self.udp_records.get_mut(&key) {
+            Some(mut s) => {
+                s.update_time();
                 Ok((s.source_addr, s.dest_addr, s.available.clone()))
             }
             None => Err(io::Error::new(

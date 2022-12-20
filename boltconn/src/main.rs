@@ -17,12 +17,14 @@ use network::{
     dns::{Dns, DnsRoutingHandle},
     packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt},
 };
+use nix::unistd::Uid;
 use platform::get_default_route;
 use proxy::Dispatcher;
 use proxy::{Nat, SessionManager};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::process::exit;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{fs, io};
@@ -91,7 +93,7 @@ async fn load_config(
         &raw_config.rule_provider,
         false
     ))
-        .0?;
+    .0?;
     Ok((raw_config, raw_state, schema))
 }
 
@@ -124,6 +126,11 @@ fn main() {
     let state_path = "./_private/config/state.yml";
     let crt_path = "_private/ca/crt.pem";
     let privkey_path = "_private/ca/key.pem";
+
+    if !Uid::effective().is_root() {
+        println!("BoltConn must be run with root privilege.");
+        exit(-1);
+    }
 
     // tokio and tracing
     let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
@@ -216,8 +223,16 @@ fn main() {
         platform::get_iface_address(tun.get_name()).expect("failed to get tun address"),
         9961,
     );
-    let nat = Nat::new(nat_addr, manager.clone(), dispatcher, dns, proxy_allocator);
-    let _nat_handle = rt.spawn(async move { nat.run_tcp().await });
+    let nat = Arc::new(Nat::new(
+        nat_addr,
+        manager.clone(),
+        dispatcher,
+        dns,
+        proxy_allocator,
+    ));
+    let nat_udp = nat.clone();
+    let _nat_tcp_handle = rt.spawn(async move { nat.run_tcp().await });
+    let _nat_udp_handle = rt.spawn(async move { nat_udp.run_udp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
     rt.block_on(async { tokio::signal::ctrl_c().await })

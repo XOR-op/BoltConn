@@ -2,6 +2,7 @@ use crate::common::async_raw_fd::AsyncRawFd;
 use crate::common::async_socket::AsyncRawSocket;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::network;
+use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::platform;
 use crate::platform::route::setup_ipv4_routing_table;
 use crate::platform::{create_v4_raw_socket, errno_err, interface_up, set_address};
@@ -241,14 +242,7 @@ impl TunDevice {
                     }
                 }
                 IpProtocol::Udp => {
-                    let pkt = UdpPkt::new(pkt);
-                    // tracing::trace!(
-                    //     "[TUN] UDP packet: {}:{} -> {}:{}",
-                    //     src,
-                    //     pkt.src_port(),
-                    //     dst,
-                    //     pkt.dst_port()
-                    // );
+                    let mut pkt = UdpPkt::new(pkt);
                     if pkt.dst_port() == 53 {
                         // fake ip
                         if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload())
@@ -265,9 +259,43 @@ impl TunDevice {
                             self.pool.release(pkt.into_handle());
                         }
                     } else {
-                        let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
-                        self.pool.release(pkt.into_handle());
+                        // tracing::trace!("[TUN] UDP packet {}", pkt);
+                        // NAT with token
+                        if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
+                            // outbound -> inbound
+                            let Ok((real_src, real_dst, _)) = self.session_mgr.lookup_udp_session(IpAddr::V4(dst))else {
+                                // drop unknown packet
+                                self.pool.release(pkt.into_handle());
+                                continue;
+                            };
+                            pkt.rewrite_addr(real_dst, real_src);
+                            let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
+                            self.pool.release(pkt.into_handle());
+                        } else {
+                            // inbound -> outbound
+                            let token_ip = self
+                                .session_mgr
+                                .register_udp_session(
+                                    SocketAddr::new(IpAddr::V4(src), pkt.src_port()),
+                                    SocketAddr::new(IpAddr::V4(dst), pkt.dst_port()),
+                                )
+                                .await;
+                            pkt.rewrite_addr(
+                                SocketAddr::new(token_ip, pkt.src_port()),
+                                nat_addr.into(),
+                            );
+                            let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
+                            self.pool.release(pkt.into_handle());
+                        }
                     }
+                }
+                IpProtocol::Icmp => {
+                    // just echo now
+                    tracing::trace!("ICMP packet: {} -> {}", src, dst);
+                    let mut pkt = Icmpv4Pkt::new(pkt);
+                    pkt.rewrite_addr(dst, src);
+                    let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
+                    self.pool.release(pkt.into_handle());
                 }
                 _ => {
                     tracing::trace!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);

@@ -84,7 +84,7 @@ impl Display for TcpPkt {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}: [src_port:{}, dst_port:{}",
+            "{}: [src_port:{}, dst_port:{}]",
             self.ip_pkt,
             self.src_port(),
             self.dst_port()
@@ -170,7 +170,7 @@ impl Display for UdpPkt {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}: [src_port:{}, dst_port:{}",
+            "{}: [src_port:{}, dst_port:{}]",
             self.ip_pkt,
             self.src_port(),
             self.dst_port()

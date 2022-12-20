@@ -65,10 +65,10 @@ impl DirectOutbound {
 
     async fn run_udp(self, inbound: Connector) -> Result<()> {
         let dst_addr = self.get_dst().await?;
-        let outbound = Arc::new(Egress::new(&self.iface_name).udp_socket().await?);
+        let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         outbound.connect(dst_addr).await?;
         tracing::info!(
-            "[Direct] UDP Connection {:?} <=> {:?} established",
+            "[Direct] UDP Session {:?} <=> {:?} established",
             outbound.local_addr(),
             outbound.peer_addr()
         );
@@ -77,7 +77,8 @@ impl DirectOutbound {
             UdpSocketWrapper::Direct(outbound),
             self.allocator,
             dst_addr,
-        );
+        )
+        .await;
         Ok(())
     }
 }

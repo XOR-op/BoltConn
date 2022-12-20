@@ -15,8 +15,7 @@ Supported platforms: Macos, Linux.
 - [x] clash-compatible ruleset configuration
 - [x] RESTful API controller
 - [x] command-line tool for controlling and monitoring
-
-[//]: # (- [x] symmetric UDP NAT)
+- [x] symmetric UDP NAT
 
 ## Documentations
 

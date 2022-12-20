@@ -83,8 +83,8 @@ pub trait UdpOutBound: Send + Sync {
 }
 
 async fn established_tcp<T>(inbound: Connector, outbound: T, allocator: PktBufPool)
-    where
-        T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
+where
+    T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
     let allocator2 = allocator.clone();

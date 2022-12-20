@@ -15,6 +15,8 @@ pub struct NatAdapter {
     info: Arc<RwLock<StatisticsInfo>>,
     inbound_read: mpsc::Receiver<PktBufHandle>,
     inbound_write: Arc<UdpSocket>,
+    src: SocketAddr,
+    dst: SocketAddr,
     allocator: PktBufPool,
     connector: Connector,
     session_mgr: Arc<SessionManager>,
@@ -27,6 +29,8 @@ impl NatAdapter {
         info: Arc<RwLock<StatisticsInfo>>,
         inbound_read: mpsc::Receiver<PktBufHandle>,
         inbound_write: Arc<UdpSocket>,
+        src: SocketAddr,
+        dst: SocketAddr,
         allocator: PktBufPool,
         connector: Connector,
         session_mgr: Arc<SessionManager>,
@@ -35,6 +39,8 @@ impl NatAdapter {
             info,
             inbound_read,
             inbound_write,
+            src,
+            dst,
             allocator,
             connector,
             session_mgr,
@@ -55,6 +61,7 @@ impl NatAdapter {
                         break;
                     }
                     Some(buf) => {
+                        // tracing::trace!("[NatAdapter] outgoing {} bytes", buf.len);
                         if first_packet {
                             first_packet = false;
                             outgoing_info_arc
@@ -76,9 +83,17 @@ impl NatAdapter {
         loop {
             match rx.recv().await {
                 Some(buf) => {
-                    // tracing::trace!("[Direct] ingoing {} bytes", size);
+                    let Some(token_ip) = self.session_mgr.lookup_udp_token(self.src, self.dst).await else {
+                        // no mapping, drop and return
+                        break;
+                    };
+                    // tracing::trace!("[NatAdapter] incoming {} bytes", buf.len);
                     self.info.write().unwrap().more_download(buf.len);
-                    if let Err(err) = self.inbound_write.send(buf.as_ready()).await {
+                    if let Err(err) = self
+                        .inbound_write
+                        .send_to(buf.as_ready(), SocketAddr::new(token_ip, self.src.port()))
+                        .await
+                    {
                         tracing::warn!("NatAdapter write to inbound failed: {}", err);
                         self.allocator.release(buf);
                         break;
