@@ -162,19 +162,26 @@ fn main() {
 
     // guards
     let _guard = rt.enter();
-    let dns_guard = platform::SystemDnsHandle::new("198.18.99.88".parse().unwrap())
-        .expect("fail to replace /etc/resolv.conf");
-    let dns_routing_guard =
-        DnsRoutingHandle::new(gateway_address, real_iface_name.as_str(), &dns_config)
-            .expect("fail to add dns route table");
+    let fake_dns_server = "198.18.99.88".parse().unwrap();
+    let dns_guard =
+        platform::SystemDnsHandle::new(fake_dns_server).expect("fail to replace /etc/resolv.conf");
+    // let dns_routing_guard =
+    //     DnsRoutingHandle::new(gateway_address, real_iface_name.as_str(), &dns_config)
+    //         .expect("fail to add dns route table");
 
     // initialize resources
     let manager = Arc::new(SessionManager::new());
     let dns = Arc::new(Dns::new(&dns_config).expect("DNS failed to initialize"));
     let tun = rt.block_on(async {
         let pool = PktBufPool::new(512, 4096);
-        let mut tun = TunDevice::open(manager.clone(), pool, real_iface_name.as_str(), dns.clone())
-            .expect("fail to create TUN");
+        let mut tun = TunDevice::open(
+            manager.clone(),
+            pool,
+            real_iface_name.as_str(),
+            dns.clone(),
+            fake_dns_server,
+        )
+        .expect("fail to create TUN");
         // create tun device
         event!(Level::INFO, "TUN Device {} opened.", tun.get_name());
         tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 16).unwrap())
@@ -238,7 +245,7 @@ fn main() {
     rt.block_on(async { tokio::signal::ctrl_c().await })
         .expect("Tokio runtime error");
     drop(dns_guard);
-    drop(dns_routing_guard);
+    // drop(dns_routing_guard);
     // rt.shutdown_timeout(Duration::from_millis(3000));
     rt.shutdown_background();
 }

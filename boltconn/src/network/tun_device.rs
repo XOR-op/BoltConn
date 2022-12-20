@@ -15,7 +15,7 @@ use network::packet::ip::IPPkt;
 use smoltcp::wire::IpProtocol;
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
@@ -32,6 +32,7 @@ pub struct TunDevice {
     pool: PktBufPool,
     session_mgr: Arc<SessionManager>,
     dns_resolver: Arc<Dns>,
+    fake_dns_addr: Ipv4Addr,
 }
 
 impl TunDevice {
@@ -40,6 +41,7 @@ impl TunDevice {
         pool: PktBufPool,
         outbound_iface: &str,
         dns_resolver: Arc<Dns>,
+        fake_dns_addr: Ipv4Addr,
     ) -> io::Result<TunDevice> {
         let mut name_buffer: Vec<c_char> = Vec::new();
         name_buffer.resize(36, 0);
@@ -62,6 +64,7 @@ impl TunDevice {
             pool,
             session_mgr,
             dns_resolver,
+            fake_dns_addr,
         })
     }
 
@@ -243,7 +246,7 @@ impl TunDevice {
                 }
                 IpProtocol::Udp => {
                     let mut pkt = UdpPkt::new(pkt);
-                    if pkt.dst_port() == 53 {
+                    if pkt.dst_port() == 53 && dst == self.fake_dns_addr {
                         // fake ip
                         if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload())
                         {
@@ -259,7 +262,7 @@ impl TunDevice {
                             self.pool.release(pkt.into_handle());
                         }
                     } else {
-                        // tracing::trace!("[TUN] UDP packet {}", pkt);
+                        tracing::trace!("[TUN] UDP packet {}", pkt);
                         // NAT with token
                         if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                             // outbound -> inbound
