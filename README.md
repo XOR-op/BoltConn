@@ -1,6 +1,6 @@
 # BoltConn
 
-BoltConn is a transparent proxy for domain name/application level routing.
+BoltConn is a transparent proxy for domain name/application level tunneling.
 
 Supported platforms: Macos, Linux.
 

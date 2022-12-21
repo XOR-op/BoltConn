@@ -1,3 +1,6 @@
+use ::shadowsocks::relay::Address;
+use ::shadowsocks::ProxySocket;
+use fast_socks5::util::target_addr::TargetAddr;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
@@ -134,44 +137,80 @@ where
 #[derive(Clone)]
 enum UdpSocketWrapper {
     Direct(Arc<UdpSocket>),
+    Socks5(Arc<UdpSocket>, TargetAddr),
+    SS(Arc<ProxySocket>, Address),
 }
 
 impl UdpSocketWrapper {
-    async fn send(&self, data: &[u8], dest: SocketAddr) -> anyhow::Result<()> {
+    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
         match self {
             UdpSocketWrapper::Direct(s) => {
-                s.send_to(data, dest).await?;
+                s.send(data).await?;
+            }
+            UdpSocketWrapper::Socks5(s, target) => {
+                let mut buf = match target {
+                    TargetAddr::Ip(s) => fast_socks5::new_udp_header(s.clone())?,
+                    TargetAddr::Domain(s, p) => {
+                        fast_socks5::new_udp_header((s.as_str(), p.clone()))?
+                    }
+                };
+                buf.extend_from_slice(data);
+                s.send(buf.as_slice()).await?;
+            }
+            UdpSocketWrapper::SS(s, target) => {
+                s.send(target, data).await?;
             }
         }
         Ok(())
     }
-    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, SocketAddr)> {
+
+    // @return: <length>, <if addr matches target>
+    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
         match self {
             UdpSocketWrapper::Direct(s) => {
-                let (len, addr) = s.recv_from(data).await?;
-                Ok((len, addr))
+                let (len, _) = s.recv_from(data).await?;
+                // s is established by connect
+                Ok((len, true))
+            }
+            UdpSocketWrapper::Socks5(s, target) => {
+                let mut buf = [0u8; 0x10000];
+                let (size, _) = s.recv_from(&mut buf).await?;
+                let (frag, target_addr, raw_data) =
+                    fast_socks5::parse_udp_request(&mut buf[..size]).await?;
+                if frag != 0 {
+                    return Err(anyhow::anyhow!("Unsupported frag value."));
+                }
+                data[..raw_data.len()].copy_from_slice(raw_data);
+                Ok((
+                    raw_data.len(),
+                    match (target, target_addr) {
+                        (TargetAddr::Ip(a), TargetAddr::Ip(b)) => *a == b,
+                        (TargetAddr::Domain(s1, p1), TargetAddr::Domain(s2, p2)) => {
+                            *p1 == p2 && *s1 == s2
+                        }
+                        _ => false,
+                    },
+                ))
+            }
+            UdpSocketWrapper::SS(s, target) => {
+                let (len, addr, _) = s.recv(data).await?;
+                Ok((len, addr == *target))
             }
         }
     }
 }
 
-async fn established_udp(
-    inbound: Connector,
-    outbound: UdpSocketWrapper,
-    allocator: PktBufPool,
-    dest: SocketAddr,
-) {
+async fn established_udp(inbound: Connector, outbound: UdpSocketWrapper, allocator: PktBufPool) {
     // establish udp
     let allocator2 = allocator.clone();
     let outbound2 = outbound.clone();
-    let dest2 = dest.clone();
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Some(buf) => {
-                    let res = outbound2.send(buf.as_ready(), dest2).await;
+                    let res = outbound2.send(buf.as_ready()).await;
                     allocator2.release(buf);
                     if let Err(err) = res {
                         tracing::warn!("write to outbound failed: {}", err);
@@ -189,14 +228,15 @@ async fn established_udp(
         let mut buf = allocator.obtain().await;
         let res = outbound.recv(buf.as_uninited()).await;
         match res {
-            Ok((0, _addr)) => {
+            Ok((0, _)) => {
                 allocator.release(buf);
                 break;
             }
-            Ok((n, addr)) => {
+            Ok((n, match_addr)) => {
                 buf.len = n;
-                if dest != addr {
+                if !match_addr {
                     // we follow symmetric NAT here; drop unknown packets
+                    tracing::trace!("Sym NAT drop unknown packet");
                     allocator.release(buf);
                     continue;
                 }

@@ -1,15 +1,18 @@
-use crate::adapter::{established_tcp, Connector, TcpOutBound, UdpOutBound};
+use crate::adapter::{
+    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketWrapper,
+};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{as_io_err, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::NetworkAddr;
+use anyhow::Context;
 use fast_socks5::client::Socks5Stream;
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{AuthenticationMethod, Socks5Command};
 use std::io::Result;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
@@ -58,7 +61,7 @@ impl Socks5Outbound {
         }
     }
 
-    async fn connect_proxy(&self) -> Result<Socks5Stream<TcpStream>> {
+    async fn connect_proxy(&self) -> Result<(Socks5Stream<TcpStream>, SocketAddr)> {
         let server_addr = match self.config.server_addr {
             NetworkAddr::Raw(addr) => addr,
             NetworkAddr::DomainName {
@@ -87,12 +90,15 @@ impl Socks5Outbound {
         };
         let mut conn_cfg = fast_socks5::client::Config::default();
         conn_cfg.set_connect_timeout(8);
-        Socks5Stream::use_stream(socks_conn, Some(self.config.get_auth()), conn_cfg)
-            .await
-            .map_err(|e| as_io_err(e))
+        Ok((
+            Socks5Stream::use_stream(socks_conn, Some(self.config.get_auth()), conn_cfg)
+                .await
+                .map_err(|e| as_io_err(e))?,
+            server_addr,
+        ))
     }
     async fn run_tcp(self, inbound: Connector) -> Result<()> {
-        let mut socks_stream = self.connect_proxy().await?;
+        let (mut socks_stream, _) = self.connect_proxy().await?;
         let target = match self.dst {
             NetworkAddr::Raw(addr) => TargetAddr::Ip(addr),
             NetworkAddr::DomainName { domain_name, port } => TargetAddr::Domain(domain_name, port),
@@ -106,18 +112,31 @@ impl Socks5Outbound {
     }
 
     async fn run_udp(self, inbound: Connector) -> Result<()> {
-        // todo: use Socks5Datagram
-        let mut socks_stream = self.connect_proxy().await?;
-        let target = match self.dst {
-            NetworkAddr::Raw(addr) => TargetAddr::Ip(addr),
-            NetworkAddr::DomainName { domain_name, port } => TargetAddr::Domain(domain_name, port),
+        let target = match &self.dst {
+            NetworkAddr::Raw(addr) => TargetAddr::Ip(addr.clone()),
+            NetworkAddr::DomainName { domain_name, port } => {
+                TargetAddr::Domain(domain_name.clone(), port.clone())
+            }
         };
+        let (mut socks_stream, server_addr) = self.connect_proxy().await?;
+        let out_sock = Arc::new(match server_addr {
+            SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
+            SocketAddr::V6(_) => return Err(io_err("udp v6 not supported")),
+        });
         let bound_addr = socks_stream
-            .request(Socks5Command::UDPAssociate, target)
+            .request(Socks5Command::UDPAssociate, target.clone())
             .await
-            .map_err(|e| as_io_err(e))?;
-        // established_tcp(inbound, socks_stream, self.allocator).await;
-        todo!();
+            .map_err(|e| as_io_err(e))?
+            .to_socket_addrs()?
+            .next()
+            .unwrap();
+        out_sock.connect(bound_addr).await?;
+        established_udp(
+            inbound,
+            UdpSocketWrapper::Socks5(out_sock, target),
+            self.allocator,
+        )
+        .await;
         Ok(())
     }
 }

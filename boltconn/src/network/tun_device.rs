@@ -262,7 +262,6 @@ impl TunDevice {
                             self.pool.release(pkt.into_handle());
                         }
                     } else {
-                        tracing::trace!("[TUN] UDP packet {}", pkt);
                         // NAT with token
                         if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                             // outbound -> inbound

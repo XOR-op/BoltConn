@@ -42,15 +42,6 @@ impl Egress {
             }
             platform::bind_to_device(fd, self.iface_name.as_str())?;
 
-            // set nonblocking
-            let flags = libc::fcntl(fd, libc::F_GETFL, 0);
-            if flags < 0 {
-                return Err(io_err("udp GETFL failed"));
-            }
-            if libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK | flags) != 0 {
-                return Err(io_err("set udp non-blocking failed"));
-            }
-
             let sock = platform::get_sockaddr(local_addr);
             if libc::bind(
                 fd,
@@ -58,10 +49,11 @@ impl Egress {
                 mem::size_of_val(&sock) as libc::socklen_t,
             ) != 0
             {
-                return Err(io_err("bind  udp socket failed"));
+                return Err(io_err("bind udp socket failed"));
             }
             std::net::UdpSocket::from_raw_fd(fd)
         };
+        std_udp_sock.set_nonblocking(true)?;
         // any port
         let socket = UdpSocket::from_std(std_udp_sock)?;
         Ok(socket)

@@ -1,4 +1,6 @@
-use crate::adapter::{established_tcp, Connector, TcpOutBound, UdpOutBound};
+use crate::adapter::{
+    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketWrapper,
+};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
@@ -7,7 +9,8 @@ use crate::network::egress::Egress;
 use crate::proxy::NetworkAddr;
 use io::Result;
 use shadowsocks::config::ServerType;
-use shadowsocks::{ProxyClientStream, ServerAddr, ServerConfig};
+use shadowsocks::context::SharedContext;
+use shadowsocks::{relay, ProxyClientStream, ProxySocket, ServerAddr, ServerConfig};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,17 +42,19 @@ impl SSOutbound {
         }
     }
 
-    async fn run(self, inbound: Connector) -> Result<()> {
-        let target_addr = match self.dst {
-            NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(s),
+    async fn create_internal(
+        &self,
+    ) -> Result<(relay::Address, SharedContext, ServerConfig, SocketAddr)> {
+        let target_addr = match &self.dst {
+            NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(s.clone()),
             NetworkAddr::DomainName { domain_name, port } => {
-                shadowsocks::relay::Address::from((domain_name, port))
+                shadowsocks::relay::Address::from((domain_name.clone(), port.clone()))
             }
         };
         // ss configs
         let context = shadowsocks::context::Context::new_shared(ServerType::Local);
         let (resolved_config, server_addr) = match self.config.addr().clone() {
-            ServerAddr::SocketAddr(p) => (self.config, p),
+            ServerAddr::SocketAddr(p) => (self.config.clone(), p),
             ServerAddr::DomainName(domain_name, port) => {
                 let resp = self
                     .dns
@@ -63,6 +68,11 @@ impl SSOutbound {
                 )
             }
         };
+        Ok((target_addr, context, resolved_config.clone(), server_addr))
+    }
+
+    async fn run_tcp(self, inbound: Connector) -> Result<()> {
+        let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
         let tcp_conn = match server_addr {
             SocketAddr::V4(_) => {
                 Egress::new(&self.iface_name)
@@ -80,28 +90,56 @@ impl SSOutbound {
         established_tcp(inbound, ss_stream, self.allocator).await;
         Ok(())
     }
+
+    async fn run_udp(self, inbound: Connector) -> Result<()> {
+        let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
+        let out_sock = {
+            let socket = match server_addr {
+                SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
+                SocketAddr::V6(_) => return Err(io_err("ss ipv6 udp not supported now")),
+            };
+            socket.connect(server_addr).await?;
+            socket
+        };
+        let proxy_socket = Arc::new(ProxySocket::from_socket(
+            context,
+            &resolved_config,
+            out_sock,
+        ));
+        established_udp(
+            inbound,
+            UdpSocketWrapper::SS(proxy_socket, target_addr),
+            self.allocator,
+        )
+        .await;
+        Ok(())
+    }
 }
 
 impl TcpOutBound for SSOutbound {
     fn spawn_tcp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
-        tokio::spawn(self.clone().run(inbound))
+        tokio::spawn(self.clone().run_tcp(inbound))
     }
 
     fn spawn_tcp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run(outer)),
+            tokio::spawn(self.clone().run_tcp(outer)),
         )
     }
 }
 
 impl UdpOutBound for SSOutbound {
     fn spawn_udp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
-        todo!()
+        tokio::spawn(self.clone().run_udp(inbound))
     }
 
     fn spawn_udp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
-        todo!()
+        let (inner, outer) = Connector::new_pair(10);
+        (
+            DuplexChan::new(self.allocator.clone(), inner),
+            tokio::spawn(self.clone().run_udp(outer)),
+        )
     }
 }
