@@ -10,6 +10,7 @@ use crate::proxy::NetworkAddr;
 use io::Result;
 use shadowsocks::config::ServerType;
 use shadowsocks::context::SharedContext;
+use shadowsocks::relay::udprelay::proxy_socket::UdpSocketType;
 use shadowsocks::{relay, ProxyClientStream, ProxySocket, ServerAddr, ServerConfig};
 use std::io;
 use std::net::SocketAddr;
@@ -102,6 +103,7 @@ impl SSOutbound {
             socket
         };
         let proxy_socket = Arc::new(ProxySocket::from_socket(
+            UdpSocketType::Client,
             context,
             &resolved_config,
             out_sock,

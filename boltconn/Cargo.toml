@@ -38,7 +38,7 @@ http = "0.2.8"
 hyper = { version = "0.14.23", features = ["stream", "server", "client", "http1", "http2"] }
 httparse = "1.8.0"
 fast-socks5 = "0.8.1"
-shadowsocks = "1.14.2"
+shadowsocks = "1.15.0"
 axum = "0.6.0"
 radix_trie = "0.2.1"
 aho-corasick = "0.7.20"

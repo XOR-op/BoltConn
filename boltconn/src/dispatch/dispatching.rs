@@ -7,7 +7,7 @@ use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
-use shadowsocks::crypto::v1::CipherKind;
+use shadowsocks::crypto::CipherKind;
 use shadowsocks::{ServerAddr, ServerConfig};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
