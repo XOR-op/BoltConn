@@ -3,6 +3,7 @@ use crate::common::io_err;
 use crate::platform::{errno_err, get_command_output, run_command};
 use ipnet::IpNet;
 use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{io, mem};
@@ -127,24 +128,27 @@ pub fn get_default_route() -> io::Result<(IpAddr, String)> {
         .split("\n")
         .map(|s| s.to_string())
         .collect();
-    if lines.len() >= 5 {
-        let gw: IpAddr = {
-            let gw_str: Vec<&str> = lines[3].split(": ").collect();
-            if gw_str.len() != 2 {
-                return Err(io_err("Invalid format"));
+    let kv: HashMap<String, String> = lines
+        .into_iter()
+        .filter_map(|l| {
+            let vec: Vec<&str> = l.split(": ").collect();
+            if vec.len() == 2 {
+                Some((vec[0].trim().to_string(), vec[1].to_string()))
+            } else {
+                None
             }
-            gw_str[1].parse().map_err(|_| io_err("Invalid gateway"))?
-        };
-        let iface = {
-            let iface_str: Vec<&str> = lines[4].split(": ").collect();
-            if iface_str.len() != 2 {
-                return Err(io_err("Invalid format"));
-            }
-            iface_str[1].clone()
-        };
-        Ok((gw, iface.to_string()))
+        })
+        .collect();
+    if kv.contains_key("interface") && kv.contains_key("gateway") {
+        let gw: IpAddr = kv
+            .get("gateway")
+            .unwrap()
+            .parse()
+            .map_err(|_| io_err("Invalid gateway"))?;
+        let iface = kv.get("interface").unwrap().to_string();
+        Ok((gw, iface))
     } else {
-        Err(io_err("Invalid parse"))
+        Err(io_err("Missing interface/gateway"))
     }
 }
 

@@ -157,8 +157,7 @@ fn main() {
         initialize_dispatching(&config, &state, schema).expect("Failed to initialize dispatching");
 
     // interface
-    let (gateway_address, real_iface_name) =
-        get_default_route().expect("failed to get default route");
+    let (_, real_iface_name) = get_default_route().expect("failed to get default route");
 
     // guards
     let _guard = rt.enter();
