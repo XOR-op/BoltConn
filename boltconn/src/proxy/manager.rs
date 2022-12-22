@@ -9,27 +9,29 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
-#[derive(Clone)]
 pub struct SessionManager {
-    tcp_records: DashMap<u16, TcpSessionCtl>,
+    tcp_records: Arc<DashMap<u16, TcpSessionCtl>>,
     // ipv4 as key
-    udp_records: DashMap<u32, UdpSessionCtl>,
+    udp_records: Arc<DashMap<u32, UdpSessionCtl>>,
     // map (src,dst) to session key
-    udp_session_mapping: DashMap<(SocketAddr, SocketAddr), u32>,
-    occupied_key: DashSet<u32>,
-    stale_time: Duration,
+    udp_session_mapping: Arc<DashMap<(SocketAddr, SocketAddr), u32>>,
+    occupied_key: Arc<DashSet<u32>>,
+    tcp_stale_time: Duration,
+    udp_stale_time: Duration,
 }
 
 impl SessionManager {
     pub fn new() -> Self {
         Self {
-            tcp_records: DashMap::new(),
-            udp_records: DashMap::new(),
-            udp_session_mapping: DashMap::new(),
-            occupied_key: DashSet::new(),
+            tcp_records: Default::default(),
+            udp_records: Default::default(),
+            udp_session_mapping: Default::default(),
+            occupied_key: Default::default(),
             // 2MSL
-            stale_time: Duration::from_secs(120),
+            tcp_stale_time: Duration::from_secs(120),
+            udp_stale_time: Duration::from_secs(45),
         }
     }
 
@@ -52,26 +54,11 @@ impl SessionManager {
         inbound_port: u16,
     ) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
         match self.tcp_records.get(&inbound_port) {
-            Some(s) => {
-                // tracing::trace!(
-                //     "[Session] success = ({})=>({},{})",
-                //     port,
-                //     s.source_addr,
-                //     s.dest_addr
-                // );
-                Ok((s.source_addr, s.dest_addr, s.available.clone()))
-            }
-            None => {
-                // tracing::debug!(
-                //     "[Session] token {} not found; tcp_records = {:?}",
-                //     port,
-                //     self.tcp_records
-                // );
-                Err(io::Error::new(
-                    ErrorKind::AddrNotAvailable,
-                    format!("No record found"),
-                ))
-            }
+            Some(s) => Ok((s.source_addr, s.dest_addr, s.available.clone())),
+            None => Err(io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                format!("No record found"),
+            )),
         }
     }
 
@@ -80,9 +67,33 @@ impl SessionManager {
     pub fn flush(&self) {
         self.tcp_records
             .retain(|_, v| v.available.load(Ordering::Relaxed) > 0);
-        // todo: need fix
-        self.udp_records
-            .retain(|_, v| v.is_expired(self.stale_time));
+        self.udp_session_mapping.retain(|_, id| -> bool {
+            let Entry::Occupied(record) = self.udp_records.entry(*id)else { return false; };
+            if record.get().is_expired(self.udp_stale_time) {
+                self.occupied_key.remove(id);
+                record.remove();
+                return false;
+            }
+            true
+        });
+    }
+
+    pub fn flush_with_interval(&self, dura: Duration) {
+        let shallow_copy = Self {
+            tcp_records: self.tcp_records.clone(),
+            udp_records: self.udp_records.clone(),
+            udp_session_mapping: self.udp_session_mapping.clone(),
+            occupied_key: self.occupied_key.clone(),
+            tcp_stale_time: self.tcp_stale_time.clone(),
+            udp_stale_time: self.udp_stale_time.clone(),
+        };
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(dura);
+            loop {
+                interval.tick().await;
+                shallow_copy.flush();
+            }
+        });
     }
 
     pub fn get_all_tcp_sessions(&self) -> Vec<TcpSessionCtl> {

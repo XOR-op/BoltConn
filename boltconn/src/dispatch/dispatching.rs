@@ -32,14 +32,14 @@ impl Dispatching {
     pub fn matches(&self, info: &ConnInfo) -> Arc<ProxyImpl> {
         for v in &self.rules {
             if let Some(proxy) = v.matches(&info) {
-                tracing::trace!("Matches policy {:?}", v);
+                tracing::trace!("{} matches policy {:?}", info.dst, v);
                 return match &proxy {
                     GeneralProxy::Single(p) => p.get_impl(),
                     GeneralProxy::Group(g) => g.get_proxy().get_impl(),
                 };
             }
         }
-        tracing::trace!("Fallback policy");
+        tracing::trace!("{} Fallback policy", info.dst);
         match &self.fallback {
             GeneralProxy::Single(p) => p.get_impl(),
             GeneralProxy::Group(g) => g.get_proxy().get_impl(),

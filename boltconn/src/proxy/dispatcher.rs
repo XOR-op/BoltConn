@@ -118,6 +118,7 @@ impl Dispatcher {
             dst_addr.clone(),
             process_info.clone(),
             proxy_type,
+            NetworkType::TCP,
         )));
         self.stat_center.push(info.clone());
 
@@ -257,6 +258,7 @@ impl Dispatcher {
                     dst_addr.clone(),
                     process_info.clone(),
                     proxy_type,
+                    NetworkType::UDP,
                 )));
                 self.stat_center.push(info.clone());
 

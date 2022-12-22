@@ -44,7 +44,7 @@ impl Nat {
             if let Ok((src_addr, dst_addr, indicator)) =
                 self.session_mgr.lookup_tcp_session(addr.port())
             {
-                tracing::trace!("[NAT] received new connection {}->{}", src_addr, dst_addr);
+                // tracing::trace!("[NAT] received new connection {}->{}", src_addr, dst_addr);
                 let dst_addr = match self.dns.fake_ip_to_domain(dst_addr.ip()) {
                     None => NetworkAddr::Raw(dst_addr),
                     Some(s) => NetworkAddr::DomainName {

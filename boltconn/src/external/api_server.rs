@@ -83,7 +83,7 @@ impl ApiServer {
 
     async fn get_sessions(State(server): State<Self>) -> Json<serde_json::Value> {
         let all_tcp = server.manager.get_all_tcp_sessions();
-        let _all_udp = server.manager.get_all_udp_sessions();
+        let all_udp = server.manager.get_all_udp_sessions();
         let mut result = Vec::new();
         for x in all_tcp {
             let elapsed = x.last_time.elapsed().as_secs();
@@ -96,6 +96,20 @@ impl ApiServer {
                 ),
                 time: pretty_time(elapsed),
                 tcp_open: Some(x.available.load(Ordering::Relaxed)),
+            };
+            result.push(session);
+        }
+        for x in all_udp {
+            let elapsed = x.last_time.elapsed().as_secs();
+            let session = boltapi::SessionSchema {
+                pair: format!(
+                    "{}->{}:{}",
+                    x.source_addr.port(),
+                    x.dest_addr.ip(),
+                    x.dest_addr.port()
+                ),
+                time: pretty_time(elapsed),
+                tcp_open: None,
             };
             result.push(session);
         }

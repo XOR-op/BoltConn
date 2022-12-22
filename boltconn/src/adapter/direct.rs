@@ -53,11 +53,6 @@ impl DirectOutbound {
             SocketAddr::V4(_) => Egress::new(&self.iface_name).tcpv4_stream(dst_addr).await?,
             SocketAddr::V6(_) => Egress::new(&self.iface_name).tcpv6_stream(dst_addr).await?,
         };
-        tracing::trace!(
-            "[Direct] Connection {:?} <=> {:?} established",
-            outbound.local_addr(),
-            outbound.peer_addr()
-        );
 
         established_tcp(inbound, outbound, self.allocator).await;
         Ok(())
@@ -67,11 +62,6 @@ impl DirectOutbound {
         let dst_addr = self.get_dst().await?;
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         outbound.connect(dst_addr).await?;
-        tracing::trace!(
-            "[Direct] UDP Session {:?} <=> {:?} established",
-            outbound.local_addr(),
-            outbound.peer_addr()
-        );
         established_udp(inbound, UdpSocketWrapper::Direct(outbound), self.allocator).await;
         Ok(())
     }

@@ -121,8 +121,3 @@ impl AsyncRead for DuplexChan {
         }
     }
 }
-
-#[tokio::test]
-async fn test_correctness() {
-    todo!()
-}

@@ -121,13 +121,13 @@ where
             Ok(_) => {
                 if let Err(err) = tx.send(buf).await {
                     allocator.release(err.0);
-                    tracing::warn!("write to inbound failed");
+                    // tracing::warn!("write to inbound failed: channel closed");
                     break;
                 }
             }
             Err(err) => {
                 allocator.release(buf);
-                tracing::warn!("[Direct] encounter error: {}", err);
+                tracing::warn!("outbound read error: {}", err);
                 break;
             }
         }

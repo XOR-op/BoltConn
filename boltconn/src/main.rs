@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::process::exit;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fs, io};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tracing::{event, Level};
@@ -164,9 +165,6 @@ fn main() {
     let fake_dns_server = "198.18.99.88".parse().unwrap();
     let dns_guard =
         platform::SystemDnsHandle::new(fake_dns_server).expect("fail to replace /etc/resolv.conf");
-    // let dns_routing_guard =
-    //     DnsRoutingHandle::new(gateway_address, real_iface_name.as_str(), &dns_config)
-    //         .expect("fail to add dns route table");
 
     // initialize resources
     let manager = Arc::new(SessionManager::new());
@@ -237,14 +235,13 @@ fn main() {
         proxy_allocator,
     ));
     let nat_udp = nat.clone();
+    manager.flush_with_interval(Duration::from_secs(30));
     let _nat_tcp_handle = rt.spawn(async move { nat.run_tcp().await });
     let _nat_udp_handle = rt.spawn(async move { nat_udp.run_udp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
     rt.block_on(async { tokio::signal::ctrl_c().await })
         .expect("Tokio runtime error");
-    drop(dns_guard);
-    // drop(dns_routing_guard);
-    // rt.shutdown_timeout(Duration::from_millis(3000));
     rt.shutdown_background();
+    drop(dns_guard);
 }

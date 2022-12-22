@@ -1,6 +1,6 @@
 use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
-use crate::platform::process::ProcessInfo;
+use crate::platform::process::{NetworkType, ProcessInfo};
 use http::{Request, Response};
 use hyper::Body;
 use std::fmt::{Display, Formatter, Write};
@@ -11,6 +11,7 @@ use std::time::Instant;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SessionProtocol {
     TCP,
+    UDP,
     HTTP,
     TLS(TlsVersion),
 }
@@ -19,6 +20,7 @@ impl Display for SessionProtocol {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             SessionProtocol::TCP => f.write_str("tcp"),
+            SessionProtocol::UDP => f.write_str("udp"),
             SessionProtocol::HTTP => f.write_str("http"),
             SessionProtocol::TLS(_) => f.write_str("tls"),
         }
@@ -83,12 +85,20 @@ pub struct StatisticsInfo {
 }
 
 impl StatisticsInfo {
-    pub fn new(dst: NetworkAddr, process_info: Option<ProcessInfo>, rule: OutboundType) -> Self {
+    pub fn new(
+        dst: NetworkAddr,
+        process_info: Option<ProcessInfo>,
+        rule: OutboundType,
+        network_type: NetworkType,
+    ) -> Self {
         Self {
             start_time: Instant::now(),
             dest: dst,
             process_info,
-            session_proto: SessionProtocol::TCP,
+            session_proto: match network_type {
+                NetworkType::TCP => SessionProtocol::TCP,
+                NetworkType::UDP => SessionProtocol::UDP,
+            },
             rule,
             upload_traffic: 0,
             download_traffic: 0,
@@ -97,14 +107,8 @@ impl StatisticsInfo {
     }
 
     pub fn update_proto(&mut self, packet: &[u8]) {
-        self.session_proto = check_tcp_protocol(packet);
-        if self.session_proto != SessionProtocol::TCP {
-            tracing::trace!(
-                "Update info: dst={:?}, proto={:?}, rule={:?}",
-                self.dest,
-                self.session_proto,
-                self.rule
-            );
+        if self.session_proto == SessionProtocol::TCP {
+            self.session_proto = check_tcp_protocol(packet);
         }
     }
 
