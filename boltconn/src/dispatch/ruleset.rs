@@ -44,7 +44,9 @@ pub struct RuleSet {
     ip: Trie<Vec<u8>, bool>,
     port: HashSet<u16>,
     domain_keyword: AhoCorasick,
-    process_name: AhoCorasick,
+    process_name: HashSet<String>,
+    process_keyword: AhoCorasick,
+    procpath_keyword: AhoCorasick,
 }
 
 impl Debug for RuleSet {
@@ -81,8 +83,10 @@ impl RuleSet {
             return true;
         }
         if let Some(proc) = &info.process_info {
-            if self.process_name.is_match(proc.name.as_str()) {
-                // PROCESS-NAME
+            if self.process_name.contains(&proc.name)
+                || self.process_keyword.is_match(proc.name.as_str())
+                || self.procpath_keyword.is_match(proc.path.as_str())
+            {
                 return true;
             }
         }
@@ -94,7 +98,9 @@ pub struct RuleSetBuilder {
     domain: HostMatcherBuilder,
     domain_keyword: Vec<String>,
     ip_cidr: Vec<(Vec<u8>, bool)>,
-    process_name: Vec<String>,
+    process_name: HashSet<String>,
+    process_keyword: Vec<String>,
+    procpath_keyword: Vec<String>,
     port: HashSet<u16>,
 }
 
@@ -104,14 +110,20 @@ impl RuleSetBuilder {
             domain: HostMatcherBuilder::new(),
             domain_keyword: vec![],
             ip_cidr: vec![],
-            process_name: vec![],
+            process_name: HashSet::new(),
+            process_keyword: vec![],
+            procpath_keyword: vec![],
             port: HashSet::new(),
         };
         let fake = GeneralProxy::Single(Arc::new(Proxy::new("FAKE", ProxyImpl::Direct)));
         for str in &payload.payload {
             if let Some(rule) = RuleBuilder::parse_ruleset(str, fake.clone()) {
                 match rule.get_impl() {
-                    RuleImpl::ProcessName(pn) => retval.process_name.push(pn.clone()),
+                    RuleImpl::ProcessName(pn) => {
+                        retval.process_name.insert(pn.clone());
+                    }
+                    RuleImpl::ProcessKeyword(kw) => retval.process_keyword.push(kw.clone()),
+                    RuleImpl::ProcPathKeyword(kw) => retval.procpath_keyword.push(kw.clone()),
                     RuleImpl::Domain(dn) => retval.domain.add_exact(dn.as_str()),
                     RuleImpl::DomainSuffix(sfx) => retval.domain.add_suffix(sfx.as_str()),
                     RuleImpl::DomainKeyword(kw) => retval.domain_keyword.push(kw.clone()),
@@ -122,7 +134,7 @@ impl RuleSetBuilder {
                     RuleImpl::Port(p) => {
                         retval.port.insert(*p);
                     }
-                    _ => return None,
+                    RuleImpl::RuleSet(_) => return None,
                 }
             } else {
                 return None;
@@ -135,6 +147,9 @@ impl RuleSetBuilder {
         self.domain.merge(rhs.domain);
         self.ip_cidr.extend(rhs.ip_cidr.into_iter());
         self.process_name.extend(rhs.process_name.into_iter());
+        self.process_keyword.extend(rhs.process_keyword.into_iter());
+        self.procpath_keyword
+            .extend(rhs.procpath_keyword.into_iter());
         self.port.extend(rhs.port.into_iter());
         self.domain_keyword.extend(rhs.domain_keyword.into_iter());
         self
@@ -146,7 +161,9 @@ impl RuleSetBuilder {
             ip: Trie::from_iter(self.ip_cidr.into_iter()),
             port: self.port,
             domain_keyword: AhoCorasick::new_auto_configured(self.domain_keyword.as_slice()),
-            process_name: AhoCorasick::new_auto_configured(self.process_name.as_slice()),
+            process_name: self.process_name,
+            process_keyword: AhoCorasick::new_auto_configured(self.process_keyword.as_slice()),
+            procpath_keyword: AhoCorasick::new_auto_configured(self.procpath_keyword.as_slice()),
         }
     }
 }
@@ -154,7 +171,7 @@ impl RuleSetBuilder {
 #[ignore]
 #[test]
 fn test_rule_provider() {
-    let config_text = fs::read_to_string("../_private/config/Rules/Apple").unwrap();
+    let config_text = fs::read_to_string("../examples/Rules/Apple").unwrap();
     let deserialized: RuleSchema = serde_yaml::from_str(&config_text).unwrap();
     println!("{:?}", deserialized);
     let builder = RuleSetBuilder::new(deserialized);

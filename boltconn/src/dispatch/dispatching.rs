@@ -117,7 +117,7 @@ impl DispatchingBuilder {
         );
         builder
             .proxies
-            .insert("DROP".into(), Arc::new(Proxy::new("DROP", ProxyImpl::Drop)));
+            .insert("REJECT".into(), Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)));
         // read all proxies
         for (name, proxy) in &cfg.proxy_local {
             // avoid duplication

@@ -29,7 +29,7 @@ impl Proxy {
 #[derive(Debug)]
 pub enum ProxyImpl {
     Direct,
-    Drop,
+    Reject,
     Socks5(Socks5Config),
     Shadowsocks(ServerConfig),
 }

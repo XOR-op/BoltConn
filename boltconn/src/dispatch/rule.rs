@@ -12,6 +12,8 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub enum RuleImpl {
     ProcessName(String),
+    ProcessKeyword(String),
+    ProcPathKeyword(String),
     Domain(String),
     DomainSuffix(String),
     DomainKeyword(String),
@@ -109,6 +111,14 @@ impl RuleBuilder<'_> {
             }),
             "PROCESS-NAME" => Some(Rule {
                 rule: RuleImpl::ProcessName(content),
+                policy: general,
+            }),
+            "PROCESS-KEYWORD" => Some(Rule {
+                rule: RuleImpl::ProcessKeyword(content),
+                policy: general,
+            }),
+            "PROCPATH-KEYWORD" => Some(Rule {
+                rule: RuleImpl::ProcPathKeyword(content),
                 policy: general,
             }),
             "IP-CIDR" | "IP-CIDR6" => {
@@ -229,6 +239,20 @@ impl Rule {
             RuleImpl::ProcessName(proc) => {
                 if let Some(proc_info) = &info.process_info {
                     if proc_info.name == *proc {
+                        return Some(self.policy.clone());
+                    }
+                }
+            }
+            RuleImpl::ProcessKeyword(proc) => {
+                if let Some(proc_info) = &info.process_info {
+                    if proc_info.name.contains(proc) {
+                        return Some(self.policy.clone());
+                    }
+                }
+            }
+            RuleImpl::ProcPathKeyword(proc) => {
+                if let Some(proc_info) = &info.process_info {
+                    if proc_info.path.contains(proc) {
                         return Some(self.policy.clone());
                     }
                 }

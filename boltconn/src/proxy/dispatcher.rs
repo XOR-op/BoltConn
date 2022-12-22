@@ -87,7 +87,7 @@ impl Dispatcher {
                     )),
                     OutboundType::Direct,
                 ),
-                ProxyImpl::Drop => {
+                ProxyImpl::Reject => {
                     indicator.store(0, Ordering::Relaxed);
                     return;
                 }
@@ -227,7 +227,7 @@ impl Dispatcher {
                             )),
                             OutboundType::Direct,
                         ),
-                        ProxyImpl::Drop => {
+                        ProxyImpl::Reject => {
                             indicator.store(false, Ordering::Relaxed);
                             return;
                         }
