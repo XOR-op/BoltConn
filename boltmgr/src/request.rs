@@ -93,8 +93,15 @@ impl Requester {
         Ok(())
     }
 
-    pub async fn get_captured(&self) -> Result<()> {
-        let data = reqwest::get(self.route("/captured")).await?.text().await?;
+    pub async fn get_captured(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
+        let uri = match range {
+            None => self.route("/captured/all"),
+            Some((s, Some(e))) => {
+                self.route(format!("/captured/range?start={}&end={}", s, e).as_str())
+            }
+            Some((s, None)) => self.route(format!("/captured/range?start={}", s).as_str()),
+        };
+        let data = reqwest::get(uri).await?.text().await?;
         let result: Vec<boltapi::HttpCaptureSchema> = serde_json::from_str(data.as_str())?;
         let mut table = Table::new("{:<} {:<} {:<} {:<} {:<} {:<}");
         table.add_row(
@@ -118,6 +125,36 @@ impl Requester {
             );
         }
         println!("{}", table);
+        Ok(())
+    }
+
+    pub async fn get_captured_detail(&self, id: u32) -> Result<()> {
+        let data = reqwest::get(self.route(format!("/captured/detail/{}", id).as_str()))
+            .await?
+            .text()
+            .await?;
+        let result: boltapi::GetCapturedDataResp = serde_json::from_str(data.as_str())?;
+        println!("==================  Request  ===================");
+        println!("Header:");
+        result.req_header.iter().for_each(|l| println!("{}", l));
+        println!();
+        if let Ok(data) = std::str::from_utf8(result.req_body.as_slice()) {
+            println!("Body:");
+            println!("{}", data);
+        } else {
+            println!("Body is not UTF-8 encoded");
+        }
+        println!();
+        println!("==================  Response ==================");
+        println!("Header:");
+        result.resp_header.iter().for_each(|l| println!("{}", l));
+        println!();
+        if let Ok(data) = std::str::from_utf8(result.resp_body.as_slice()) {
+            println!("Body:");
+            println!("{}", data);
+        } else {
+            println!("Body is not UTF-8 encoded");
+        }
         Ok(())
     }
 

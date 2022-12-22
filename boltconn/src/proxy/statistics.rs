@@ -217,12 +217,20 @@ impl HttpCapturer {
     }
     pub fn get_range_copy(
         &self,
-        range: (usize, usize),
-    ) -> Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)> {
+        start: usize,
+        end: Option<usize>,
+    ) -> Option<Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>> {
         let arr = self.contents.lock().unwrap();
-        arr.as_slice()[range.0..range.1]
-            .iter()
-            .map(|e| e.clone())
-            .collect()
+        if start >= arr.len() || (end.is_some() && end.unwrap() > arr.len()) {
+            return None;
+        }
+        Some(if let Some(end) = end {
+            arr.as_slice()[start..end]
+                .iter()
+                .map(|e| e.clone())
+                .collect()
+        } else {
+            arr.as_slice()[start..].iter().map(|e| e.clone()).collect()
+        })
     }
 }

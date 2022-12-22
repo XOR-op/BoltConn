@@ -51,6 +51,10 @@ struct CertOptions {
 enum CaptureOptions {
     /// List all captured data
     List,
+    /// List data ranged from *start* to *end*
+    Range { start: u32, end: Option<u32> },
+    /// Get details of the packet
+    Get { id: u32 },
 }
 
 #[derive(Debug, StructOpt)]
@@ -89,7 +93,11 @@ async fn main() {
         },
         SubCommand::Cert(opt) => cert::generate_cert(opt.path),
         SubCommand::Capture(opt) => match opt {
-            CaptureOptions::List => requestor.get_captured().await,
+            CaptureOptions::List => requestor.get_captured(None).await,
+            CaptureOptions::Range { start, end } => {
+                requestor.get_captured(Some((start, end))).await
+            }
+            CaptureOptions::Get { id } => requestor.get_captured_detail(id).await,
         },
     };
     match result {

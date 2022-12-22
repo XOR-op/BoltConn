@@ -1,12 +1,17 @@
 use crate::config::{LinkedState, RawState};
 use crate::dispatch::{Dispatching, GeneralProxy};
-use crate::proxy::{HttpCapturer, SessionManager, StatCenter};
-use axum::extract::State;
+use crate::platform::process::ProcessInfo;
+use crate::proxy::{DumpedRequest, DumpedResponse, HttpCapturer, SessionManager, StatCenter};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
 use axum::{Json, Router, ServiceExt};
-use boltapi::{GetGroupRespSchema, SetGroupReqSchema};
+use boltapi::{
+    GetCapturedDataReq, GetCapturedDataResp, GetCapturedRangeReq, GetGroupRespSchema,
+    SetGroupReqSchema,
+};
 use serde_json::json;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -43,7 +48,9 @@ impl ApiServer {
             .route("/logs", get(Self::get_logs))
             .route("/active", get(Self::get_active_conn))
             .route("/sessions", get(Self::get_sessions))
-            .route("/captured", get(Self::get_captured))
+            .route("/captured/all", get(Self::get_captured))
+            .route("/captured/range", get(Self::get_captured_range))
+            .route("/captured/detail/:id", get(Self::get_captured_data))
             .route(
                 "/groups",
                 get(Self::get_group_list).put(Self::set_selection),
@@ -116,34 +123,95 @@ impl ApiServer {
         Json(json!(result))
     }
 
+    fn collect_captured(
+        list: Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>,
+    ) -> Json<serde_json::Value> {
+        let mut result = Vec::new();
+        for (host, proc, req, resp) in list {
+            let item = boltapi::HttpCaptureSchema {
+                client: proc.map(|proc| proc.name),
+                uri: {
+                    let s = req.uri.to_string();
+                    if s.starts_with("https://") || s.starts_with("http://") {
+                        // http2
+                        s
+                    } else {
+                        // http1.1, with no host in uri field
+                        host + s.as_str()
+                    }
+                },
+                method: req.method.to_string(),
+                status: resp.status.as_u16(),
+                size: pretty_size(resp.body.len()),
+                time: pretty_latency(resp.time - req.time),
+            };
+            result.push(item);
+        }
+        Json(json!(result))
+    }
+
     async fn get_captured(State(server): State<Self>) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
             let list = capturer.get_copy();
-            let mut result = Vec::new();
-            for (host, proc, req, resp) in list {
-                let item = boltapi::HttpCaptureSchema {
-                    client: proc.map(|proc| proc.name),
-                    uri: {
-                        let s = req.uri.to_string();
-                        if s.starts_with("https://") || s.starts_with("http://") {
-                            // http2
-                            s
-                        } else {
-                            // http1.1, with no host in uri field
-                            host + s.as_str()
-                        }
-                    },
-                    method: req.method.to_string(),
-                    status: resp.status.as_u16(),
-                    size: pretty_size(resp.body.len()),
-                    time: pretty_latency(resp.time - req.time),
-                };
-                result.push(item);
-            }
-            Json(json!(result))
+            Self::collect_captured(list)
         } else {
             Json(serde_json::Value::Null)
         }
+    }
+
+    async fn get_captured_range(
+        State(server): State<Self>,
+        Query(params): Query<GetCapturedRangeReq>,
+    ) -> Json<serde_json::Value> {
+        if let Some(capturer) = &server.http_capturer {
+            if let Some(list) =
+                capturer.get_range_copy(params.start as usize, params.end.map(|p| p as usize))
+            {
+                return Self::collect_captured(list);
+            }
+        }
+        Json(serde_json::Value::Null)
+    }
+
+    async fn get_captured_data(
+        State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        let id = {
+            let Some(start) = params.get("id")else { return Json(serde_json::Value::Null); };
+            if let Ok(s) = start.parse::<usize>() {
+                s
+            } else {
+                return Json(serde_json::Value::Null);
+            }
+        };
+        if let Some(capturer) = &server.http_capturer {
+            if let Some(list) = capturer.get_range_copy(id as usize, Some((id + 1) as usize)) {
+                if list.len() == 1 {
+                    let (_, _, req, resp) = list.get(0).unwrap();
+                    let result = GetCapturedDataResp {
+                        req_header: req
+                            .headers
+                            .iter()
+                            .map(|(k, v)| {
+                                format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA"))
+                            })
+                            .collect(),
+                        req_body: req.body.to_vec(),
+                        resp_header: resp
+                            .headers
+                            .iter()
+                            .map(|(k, v)| {
+                                format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA"))
+                            })
+                            .collect(),
+                        resp_body: resp.body.to_vec(),
+                    };
+                    return Json(json!(result));
+                }
+            }
+        }
+        Json(serde_json::Value::Null)
     }
 
     async fn get_group_list(State(server): State<Self>) -> Json<serde_json::Value> {

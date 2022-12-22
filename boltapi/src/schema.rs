@@ -1,3 +1,4 @@
+use super::base64ext;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -44,4 +45,28 @@ pub struct GetGroupRespSchema {
 pub struct SetGroupReqSchema {
     pub group: String,
     pub selected: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct GetCapturedRangeReq {
+    pub start: u32,
+    pub end: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct GetCapturedDataReq {
+    pub id: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct GetCapturedDataResp {
+    pub req_header: Vec<String>,
+    #[serde(with = "base64ext")]
+    pub req_body: Vec<u8>,
+    pub resp_header: Vec<String>,
+    #[serde(with = "base64ext")]
+    pub resp_body: Vec<u8>,
 }
