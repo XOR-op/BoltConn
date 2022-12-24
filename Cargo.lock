@@ -300,6 +300,8 @@ dependencies = [
  "anyhow",
  "boltapi",
  "colored",
+ "ipnet",
+ "is-root",
  "rcgen",
  "reqwest",
  "serde",
@@ -1184,6 +1186,16 @@ name = "ipnet"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11b0d96e660696543b251e58030cf9787df56da39dab19ad60eae7353040917e"
+
+[[package]]
+name = "is-root"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04a4202a60e86f1c9702706bb42270dadd333f2db7810157563c86f17af3c873"
+dependencies = [
+ "users",
+ "winapi",
+]
 
 [[package]]
 name = "itoa"
@@ -2808,6 +2820,16 @@ dependencies = [
  "form_urlencoded",
  "idna 0.3.0",
  "percent-encoding",
+]
+
+[[package]]
+name = "users"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa4227e95324a443c9fcb06e03d4d85e91aabe9a5a02aa818688b6918b6af486"
+dependencies = [
+ "libc",
+ "log",
 ]
 
 [[package]]

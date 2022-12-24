@@ -1,7 +1,9 @@
 mod cert;
+mod clean;
 mod request;
 
 use crate::request::Requester;
+use is_root::is_root;
 use std::process::exit;
 use structopt::StructOpt;
 
@@ -71,6 +73,8 @@ enum SubCommand {
     Cert(CertOptions),
     /// Captured HTTP data
     Capture(CaptureOptions),
+    /// Clean unexpected shutdown
+    Clean,
 }
 
 #[tokio::main]
@@ -86,7 +90,10 @@ async fn main() {
             ConnOptions::List => requestor.get_active_conn().await,
         },
         SubCommand::Log(opt) => match opt {
-            LogOptions::List => Ok(()),
+            LogOptions::List => {
+                // todo
+                Ok(())
+            }
         },
         SubCommand::Debug(opt) => match opt {
             DebugOptions::Session => requestor.get_sessions().await,
@@ -99,6 +106,15 @@ async fn main() {
             }
             CaptureOptions::Get { id } => requestor.get_captured_detail(id).await,
         },
+        SubCommand::Clean => {
+            if !is_root() {
+                eprintln!("Must be run with root/admin privilege");
+                exit(-1)
+            } else {
+                clean::clean_route_table();
+                Ok(())
+            }
+        }
     };
     match result {
         Ok(_) => exit(0),
