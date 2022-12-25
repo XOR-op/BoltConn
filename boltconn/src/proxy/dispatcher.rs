@@ -9,7 +9,7 @@ use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
-use crate::proxy::{NetworkAddr, SessionManager, StatCenter, StatisticsInfo};
+use crate::proxy::{AgentCenter, ConnAgent, NetworkAddr, SessionManager};
 use crate::sniff::{HttpSniffer, HttpsSniffer, Modifier, ModifierClosure};
 use crate::PktBufPool;
 use dashmap::mapref::entry::Entry;
@@ -25,7 +25,7 @@ pub struct Dispatcher {
     iface_name: String,
     allocator: PktBufPool,
     dns: Arc<Dns>,
-    stat_center: Arc<StatCenter>,
+    stat_center: Arc<AgentCenter>,
     dispatching: Arc<Dispatching>,
     certificate: Vec<Certificate>,
     priv_key: PrivateKey,
@@ -39,7 +39,7 @@ impl Dispatcher {
         iface_name: &str,
         allocator: PktBufPool,
         dns: Arc<Dns>,
-        stat_center: Arc<StatCenter>,
+        stat_center: Arc<AgentCenter>,
         dispatching: Arc<Dispatching>,
         certificate: Vec<Certificate>,
         priv_key: PrivateKey,
@@ -114,70 +114,78 @@ impl Dispatcher {
             };
 
         // conn info
-        let info = Arc::new(RwLock::new(StatisticsInfo::new(
+        let info = Arc::new(RwLock::new(ConnAgent::new(
             dst_addr.clone(),
             process_info.clone(),
             proxy_type,
             NetworkType::TCP,
         )));
-        self.stat_center.push(info.clone());
 
         let (tun_conn, tun_next) = Connector::new_pair(10);
-        let tun_alloc = self.allocator.clone();
-        let out_dst_addr = dst_addr.clone();
-        let info_clone = info.clone();
-        tokio::spawn(async move {
-            let tun = TunAdapter::new(
-                src_addr,
-                out_dst_addr,
-                info,
-                stream,
-                indicator,
-                tun_alloc,
-                tun_conn,
-            );
-            if let Err(err) = tun.run().await {
-                tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
-            }
+        let mut handles = Vec::new();
+
+        // tun adapter
+        handles.push({
+            let info = info.clone();
+            let allocator = self.allocator.clone();
+            let dst_addr = dst_addr.clone();
+            tokio::spawn(async move {
+                let tun = TunAdapter::new(
+                    src_addr, dst_addr, info, stream, indicator, allocator, tun_conn,
+                );
+                if let Err(err) = tun.run().await {
+                    tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
+                }
+            })
         });
+
+        // mitm for 80/443
         let modifier = (self.modifier)(process_info);
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
             if self.mitm_hosts.matches(&domain_name) {
                 match port {
                     80 => {
                         // hijack
-                        let http_alloc = self.allocator.clone();
-                        tokio::spawn(async move {
-                            let mocker = HttpSniffer::new(
-                                DuplexChan::new(http_alloc, tun_next),
-                                modifier,
-                                outbounding,
-                                info_clone,
-                            );
-                            if let Err(err) = mocker.run().await {
-                                tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
-                            }
+                        handles.push({
+                            let allocator = self.allocator.clone();
+                            let info = info.clone();
+                            tokio::spawn(async move {
+                                let mocker = HttpSniffer::new(
+                                    DuplexChan::new(allocator, tun_next),
+                                    modifier,
+                                    outbounding,
+                                    info,
+                                );
+                                if let Err(err) = mocker.run().await {
+                                    tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+                                }
+                            })
                         });
+                        self.stat_center.push_with_handles(info, handles);
                         return;
                     }
                     443 => {
-                        let http_alloc = self.allocator.clone();
-                        let cert = self.certificate.clone();
-                        let key = self.priv_key.clone();
-                        tokio::spawn(async move {
-                            let mocker = HttpsSniffer::new(
-                                cert,
-                                key,
-                                domain_name,
-                                DuplexChan::new(http_alloc, tun_next),
-                                modifier,
-                                outbounding,
-                                info_clone,
-                            );
-                            if let Err(err) = mocker.run().await {
-                                tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
-                            }
+                        handles.push({
+                            let allocator = self.allocator.clone();
+                            let cert = self.certificate.clone();
+                            let key = self.priv_key.clone();
+                            let info = info.clone();
+                            tokio::spawn(async move {
+                                let mocker = HttpsSniffer::new(
+                                    cert,
+                                    key,
+                                    domain_name,
+                                    DuplexChan::new(allocator, tun_next),
+                                    modifier,
+                                    outbounding,
+                                    info,
+                                );
+                                if let Err(err) = mocker.run().await {
+                                    tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
+                                }
+                            })
                         });
+                        self.stat_center.push_with_handles(info, handles);
                         return;
                     }
                     _ => {
@@ -186,11 +194,12 @@ impl Dispatcher {
                 }
             }
         }
-        tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             if let Err(err) = outbounding.spawn_tcp(tun_next).await {
                 tracing::error!("[Dispatcher] create failed: {}", err)
             }
-        });
+        }));
+        self.stat_center.push_with_handles(info, handles);
     }
 
     pub async fn submit_udp_pkt(
@@ -254,13 +263,13 @@ impl Dispatcher {
                     };
 
                 // conn info
-                let info = Arc::new(RwLock::new(StatisticsInfo::new(
+                let info = Arc::new(RwLock::new(ConnAgent::new(
                     dst_addr.clone(),
                     process_info.clone(),
                     proxy_type,
                     NetworkType::UDP,
                 )));
-                self.stat_center.push(info.clone());
+                let mut handles = Vec::new();
 
                 let (nat_conn, nat_next) = Connector::new_pair(10);
                 let nat_allocator = self.allocator.clone();
@@ -270,28 +279,32 @@ impl Dispatcher {
                 let _ = send_side.sender.send(pkt).await;
 
                 entry.insert(send_side);
-                let socket = socket.clone();
-                let session_mgr = session_mgr.clone();
-                tokio::spawn(async move {
-                    let nat_adp = NatAdapter::new(
-                        info,
-                        receiver,
-                        socket,
-                        src_addr,
-                        dst_fake_addr,
-                        nat_allocator,
-                        nat_conn,
-                        session_mgr,
-                    );
-                    if let Err(err) = nat_adp.run().await {
-                        tracing::error!("[Dispatcher] run NatAdapter failed: {}", err)
-                    }
+                handles.push({
+                    let socket = socket.clone();
+                    let session_mgr = session_mgr.clone();
+                    let info = info.clone();
+                    tokio::spawn(async move {
+                        let nat_adp = NatAdapter::new(
+                            info,
+                            receiver,
+                            socket,
+                            src_addr,
+                            dst_fake_addr,
+                            nat_allocator,
+                            nat_conn,
+                            session_mgr,
+                        );
+                        if let Err(err) = nat_adp.run().await {
+                            tracing::error!("[Dispatcher] run NatAdapter failed: {}", err)
+                        }
+                    })
                 });
-                tokio::spawn(async move {
+                handles.push(tokio::spawn(async move {
                     if let Err(err) = outbounding.spawn_udp(nat_next).await {
                         tracing::error!("[Dispatcher] create failed: {}", err)
                     }
-                });
+                }));
+                self.stat_center.push(info.clone());
             }
         }
     }

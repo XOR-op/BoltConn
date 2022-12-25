@@ -7,7 +7,7 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
-use crate::proxy::{HttpCapturer, StatCenter};
+use crate::proxy::{AgentCenter, HttpCapturer};
 use crate::sniff::Recorder;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
@@ -188,7 +188,7 @@ fn main() {
     });
 
     // dispatcher and statistics
-    let stat_center = Arc::new(StatCenter::new());
+    let stat_center = Arc::new(AgentCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
     let hcap_copy = http_capturer.clone();
     let proxy_allocator = PktBufPool::new(512, 4096);
@@ -235,7 +235,7 @@ fn main() {
         proxy_allocator,
     ));
     let nat_udp = nat.clone();
-    manager.flush_with_interval(Duration::from_secs(30));
+    let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
     let _nat_tcp_handle = rt.spawn(async move { nat.run_tcp().await });
     let _nat_udp_handle = rt.spawn(async move { nat_udp.run_udp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });

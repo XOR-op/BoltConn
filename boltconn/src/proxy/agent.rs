@@ -7,6 +7,7 @@ use std::fmt::{Display, Formatter, Write};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SessionProtocol {
@@ -72,8 +73,8 @@ impl NetworkAddr {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct StatisticsInfo {
+#[derive(Debug)]
+pub struct ConnAgent {
     pub start_time: Instant,
     pub dest: NetworkAddr,
     pub process_info: Option<ProcessInfo>,
@@ -82,9 +83,10 @@ pub struct StatisticsInfo {
     pub upload_traffic: usize,
     pub download_traffic: usize,
     pub done: bool,
+    handles: Vec<JoinHandle<()>>,
 }
 
-impl StatisticsInfo {
+impl ConnAgent {
     pub fn new(
         dst: NetworkAddr,
         process_info: Option<ProcessInfo>,
@@ -103,6 +105,7 @@ impl StatisticsInfo {
             upload_traffic: 0,
             download_traffic: 0,
             done: false,
+            handles: Default::default(),
         }
     }
 
@@ -120,8 +123,22 @@ impl StatisticsInfo {
         self.download_traffic += size
     }
 
+    pub fn more_handles(&mut self, handle: Vec<JoinHandle<()>>) {
+        self.handles.extend(handle.into_iter());
+    }
+    pub fn more_handle(&mut self, handle: JoinHandle<()>) {
+        self.handles.push(handle);
+    }
+
     pub fn mark_fin(&mut self) {
         self.done = true;
+    }
+
+    pub fn abort(&mut self) {
+        for h in &self.handles {
+            h.abort();
+        }
+        self.mark_fin();
     }
 }
 
@@ -150,22 +167,27 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
     SessionProtocol::TCP
 }
 
-pub struct StatCenter {
-    content: RwLock<Vec<Arc<RwLock<StatisticsInfo>>>>,
+pub struct AgentCenter {
+    content: RwLock<Vec<Arc<RwLock<ConnAgent>>>>,
 }
 
-impl StatCenter {
+impl AgentCenter {
     pub fn new() -> Self {
         Self {
             content: RwLock::new(Vec::new()),
         }
     }
 
-    pub fn push(&self, info: Arc<RwLock<StatisticsInfo>>) {
+    pub fn push(&self, info: Arc<RwLock<ConnAgent>>) {
         self.content.write().unwrap().push(info);
     }
 
-    pub fn get_copy(&self) -> Vec<Arc<RwLock<StatisticsInfo>>> {
+    pub fn push_with_handles(&self, info: Arc<RwLock<ConnAgent>>, handles: Vec<JoinHandle<()>>) {
+        info.write().unwrap().more_handles(handles);
+        self.content.write().unwrap().push(info);
+    }
+
+    pub fn get_copy(&self) -> Vec<Arc<RwLock<ConnAgent>>> {
         self.content.read().unwrap().clone()
     }
 }

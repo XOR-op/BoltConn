@@ -1,5 +1,5 @@
-use crate::adapter::{Connector, TcpStatus};
-use crate::proxy::{NetworkAddr, StatisticsInfo};
+use crate::adapter::{Connector, TcpIndicatorGuard, TcpStatus};
+use crate::proxy::{ConnAgent, NetworkAddr};
 use crate::PktBufPool;
 use io::Result;
 use std::io;
@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 
 pub struct TunAdapter {
     stat: TcpStatus,
-    info: Arc<RwLock<StatisticsInfo>>,
+    info: Arc<RwLock<ConnAgent>>,
     inbound: TcpStream,
     allocator: PktBufPool,
     connector: Connector,
@@ -23,7 +23,7 @@ impl TunAdapter {
     pub fn new(
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
-        info: Arc<RwLock<StatisticsInfo>>,
+        info: Arc<RwLock<ConnAgent>>,
         inbound: TcpStream,
         available: Arc<AtomicU8>,
         allocator: PktBufPool,
@@ -47,42 +47,49 @@ impl TunAdapter {
         let allocator = self.allocator.clone();
         let Connector { tx, mut rx } = self.connector;
         // recv from inbound and send to outbound
-        tokio::spawn(async move {
-            loop {
-                let mut buf = allocator.obtain().await;
-                match buf.read(&mut in_read).await {
-                    Ok(0) => {
-                        allocator.release(buf);
-                        break;
-                    }
-                    Ok(size) => {
-                        if first_packet {
-                            first_packet = false;
-                            outgoing_info_arc
-                                .write()
-                                .unwrap()
-                                .update_proto(buf.as_ready());
+        self.info
+            .write()
+            .unwrap()
+            .more_handle(tokio::spawn(async move {
+                let _guard = TcpIndicatorGuard {
+                    indicator: outgoing_indicator,
+                    info: outgoing_info_arc.clone(),
+                };
+                loop {
+                    let mut buf = allocator.obtain().await;
+                    match buf.read(&mut in_read).await {
+                        Ok(0) => {
+                            allocator.release(buf);
+                            break;
                         }
-                        outgoing_info_arc.write().unwrap().more_upload(size);
-                        if let Err(err) = tx.send(buf).await {
-                            allocator.release(err.0);
-                            tracing::warn!("TunAdapter tx send err");
+                        Ok(size) => {
+                            if first_packet {
+                                first_packet = false;
+                                outgoing_info_arc
+                                    .write()
+                                    .unwrap()
+                                    .update_proto(buf.as_ready());
+                            }
+                            outgoing_info_arc.write().unwrap().more_upload(size);
+                            if let Err(err) = tx.send(buf).await {
+                                allocator.release(err.0);
+                                tracing::warn!("TunAdapter tx send err");
+                                break;
+                            }
+                        }
+                        Err(err) => {
+                            allocator.release(buf);
+                            tracing::warn!("TunAdapter encounter error: {}", err);
                             break;
                         }
                     }
-                    Err(err) => {
-                        allocator.release(buf);
-                        tracing::warn!("TunAdapter encounter error: {}", err);
-                        break;
-                    }
                 }
-            }
-            outgoing_indicator.fetch_sub(1, Ordering::Relaxed);
-            if outgoing_indicator.load(Ordering::Relaxed) == 0 {
-                outgoing_info_arc.write().unwrap().mark_fin();
-            }
-        });
+            }));
         // recv from outbound and send to inbound
+        let _guard = TcpIndicatorGuard {
+            indicator: ingoing_indicator,
+            info: self.info.clone(),
+        };
         loop {
             match rx.recv().await {
                 Some(buf) => {
@@ -101,10 +108,7 @@ impl TunAdapter {
                 }
             }
         }
-        ingoing_indicator.fetch_sub(1, Ordering::Relaxed);
-        if ingoing_indicator.load(Ordering::Relaxed) == 0 {
-            self.info.write().unwrap().mark_fin();
-        }
+
         Ok(())
     }
 }

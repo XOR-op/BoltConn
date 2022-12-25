@@ -3,8 +3,9 @@ use ::shadowsocks::ProxySocket;
 use fast_socks5::util::target_addr::TargetAddr;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU8;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -19,7 +20,7 @@ mod tun_adapter;
 pub use crate::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;
-use crate::proxy::NetworkAddr;
+use crate::proxy::{ConnAgent, NetworkAddr};
 pub use direct::*;
 pub use nat_adapter::*;
 pub use socks5::*;
@@ -93,7 +94,7 @@ where
     let allocator2 = allocator.clone();
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
-    tokio::spawn(async move {
+    let _guard = TcpHalfClosedGuard::new(tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Some(buf) => {
@@ -109,7 +110,7 @@ where
                 }
             }
         }
-    });
+    }));
     // recv from outbound and send to inbound
     loop {
         let mut buf = allocator.obtain().await;
@@ -206,7 +207,7 @@ async fn established_udp(inbound: Connector, outbound: UdpSocketWrapper, allocat
     let outbound2 = outbound.clone();
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
-    tokio::spawn(async move {
+    let _guard = UdpDropGuard(tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Some(buf) => {
@@ -222,7 +223,7 @@ async fn established_udp(inbound: Connector, outbound: UdpSocketWrapper, allocat
                 }
             }
         }
-    });
+    }));
     // recv from outbound and send to inbound
     loop {
         let mut buf = allocator.obtain().await;
@@ -251,6 +252,60 @@ async fn established_udp(inbound: Connector, outbound: UdpSocketWrapper, allocat
                 tracing::warn!("[Direct] encounter error: {}", err);
                 break;
             }
+        }
+    }
+}
+
+struct TcpIndicatorGuard {
+    pub indicator: Arc<AtomicU8>,
+    pub info: Arc<RwLock<ConnAgent>>,
+}
+
+impl Drop for TcpIndicatorGuard {
+    fn drop(&mut self) {
+        self.indicator.fetch_sub(1, Ordering::Relaxed);
+        if self.indicator.load(Ordering::Relaxed) == 0 {
+            self.info.write().unwrap().mark_fin();
+        }
+    }
+}
+
+struct TcpHalfClosedGuard {
+    handle: Option<JoinHandle<()>>,
+}
+
+impl TcpHalfClosedGuard {
+    pub fn new(handle: JoinHandle<()>) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for TcpHalfClosedGuard {
+    fn drop(&mut self) {
+        if !self.handle.is_finished() {
+            if let Some(handle) = self.handle.take() {
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    if !handle.is_finished() {
+                        // wait until 30s
+                        tokio::time::sleep(Duration::from_secs(25)).await;
+                        handle.abort();
+                        // done, return deliberately
+                    }
+                })
+            }
+        }
+    }
+}
+
+struct UdpDropGuard(JoinHandle<()>);
+
+impl Drop for UdpDropGuard {
+    fn drop(&mut self) {
+        if !self.0.is_finished() {
+            self.0.abort();
         }
     }
 }

@@ -2,7 +2,7 @@ use crate::adapter::TcpOutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::common::io_err;
-use crate::proxy::StatisticsInfo;
+use crate::proxy::ConnAgent;
 use crate::sniff::modifier::{Logger, Modifier, Nooper};
 use crate::sniff::ModifierContext;
 use hyper::client::conn;
@@ -24,7 +24,7 @@ pub struct HttpsSniffer {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Box<dyn TcpOutBound>,
-    conn_info: Arc<RwLock<StatisticsInfo>>,
+    conn_info: Arc<RwLock<ConnAgent>>,
 }
 
 impl HttpsSniffer {
@@ -35,7 +35,7 @@ impl HttpsSniffer {
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn TcpOutBound>,
-        conn_info: Arc<RwLock<StatisticsInfo>>,
+        conn_info: Arc<RwLock<ConnAgent>>,
     ) -> Self {
         Self {
             cert,
@@ -95,7 +95,8 @@ impl HttpsSniffer {
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
-            let (conn, _) = self.creator.spawn_tcp_with_chan();
+            // since sniffer is the middle part, async tasks should be cancelled properly
+            let (conn, _handle) = self.creator.spawn_tcp_with_chan();
             Self::proxy(
                 client_tls.clone(),
                 server_name.clone(),

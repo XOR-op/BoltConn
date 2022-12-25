@@ -1,7 +1,7 @@
 use crate::config::{LinkedState, RawState};
 use crate::dispatch::{Dispatching, GeneralProxy};
 use crate::platform::process::ProcessInfo;
-use crate::proxy::{DumpedRequest, DumpedResponse, HttpCapturer, SessionManager, StatCenter};
+use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 #[derive(Clone)]
 pub struct ApiServer {
     manager: Arc<SessionManager>,
-    stat_center: Arc<StatCenter>,
+    stat_center: Arc<AgentCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
     dispatching: Arc<Dispatching>,
     state: Arc<Mutex<LinkedState>>,
@@ -29,7 +29,7 @@ pub struct ApiServer {
 impl ApiServer {
     pub fn new(
         manager: Arc<SessionManager>,
-        stat_center: Arc<StatCenter>,
+        stat_center: Arc<AgentCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
         dispatching: Arc<Dispatching>,
         state: LinkedState,

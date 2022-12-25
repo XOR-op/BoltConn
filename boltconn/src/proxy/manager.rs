@@ -78,7 +78,7 @@ impl SessionManager {
         });
     }
 
-    pub fn flush_with_interval(&self, dura: Duration) {
+    pub fn flush_with_interval(&self, dura: Duration) -> JoinHandle<()> {
         let shallow_copy = Self {
             tcp_records: self.tcp_records.clone(),
             udp_records: self.udp_records.clone(),
@@ -93,7 +93,7 @@ impl SessionManager {
                 interval.tick().await;
                 shallow_copy.flush();
             }
-        });
+        })
     }
 
     pub fn get_all_tcp_sessions(&self) -> Vec<TcpSessionCtl> {

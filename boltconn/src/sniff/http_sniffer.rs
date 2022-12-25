@@ -1,7 +1,7 @@
 use crate::adapter::TcpOutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
-use crate::proxy::StatisticsInfo;
+use crate::proxy::ConnAgent;
 use crate::sniff::modifier::{Logger, Modifier, Nooper};
 use crate::sniff::ModifierContext;
 use hyper::client::conn;
@@ -15,7 +15,7 @@ pub struct HttpSniffer {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Box<dyn TcpOutBound>,
-    conn_info: Arc<RwLock<StatisticsInfo>>,
+    conn_info: Arc<RwLock<ConnAgent>>,
 }
 
 impl HttpSniffer {
@@ -23,7 +23,7 @@ impl HttpSniffer {
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn TcpOutBound>,
-        conn_info: Arc<RwLock<StatisticsInfo>>,
+        conn_info: Arc<RwLock<ConnAgent>>,
     ) -> Self {
         Self {
             inbound,
@@ -50,7 +50,7 @@ impl HttpSniffer {
     pub async fn run(self) -> io::Result<()> {
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
-            let (conn, _) = self.creator.spawn_tcp_with_chan();
+            let (conn, handle) = self.creator.spawn_tcp_with_chan();
             Self::proxy(
                 conn,
                 self.modifier.clone(),
