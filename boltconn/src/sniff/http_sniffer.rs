@@ -50,7 +50,7 @@ impl HttpSniffer {
     pub async fn run(self) -> io::Result<()> {
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
-            let (conn, handle) = self.creator.spawn_tcp_with_chan();
+            let (conn, _handle) = self.creator.spawn_tcp_with_chan();
             Self::proxy(
                 conn,
                 self.modifier.clone(),

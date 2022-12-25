@@ -29,6 +29,9 @@ enum ProxyOptions {
 enum ConnOptions {
     /// List all active connections
     List,
+    Stop {
+        nth: Option<usize>,
+    },
 }
 
 #[derive(Debug, StructOpt)]
@@ -50,7 +53,7 @@ struct CertOptions {
 }
 
 #[derive(Debug, StructOpt)]
-enum CaptureOptions {
+enum MitmOptions {
     /// List all captured data
     List,
     /// List data ranged from *start* to *end*
@@ -72,7 +75,7 @@ enum SubCommand {
     /// Generate Certificates
     Cert(CertOptions),
     /// Captured HTTP data
-    Capture(CaptureOptions),
+    Mitm(MitmOptions),
     /// Clean unexpected shutdown
     Clean,
 }
@@ -87,7 +90,8 @@ async fn main() {
             ProxyOptions::List => requestor.get_group_list().await,
         },
         SubCommand::Conn(opt) => match opt {
-            ConnOptions::List => requestor.get_active_conn().await,
+            ConnOptions::List => requestor.get_connections().await,
+            ConnOptions::Stop { nth } => requestor.stop_connections(nth).await,
         },
         SubCommand::Log(opt) => match opt {
             LogOptions::List => {
@@ -99,12 +103,10 @@ async fn main() {
             DebugOptions::Session => requestor.get_sessions().await,
         },
         SubCommand::Cert(opt) => cert::generate_cert(opt.path),
-        SubCommand::Capture(opt) => match opt {
-            CaptureOptions::List => requestor.get_captured(None).await,
-            CaptureOptions::Range { start, end } => {
-                requestor.get_captured(Some((start, end))).await
-            }
-            CaptureOptions::Get { id } => requestor.get_captured_detail(id).await,
+        SubCommand::Mitm(opt) => match opt {
+            MitmOptions::List => requestor.get_mitm(None).await,
+            MitmOptions::Range { start, end } => requestor.get_mitm(Some((start, end))).await,
+            MitmOptions::Get { id } => requestor.get_mitm_payload(id).await,
         },
         SubCommand::Clean => {
             if !is_root() {

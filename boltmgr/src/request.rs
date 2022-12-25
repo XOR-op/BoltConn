@@ -47,12 +47,15 @@ impl Requester {
         }
     }
 
-    pub async fn get_active_conn(&self) -> Result<()> {
-        let data = reqwest::get(self.route("/active")).await?.text().await?;
+    pub async fn get_connections(&self) -> Result<()> {
+        let data = reqwest::get(self.route("/connections"))
+            .await?
+            .text()
+            .await?;
         let result: Vec<boltapi::ConnectionSchema> = serde_json::from_str(data.as_str())?;
         for conn in result {
             println!(
-                "{} ({},{}) {} [up:{},down:{},time:{}]",
+                "{} ({},{}) {}\t [up:{},down:{},time:{}] [{}]",
                 conn.destination.cyan(),
                 conn.protocol,
                 conn.proxy.italic(),
@@ -62,8 +65,29 @@ impl Requester {
                 },
                 conn.upload,
                 conn.download,
-                conn.time
+                conn.time,
+                if conn.active { "open" } else { "closed" }
             );
+        }
+        Ok(())
+    }
+    pub async fn stop_connections(&self, nth: Option<usize>) -> Result<()> {
+        if let Some(id) = nth {
+            let data = reqwest::Client::new()
+                .delete(self.route(format!("/connections/{}", id).as_str()))
+                .send()
+                .await?
+                .text()
+                .await?;
+            match data.as_str() {
+                "true" => println!("Success"),
+                _ => println!("Failed"),
+            };
+        } else {
+            reqwest::Client::new()
+                .delete(self.route("/connections"))
+                .send()
+                .await?;
         }
         Ok(())
     }
@@ -93,16 +117,14 @@ impl Requester {
         Ok(())
     }
 
-    pub async fn get_captured(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
+    pub async fn get_mitm(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
         let uri = match range {
-            None => self.route("/captured/all"),
-            Some((s, Some(e))) => {
-                self.route(format!("/captured/range?start={}&end={}", s, e).as_str())
-            }
-            Some((s, None)) => self.route(format!("/captured/range?start={}", s).as_str()),
+            None => self.route("/mitm/all"),
+            Some((s, Some(e))) => self.route(format!("/mitm/range?start={}&end={}", s, e).as_str()),
+            Some((s, None)) => self.route(format!("/mitm/range?start={}", s).as_str()),
         };
         let data = reqwest::get(uri).await?.text().await?;
-        let result: Vec<boltapi::HttpCaptureSchema> = serde_json::from_str(data.as_str())?;
+        let result: Vec<boltapi::HttpMitmSchema> = serde_json::from_str(data.as_str())?;
         let mut table = Table::new("{:<} {:<} {:<} {:<} {:<} {:<}");
         table.add_row(
             Row::new()
@@ -128,12 +150,12 @@ impl Requester {
         Ok(())
     }
 
-    pub async fn get_captured_detail(&self, id: u32) -> Result<()> {
-        let data = reqwest::get(self.route(format!("/captured/detail/{}", id).as_str()))
+    pub async fn get_mitm_payload(&self, id: u32) -> Result<()> {
+        let data = reqwest::get(self.route(format!("/mitm/payload/{}", id).as_str()))
             .await?
             .text()
             .await?;
-        let result: boltapi::GetCapturedDataResp = serde_json::from_str(data.as_str())?;
+        let result: boltapi::GetMitmDataResp = serde_json::from_str(data.as_str())?;
         println!("==================  Request  ===================");
         println!("Header:");
         result.req_header.iter().for_each(|l| println!("{}", l));

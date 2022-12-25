@@ -214,7 +214,21 @@ impl Dispatcher {
     ) {
         match self.udp_sessions.entry((src_addr, dst_addr.clone())) {
             Entry::Occupied(val) => {
-                let _ = val.get().sender.send(pkt).await;
+                if let Err(pkt) = val.get().sender.send(pkt).await {
+                    // retry
+                    val.remove();
+                    drop(val);
+                    // will be vacant, should be true
+                    self.submit_udp_pkt(
+                        pkt.0,
+                        src_addr,
+                        dst_addr,
+                        dst_fake_addr,
+                        indicator,
+                        socket,
+                        session_mgr,
+                    );
+                }
             }
             Entry::Vacant(entry) => {
                 let process_info = process::get_pid(src_addr, NetworkType::UDP)
@@ -311,6 +325,6 @@ impl Dispatcher {
 }
 
 struct SendSide {
-    sender: tokio::sync::mpsc::Sender<PktBufHandle>,
+    sender: mpsc::Sender<PktBufHandle>,
     indicator: Arc<AtomicBool>,
 }

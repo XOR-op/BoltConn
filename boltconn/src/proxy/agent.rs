@@ -134,10 +134,12 @@ impl ConnAgent {
         self.done = true;
     }
 
+    // todo: abort udp may not work properly
     pub fn abort(&mut self) {
         for h in &self.handles {
             h.abort();
         }
+        self.handles = Vec::new();
         self.mark_fin();
     }
 }
@@ -189,6 +191,10 @@ impl AgentCenter {
 
     pub fn get_copy(&self) -> Vec<Arc<RwLock<ConnAgent>>> {
         self.content.read().unwrap().clone()
+    }
+
+    pub fn get_nth(&self, idx: usize) -> Option<Arc<RwLock<ConnAgent>>> {
+        self.content.read().unwrap().get(idx).map(|e| e.clone())
     }
 }
 

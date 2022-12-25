@@ -284,8 +284,8 @@ impl TcpHalfClosedGuard {
 
 impl Drop for TcpHalfClosedGuard {
     fn drop(&mut self) {
-        if !self.handle.is_finished() {
-            if let Some(handle) = self.handle.take() {
+        if let Some(handle) = self.handle.take() {
+            if !handle.is_finished() {
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     if !handle.is_finished() {
@@ -294,7 +294,7 @@ impl Drop for TcpHalfClosedGuard {
                         handle.abort();
                         // done, return deliberately
                     }
-                })
+                });
             }
         }
     }

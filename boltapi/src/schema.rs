@@ -11,6 +11,7 @@ pub struct ConnectionSchema {
     pub upload: String,
     pub download: String,
     pub time: String,
+    pub active: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -23,7 +24,7 @@ pub struct SessionSchema {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct HttpCaptureSchema {
+pub struct HttpMitmSchema {
     pub client: Option<String>,
     pub uri: String,
     pub method: String,
@@ -49,20 +50,20 @@ pub struct SetGroupReqSchema {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct GetCapturedRangeReq {
+pub struct GetMitmRangeReq {
     pub start: u32,
     pub end: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct GetCapturedDataReq {
+pub struct GetMitmDataReq {
     pub id: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct GetCapturedDataResp {
+pub struct GetMitmDataResp {
     pub req_header: Vec<String>,
     #[serde(with = "base64ext")]
     pub req_body: Vec<u8>,

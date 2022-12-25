@@ -4,11 +4,10 @@ use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router, ServiceExt};
 use boltapi::{
-    GetCapturedDataReq, GetCapturedDataResp, GetCapturedRangeReq, GetGroupRespSchema,
-    SetGroupReqSchema,
+    GetGroupRespSchema, GetMitmDataReq, GetMitmDataResp, GetMitmRangeReq, SetGroupReqSchema,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -46,11 +45,15 @@ impl ApiServer {
     pub async fn run(self, port: u16) {
         let app = Router::new()
             .route("/logs", get(Self::get_logs))
-            .route("/active", get(Self::get_active_conn))
+            .route(
+                "/connections",
+                get(Self::get_all_conn).delete(Self::stop_all_conn),
+            )
+            .route("/connections/:id", delete(Self::stop_conn))
             .route("/sessions", get(Self::get_sessions))
-            .route("/captured/all", get(Self::get_captured))
-            .route("/captured/range", get(Self::get_captured_range))
-            .route("/captured/detail/:id", get(Self::get_captured_data))
+            .route("/mitm/all", get(Self::get_mitm))
+            .route("/mitm/range", get(Self::get_mitm_range))
+            .route("/mitm/payload/:id", get(Self::get_mitm_payload))
             .route(
                 "/groups",
                 get(Self::get_group_list).put(Self::set_selection),
@@ -67,12 +70,11 @@ impl ApiServer {
         Json(serde_json::Value::Null)
     }
 
-    async fn get_active_conn(State(server): State<Self>) -> Json<serde_json::Value> {
+    async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
         let list = server.stat_center.get_copy();
         let mut result = Vec::new();
         for entry in list {
             let info = entry.read().unwrap();
-
             let elapsed = info.start_time.elapsed().as_secs();
             let conn = boltapi::ConnectionSchema {
                 destination: info.dest.to_string(),
@@ -82,10 +84,38 @@ impl ApiServer {
                 upload: pretty_size(info.upload_traffic),
                 download: pretty_size(info.download_traffic),
                 time: pretty_time(elapsed),
+                active: !info.done,
             };
             result.push(conn);
         }
         Json(json!(result))
+    }
+
+    async fn stop_all_conn(State(server): State<Self>) {
+        let list = server.stat_center.get_copy();
+        for entry in list {
+            let mut info = entry.write().unwrap();
+            info.abort();
+        }
+    }
+
+    async fn stop_conn(
+        State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        let id = {
+            let Some(id) = params.get("id")else { return Json(serde_json::Value::Bool(false)); };
+            if let Ok(s) = id.parse::<usize>() {
+                s
+            } else {
+                return Json(serde_json::Value::Bool(false));
+            }
+        };
+        if let Some(ele) = server.stat_center.get_nth(id) {
+            ele.write().unwrap().abort();
+            return Json(serde_json::Value::Bool(true));
+        }
+        return Json(serde_json::Value::Bool(false));
     }
 
     async fn get_sessions(State(server): State<Self>) -> Json<serde_json::Value> {
@@ -128,7 +158,7 @@ impl ApiServer {
     ) -> Json<serde_json::Value> {
         let mut result = Vec::new();
         for (host, proc, req, resp) in list {
-            let item = boltapi::HttpCaptureSchema {
+            let item = boltapi::HttpMitmSchema {
                 client: proc.map(|proc| proc.name),
                 uri: {
                     let s = req.uri.to_string();
@@ -150,7 +180,7 @@ impl ApiServer {
         Json(json!(result))
     }
 
-    async fn get_captured(State(server): State<Self>) -> Json<serde_json::Value> {
+    async fn get_mitm(State(server): State<Self>) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
             let list = capturer.get_copy();
             Self::collect_captured(list)
@@ -159,9 +189,9 @@ impl ApiServer {
         }
     }
 
-    async fn get_captured_range(
+    async fn get_mitm_range(
         State(server): State<Self>,
-        Query(params): Query<GetCapturedRangeReq>,
+        Query(params): Query<GetMitmRangeReq>,
     ) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
             if let Some(list) =
@@ -173,7 +203,7 @@ impl ApiServer {
         Json(serde_json::Value::Null)
     }
 
-    async fn get_captured_data(
+    async fn get_mitm_payload(
         State(server): State<Self>,
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
@@ -189,7 +219,7 @@ impl ApiServer {
             if let Some(list) = capturer.get_range_copy(id as usize, Some((id + 1) as usize)) {
                 if list.len() == 1 {
                     let (_, _, req, resp) = list.get(0).unwrap();
-                    let result = GetCapturedDataResp {
+                    let result = GetMitmDataResp {
                         req_header: req
                             .headers
                             .iter()
