@@ -15,11 +15,12 @@ fn add_tls_server(
     arr: &mut Vec<NameServerConfig>,
     ips: &[IpAddr],
     protocol: Protocol,
+    port: u16,
     tls_name: &str,
 ) {
     for ip in ips {
         arr.push(NameServerConfig {
-            socket_addr: SocketAddr::new(*ip, 53),
+            socket_addr: SocketAddr::new(*ip, port),
             protocol,
             tls_dns_name: Some(tls_name.to_string()),
             trust_nx_responses: false,
@@ -52,7 +53,8 @@ pub fn new_bootstrap_resolver(addr: &[IpAddr]) -> anyhow::Result<TokioAsyncResol
         None,
         vec![],
         NameServerConfigGroup::from(
-            addr.iter().map(|ip| NameServerConfig::new(SocketAddr::new(*ip, 53), Protocol::Udp))
+            addr.iter()
+                .map(|ip| NameServerConfig::new(SocketAddr::new(*ip, 53), Protocol::Udp))
                 .collect::<Vec<NameServerConfig>>(),
         ),
     );
@@ -86,6 +88,7 @@ pub async fn parse_dns_config(
                     &mut arr,
                     resolve_dns(&bootstrap, content.as_str()).await?.as_slice(),
                     Protocol::Tls,
+                    853,
                     content.as_str(),
                 );
             }
@@ -94,6 +97,7 @@ pub async fn parse_dns_config(
                     &mut arr,
                     resolve_dns(&bootstrap, content.as_str()).await?.as_slice(),
                     Protocol::Https,
+                    443,
                     content.as_str(),
                 );
             }
