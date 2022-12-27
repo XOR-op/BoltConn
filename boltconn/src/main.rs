@@ -27,7 +27,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::exit;
 use std::str::FromStr;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io};
 use tokio_rustls::rustls::{Certificate, PrivateKey};

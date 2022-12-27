@@ -5,7 +5,7 @@ use crate::Dns;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::io::Result;
-use std::net::{ SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};

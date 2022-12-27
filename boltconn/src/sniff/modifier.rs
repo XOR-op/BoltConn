@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hyper::{Body, Request, Response};
-use std::sync::{Arc,  RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 pub type ModifierClosure = Box<dyn Fn(Option<ProcessInfo>) -> Arc<dyn Modifier> + Send + Sync>;

@@ -1,6 +1,6 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::RuleSchema;
-use crate::dispatch::rule::{ RuleBuilder, RuleImpl};
+use crate::dispatch::rule::{RuleBuilder, RuleImpl};
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyImpl};
 use crate::proxy::NetworkAddr;
 use aho_corasick::AhoCorasick;

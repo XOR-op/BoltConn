@@ -2,7 +2,7 @@
 
 use crate::adapter::Connector;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
-use crate::proxy::{ConnAgent,  SessionManager};
+use crate::proxy::{ConnAgent, SessionManager};
 use io::Result;
 use std::io;
 use std::net::SocketAddr;

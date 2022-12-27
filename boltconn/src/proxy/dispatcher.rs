@@ -10,7 +10,7 @@ use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
 use crate::proxy::{AgentCenter, ConnAgent, NetworkAddr, SessionManager};
-use crate::sniff::{HttpSniffer, HttpsSniffer,  ModifierClosure};
+use crate::sniff::{HttpSniffer, HttpsSniffer, ModifierClosure};
 use crate::PktBufPool;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

@@ -1,19 +1,17 @@
-use crate::config::{LinkedState};
+use crate::config::LinkedState;
 use crate::dispatch::{Dispatching, GeneralProxy};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
 use axum::extract::{Path, Query, State};
 use axum::routing::{delete, get};
 use axum::{Json, Router};
-use boltapi::{
-    GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, SetGroupReqSchema,
-};
+use boltapi::{GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, SetGroupReqSchema};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration};
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct ApiServer {

@@ -1,7 +1,7 @@
 use crate::network::dns::dns_table::DnsTable;
 use std::io;
 use std::io::Result;
-use std::net::{IpAddr};
+use std::net::IpAddr;
 use tokio::sync::RwLock;
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
