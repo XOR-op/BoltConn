@@ -2,7 +2,7 @@ use crate::adapter::TcpOutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::proxy::ConnAgent;
-use crate::sniff::modifier::{Logger, Modifier, Nooper};
+use crate::sniff::modifier::{Modifier};
 use crate::sniff::ModifierContext;
 use hyper::client::conn;
 use hyper::server::conn::Http;

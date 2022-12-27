@@ -1,12 +1,10 @@
 use super::session_ctl::{TcpSessionCtl, UdpSessionCtl};
-use crate::proxy::NetworkAddr;
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use io::Result;
-use std::collections::HashSet;
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

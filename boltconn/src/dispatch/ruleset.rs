@@ -1,16 +1,14 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::RuleSchema;
-use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
-use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup, ProxyImpl};
-use crate::platform::process::NetworkType;
+use crate::dispatch::rule::{ RuleBuilder, RuleImpl};
+use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyImpl};
 use crate::proxy::NetworkAddr;
 use aho_corasick::AhoCorasick;
 use ipnet::{IpNet, Ipv4Net};
 use radix_trie::{Trie, TrieCommon};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
-use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 fn ip4_to_vec(ip: Ipv4Addr) -> Vec<u8> {

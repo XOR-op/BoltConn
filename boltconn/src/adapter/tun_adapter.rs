@@ -4,7 +4,7 @@ use crate::PktBufPool;
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8};
 use std::sync::{Arc, RwLock};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;

@@ -1,10 +1,7 @@
 mod dns;
 mod dns_table;
 
-use crate::config::RawDnsConfig;
-use anyhow::anyhow;
 pub use dns::Dns;
-use ipnet::IpNet;
 use std::net::{IpAddr, SocketAddr};
 use trust_dns_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,

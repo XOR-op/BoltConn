@@ -1,9 +1,7 @@
 use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
 use crate::platform::process::{NetworkType, ProcessInfo};
-use http::{Request, Response};
-use hyper::Body;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;

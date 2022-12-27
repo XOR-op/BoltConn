@@ -1,7 +1,7 @@
 use crate::common::buf_pool::PktBufHandle;
 use crate::network::packet::ip::IPPkt;
-use smoltcp::wire::{Icmpv4Packet, IpAddress, IpProtocol, Ipv4Address, Ipv4Packet};
-use std::net::{Ipv4Addr, SocketAddr};
+use smoltcp::wire::{Icmpv4Packet,  IpProtocol, Ipv4Address, Ipv4Packet};
+use std::net::{Ipv4Addr};
 
 pub struct Icmpv4Pkt {
     ip_pkt: IPPkt,

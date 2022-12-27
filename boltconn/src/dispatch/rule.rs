@@ -5,7 +5,6 @@ use anyhow::anyhow;
 use ipnet::IpNet;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 

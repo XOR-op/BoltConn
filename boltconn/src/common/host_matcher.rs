@@ -1,4 +1,4 @@
-use radix_trie::{Trie, TrieCommon, TrieKey};
+use radix_trie::{Trie, TrieCommon};
 
 #[derive(Debug, Clone, Copy)]
 enum HostType {

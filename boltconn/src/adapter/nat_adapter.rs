@@ -2,11 +2,10 @@
 
 use crate::adapter::Connector;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
-use crate::proxy::{ConnAgent, NetworkAddr, SessionManager};
+use crate::proxy::{ConnAgent,  SessionManager};
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
