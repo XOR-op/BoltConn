@@ -4,6 +4,7 @@ use crate::network::dns::parse_dns_config;
 use std::io;
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr};
+use tokio::sync::RwLock;
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
@@ -11,17 +12,24 @@ use trust_dns_resolver::TokioAsyncResolver;
 
 pub struct Dns {
     table: DnsTable,
-    resolvers: Vec<TokioAsyncResolver>,
+    resolvers: RwLock<Vec<TokioAsyncResolver>>,
 }
 
 impl Dns {
-    pub fn new(config: NameServerConfigGroup) -> anyhow::Result<Dns> {
+    pub fn with_config(config: NameServerConfigGroup) -> anyhow::Result<Dns> {
         let cfg = ResolverConfig::from_parts(None, vec![], config);
         let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
         Ok(Dns {
             table: DnsTable::new(),
-            resolvers: vec![resolver],
+            resolvers: RwLock::new(vec![resolver]),
         })
+    }
+
+    pub fn new() -> Dns {
+        Dns {
+            table: DnsTable::new(),
+            resolvers: RwLock::new(vec![]),
+        }
     }
 
     /// Return fake ip for the domain name instantly.
@@ -42,7 +50,7 @@ impl Dns {
     }
 
     pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
-        for r in &self.resolvers {
+        for r in self.resolvers.read().await.iter() {
             if let Ok(result) = r.ipv4_lookup(domain_name).await {
                 for i in result {
                     return Some(IpAddr::V4(i));

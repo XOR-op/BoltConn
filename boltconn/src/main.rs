@@ -8,7 +8,7 @@ use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
-use crate::proxy::{AgentCenter, HttpCapturer};
+use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
 use crate::sniff::Recorder;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
@@ -27,7 +27,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::exit;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::{fs, io};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
@@ -145,32 +145,37 @@ fn main() {
         .with(EnvFilter::new("boltconn=trace"))
         .init();
 
-    // configuration
-    let (config, state, schema) = rt
-        .block_on(load_config(config_path, state_path))
-        .expect("Failed to load config");
-
-    let dispatching =
-        initialize_dispatching(&config, &state, schema).expect("Failed to initialize dispatching");
-
     // interface
     let (_, real_iface_name) = get_default_route().expect("failed to get default route");
 
     // guards
     let _guard = rt.enter();
     let fake_dns_server = "198.18.99.88".parse().unwrap();
-    let dns_guard =
+    let _dns_guard =
         platform::SystemDnsHandle::new(fake_dns_server).expect("fail to replace /etc/resolv.conf");
 
-    // initialize resources
+    // config-independent components
     let manager = Arc::new(SessionManager::new());
+    let stat_center = Arc::new(AgentCenter::new());
+    let http_capturer = Arc::new(HttpCapturer::new());
+    let hcap_copy = http_capturer.clone();
+    let proxy_allocator = PktBufPool::new(512, 4096);
+    let udp_manager = Arc::new(UdpOutboundManager::new());
+
+    // Read initial config
+    let (config, state, schema) = rt
+        .block_on(load_config(config_path, state_path))
+        .expect("Failed to load config");
+
+    // initialize resources
     let dns = {
         let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice()).unwrap();
         let group = rt
             .block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap)))
             .unwrap();
-        Arc::new(Dns::new(group).expect("DNS failed to initialize"))
+        Arc::new(Dns::with_config(group).expect("DNS failed to initialize"))
     };
+
     let tun = rt.block_on(async {
         let pool = PktBufPool::new(512, 4096);
         let mut tun = TunDevice::open(
@@ -189,11 +194,11 @@ fn main() {
         tun
     });
 
+    // If reloaded, the following components need restarting
+    let dispatching =
+        initialize_dispatching(&config, &state, schema).expect("Failed to initialize dispatching");
+
     // dispatcher and statistics
-    let stat_center = Arc::new(AgentCenter::new());
-    let http_capturer = Arc::new(HttpCapturer::new());
-    let hcap_copy = http_capturer.clone();
-    let proxy_allocator = PktBufPool::new(512, 4096);
     let dispatcher = {
         // tls mitm
         let (cert, priv_key) =
@@ -235,6 +240,7 @@ fn main() {
         dispatcher,
         dns,
         proxy_allocator,
+        udp_manager,
     ));
     let nat_udp = nat.clone();
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
@@ -245,5 +251,4 @@ fn main() {
     rt.block_on(async { tokio::signal::ctrl_c().await })
         .expect("Tokio runtime error");
     rt.shutdown_background();
-    drop(dns_guard);
 }

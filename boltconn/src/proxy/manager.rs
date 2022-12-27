@@ -1,4 +1,5 @@
 use super::session_ctl::{TcpSessionCtl, UdpSessionCtl};
+use crate::proxy::NetworkAddr;
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use io::Result;

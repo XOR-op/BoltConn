@@ -1,11 +1,28 @@
-use crate::common::buf_pool::PktBufPool;
+use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::proxy::manager::SessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use crate::Dns;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};
+use tokio::sync::mpsc;
+
+pub struct UdpOutboundManager(DashMap<(SocketAddr, NetworkAddr), SendSide>);
+
+impl UdpOutboundManager {
+    pub fn new() -> Self {
+        Self(DashMap::new())
+    }
+}
+
+struct SendSide {
+    sender: mpsc::Sender<PktBufHandle>,
+    indicator: Arc<AtomicBool>,
+}
 
 pub struct Nat {
     nat_addr: SocketAddr,
@@ -13,6 +30,7 @@ pub struct Nat {
     dispatcher: Arc<Dispatcher>,
     dns: Arc<Dns>,
     pool: PktBufPool,
+    udp_mgr: Arc<UdpOutboundManager>,
 }
 
 impl Nat {
@@ -22,6 +40,7 @@ impl Nat {
         dispatcher: Arc<Dispatcher>,
         dns: Arc<Dns>,
         pool: PktBufPool,
+        udp_mgr: Arc<UdpOutboundManager>,
     ) -> Self {
         Self {
             nat_addr: addr,
@@ -29,6 +48,7 @@ impl Nat {
             dispatcher,
             dns,
             pool,
+            udp_mgr,
         }
     }
 
@@ -60,6 +80,48 @@ impl Nat {
         }
     }
 
+    async fn retryable_udp(
+        &self,
+        pkt: PktBufHandle,
+        src: SocketAddr,
+        real_dst: &NetworkAddr,
+        dst: SocketAddr,
+        indicator: &Arc<AtomicBool>,
+        udp_listener: &Arc<UdpSocket>,
+    ) -> Option<PktBufHandle> {
+        match self.udp_mgr.0.entry((src, real_dst.clone())) {
+            Entry::Occupied(val) => {
+                if let Err(pkt) = val.get().sender.send(pkt).await {
+                    val.remove();
+                    // let caller to retry
+                    return Some(pkt.0);
+                }
+            }
+            Entry::Vacant(entry) => {
+                let (sender, receiver) = mpsc::channel(128);
+                let send_side = SendSide {
+                    sender,
+                    indicator: indicator.clone(),
+                };
+                // push packet into channel
+                let _ = send_side.sender.send(pkt).await;
+                entry.insert(send_side);
+                self.dispatcher
+                    .submit_udp_pkt(
+                        src,
+                        real_dst.clone(),
+                        dst,
+                        receiver,
+                        indicator.clone(),
+                        &udp_listener,
+                        &self.session_mgr,
+                    )
+                    .await;
+            }
+        }
+        None
+    }
+
     pub async fn run_udp(&self) -> Result<()> {
         let udp_listener = Arc::new(UdpSocket::bind(self.nat_addr).await?);
         tracing::event!(
@@ -79,32 +141,18 @@ impl Nat {
                         port: dst.port(),
                     },
                 };
-                if let Err(buffer) = self
-                    .dispatcher
-                    .submit_udp_pkt(
-                        buffer,
-                        src,
-                        real_dst.clone(),
-                        dst,
-                        indicator.clone(),
-                        &udp_listener,
-                        &self.session_mgr,
-                    )
+
+                if let Some(retry_pkt) = self
+                    .retryable_udp(buffer, src, &real_dst, dst, &indicator, &udp_listener)
                     .await
                 {
-                    // retry only once
-                    let _ = self
-                        .dispatcher
-                        .submit_udp_pkt(
-                            buffer,
-                            src,
-                            real_dst,
-                            dst,
-                            indicator,
-                            &udp_listener,
-                            &self.session_mgr,
-                        )
-                        .await;
+                    // retry once
+                    if let Some(recycle) = self
+                        .retryable_udp(retry_pkt, src, &real_dst, dst, &indicator, &udp_listener)
+                        .await
+                    {
+                        self.pool.release(recycle);
+                    }
                 }
             } else {
                 // no corresponding, drop
