@@ -269,11 +269,11 @@ dependencies = [
  "hyper",
  "ioctl-sys",
  "ipnet",
+ "is-root",
  "libc",
  "libproc",
  "netlink-packet-sock-diag",
  "netlink-sys",
- "nix",
  "radix_trie",
  "reqwest",
  "rustls-pemfile",
@@ -1363,15 +1363,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
-name = "memoffset"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1470,20 +1461,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
 dependencies = [
  "smallvec",
-]
-
-[[package]]
-name = "nix"
-version = "0.26.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46a58d1d356c6597d08cde02c2f09d785b09e28711837b1ed667dc652c08a694"
-dependencies = [
- "bitflags",
- "cfg-if",
- "libc",
- "memoffset",
- "pin-utils",
- "static_assertions",
 ]
 
 [[package]]
@@ -2336,12 +2313,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "static_assertions"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
 name = "strsim"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2706,22 +2677,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f7f83d1e4a0e4358ac54c5c3681e5d7da5efc5a7a632c90bb6d6669ddd9bc26"
 dependencies = [
  "async-trait",
+ "bytes",
  "cfg-if",
  "data-encoding",
  "enum-as-inner",
  "futures-channel",
  "futures-io",
  "futures-util",
+ "h2",
+ "http",
  "idna 0.2.3",
  "ipnet",
  "lazy_static",
  "rand",
+ "rustls",
+ "rustls-pemfile",
  "smallvec",
  "thiserror",
  "tinyvec",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "url",
+ "webpki",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2737,11 +2716,14 @@ dependencies = [
  "lru-cache",
  "parking_lot",
  "resolv-conf",
+ "rustls",
  "smallvec",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "trust-dns-proto",
+ "webpki-roots",
 ]
 
 [[package]]

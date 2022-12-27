@@ -79,17 +79,33 @@ impl Nat {
                         port: dst.port(),
                     },
                 };
-                self.dispatcher
+                if let Err(buffer) = self
+                    .dispatcher
                     .submit_udp_pkt(
                         buffer,
                         src,
-                        real_dst,
+                        real_dst.clone(),
                         dst,
-                        indicator,
+                        indicator.clone(),
                         &udp_listener,
                         &self.session_mgr,
                     )
-                    .await;
+                    .await
+                {
+                    // retry only once
+                    let _ = self
+                        .dispatcher
+                        .submit_udp_pkt(
+                            buffer,
+                            src,
+                            real_dst,
+                            dst,
+                            indicator,
+                            &udp_listener,
+                            &self.session_mgr,
+                        )
+                        .await;
+                }
             } else {
                 // no corresponding, drop
                 self.pool.release(buffer);

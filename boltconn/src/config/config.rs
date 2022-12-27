@@ -9,7 +9,7 @@ use std::net::IpAddr;
 pub struct RawRootCfg {
     pub interface: String,
     pub api_port: u16,
-    pub dns: Vec<String>,
+    pub dns: RawDnsConfig,
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
     pub proxy_group: HashMap<String, Vec<String>>,
     pub rule_local: Vec<String>,
@@ -22,6 +22,12 @@ pub struct RawRootCfg {
 pub enum RawServerAddr {
     IpAddr(IpAddr),
     DomainName(String),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RawDnsConfig {
+    pub bootstrap: Vec<IpAddr>,
+    pub nameserver: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

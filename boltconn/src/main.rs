@@ -7,17 +7,18 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
+use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer};
 use crate::sniff::Recorder;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
+use is_root::is_root;
 use network::tun_device::TunDevice;
 use network::{
-    dns::{Dns, DnsRoutingHandle},
+    dns::Dns,
     packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt},
 };
-use nix::unistd::Uid;
 use platform::get_default_route;
 use proxy::Dispatcher;
 use proxy::{Nat, SessionManager};
@@ -128,7 +129,7 @@ fn main() {
     let crt_path = "_private/ca/crt.pem";
     let privkey_path = "_private/ca/key.pem";
 
-    if !Uid::effective().is_root() {
+    if !is_root() {
         println!("BoltConn must be run with root privilege.");
         exit(-1);
     }
@@ -148,12 +149,7 @@ fn main() {
     let (config, state, schema) = rt
         .block_on(load_config(config_path, state_path))
         .expect("Failed to load config");
-    let dns_config = config
-        .dns
-        .iter()
-        .map(|s| s.parse().ok())
-        .flatten()
-        .collect();
+
     let dispatching =
         initialize_dispatching(&config, &state, schema).expect("Failed to initialize dispatching");
 
@@ -168,7 +164,13 @@ fn main() {
 
     // initialize resources
     let manager = Arc::new(SessionManager::new());
-    let dns = Arc::new(Dns::new(&dns_config).expect("DNS failed to initialize"));
+    let dns = {
+        let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice()).unwrap();
+        let group = rt
+            .block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap)))
+            .unwrap();
+        Arc::new(Dns::new(group).expect("DNS failed to initialize"))
+    };
     let tun = rt.block_on(async {
         let pool = PktBufPool::new(512, 4096);
         let mut tun = TunDevice::open(

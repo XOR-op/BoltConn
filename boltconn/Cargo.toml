@@ -29,7 +29,7 @@ dashmap = "5.4.0"
 arrayref = "0.3.6"
 libproc = "0.12.0"
 trust-dns-proto = "0.22.0"
-trust-dns-resolver = "0.22.0"
+trust-dns-resolver = { version = "0.22.0", features = ['dns-over-rustls', 'dns-over-https-rustls', 'dns-over-https', 'dns-over-tls']}
 serde = { version = "1.0.147", features = ["derive"] }
 serde_yaml = "0.9.14"
 serde_json = "1.0.89"
@@ -44,7 +44,7 @@ radix_trie = "0.2.1"
 aho-corasick = "0.7.20"
 reqwest = "0.11.13"
 fastrand = "1.8.0"
-nix = "0.26.1"
+is-root = "0.1.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-sys = "0.8.3"
 netlink-packet-sock-diag = "0.4.0"

@@ -1,59 +1,123 @@
 mod dns;
 mod dns_table;
 
-use crate::platform::{add_route_entry, add_route_entry_via_gateway, delete_route_entry};
-use anyhow::Result;
+use crate::config::RawDnsConfig;
+use anyhow::anyhow;
 pub use dns::Dns;
 use ipnet::IpNet;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+use trust_dns_resolver::config::{
+    NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
+};
+use trust_dns_resolver::TokioAsyncResolver;
 
-#[derive(Clone, Debug)]
-pub struct DnsRoutingHandle(Vec<DnsConfig>);
-
-impl DnsRoutingHandle {
-    pub fn new(gw: IpAddr, iface: &str, config: &Vec<IpAddr>) -> Result<Self> {
-        let mut arr = Vec::new();
-        for e in config.clone() {
-            add_route_entry_via_gateway(e, gw, iface)?;
-            arr.push(DnsConfig::new_udp(e))
-        }
-        Ok(Self { 0: arr })
+fn add_tls_server(
+    arr: &mut Vec<NameServerConfig>,
+    ips: &[IpAddr],
+    protocol: Protocol,
+    tls_name: &str,
+) {
+    for ip in ips {
+        arr.push(NameServerConfig {
+            socket_addr: SocketAddr::new(*ip, 53),
+            protocol,
+            tls_dns_name: Some(tls_name.to_string()),
+            trust_nx_responses: false,
+            tls_config: None,
+            bind_addr: None,
+        })
     }
 }
 
-impl Drop for DnsRoutingHandle {
-    fn drop(&mut self) {
-        for e in &self.0 {
-            let _ = delete_route_entry(e.ip());
-        }
-    }
+async fn resolve_dns(
+    bootstrap: &Option<TokioAsyncResolver>,
+    dn: &str,
+) -> anyhow::Result<Vec<IpAddr>> {
+    let Some(resolver) = bootstrap else {
+        return Err(anyhow::anyhow!("DoT requires bootstrap udp DNS nameserver {}", dn));
+    };
+    let Ok(ips) = resolver.lookup_ip(dn).await else {
+        return Err(anyhow::anyhow!("Failed to resolve DNS {}", dn));
+    };
+    let result: Vec<IpAddr> = ips.iter().collect();
+    return if result.is_empty() {
+        Err(anyhow::anyhow!("Failed to resolve DNS {}", dn))
+    } else {
+        Ok(result)
+    };
 }
 
-#[derive(Clone, Debug)]
-enum DnsType {
-    Udp(IpAddr),
-    Tcp(IpAddr),
-    // todo: domain name alternative
-    DoT(IpAddr),
+pub fn new_bootstrap_resolver(addr: &[IpAddr]) -> anyhow::Result<TokioAsyncResolver> {
+    let cfg = ResolverConfig::from_parts(
+        None,
+        vec![],
+        NameServerConfigGroup::from(
+            addr.iter().map(|ip| NameServerConfig::new(SocketAddr::new(*ip, 53), Protocol::Udp))
+                .collect::<Vec<NameServerConfig>>(),
+        ),
+    );
+    let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
+    Ok(resolver)
 }
 
-#[derive(Clone, Debug)]
-pub struct DnsConfig {
-    dns_type: DnsType,
-}
-
-impl DnsConfig {
-    pub fn new_udp(ip: IpAddr) -> Self {
-        Self {
-            dns_type: DnsType::Udp(ip),
+pub async fn parse_dns_config(
+    lines: &Vec<String>,
+    bootstrap: Option<TokioAsyncResolver>,
+) -> anyhow::Result<NameServerConfigGroup> {
+    let mut arr = Vec::new();
+    for l in lines {
+        let parts: Vec<&str> = l.split(",").map(|s| s.trim()).collect();
+        if parts.len() != 2 {
+            return Err(anyhow::anyhow!("Invalid dns format {}", l));
+        }
+        let (proto, content) = (
+            parts.get(0).unwrap().to_string(),
+            parts.get(1).unwrap().to_string(),
+        );
+        match proto.as_str() {
+            "udp" => {
+                arr.push(NameServerConfig::new(
+                    SocketAddr::new(content.parse::<IpAddr>()?, 53),
+                    Protocol::Udp,
+                ));
+            }
+            "dot" => {
+                add_tls_server(
+                    &mut arr,
+                    resolve_dns(&bootstrap, content.as_str()).await?.as_slice(),
+                    Protocol::Tls,
+                    content.as_str(),
+                );
+            }
+            "doh" => {
+                add_tls_server(
+                    &mut arr,
+                    resolve_dns(&bootstrap, content.as_str()).await?.as_slice(),
+                    Protocol::Https,
+                    content.as_str(),
+                );
+            }
+            "dot-preset" => {
+                let ns_cfg_group = match content.as_str() {
+                    "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_tls(),
+                    "quad9" => NameServerConfigGroup::quad9_tls(),
+                    _ => return Err(anyhow::anyhow!("Unknown DoT preset {}", content)),
+                };
+                arr.extend(ns_cfg_group.into_inner());
+            }
+            "doh-preset" => {
+                let ns_cfg_group = match content.as_str() {
+                    "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_https(),
+                    "quad9" => NameServerConfigGroup::quad9_https(),
+                    "google" => NameServerConfigGroup::google_https(),
+                    _ => return Err(anyhow::anyhow!("Unknown DoH preset {}", content)),
+                };
+                arr.extend(ns_cfg_group.into_inner());
+            }
+            _ => {
+                return Err(anyhow::anyhow!("Unknown DNS type {}", proto));
+            }
         }
     }
-
-    pub fn ip(&self) -> IpAddr {
-        match self.dns_type {
-            DnsType::Udp(ip) => ip,
-            DnsType::Tcp(ip) => ip,
-            DnsType::DoT(ip) => ip,
-        }
-    }
+    Ok(NameServerConfigGroup::from(arr))
 }

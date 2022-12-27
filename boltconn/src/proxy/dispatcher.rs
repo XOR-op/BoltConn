@@ -211,23 +211,13 @@ impl Dispatcher {
         indicator: Arc<AtomicBool>,
         socket: &Arc<UdpSocket>,
         session_mgr: &Arc<SessionManager>,
-    ) {
+    ) -> Result<(), PktBufHandle> {
         match self.udp_sessions.entry((src_addr, dst_addr.clone())) {
             Entry::Occupied(val) => {
                 if let Err(pkt) = val.get().sender.send(pkt).await {
-                    // retry
                     val.remove();
-                    drop(val);
-                    // will be vacant, should be true
-                    self.submit_udp_pkt(
-                        pkt.0,
-                        src_addr,
-                        dst_addr,
-                        dst_fake_addr,
-                        indicator,
-                        socket,
-                        session_mgr,
-                    );
+                    // let caller to retry
+                    return Err(pkt.0);
                 }
             }
             Entry::Vacant(entry) => {
@@ -252,7 +242,7 @@ impl Dispatcher {
                         ),
                         ProxyImpl::Reject => {
                             indicator.store(false, Ordering::Relaxed);
-                            return;
+                            return Ok(());
                         }
                         ProxyImpl::Socks5(cfg) => (
                             Box::new(Socks5Outbound::new(
@@ -321,6 +311,7 @@ impl Dispatcher {
                 self.stat_center.push(info.clone());
             }
         }
+        Ok(())
     }
 }
 

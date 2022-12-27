@@ -1,4 +1,6 @@
+use crate::config::RawDnsConfig;
 use crate::network::dns::dns_table::DnsTable;
+use crate::network::dns::parse_dns_config;
 use std::io;
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr};
@@ -13,22 +15,8 @@ pub struct Dns {
 }
 
 impl Dns {
-    pub fn new(config: &Vec<IpAddr>) -> Result<Dns> {
-        let ns_vec: Vec<NameServerConfig> = config
-            .iter()
-            .map(|e| {
-                NameServerConfig {
-                    socket_addr: SocketAddr::new(*e, 53),
-                    protocol: Protocol::Udp,
-                    tls_dns_name: None,
-                    trust_nx_responses: false,
-                    bind_addr: None,
-                    // bind_addr: Some(SocketAddr::new(gw_ip, 1101)),
-                }
-            })
-            .collect();
-
-        let cfg = ResolverConfig::from_parts(None, vec![], NameServerConfigGroup::from(ns_vec));
+    pub fn new(config: NameServerConfigGroup) -> anyhow::Result<Dns> {
+        let cfg = ResolverConfig::from_parts(None, vec![], config);
         let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
         Ok(Dns {
             table: DnsTable::new(),
