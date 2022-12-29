@@ -24,7 +24,7 @@ pub struct Dispatcher {
     allocator: PktBufPool,
     dns: Arc<Dns>,
     stat_center: Arc<AgentCenter>,
-    dispatching: Arc<Dispatching>,
+    dispatching: RwLock<Arc<Dispatching>>,
     certificate: Vec<Certificate>,
     priv_key: PrivateKey,
     modifier: ModifierClosure,
@@ -48,12 +48,16 @@ impl Dispatcher {
             allocator,
             dns,
             stat_center,
-            dispatching,
+            dispatching: RwLock::new(dispatching),
             certificate,
             priv_key,
             modifier,
             mitm_hosts,
         }
+    }
+
+    pub fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
+        *self.dispatching.write().unwrap() = dispatching;
     }
 
     pub fn submit_tun_tcp(
@@ -72,42 +76,47 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
-            match self.dispatching.matches(&conn_info).as_ref() {
-                ProxyImpl::Direct => (
-                    Box::new(DirectOutbound::new(
-                        &self.iface_name,
-                        dst_addr.clone(),
-                        self.allocator.clone(),
-                        self.dns.clone(),
-                    )),
-                    OutboundType::Direct,
-                ),
-                ProxyImpl::Reject => {
-                    indicator.store(0, Ordering::Relaxed);
-                    return;
-                }
-                ProxyImpl::Socks5(cfg) => (
-                    Box::new(Socks5Outbound::new(
-                        &self.iface_name,
-                        dst_addr.clone(),
-                        self.allocator.clone(),
-                        self.dns.clone(),
-                        cfg.clone(),
-                    )),
-                    OutboundType::Socks5,
-                ),
-                ProxyImpl::Shadowsocks(cfg) => (
-                    Box::new(SSOutbound::new(
-                        &self.iface_name,
-                        dst_addr.clone(),
-                        self.allocator.clone(),
-                        self.dns.clone(),
-                        cfg.clone(),
-                    )),
-                    OutboundType::Shadowsocks,
-                ),
-            };
+        let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) = match self
+            .dispatching
+            .read()
+            .unwrap()
+            .matches(&conn_info)
+            .as_ref()
+        {
+            ProxyImpl::Direct => (
+                Box::new(DirectOutbound::new(
+                    &self.iface_name,
+                    dst_addr.clone(),
+                    self.allocator.clone(),
+                    self.dns.clone(),
+                )),
+                OutboundType::Direct,
+            ),
+            ProxyImpl::Reject => {
+                indicator.store(0, Ordering::Relaxed);
+                return;
+            }
+            ProxyImpl::Socks5(cfg) => (
+                Box::new(Socks5Outbound::new(
+                    &self.iface_name,
+                    dst_addr.clone(),
+                    self.allocator.clone(),
+                    self.dns.clone(),
+                    cfg.clone(),
+                )),
+                OutboundType::Socks5,
+            ),
+            ProxyImpl::Shadowsocks(cfg) => (
+                Box::new(SSOutbound::new(
+                    &self.iface_name,
+                    dst_addr.clone(),
+                    self.allocator.clone(),
+                    self.dns.clone(),
+                    cfg.clone(),
+                )),
+                OutboundType::Shadowsocks,
+            ),
+        };
 
         // conn info
         let info = Arc::new(RwLock::new(ConnAgent::new(
@@ -216,42 +225,47 @@ impl Dispatcher {
             connection_type: NetworkType::UDP,
             process_info: process_info.clone(),
         };
-        let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) =
-            match self.dispatching.matches(&conn_info).as_ref() {
-                ProxyImpl::Direct => (
-                    Box::new(DirectOutbound::new(
-                        &self.iface_name,
-                        dst_addr.clone(),
-                        self.allocator.clone(),
-                        self.dns.clone(),
-                    )),
-                    OutboundType::Direct,
-                ),
-                ProxyImpl::Reject => {
-                    indicator.store(false, Ordering::Relaxed);
-                    return;
-                }
-                ProxyImpl::Socks5(cfg) => (
-                    Box::new(Socks5Outbound::new(
-                        &self.iface_name,
-                        dst_addr.clone(),
-                        self.allocator.clone(),
-                        self.dns.clone(),
-                        cfg.clone(),
-                    )),
-                    OutboundType::Socks5,
-                ),
-                ProxyImpl::Shadowsocks(cfg) => (
-                    Box::new(SSOutbound::new(
-                        &self.iface_name,
-                        dst_addr.clone(),
-                        self.allocator.clone(),
-                        self.dns.clone(),
-                        cfg.clone(),
-                    )),
-                    OutboundType::Shadowsocks,
-                ),
-            };
+        let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) = match self
+            .dispatching
+            .read()
+            .unwrap()
+            .matches(&conn_info)
+            .as_ref()
+        {
+            ProxyImpl::Direct => (
+                Box::new(DirectOutbound::new(
+                    &self.iface_name,
+                    dst_addr.clone(),
+                    self.allocator.clone(),
+                    self.dns.clone(),
+                )),
+                OutboundType::Direct,
+            ),
+            ProxyImpl::Reject => {
+                indicator.store(false, Ordering::Relaxed);
+                return;
+            }
+            ProxyImpl::Socks5(cfg) => (
+                Box::new(Socks5Outbound::new(
+                    &self.iface_name,
+                    dst_addr.clone(),
+                    self.allocator.clone(),
+                    self.dns.clone(),
+                    cfg.clone(),
+                )),
+                OutboundType::Socks5,
+            ),
+            ProxyImpl::Shadowsocks(cfg) => (
+                Box::new(SSOutbound::new(
+                    &self.iface_name,
+                    dst_addr.clone(),
+                    self.allocator.clone(),
+                    self.dns.clone(),
+                    cfg.clone(),
+                )),
+                OutboundType::Shadowsocks,
+            ),
+        };
 
         // conn info
         let info = Arc::new(RwLock::new(ConnAgent::new(

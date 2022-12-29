@@ -30,6 +30,13 @@ impl Dns {
         }
     }
 
+    pub async fn replace_resolvers(&self, config: NameServerConfigGroup) -> Result<()> {
+        let cfg = ResolverConfig::from_parts(None, vec![], config);
+        let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
+        *self.resolvers.write().await = vec![resolver];
+        Ok(())
+    }
+
     /// Return fake ip for the domain name instantly.
     pub fn domain_to_fake_ip(&self, domain_name: &str) -> IpAddr {
         self.table.query_by_domain_name(domain_name).ip

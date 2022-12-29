@@ -30,6 +30,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io};
+use tokio::select;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tracing::{event, Level};
 use tracing_subscriber::fmt::format::Writer;
@@ -163,9 +164,7 @@ fn main() {
     let udp_manager = Arc::new(UdpOutboundManager::new());
 
     // Read initial config
-    let (config, state, schema) = rt
-        .block_on(load_config(config_path, state_path))
-        .expect("Failed to load config");
+    let (config, state, schema) = rt.block_on(load_config(config_path, state_path)).unwrap();
 
     // initialize resources
     let dns = {
@@ -193,16 +192,33 @@ fn main() {
         tun.up().expect("TUN failed to up");
         tun
     });
+    let nat_addr = SocketAddr::new(
+        platform::get_iface_address(tun.get_name()).expect("failed to get tun address"),
+        9961,
+    );
 
-    // If reloaded, the following components need restarting
     let dispatching =
         initialize_dispatching(&config, &state, schema).expect("Failed to initialize dispatching");
 
-    // dispatcher and statistics
+    // external controller
+    let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
+    let api_port = config.api_port;
+    let (sender, mut receiver) = tokio::sync::oneshot::channel::<()>();
+    let api_server = ApiServer::new(
+        manager.clone(),
+        stat_center.clone(),
+        Some(http_capturer.clone()),
+        api_dispatching_handler.clone(),
+        LinkedState {
+            state_path: state_path.to_string(),
+            state,
+        },
+    );
+
+    // If reloaded, the following components need restarting together with dispatching and dns
     let dispatcher = {
         // tls mitm
-        let (cert, priv_key) =
-            load_cert_and_key(crt_path, privkey_path).expect("Failed to parse cert & key");
+        let (cert, priv_key) = load_cert_and_key(crt_path, privkey_path).unwrap();
         Arc::new(Dispatcher::new(
             real_iface_name.as_str(),
             proxy_allocator.clone(),
@@ -215,40 +231,44 @@ fn main() {
             read_mitm_hosts(&config.mitm_hosts),
         ))
     };
-
-    // external controller
-    let api_server = ApiServer::new(
-        manager.clone(),
-        stat_center.clone(),
-        Some(http_capturer.clone()),
-        dispatching.clone(),
-        LinkedState {
-            state_path: state_path.to_string(),
-            state,
-        },
-    );
-    let api_port = config.api_port;
-
-    // run
-    let nat_addr = SocketAddr::new(
-        platform::get_iface_address(tun.get_name()).expect("failed to get tun address"),
-        9961,
-    );
     let nat = Arc::new(Nat::new(
         nat_addr,
         manager.clone(),
-        dispatcher,
-        dns,
-        proxy_allocator,
-        udp_manager,
+        dispatcher.clone(),
+        dns.clone(),
+        proxy_allocator.clone(),
+        udp_manager.clone(),
     ));
+    let nat_tcp = nat.clone();
     let nat_udp = nat.clone();
+
+    // run
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
-    let _nat_tcp_handle = rt.spawn(async move { nat.run_tcp().await });
+    let _nat_tcp_handle = rt.spawn(async move { nat_tcp.run_tcp().await });
     let _nat_udp_handle = rt.spawn(async move { nat_udp.run_udp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
-    rt.block_on(async { tokio::signal::ctrl_c().await })
-        .expect("Tokio runtime error");
+
+    rt.block_on(async move {
+        loop {
+            select! {
+                _ = tokio::signal::ctrl_c()=>break,
+                restart = &mut receiver => {
+                    if restart.is_ok(){
+                        // try restarting components
+                        let Ok((config, state, schema)) = load_config(config_path, state_path).await else {continue;};
+                        let Ok(dispatching) = initialize_dispatching(&config, &state, schema) else {continue};
+                        let Ok(bootstrap) = new_bootstrap_resolver(config.dns.bootstrap.as_slice()) else {continue;};
+                        let Ok(group) = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await else {continue;};
+                        let Ok(_) = dns.replace_resolvers(group).await else{continue;};
+                        *api_dispatching_handler.write().await = dispatching.clone();
+                        dispatcher.replace_dispatching(dispatching);
+                    }else {
+                        break;
+                    }
+                }
+            }
+        }
+    });
     rt.shutdown_background();
 }

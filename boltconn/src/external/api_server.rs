@@ -12,13 +12,16 @@ use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::RwLock;
+
+pub type SharedDispatching = Arc<RwLock<Arc<Dispatching>>>;
 
 #[derive(Clone)]
 pub struct ApiServer {
     manager: Arc<SessionManager>,
     stat_center: Arc<AgentCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
-    dispatching: Arc<Dispatching>,
+    dispatching: SharedDispatching,
     state: Arc<Mutex<LinkedState>>,
 }
 
@@ -27,7 +30,7 @@ impl ApiServer {
         manager: Arc<SessionManager>,
         stat_center: Arc<AgentCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
-        dispatching: Arc<Dispatching>,
+        dispatching: SharedDispatching,
         state: LinkedState,
     ) -> Self {
         Self {
@@ -61,6 +64,10 @@ impl ApiServer {
             .serve(app.into_make_service())
             .await
             .unwrap();
+    }
+
+    pub async fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
+        *self.dispatching.write().await = dispatching;
     }
 
     async fn get_logs(State(_server): State<Self>) -> Json<serde_json::Value> {
@@ -242,7 +249,7 @@ impl ApiServer {
     }
 
     async fn get_group_list(State(server): State<Self>) -> Json<serde_json::Value> {
-        let list = server.dispatching.get_group_list();
+        let list = server.dispatching.read().await.get_group_list();
         let mut result = Vec::new();
         for g in list.iter() {
             let item = GetGroupRespSchema {
@@ -265,6 +272,8 @@ impl ApiServer {
     ) -> Json<serde_json::Value> {
         let r = match server
             .dispatching
+            .read()
+            .await
             .set_group_selection(args.group.as_str(), args.selected.as_str())
         {
             Ok(_) => true,
