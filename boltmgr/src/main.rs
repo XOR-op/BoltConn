@@ -78,6 +78,8 @@ enum SubCommand {
     Mitm(MitmOptions),
     /// Clean unexpected shutdown
     Clean,
+    /// Reload Configuration
+    Reload,
 }
 
 #[tokio::main]
@@ -117,6 +119,7 @@ async fn main() {
                 Ok(())
             }
         }
+        SubCommand::Reload => requestor.reload_config().await,
     };
     match result {
         Ok(_) => exit(0),

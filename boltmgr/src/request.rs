@@ -180,6 +180,14 @@ impl Requester {
         Ok(())
     }
 
+    pub async fn reload_config(&self) -> Result<()> {
+        reqwest::Client::new()
+            .post(self.route("/reload"))
+            .send()
+            .await?;
+        Ok(())
+    }
+
     fn route(&self, s: &str) -> String {
         format!("http://127.0.0.1:{}{}", self.port, s)
     }
