@@ -175,12 +175,18 @@ fn main() {
         Arc::new(Dns::with_config(group).expect("DNS failed to initialize"))
     };
 
+    let outbound_iface = if config.interface == "auto" {
+        config.interface.clone()
+    } else {
+        real_iface_name
+    };
+
     let tun = rt.block_on(async {
         let pool = PktBufPool::new(512, 4096);
         let mut tun = TunDevice::open(
             manager.clone(),
             pool,
-            real_iface_name.as_str(),
+            outbound_iface.as_str(),
             dns.clone(),
             fake_dns_server,
         )
@@ -220,7 +226,7 @@ fn main() {
         // tls mitm
         let (cert, priv_key) = load_cert_and_key(crt_path, privkey_path).unwrap();
         Arc::new(Dispatcher::new(
-            real_iface_name.as_str(),
+            outbound_iface.as_str(),
             proxy_allocator.clone(),
             dns.clone(),
             stat_center.clone(),
