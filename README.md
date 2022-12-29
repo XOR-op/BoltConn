@@ -9,13 +9,14 @@ Supported platforms: Macos, Linux.
 ## Features
 
 - [x] TLS mitm
-- [x] modification of http/s requests and responses
-- [x] graceful shutdown
+- [x] DoH/DoT support
+- [x] symmetric UDP NAT
 - [x] socks5 & ss support
 - [x] clash-compatible ruleset configuration
 - [x] RESTful API controller
 - [x] command-line tool for controlling and monitoring
-- [x] symmetric UDP NAT
+- [x] graceful shutdown
+- [x] live reload without breaking existent connections
 
 ## Documentations
 

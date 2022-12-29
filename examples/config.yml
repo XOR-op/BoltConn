@@ -1,7 +1,16 @@
+# Unable to reload; require full restarting
 interface: auto
 api_port: 18086
+
+# Able to reload by API calling
 dns:
-  - 114.114.114.114
+  bootstrap:
+    - 114.114.114.114
+  nameserver:
+    - udp, 8.8.8.8
+    - doh, cloudflare-dns.com
+    - dot, dns.alidns.com
+    - doh-preset, google
 proxy_local:
   lan_socks:
     proto: socks5
