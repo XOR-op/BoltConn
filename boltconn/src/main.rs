@@ -203,19 +203,19 @@ fn main() {
     // external controller
     let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
     let api_port = config.api_port;
-    let (sender, mut receiver) = tokio::sync::oneshot::channel::<()>();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
     let api_server = ApiServer::new(
         manager.clone(),
         stat_center.clone(),
         Some(http_capturer.clone()),
         api_dispatching_handler.clone(),
+        sender,
         LinkedState {
             state_path: state_path.to_string(),
             state,
         },
     );
 
-    // If reloaded, the following components need restarting together with dispatching and dns
     let dispatcher = {
         // tls mitm
         let (cert, priv_key) = load_cert_and_key(crt_path, privkey_path).unwrap();
@@ -252,23 +252,41 @@ fn main() {
     rt.block_on(async move {
         loop {
             select! {
-                _ = tokio::signal::ctrl_c()=>break,
-                restart = &mut receiver => {
-                    if restart.is_ok(){
+                _ = tokio::signal::ctrl_c()=>return,
+                restart = receiver.recv() => {
+                    if restart.is_some(){
                         // try restarting components
-                        let Ok((config, state, schema)) = load_config(config_path, state_path).await else {continue;};
-                        let Ok(dispatching) = initialize_dispatching(&config, &state, schema) else {continue};
-                        let Ok(bootstrap) = new_bootstrap_resolver(config.dns.bootstrap.as_slice()) else {continue;};
-                        let Ok(group) = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await else {continue;};
-                        let Ok(_) = dns.replace_resolvers(group).await else{continue;};
-                        *api_dispatching_handler.write().await = dispatching.clone();
-                        dispatcher.replace_dispatching(dispatching);
+                        match reload(config_path,state_path,dns.clone()).await{
+                            Ok((dispatching, mitm_hosts)) => {
+                                *api_dispatching_handler.write().await = dispatching.clone();
+                                dispatcher.replace_dispatching(dispatching);
+                                dispatcher.replace_mitm_list(mitm_hosts);
+                                tracing::info!("Reloaded config successfully");
+                            }
+                            Err(err)=>{
+                                tracing::warn!("Reloading config failed: {}",err);
+                            }
+                        }
                     }else {
-                        break;
+                        return;
                     }
                 }
             }
         }
     });
+    tracing::info!("Exiting...");
     rt.shutdown_background();
+}
+
+async fn reload(
+    config_path: &str,
+    state_path: &str,
+    dns: Arc<Dns>,
+) -> anyhow::Result<(Arc<Dispatching>, HostMatcher)> {
+    let (config, state, schema) = load_config(config_path, state_path).await?;
+    let dispatching = initialize_dispatching(&config, &state, schema)?;
+    let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
+    let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
+    dns.replace_resolvers(group).await?;
+    Ok((dispatching, read_mitm_hosts(&config.mitm_hosts)))
 }

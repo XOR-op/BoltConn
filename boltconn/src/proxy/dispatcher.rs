@@ -28,7 +28,7 @@ pub struct Dispatcher {
     certificate: Vec<Certificate>,
     priv_key: PrivateKey,
     modifier: ModifierClosure,
-    mitm_hosts: HostMatcher,
+    mitm_hosts: RwLock<HostMatcher>,
 }
 
 impl Dispatcher {
@@ -52,12 +52,16 @@ impl Dispatcher {
             certificate,
             priv_key,
             modifier,
-            mitm_hosts,
+            mitm_hosts: RwLock::new(mitm_hosts),
         }
     }
 
     pub fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
         *self.dispatching.write().unwrap() = dispatching;
+    }
+
+    pub fn replace_mitm_list(&self, mitm_hosts: HostMatcher) {
+        *self.mitm_hosts.write().unwrap() = mitm_hosts;
     }
 
     pub fn submit_tun_tcp(
@@ -147,7 +151,7 @@ impl Dispatcher {
         // mitm for 80/443
         let modifier = (self.modifier)(process_info);
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
-            if self.mitm_hosts.matches(&domain_name) {
+            if self.mitm_hosts.read().unwrap().matches(&domain_name) {
                 match port {
                     80 => {
                         // hijack

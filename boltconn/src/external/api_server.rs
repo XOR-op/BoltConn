@@ -3,7 +3,7 @@ use crate::dispatch::{Dispatching, GeneralProxy};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
 use axum::extract::{Path, Query, State};
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use boltapi::{GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, SetGroupReqSchema};
 use serde_json::json;
@@ -22,6 +22,7 @@ pub struct ApiServer {
     stat_center: Arc<AgentCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
     dispatching: SharedDispatching,
+    reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<Mutex<LinkedState>>,
 }
 
@@ -31,6 +32,7 @@ impl ApiServer {
         stat_center: Arc<AgentCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
         dispatching: SharedDispatching,
+        reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
     ) -> Self {
         Self {
@@ -38,6 +40,7 @@ impl ApiServer {
             stat_center,
             http_capturer,
             dispatching,
+            reload_sender: Arc::new(reload_sender),
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -58,6 +61,7 @@ impl ApiServer {
                 "/groups",
                 get(Self::get_group_list).put(Self::set_selection),
             )
+            .route("/reload", post(Self::reload))
             .with_state(self);
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
         axum::Server::bind(&addr)
@@ -284,12 +288,17 @@ impl ApiServer {
             if let Some(val) = state.state.group_selection.get_mut(&args.group) {
                 *val = args.selected;
                 if let Ok(content) = serde_yaml::to_string(&state.state) {
+                    let content = "# This file is managed by BoltConn. Do not edit unless you know what you are doing.\n".to_string() + content.as_str();
                     let _ = std::fs::write(&state.state_path, content);
                 }
             }
         }
 
         Json(json!(r))
+    }
+
+    async fn reload(State(server): State<Self>) {
+        let _ = server.reload_sender.send(()).await;
     }
 }
 
