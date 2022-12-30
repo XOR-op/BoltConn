@@ -25,6 +25,8 @@ pub enum RawServerAddr {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawDnsConfig {
+    #[serde(alias = "force-direct-dns")]
+    pub force_direct_dns: bool,
     pub bootstrap: Vec<IpAddr>,
     pub nameserver: Vec<String>,
 }
@@ -51,7 +53,7 @@ pub enum RawProxyLocalCfg {
 #[ignore]
 #[test]
 fn test_raw_root_cfg() {
-    let config_text = fs::read_to_string("../_private/config/config.yml").unwrap();
+    let config_text = std::fs::read_to_string("../_private/config/config.yml").unwrap();
     let deserialized: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
     println!("{:?}", deserialized)
 }

@@ -149,12 +149,13 @@ impl Dispatcher {
         });
 
         // mitm for 80/443
-        let modifier = (self.modifier)(process_info);
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
             if self.mitm_hosts.read().unwrap().matches(&domain_name) {
+                let modifier = (self.modifier)(process_info);
                 match port {
                     80 => {
                         // hijack
+                        tracing::trace!("HTTP MitM for {}", domain_name);
                         handles.push({
                             let allocator = self.allocator.clone();
                             let info = info.clone();
@@ -174,6 +175,7 @@ impl Dispatcher {
                         return;
                     }
                     443 => {
+                        tracing::trace!("HTTPS MitM for {}", domain_name);
                         handles.push({
                             let allocator = self.allocator.clone();
                             let cert = self.certificate.clone();

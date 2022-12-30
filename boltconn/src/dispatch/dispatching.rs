@@ -1,7 +1,7 @@
 use crate::adapter::Socks5Config;
 use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState, RuleSchema};
 use crate::dispatch::proxy::ProxyImpl;
-use crate::dispatch::rule::{Rule, RuleBuilder};
+use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
 use crate::dispatch::ruleset::RuleSetBuilder;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -11,7 +11,7 @@ use shadowsocks::crypto::CipherKind;
 use shadowsocks::{ServerAddr, ServerConfig};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 pub struct ConnInfo {
@@ -236,5 +236,15 @@ impl DispatchingBuilder {
         builder.rules = rule_builder.build().ok_or(anyhow!("Fail to build rules"))?;
         tracing::info!("Loaded config successfully");
         Ok(builder)
+    }
+
+    pub fn direct_prioritize(&mut self, prioritized: Vec<IpAddr>) {
+        let ruleset = RuleSetBuilder::from_ipaddrs(prioritized).build();
+        let mut new_rules = vec![Rule::new(
+            RuleImpl::RuleSet(ruleset),
+            GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct))),
+        )];
+        new_rules.extend(self.rules.drain(..));
+        self.rules = new_rules
     }
 }

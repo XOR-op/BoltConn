@@ -7,7 +7,7 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
-use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
+use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
 use crate::sniff::Recorder;
 use chrono::Timelike;
@@ -167,17 +167,26 @@ fn main() {
     let (config, state, schema) = rt.block_on(load_config(config_path, state_path)).unwrap();
 
     // initialize resources
-    let dns = {
+    let (dns, dns_ips) = {
         let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice()).unwrap();
         let group = rt
             .block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap)))
             .unwrap();
-        Arc::new(Dns::with_config(group).expect("DNS failed to initialize"))
+        let dns_ips = if config.dns.force_direct_dns {
+            Some(extract_address(&group))
+        } else {
+            None
+        };
+        (
+            Arc::new(Dns::with_config(group).expect("DNS failed to initialize")),
+            dns_ips,
+        )
     };
 
-    let outbound_iface = if config.interface == "auto" {
+    let outbound_iface = if config.interface != "auto" {
         config.interface.clone()
     } else {
+        tracing::info!("Auto detected interface: {}", real_iface_name);
         real_iface_name
     };
 
@@ -203,8 +212,13 @@ fn main() {
         9961,
     );
 
-    let dispatching =
-        initialize_dispatching(&config, &state, schema).expect("Failed to initialize dispatching");
+    let dispatching = {
+        let mut builder = DispatchingBuilder::new_from_config(&config, &state, schema).unwrap();
+        if let Some(list) = dns_ips {
+            builder.direct_prioritize(list);
+        }
+        Arc::new(builder.build())
+    };
 
     // external controller
     let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
@@ -290,9 +304,15 @@ async fn reload(
     dns: Arc<Dns>,
 ) -> anyhow::Result<(Arc<Dispatching>, HostMatcher)> {
     let (config, state, schema) = load_config(config_path, state_path).await?;
-    let dispatching = initialize_dispatching(&config, &state, schema)?;
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
+    let dispatching = {
+        let mut builder = DispatchingBuilder::new_from_config(&config, &state, schema)?;
+        if config.dns.force_direct_dns {
+            builder.direct_prioritize(extract_address(&group));
+        }
+        Arc::new(builder.build())
+    };
     dns.replace_resolvers(group).await?;
     Ok((dispatching, read_mitm_hosts(&config.mitm_hosts)))
 }

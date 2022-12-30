@@ -39,7 +39,7 @@ fn ip4net_to_vec(ip: Ipv4Net) -> Vec<u8> {
 /// Matcher for rules in the same group
 pub struct RuleSet {
     domain: HostMatcher,
-    ip: Trie<Vec<u8>, bool>,
+    ip: Trie<Vec<u8>, ()>,
     port: HashSet<u16>,
     domain_keyword: AhoCorasick,
     process_name: HashSet<String>,
@@ -95,7 +95,7 @@ impl RuleSet {
 pub struct RuleSetBuilder {
     domain: HostMatcherBuilder,
     domain_keyword: Vec<String>,
-    ip_cidr: Vec<(Vec<u8>, bool)>,
+    ip_cidr: Vec<(Vec<u8>, ())>,
     process_name: HashSet<String>,
     process_keyword: Vec<String>,
     procpath_keyword: Vec<String>,
@@ -126,7 +126,7 @@ impl RuleSetBuilder {
                     RuleImpl::DomainSuffix(sfx) => retval.domain.add_suffix(sfx.as_str()),
                     RuleImpl::DomainKeyword(kw) => retval.domain_keyword.push(kw.clone()),
                     RuleImpl::IpCidr(ip) => match ip {
-                        IpNet::V4(v4) => retval.ip_cidr.push((ip4net_to_vec(v4.clone()), true)),
+                        IpNet::V4(v4) => retval.ip_cidr.push((ip4net_to_vec(v4.clone()), ())),
                         IpNet::V6(_) => tracing::warn!("IpCidr6 is not supported now: {:?}", rule),
                     },
                     RuleImpl::Port(p) => {
@@ -164,12 +164,34 @@ impl RuleSetBuilder {
             procpath_keyword: AhoCorasick::new_auto_configured(self.procpath_keyword.as_slice()),
         }
     }
+
+    pub fn from_ipaddrs(list: Vec<IpAddr>) -> Self {
+        Self {
+            domain: HostMatcherBuilder::new(),
+            domain_keyword: vec![],
+            ip_cidr: list
+                .into_iter()
+                .filter_map(|ip| match ip {
+                    IpAddr::V4(v4) => Some((ip4net_to_vec(Ipv4Net::new(v4, 32).unwrap()), ())),
+                    IpAddr::V6(_) => {
+                        tracing::warn!("IpCidr6 is not supported now: {:?}", ip);
+                        None
+                    }
+                })
+                .collect(),
+            process_name: HashSet::new(),
+            process_keyword: vec![],
+            procpath_keyword: vec![],
+            port: HashSet::new(),
+        }
+    }
 }
 
 #[ignore]
 #[test]
 fn test_rule_provider() {
-    let config_text = fs::read_to_string("../examples/Rules/Apple").unwrap();
+    use crate::platform::process::NetworkType;
+    let config_text = std::fs::read_to_string("../examples/Rules/Apple").unwrap();
     let deserialized: RuleSchema = serde_yaml::from_str(&config_text).unwrap();
     println!("{:?}", deserialized);
     let builder = RuleSetBuilder::new(deserialized);

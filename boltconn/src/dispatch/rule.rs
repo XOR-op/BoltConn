@@ -200,6 +200,10 @@ pub struct Rule {
 }
 
 impl Rule {
+    pub(crate) fn new(rule: RuleImpl, policy: GeneralProxy) -> Self {
+        Self { rule, policy }
+    }
+
     pub fn matches(&self, info: &ConnInfo) -> Option<GeneralProxy> {
         match &self.rule {
             RuleImpl::Domain(d) => {

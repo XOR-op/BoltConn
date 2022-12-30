@@ -122,3 +122,12 @@ pub async fn parse_dns_config(
     }
     Ok(NameServerConfigGroup::from(arr))
 }
+
+pub fn extract_address(group: &NameServerConfigGroup) -> Vec<IpAddr> {
+    group
+        .clone()
+        .into_inner()
+        .iter()
+        .map(|cfg| cfg.socket_addr.ip())
+        .collect()
+}
