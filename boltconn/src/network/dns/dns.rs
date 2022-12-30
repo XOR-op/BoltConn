@@ -14,12 +14,15 @@ pub struct Dns {
 }
 
 impl Dns {
-    pub fn with_config(config: NameServerConfigGroup) -> anyhow::Result<Dns> {
-        let cfg = ResolverConfig::from_parts(None, vec![], config);
-        let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
+    pub fn with_config(configs: Vec<NameServerConfigGroup>) -> anyhow::Result<Dns> {
+        let mut resolvers = Vec::new();
+        for config in configs {
+            let cfg = ResolverConfig::from_parts(None, vec![], config);
+            resolvers.push(TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?);
+        }
         Ok(Dns {
             table: DnsTable::new(),
-            resolvers: RwLock::new(vec![resolver]),
+            resolvers: RwLock::new(resolvers),
         })
     }
 
@@ -30,10 +33,13 @@ impl Dns {
         }
     }
 
-    pub async fn replace_resolvers(&self, config: NameServerConfigGroup) -> Result<()> {
-        let cfg = ResolverConfig::from_parts(None, vec![], config);
-        let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
-        *self.resolvers.write().await = vec![resolver];
+    pub async fn replace_resolvers(&self, configs: Vec<NameServerConfigGroup>) -> Result<()> {
+        let mut resolvers = Vec::new();
+        for config in configs {
+            let cfg = ResolverConfig::from_parts(None, vec![], config);
+            resolvers.push(TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?);
+        }
+        *self.resolvers.write().await = resolvers;
         Ok(())
     }
 

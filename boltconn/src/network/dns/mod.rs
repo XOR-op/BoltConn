@@ -9,12 +9,12 @@ use trust_dns_resolver::config::{
 use trust_dns_resolver::TokioAsyncResolver;
 
 fn add_tls_server(
-    arr: &mut Vec<NameServerConfig>,
     ips: &[IpAddr],
     protocol: Protocol,
     port: u16,
     tls_name: &str,
-) {
+) -> NameServerConfigGroup {
+    let mut arr = vec![];
     for ip in ips {
         arr.push(NameServerConfig {
             socket_addr: SocketAddr::new(*ip, port),
@@ -25,6 +25,7 @@ fn add_tls_server(
             bind_addr: None,
         })
     }
+    NameServerConfigGroup::from(arr)
 }
 
 async fn resolve_dns(
@@ -62,7 +63,7 @@ pub fn new_bootstrap_resolver(addr: &[IpAddr]) -> anyhow::Result<TokioAsyncResol
 pub async fn parse_dns_config(
     lines: &Vec<String>,
     bootstrap: Option<TokioAsyncResolver>,
-) -> anyhow::Result<NameServerConfigGroup> {
+) -> anyhow::Result<Vec<NameServerConfigGroup>> {
     let mut arr = Vec::new();
     for l in lines {
         let parts: Vec<&str> = l.split(",").map(|s| s.trim()).collect();
@@ -75,28 +76,26 @@ pub async fn parse_dns_config(
         );
         match proto.as_str() {
             "udp" => {
-                arr.push(NameServerConfig::new(
+                arr.push(NameServerConfigGroup::from(vec![NameServerConfig::new(
                     SocketAddr::new(content.parse::<IpAddr>()?, 53),
                     Protocol::Udp,
-                ));
+                )]));
             }
             "dot" => {
-                add_tls_server(
-                    &mut arr,
+                arr.push(add_tls_server(
                     resolve_dns(&bootstrap, content.as_str()).await?.as_slice(),
                     Protocol::Tls,
                     853,
                     content.as_str(),
-                );
+                ));
             }
             "doh" => {
-                add_tls_server(
-                    &mut arr,
+                arr.push(add_tls_server(
                     resolve_dns(&bootstrap, content.as_str()).await?.as_slice(),
                     Protocol::Https,
                     443,
                     content.as_str(),
-                );
+                ));
             }
             "dot-preset" => {
                 let ns_cfg_group = match content.as_str() {
@@ -104,7 +103,7 @@ pub async fn parse_dns_config(
                     "quad9" => NameServerConfigGroup::quad9_tls(),
                     _ => return Err(anyhow::anyhow!("Unknown DoT preset {}", content)),
                 };
-                arr.extend(ns_cfg_group.into_inner());
+                arr.push(ns_cfg_group);
             }
             "doh-preset" => {
                 let ns_cfg_group = match content.as_str() {
@@ -113,21 +112,26 @@ pub async fn parse_dns_config(
                     "google" => NameServerConfigGroup::google_https(),
                     _ => return Err(anyhow::anyhow!("Unknown DoH preset {}", content)),
                 };
-                arr.extend(ns_cfg_group.into_inner());
+                arr.push(ns_cfg_group);
             }
             _ => {
                 return Err(anyhow::anyhow!("Unknown DNS type {}", proto));
             }
         }
     }
-    Ok(NameServerConfigGroup::from(arr))
+    Ok(arr)
 }
 
-pub fn extract_address(group: &NameServerConfigGroup) -> Vec<IpAddr> {
+pub fn extract_address(group: &Vec<NameServerConfigGroup>) -> Vec<IpAddr> {
     group
         .clone()
-        .into_inner()
-        .iter()
-        .map(|cfg| cfg.socket_addr.ip())
+        .into_iter()
+        .map(|cg| {
+            cg.into_inner()
+                .iter()
+                .map(|cfg| cfg.socket_addr.ip())
+                .collect::<Vec<IpAddr>>()
+        })
+        .flatten()
         .collect()
 }
