@@ -79,10 +79,10 @@ impl ApiServer {
     }
 
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
-        let list = server.stat_center.get_copy();
+        let list = server.stat_center.get_copy().await;
         let mut result = Vec::new();
         for entry in list {
-            let info = entry.read().unwrap();
+            let info = entry.read().await;
             let elapsed = info.start_time.elapsed().as_secs();
             let conn = boltapi::ConnectionSchema {
                 destination: info.dest.to_string(),
@@ -100,10 +100,10 @@ impl ApiServer {
     }
 
     async fn stop_all_conn(State(server): State<Self>) {
-        let list = server.stat_center.get_copy();
+        let list = server.stat_center.get_copy().await;
         for entry in list {
-            let mut info = entry.write().unwrap();
-            info.abort();
+            let mut info = entry.write().await;
+            info.abort().await;
         }
     }
 
@@ -119,8 +119,8 @@ impl ApiServer {
                 return Json(serde_json::Value::Bool(false));
             }
         };
-        if let Some(ele) = server.stat_center.get_nth(id) {
-            ele.write().unwrap().abort();
+        if let Some(ele) = server.stat_center.get_nth(id).await {
+            ele.write().await.abort().await;
             return Json(serde_json::Value::Bool(true));
         }
         return Json(serde_json::Value::Bool(false));

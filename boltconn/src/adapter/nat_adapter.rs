@@ -1,14 +1,14 @@
 // Adapter to NAT
 
-use crate::adapter::Connector;
+use crate::adapter::{Connector, DuplexCloseGuard};
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
-use crate::proxy::{ConnAgent, SessionManager};
+use crate::proxy::{ConnAbortHandle, ConnAgent, SessionManager};
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 
 pub struct NatAdapter {
     info: Arc<RwLock<ConnAgent>>,
@@ -46,41 +46,38 @@ impl NatAdapter {
         }
     }
 
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(self, abort_handle: ConnAbortHandle) -> Result<()> {
         let mut first_packet = true;
         let outgoing_info_arc = self.info.clone();
         let allocator = self.allocator.clone();
         let mut inbound_read = self.inbound_read;
         let Connector { tx, mut rx } = self.connector;
+        let abort_handle2 = abort_handle.clone();
         // recv from inbound and send to outbound
-        self.info
-            .write()
-            .unwrap()
-            .more_handle(tokio::spawn(async move {
-                loop {
-                    match inbound_read.recv().await {
-                        None => {
-                            break;
+        let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
+            loop {
+                match inbound_read.recv().await {
+                    None => {
+                        break;
+                    }
+                    Some(buf) => {
+                        // tracing::trace!("[NatAdapter] outgoing {} bytes", buf.len);
+                        if first_packet {
+                            first_packet = false;
+                            outgoing_info_arc.write().await.update_proto(buf.as_ready());
                         }
-                        Some(buf) => {
-                            // tracing::trace!("[NatAdapter] outgoing {} bytes", buf.len);
-                            if first_packet {
-                                first_packet = false;
-                                outgoing_info_arc
-                                    .write()
-                                    .unwrap()
-                                    .update_proto(buf.as_ready());
-                            }
-                            outgoing_info_arc.write().unwrap().more_upload(buf.len);
-                            if let Err(err) = tx.send(buf).await {
-                                allocator.release(err.0);
-                                tracing::warn!("NatAdapter tx send err");
-                                break;
-                            }
+                        outgoing_info_arc.write().await.more_upload(buf.len);
+                        if let Err(err) = tx.send(buf).await {
+                            allocator.release(err.0);
+                            tracing::warn!("NatAdapter tx send err");
+                            abort_handle2.cancel().await;
+                            break;
                         }
                     }
                 }
-            }));
+            }
+        }));
+        duplex_guard.set_err_exit();
         // recv from outbound and send to inbound
         loop {
             match rx.recv().await {
@@ -90,7 +87,7 @@ impl NatAdapter {
                         break;
                     };
                     // tracing::trace!("[NatAdapter] incoming {} bytes", buf.len);
-                    self.info.write().unwrap().more_download(buf.len);
+                    self.info.write().await.more_download(buf.len);
                     if let Err(err) = self
                         .inbound_write
                         .send_to(buf.as_ready(), SocketAddr::new(token_ip, self.src.port()))
@@ -98,6 +95,7 @@ impl NatAdapter {
                     {
                         tracing::warn!("NatAdapter write to inbound failed: {}", err);
                         self.allocator.release(buf);
+                        abort_handle.cancel().await;
                         break;
                     }
                     self.allocator.release(buf);

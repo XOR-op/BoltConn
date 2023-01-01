@@ -2,9 +2,13 @@ use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -71,6 +75,62 @@ impl NetworkAddr {
     }
 }
 
+// Abort Handle
+#[derive(Clone, Debug)]
+pub struct ConnAbortHandle(Arc<tokio::sync::RwLock<AbortHandle>>);
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum CancelState {
+    NotReady,
+    Ready,
+    Cancelled,
+}
+
+#[derive(Debug)]
+struct AbortHandle {
+    handles: Vec<JoinHandle<()>>,
+    state: CancelState,
+}
+
+impl ConnAbortHandle {
+    pub fn new() -> Self {
+        Self(Arc::new(tokio::sync::RwLock::new(AbortHandle {
+            handles: vec![],
+            state: CancelState::NotReady,
+        })))
+    }
+
+    pub async fn cancel(&self) {
+        let mut timer = tokio::time::interval(Duration::from_micros(100));
+        loop {
+            let mut got = self.0.write().await;
+            match got.state {
+                CancelState::NotReady => {
+                    drop(got);
+                    timer.tick().await;
+                    continue;
+                }
+                CancelState::Ready => {
+                    got.state = CancelState::Cancelled;
+                    for h in &got.handles {
+                        h.abort();
+                    }
+                    got.handles.clear();
+                    return;
+                }
+                CancelState::Cancelled => return,
+            }
+        }
+    }
+
+    pub async fn fulfill(&self, handles: Vec<JoinHandle<()>>) {
+        let mut got = self.0.write().await;
+        got.handles = handles;
+        got.state = CancelState::Ready;
+    }
+}
+
+// Info about one connection
 #[derive(Debug)]
 pub struct ConnAgent {
     pub start_time: Instant,
@@ -81,7 +141,7 @@ pub struct ConnAgent {
     pub upload_traffic: usize,
     pub download_traffic: usize,
     pub done: bool,
-    handles: Vec<JoinHandle<()>>,
+    abort_handle: ConnAbortHandle,
 }
 
 impl ConnAgent {
@@ -90,6 +150,7 @@ impl ConnAgent {
         process_info: Option<ProcessInfo>,
         rule: OutboundType,
         network_type: NetworkType,
+        abort_handle: ConnAbortHandle,
     ) -> Self {
         Self {
             start_time: Instant::now(),
@@ -103,7 +164,7 @@ impl ConnAgent {
             upload_traffic: 0,
             download_traffic: 0,
             done: false,
-            handles: Default::default(),
+            abort_handle,
         }
     }
 
@@ -121,23 +182,13 @@ impl ConnAgent {
         self.download_traffic += size
     }
 
-    pub fn more_handles(&mut self, handle: Vec<JoinHandle<()>>) {
-        self.handles.extend(handle.into_iter());
-    }
-    pub fn more_handle(&mut self, handle: JoinHandle<()>) {
-        self.handles.push(handle);
-    }
-
     pub fn mark_fin(&mut self) {
         self.done = true;
     }
 
     // todo: abort udp may not work properly
-    pub fn abort(&mut self) {
-        for h in &self.handles {
-            h.abort();
-        }
-        self.handles = Vec::new();
+    pub async fn abort(&mut self) {
+        self.abort_handle.cancel().await;
         self.mark_fin();
     }
 }
@@ -178,21 +229,16 @@ impl AgentCenter {
         }
     }
 
-    pub fn push(&self, info: Arc<RwLock<ConnAgent>>) {
-        self.content.write().unwrap().push(info);
+    pub async fn push(&self, info: Arc<RwLock<ConnAgent>>) {
+        self.content.write().await.push(info);
     }
 
-    pub fn push_with_handles(&self, info: Arc<RwLock<ConnAgent>>, handles: Vec<JoinHandle<()>>) {
-        info.write().unwrap().more_handles(handles);
-        self.content.write().unwrap().push(info);
+    pub async fn get_copy(&self) -> Vec<Arc<RwLock<ConnAgent>>> {
+        self.content.read().await.clone()
     }
 
-    pub fn get_copy(&self) -> Vec<Arc<RwLock<ConnAgent>>> {
-        self.content.read().unwrap().clone()
-    }
-
-    pub fn get_nth(&self, idx: usize) -> Option<Arc<RwLock<ConnAgent>>> {
-        self.content.read().unwrap().get(idx).map(|e| e.clone())
+    pub async fn get_nth(&self, idx: usize) -> Option<Arc<RwLock<ConnAgent>>> {
+        self.content.read().await.get(idx).map(|e| e.clone())
     }
 }
 

@@ -4,11 +4,13 @@ use fast_socks5::util::target_addr::TargetAddr;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::UdpSocket;
+use tokio::select;
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 mod direct;
@@ -20,7 +22,7 @@ mod tun_adapter;
 pub use crate::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;
-use crate::proxy::{ConnAgent, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 pub use direct::*;
 pub use nat_adapter::*;
 pub use socks5::*;
@@ -72,29 +74,47 @@ pub enum OutboundType {
 
 pub trait TcpOutBound: Send + Sync {
     /// Run with tokio::spawn.
-    fn spawn_tcp(&self, inbound: Connector) -> JoinHandle<io::Result<()>>;
+    fn spawn_tcp(
+        &self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>>;
 
     /// Run with tokio::spawn, returning handle and a duplex channel
-    fn spawn_tcp_with_chan(&self) -> (DuplexChan, JoinHandle<io::Result<()>>);
+    fn spawn_tcp_with_chan(
+        &self,
+        abort_handle: ConnAbortHandle,
+    ) -> (DuplexChan, JoinHandle<io::Result<()>>);
 }
 
 pub trait UdpOutBound: Send + Sync {
     /// Run with tokio::spawn.
-    fn spawn_udp(&self, inbound: Connector) -> JoinHandle<io::Result<()>>;
+    fn spawn_udp(
+        &self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>>;
 
     /// Run with tokio::spawn, returning handle and a duplex channel
-    fn spawn_udp_with_chan(&self) -> (DuplexChan, JoinHandle<io::Result<()>>);
+    fn spawn_udp_with_chan(
+        &self,
+        abort_handle: ConnAbortHandle,
+    ) -> (DuplexChan, JoinHandle<io::Result<()>>);
 }
 
-async fn established_tcp<T>(inbound: Connector, outbound: T, allocator: PktBufPool)
-where
+async fn established_tcp<T>(
+    inbound: Connector,
+    outbound: T,
+    allocator: PktBufPool,
+    abort_handle: ConnAbortHandle,
+) where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
     let allocator2 = allocator.clone();
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
-    let _guard = TcpHalfClosedGuard::new(tokio::spawn(async move {
+    let _guard = DuplexCloseGuard::new(tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Some(buf) => {
@@ -110,29 +130,34 @@ where
                 }
             }
         }
+        // tracing::debug!("Outbound outgoing closed");
     }));
     // recv from outbound and send to inbound
     loop {
         let mut buf = allocator.obtain().await;
-        match buf.read(&mut out_read).await {
-            Ok(0) => {
-                allocator.release(buf);
-                break;
-            }
-            Ok(_) => {
-                if let Err(err) = tx.send(buf).await {
-                    allocator.release(err.0);
-                    // tracing::warn!("write to inbound failed: channel closed");
+        select! {
+            _ = tx.closed() => break,
+            data = buf.read(&mut out_read) => match data {
+                Ok(0) => {
+                    allocator.release(buf);
+                    break;
+                }
+                Ok(_) => {
+                    if let Err(err) = tx.send(buf).await {
+                        allocator.release(err.0);
+                        break;
+                    }
+                }
+                Err(err) => {
+                    allocator.release(buf);
+                    tracing::warn!("outbound read error: {}", err);
+                    abort_handle.cancel().await;
                     break;
                 }
             }
-            Err(err) => {
-                allocator.release(buf);
-                tracing::warn!("outbound read error: {}", err);
-                break;
-            }
         }
     }
+    // tracing::debug!("Outbound incoming closed");
 }
 
 #[derive(Clone)]
@@ -201,7 +226,12 @@ impl UdpSocketWrapper {
     }
 }
 
-async fn established_udp(inbound: Connector, outbound: UdpSocketWrapper, allocator: PktBufPool) {
+async fn established_udp(
+    inbound: Connector,
+    outbound: UdpSocketWrapper,
+    allocator: PktBufPool,
+    abort_handle: ConnAbortHandle,
+) {
     // establish udp
     let allocator2 = allocator.clone();
     let outbound2 = outbound.clone();
@@ -215,6 +245,7 @@ async fn established_udp(inbound: Connector, outbound: UdpSocketWrapper, allocat
                     allocator2.release(buf);
                     if let Err(err) = res {
                         tracing::warn!("write to outbound failed: {}", err);
+
                         break;
                     }
                 }
@@ -244,12 +275,14 @@ async fn established_udp(inbound: Connector, outbound: UdpSocketWrapper, allocat
                 if let Err(err) = tx.send(buf).await {
                     allocator.release(err.0);
                     tracing::warn!("write to inbound failed");
+                    abort_handle.cancel().await;
                     break;
                 }
             }
             Err(err) => {
                 allocator.release(buf);
-                tracing::warn!("[Direct] encounter error: {}", err);
+                tracing::warn!("outbound read error: {}", err);
+                abort_handle.cancel().await;
                 break;
             }
         }
@@ -265,36 +298,47 @@ impl Drop for TcpIndicatorGuard {
     fn drop(&mut self) {
         self.indicator.fetch_sub(1, Ordering::Relaxed);
         if self.indicator.load(Ordering::Relaxed) == 0 {
-            self.info.write().unwrap().mark_fin();
+            let info = self.info.clone();
+            tokio::spawn(async move { info.write().await.mark_fin() });
         }
     }
 }
 
-struct TcpHalfClosedGuard {
+pub(crate) struct DuplexCloseGuard {
     handle: Option<JoinHandle<()>>,
+    err_exit: bool,
 }
 
-impl TcpHalfClosedGuard {
+impl DuplexCloseGuard {
     pub fn new(handle: JoinHandle<()>) -> Self {
         Self {
             handle: Some(handle),
+            err_exit: false,
         }
+    }
+
+    pub fn set_err_exit(&mut self) {
+        self.err_exit = true;
     }
 }
 
-impl Drop for TcpHalfClosedGuard {
+impl Drop for DuplexCloseGuard {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
             if !handle.is_finished() {
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    if !handle.is_finished() {
-                        // wait until 30s
-                        tokio::time::sleep(Duration::from_secs(25)).await;
-                        handle.abort();
-                        // done, return deliberately
-                    }
-                });
+                if self.err_exit {
+                    handle.abort();
+                } else {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        if !handle.is_finished() {
+                            // wait until 30s
+                            tokio::time::sleep(Duration::from_secs(29)).await;
+                            handle.abort();
+                            // done, return deliberately
+                        }
+                    });
+                }
             }
         }
     }

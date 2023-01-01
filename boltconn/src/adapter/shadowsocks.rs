@@ -6,7 +6,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
-use crate::proxy::NetworkAddr;
+use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use io::Result;
 use shadowsocks::config::ServerType;
 use shadowsocks::context::SharedContext;
@@ -72,7 +72,7 @@ impl SSOutbound {
         Ok((target_addr, context, resolved_config.clone(), server_addr))
     }
 
-    async fn run_tcp(self, inbound: Connector) -> Result<()> {
+    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
         let tcp_conn = match server_addr {
             SocketAddr::V4(_) => {
@@ -88,11 +88,11 @@ impl SSOutbound {
         };
         let ss_stream =
             ProxyClientStream::from_stream(context, tcp_conn, &resolved_config, target_addr);
-        established_tcp(inbound, ss_stream, self.allocator).await;
+        established_tcp(inbound, ss_stream, self.allocator, abort_handle).await;
         Ok(())
     }
 
-    async fn run_udp(self, inbound: Connector) -> Result<()> {
+    async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
         let out_sock = {
             let socket = match server_addr {
@@ -112,6 +112,7 @@ impl SSOutbound {
             inbound,
             UdpSocketWrapper::SS(proxy_socket, target_addr),
             self.allocator,
+            abort_handle,
         )
         .await;
         Ok(())
@@ -119,29 +120,43 @@ impl SSOutbound {
 }
 
 impl TcpOutBound for SSOutbound {
-    fn spawn_tcp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
-        tokio::spawn(self.clone().run_tcp(inbound))
+    fn spawn_tcp(
+        &self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
     }
 
-    fn spawn_tcp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+    fn spawn_tcp_with_chan(
+        &self,
+        abort_handle: ConnAbortHandle,
+    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run_tcp(outer)),
+            tokio::spawn(self.clone().run_tcp(outer, abort_handle)),
         )
     }
 }
 
 impl UdpOutBound for SSOutbound {
-    fn spawn_udp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
-        tokio::spawn(self.clone().run_udp(inbound))
+    fn spawn_udp(
+        &self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tokio::spawn(self.clone().run_udp(inbound, abort_handle))
     }
 
-    fn spawn_udp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+    fn spawn_udp_with_chan(
+        &self,
+        abort_handle: ConnAbortHandle,
+    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run_udp(outer)),
+            tokio::spawn(self.clone().run_udp(outer, abort_handle)),
         )
     }
 }

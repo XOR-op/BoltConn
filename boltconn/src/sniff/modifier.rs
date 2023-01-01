@@ -4,8 +4,9 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hyper::{Body, Request, Response};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::RwLock;
 
 pub type ModifierClosure = Box<dyn Fn(Option<ProcessInfo>) -> Arc<dyn Modifier> + Send + Sync>;
 
@@ -127,7 +128,7 @@ impl Modifier for Recorder {
             time: Instant::now(),
         };
         let req = self.pending.remove(&ctx.tag).ok_or(anyhow!("no id"))?.1;
-        let host = match &ctx.conn_info.read().unwrap().dest {
+        let host = match &ctx.conn_info.read().await.dest {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
         };

@@ -5,7 +5,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
-use crate::proxy::NetworkAddr;
+use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::PktBufPool;
 use io::Result;
 use std::io;
@@ -47,50 +47,70 @@ impl DirectOutbound {
         })
     }
 
-    async fn run_tcp(self, inbound: Connector) -> Result<()> {
+    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let dst_addr = self.get_dst().await?;
         let outbound = match dst_addr {
             SocketAddr::V4(_) => Egress::new(&self.iface_name).tcpv4_stream(dst_addr).await?,
             SocketAddr::V6(_) => Egress::new(&self.iface_name).tcpv6_stream(dst_addr).await?,
         };
 
-        established_tcp(inbound, outbound, self.allocator).await;
+        established_tcp(inbound, outbound, self.allocator, abort_handle).await;
         Ok(())
     }
 
-    async fn run_udp(self, inbound: Connector) -> Result<()> {
+    async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let dst_addr = self.get_dst().await?;
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         outbound.connect(dst_addr).await?;
-        established_udp(inbound, UdpSocketWrapper::Direct(outbound), self.allocator).await;
+        established_udp(
+            inbound,
+            UdpSocketWrapper::Direct(outbound),
+            self.allocator,
+            abort_handle,
+        )
+        .await;
         Ok(())
     }
 }
 
 impl TcpOutBound for DirectOutbound {
-    fn spawn_tcp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
-        tokio::spawn(self.clone().run_tcp(inbound))
+    fn spawn_tcp(
+        &self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
     }
 
-    fn spawn_tcp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+    fn spawn_tcp_with_chan(
+        &self,
+        abort_handle: ConnAbortHandle,
+    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run_tcp(outer)),
+            tokio::spawn(self.clone().run_tcp(outer, abort_handle)),
         )
     }
 }
 
 impl UdpOutBound for DirectOutbound {
-    fn spawn_udp(&self, inbound: Connector) -> JoinHandle<Result<()>> {
-        tokio::spawn(self.clone().run_udp(inbound))
+    fn spawn_udp(
+        &self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tokio::spawn(self.clone().run_udp(inbound, abort_handle))
     }
 
-    fn spawn_udp_with_chan(&self) -> (DuplexChan, JoinHandle<Result<()>>) {
+    fn spawn_udp_with_chan(
+        &self,
+        abort_handle: ConnAbortHandle,
+    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run_udp(outer)),
+            tokio::spawn(self.clone().run_udp(outer, abort_handle)),
         )
     }
 }

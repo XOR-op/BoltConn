@@ -1,7 +1,7 @@
 use crate::adapter::TcpOutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
-use crate::proxy::ConnAgent;
+use crate::proxy::{ConnAbortHandle, ConnAgent};
 use crate::sniff::modifier::Modifier;
 use crate::sniff::ModifierContext;
 use hyper::client::conn;
@@ -9,7 +9,8 @@ use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 use std::io;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub struct HttpSniffer {
     inbound: DuplexChan,
@@ -47,10 +48,10 @@ impl HttpSniffer {
         Ok(resp)
     }
 
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, abort_handle: ConnAbortHandle) -> io::Result<()> {
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
-            let (conn, _handle) = self.creator.spawn_tcp_with_chan();
+            let (conn, _handle) = self.creator.spawn_tcp_with_chan(abort_handle.clone());
             Self::proxy(
                 conn,
                 self.modifier.clone(),

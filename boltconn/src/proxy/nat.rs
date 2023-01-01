@@ -73,7 +73,8 @@ impl Nat {
                     },
                 };
                 self.dispatcher
-                    .submit_tun_tcp(src_addr, dst_addr, indicator, socket);
+                    .submit_tun_tcp(src_addr, dst_addr, indicator, socket)
+                    .await;
             } else {
                 tracing::warn!("Unexpected: no record found by port {}", addr.port())
             }

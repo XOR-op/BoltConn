@@ -295,6 +295,7 @@ fn main() {
         }
     });
     tracing::info!("Exiting...");
+    drop(_dns_guard);
     rt.shutdown_background();
 }
 
