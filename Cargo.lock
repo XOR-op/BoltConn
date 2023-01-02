@@ -275,6 +275,7 @@ dependencies = [
  "netlink-packet-sock-diag",
  "netlink-sys",
  "radix_trie",
+ "regex",
  "reqwest",
  "rustls-pemfile",
  "scopeguard",
@@ -1855,6 +1856,8 @@ version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e076559ef8e241f2ae3479e36f97bd5741c0330689e217ad51ce2c76808b868a"
 dependencies = [
+ "aho-corasick",
+ "memchr",
  "regex-syntax",
 ]
 

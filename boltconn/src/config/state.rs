@@ -16,7 +16,7 @@ pub struct LinkedState {
 #[ignore]
 #[test]
 fn test_raw_state() {
-    let config_text = fs::read_to_string("../_private/config/state.yml").unwrap();
+    let config_text = std::fs::read_to_string("../_private/config/state.yml").unwrap();
     let deserialized: RawState = serde_yaml::from_str(&config_text).unwrap();
     println!("{:?}", deserialized)
 }
