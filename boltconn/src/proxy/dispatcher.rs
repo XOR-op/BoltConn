@@ -6,11 +6,11 @@ use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::host_matcher::HostMatcher;
 use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
+use crate::mitm::{HttpMitm, HttpsMitm, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
 use crate::proxy::{AgentCenter, ConnAbortHandle, ConnAgent, NetworkAddr, SessionManager};
-use crate::sniff::{HttpSniffer, HttpsSniffer, ModifierClosure};
 use crate::PktBufPool;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -171,7 +171,7 @@ impl Dispatcher {
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
                             tokio::spawn(async move {
-                                let mocker = HttpSniffer::new(
+                                let mocker = HttpMitm::new(
                                     DuplexChan::new(allocator, tun_next),
                                     modifier,
                                     outbounding,
@@ -195,7 +195,7 @@ impl Dispatcher {
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
                             tokio::spawn(async move {
-                                let mocker = HttpsSniffer::new(
+                                let mocker = HttpsMitm::new(
                                     cert,
                                     key,
                                     domain_name,

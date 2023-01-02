@@ -1,9 +1,9 @@
 use crate::adapter::TcpOutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
+use crate::mitm::modifier::Modifier;
+use crate::mitm::ModifierContext;
 use crate::proxy::{ConnAbortHandle, ConnAgent};
-use crate::sniff::modifier::Modifier;
-use crate::sniff::ModifierContext;
 use hyper::client::conn;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
@@ -17,7 +17,7 @@ use tokio_rustls::rustls::{
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
-pub struct HttpsSniffer {
+pub struct HttpsMitm {
     cert: Vec<Certificate>,
     priv_key: PrivateKey,
     server_name: String,
@@ -27,7 +27,7 @@ pub struct HttpsSniffer {
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
-impl HttpsSniffer {
+impl HttpsMitm {
     pub fn new(
         cert: Vec<Certificate>,
         priv_key: PrivateKey,

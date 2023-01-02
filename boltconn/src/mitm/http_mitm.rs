@@ -1,9 +1,9 @@
 use crate::adapter::TcpOutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
+use crate::mitm::modifier::Modifier;
+use crate::mitm::ModifierContext;
 use crate::proxy::{ConnAbortHandle, ConnAgent};
-use crate::sniff::modifier::Modifier;
-use crate::sniff::ModifierContext;
 use hyper::client::conn;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
@@ -12,14 +12,14 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub struct HttpSniffer {
+pub struct HttpMitm {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Box<dyn TcpOutBound>,
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
-impl HttpSniffer {
+impl HttpMitm {
     pub fn new(
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,

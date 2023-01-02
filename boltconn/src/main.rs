@@ -7,9 +7,9 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
+use crate::mitm::Recorder;
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
-use crate::sniff::Recorder;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
@@ -42,10 +42,10 @@ mod common;
 mod config;
 mod dispatch;
 mod external;
+mod mitm;
 mod network;
 mod platform;
 mod proxy;
-mod sniff;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct SystemTime;
