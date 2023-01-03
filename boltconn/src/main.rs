@@ -100,6 +100,21 @@ async fn load_config(
     Ok((raw_config, raw_state, schema))
 }
 
+fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    let mut url_list = vec![];
+    let mut header_list = vec![];
+    for s in list.iter() {
+        if s.starts_with("url,") {
+            url_list.push(s.clone());
+        } else if s.starts_with("header,") {
+            header_list.push(s.clone());
+        } else {
+            return Err(anyhow::anyhow!("Unexpected: {}", s));
+        }
+    }
+    Ok((url_list, header_list))
+}
+
 fn initialize_dispatching(
     raw_config: &RawRootCfg,
     raw_state: &RawState,
@@ -248,7 +263,7 @@ fn main() {
             cert,
             priv_key,
             Box::new(move |pi| Arc::new(Recorder::new(hcap_copy.clone(), pi))),
-            read_mitm_hosts(&config.mitm_hosts),
+            read_mitm_hosts(&config.mitm_host),
         ))
     };
     let nat = Arc::new(Nat::new(
@@ -315,5 +330,5 @@ async fn reload(
         Arc::new(builder.build())
     };
     dns.replace_resolvers(group).await?;
-    Ok((dispatching, read_mitm_hosts(&config.mitm_hosts)))
+    Ok((dispatching, read_mitm_hosts(&config.mitm_host)))
 }

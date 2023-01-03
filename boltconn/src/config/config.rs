@@ -7,13 +7,21 @@ use std::net::IpAddr;
 #[serde(deny_unknown_fields)]
 pub struct RawRootCfg {
     pub interface: String,
+    #[serde(alias = "api-port")]
     pub api_port: u16,
     pub dns: RawDnsConfig,
+    #[serde(alias = "proxy-local")]
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
+    #[serde(alias = "proxy-group")]
     pub proxy_group: HashMap<String, Vec<String>>,
+    #[serde(alias = "rule-local")]
     pub rule_local: Vec<String>,
+    #[serde(alias = "rule-provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
-    pub mitm_hosts: Option<Vec<String>>,
+    #[serde(alias = "mitm-host")]
+    pub mitm_host: Option<Vec<String>>,
+    #[serde(alias = "rewrite-rule")]
+    pub rewrite: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -1,3 +1,4 @@
+mod header_rewrite;
 mod http_mitm;
 mod https_mitm;
 mod modifier;
