@@ -23,7 +23,7 @@ pub struct HttpsMitm {
     server_name: String,
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
-    creator: Box<dyn TcpOutBound>,
+    creator: Arc<dyn TcpOutBound>,
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
@@ -43,7 +43,7 @@ impl HttpsMitm {
             server_name,
             inbound,
             modifier,
-            creator,
+            creator: Arc::from(creator),
             conn_info,
         }
     }
@@ -51,12 +51,17 @@ impl HttpsMitm {
     async fn proxy(
         client_tls: TlsConnector,
         server_name: ServerName,
-        outbound: DuplexChan,
+        creator: Arc<dyn TcpOutBound>,
+        abort_handle: ConnAbortHandle,
         modifier: Arc<dyn Modifier>,
         req: Request<Body>,
         ctx: ModifierContext,
     ) -> anyhow::Result<Response<Body>> {
-        let req = modifier.modify_request(req, &ctx).await?;
+        let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
+        if let Some(resp) = fake_resp {
+            return Ok(resp);
+        }
+        let (outbound, _handle) = creator.spawn_tcp_with_chan(abort_handle.clone());
         let outbound = client_tls.connect(server_name, outbound).await?;
         let (mut sender, connection) = conn::Builder::new().handshake(outbound).await?;
         tokio::spawn(async move { connection.await });
@@ -96,11 +101,11 @@ impl HttpsMitm {
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
             // since sniffer is the middle part, async tasks should be cancelled properly
-            let (conn, _handle) = self.creator.spawn_tcp_with_chan(abort_handle.clone());
             Self::proxy(
                 client_tls.clone(),
                 server_name.clone(),
-                conn,
+                self.creator.clone(),
+                abort_handle.clone(),
                 self.modifier.clone(),
                 req,
                 ModifierContext {

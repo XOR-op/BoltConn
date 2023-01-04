@@ -21,7 +21,7 @@ pub trait Modifier: Send + Sync {
         &self,
         req: Request<Body>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<Request<Body>>;
+    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)>;
     async fn modify_response(
         &self,
         resp: Response<Body>,
@@ -38,9 +38,9 @@ impl Modifier for Logger {
         &self,
         req: Request<Body>,
         _ctx: &ModifierContext,
-    ) -> anyhow::Result<Request<Body>> {
+    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
         println!("{:?}", req);
-        Ok(req)
+        Ok((req, None))
     }
 
     async fn modify_response(
@@ -62,8 +62,8 @@ impl Modifier for Nooper {
         &self,
         req: Request<Body>,
         _ctx: &ModifierContext,
-    ) -> anyhow::Result<Request<Body>> {
-        Ok(req)
+    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
+        Ok((req, None))
     }
 
     async fn modify_response(
@@ -97,7 +97,7 @@ impl Modifier for Recorder {
         &self,
         req: Request<Body>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<Request<Body>> {
+    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
         let (parts, body) = req.into_parts();
         let whole_body = hyper::body::to_bytes(body).await?;
         let req_copy = DumpedRequest {
@@ -109,7 +109,7 @@ impl Modifier for Recorder {
             time: Instant::now(),
         };
         self.pending.insert(ctx.tag, req_copy);
-        Ok(Request::from_parts(parts, Body::from(whole_body)))
+        Ok((Request::from_parts(parts, Body::from(whole_body)), None))
     }
 
     async fn modify_response(

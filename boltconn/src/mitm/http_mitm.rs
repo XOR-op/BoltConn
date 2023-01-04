@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 pub struct HttpMitm {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
-    creator: Box<dyn TcpOutBound>,
+    creator: Arc<dyn TcpOutBound>,
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
@@ -29,19 +29,24 @@ impl HttpMitm {
         Self {
             inbound,
             modifier,
-            creator,
+            creator: Arc::from(creator),
             conn_info,
         }
     }
 
     async fn proxy(
-        outbound: DuplexChan,
+        creator: Arc<dyn TcpOutBound>,
+        abort_handle: ConnAbortHandle,
         modifier: Arc<dyn Modifier>,
         req: Request<Body>,
         ctx: ModifierContext,
     ) -> anyhow::Result<Response<Body>> {
+        let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
+        if let Some(resp) = fake_resp {
+            return Ok(resp);
+        }
+        let (outbound, _handle) = creator.spawn_tcp_with_chan(abort_handle.clone());
         let (mut sender, connection) = conn::Builder::new().handshake(outbound).await?;
-        let req = modifier.modify_request(req, &ctx).await?;
         tokio::spawn(async move { connection.await });
         let resp = sender.send_request(req).await?;
         let resp = modifier.modify_response(resp, &ctx).await?;
@@ -51,9 +56,9 @@ impl HttpMitm {
     pub async fn run(self, abort_handle: ConnAbortHandle) -> io::Result<()> {
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
-            let (conn, _handle) = self.creator.spawn_tcp_with_chan(abort_handle.clone());
             Self::proxy(
-                conn,
+                self.creator.clone(),
+                abort_handle.clone(),
                 self.modifier.clone(),
                 req,
                 ModifierContext {

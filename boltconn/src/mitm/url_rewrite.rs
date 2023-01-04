@@ -5,9 +5,11 @@ use tokio::sync::RwLock;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UrlModType {
-    Resp302,
-    Resp307,
-    Resp404,
+    R301,
+    R302,
+    R307,
+    R308,
+    R404,
 }
 
 #[derive(Debug)]
@@ -26,7 +28,7 @@ impl UrlModRule {
         let Ok(regex) = Regex::new(matched_url) else {
             return None;
         };
-        if mod_type == UrlModType::Resp404 {
+        if mod_type == UrlModType::R404 {
             return Some(Self {
                 mod_type,
                 regex,
@@ -71,7 +73,7 @@ impl UrlModRule {
 
     pub fn rewrite(&self, url: &str) -> Option<(UrlModType, Option<String>)> {
         match self.mod_type {
-            UrlModType::Resp302 | UrlModType::Resp307 => {
+            UrlModType::R301 | UrlModType::R302 | UrlModType::R307 | UrlModType::R308 => {
                 if let Some(caps) = self.regex.captures(url) {
                     let mut res = String::new();
                     for item in &self.replaced_url {
@@ -91,7 +93,7 @@ impl UrlModRule {
                     None
                 }
             }
-            UrlModType::Resp404 => {
+            UrlModType::R404 => {
                 if self.regex.is_match(url) {
                     Some((self.mod_type, None))
                 } else {
@@ -173,9 +175,11 @@ fn parse_rules(cfg: &[String]) -> Result<(Vec<UrlModRule>, Vec<String>), String>
             return Err(line.clone());
         }
         let (mod_type, valid_len) = match *list.get(2).unwrap() {
-            "302" => (UrlModType::Resp302, 4),
-            "307" => (UrlModType::Resp307, 4),
-            "404" => (UrlModType::Resp404, 3),
+            "301" => (UrlModType::R301, 4),
+            "302" => (UrlModType::R302, 4),
+            "307" => (UrlModType::R307, 4),
+            "308" => (UrlModType::R308, 4),
+            "404" => (UrlModType::R404, 3),
             _ => return Err(line.clone()),
         };
         if list.len() != valid_len {
@@ -184,7 +188,7 @@ fn parse_rules(cfg: &[String]) -> Result<(Vec<UrlModRule>, Vec<String>), String>
         match UrlModRule::new(
             mod_type,
             list.get(1).unwrap(),
-            if mod_type != UrlModType::Resp404 {
+            if mod_type != UrlModType::R404 {
                 Some(list.get(3).unwrap())
             } else {
                 None
@@ -203,14 +207,14 @@ fn parse_rules(cfg: &[String]) -> Result<(Vec<UrlModRule>, Vec<String>), String>
 #[test]
 fn test_url_match() {
     let raw_rule = UrlModRule::new(
-        UrlModType::Resp302,
+        UrlModType::R302,
         "^https://twitter.com(.*)",
         Some("https://nitter.it$1"),
     )
     .unwrap();
     assert_eq!(
         raw_rule.rewrite("https://twitter.com"),
-        Some((UrlModType::Resp302, Some("https://nitter.it".to_string())))
+        Some((UrlModType::R302, Some("https://nitter.it".to_string())))
     );
     assert_eq!(
         raw_rule.rewrite("https://google.com/args?ref=https://twitter.com"),
@@ -219,14 +223,14 @@ fn test_url_match() {
     assert_eq!(
         raw_rule.rewrite("https://twitter.com/elon_musk"),
         Some((
-            UrlModType::Resp302,
+            UrlModType::R302,
             Some("https://nitter.it/elon_musk".to_string())
         ))
     );
     drop(raw_rule);
 
     let cap_rule = UrlModRule::new(
-        UrlModType::Resp302,
+        UrlModType::R302,
         r"^https://www.google.com/(.*\?)((.*)&)?(source=[^&]+)(.*)",
         Some("https://www.google.com/$1$3$5"),
     )
@@ -242,19 +246,19 @@ fn test_url_match() {
     assert_eq!(
         cap_rule.rewrite("https://www.google.com/search?q=test&source=chrome"),
         Some((
-            UrlModType::Resp302,
+            UrlModType::R302,
             Some("https://www.google.com/search?q=test".to_string())
         ))
     );
 
     assert!(UrlModRule::new(
-        UrlModType::Resp302,
+        UrlModType::R302,
         r"https://www.google.com/(.*\?)((.*)&)?(source=[^&]+)(.*)",
         Some("https://www.google.com/$1$3$6"),
     )
     .is_none());
     assert!(UrlModRule::new(
-        UrlModType::Resp404,
+        UrlModType::R404,
         r"https://www.google.com/(.*\?)((.*)&)?(source=[^&]+)(.*)",
         None,
     )
