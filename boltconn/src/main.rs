@@ -7,7 +7,7 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
-use crate::mitm::Recorder;
+use crate::mitm::{MitmModifier, Recorder, UrlModManager};
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
 use chrono::Timelike;
@@ -254,6 +254,12 @@ fn main() {
     let dispatcher = {
         // tls mitm
         let (cert, priv_key) = load_cert_and_key(crt_path, privkey_path).unwrap();
+        let url_modifier = if let Some(rewrite_cfg) = &config.rewrite {
+            let (url_mod, _hdr_mod) = mapping_rewrite(rewrite_cfg.as_slice()).unwrap();
+            Arc::new(UrlModManager::new(url_mod.as_slice()).unwrap())
+        } else {
+            Arc::new(UrlModManager::empty())
+        };
         Arc::new(Dispatcher::new(
             outbound_iface.as_str(),
             proxy_allocator.clone(),
@@ -262,7 +268,13 @@ fn main() {
             dispatching.clone(),
             cert,
             priv_key,
-            Box::new(move |pi| Arc::new(Recorder::new(hcap_copy.clone(), pi))),
+            Box::new(move |pi| {
+                Arc::new(MitmModifier::new(
+                    hcap_copy.clone(),
+                    url_modifier.clone(),
+                    pi,
+                ))
+            }),
             read_mitm_hosts(&config.mitm_host),
         ))
     };
@@ -292,10 +304,12 @@ fn main() {
                     if restart.is_some(){
                         // try restarting components
                         match reload(config_path,state_path,dns.clone()).await{
-                            Ok((dispatching, mitm_hosts)) => {
+                            Ok((dispatching, mitm_hosts,url_rewriter)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
+                                let hcap2 = http_capturer.clone();
                                 dispatcher.replace_dispatching(dispatching);
                                 dispatcher.replace_mitm_list(mitm_hosts);
+                                dispatcher.replace_modifier(Box::new(move |pi| Arc::new(MitmModifier::new(hcap2.clone(),url_rewriter.clone(),pi))));
                                 tracing::info!("Reloaded config successfully");
                             }
                             Err(err)=>{
@@ -318,8 +332,14 @@ async fn reload(
     config_path: &str,
     state_path: &str,
     dns: Arc<Dns>,
-) -> anyhow::Result<(Arc<Dispatching>, HostMatcher)> {
+) -> anyhow::Result<(Arc<Dispatching>, HostMatcher, Arc<UrlModManager>)> {
     let (config, state, schema) = load_config(config_path, state_path).await?;
+    let url_mod = if let Some(rewrite) = &config.rewrite {
+        let (url, _hdr) = mapping_rewrite(rewrite.as_slice())?;
+        Arc::new(UrlModManager::new(url.as_slice())?)
+    } else {
+        Arc::new(UrlModManager::empty())
+    };
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
@@ -330,5 +350,5 @@ async fn reload(
         Arc::new(builder.build())
     };
     dns.replace_resolvers(group).await?;
-    Ok((dispatching, read_mitm_hosts(&config.mitm_host)))
+    Ok((dispatching, read_mitm_hosts(&config.mitm_host), url_mod))
 }

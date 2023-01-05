@@ -9,3 +9,4 @@ pub use http_mitm::HttpMitm;
 pub use https_mitm::HttpsMitm;
 pub use mitm_modifier::*;
 pub use modifier::*;
+pub use url_rewrite::*;

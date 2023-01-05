@@ -111,47 +111,34 @@ enum ReplacedUrlChunk {
 }
 
 #[derive(Debug)]
-struct UrlModManagerInner {
+pub struct UrlModManager {
     rules: Vec<UrlModRule>,
     regex_set: RegexSet,
-}
-
-#[derive(Debug)]
-pub struct UrlModManager {
-    inner: RwLock<UrlModManagerInner>,
+    // inner: RwLock<UrlModManagerInner>,
 }
 
 impl UrlModManager {
-    fn create_inner(
-        rules: Vec<UrlModRule>,
-        regexes: Vec<String>,
-    ) -> anyhow::Result<UrlModManagerInner> {
-        let regex_set = RegexSet::new(&regexes)?;
-        Ok(UrlModManagerInner { rules, regex_set })
-    }
-
     pub fn new(cfg: &[String]) -> anyhow::Result<Self> {
         let (rules, regexes) = parse_rules(cfg).map_err(|s| anyhow::anyhow!(s))?;
-        let new_inner = Self::create_inner(rules, regexes)?;
         Ok(Self {
-            inner: RwLock::new(new_inner),
+            rules,
+            regex_set: RegexSet::new(&regexes)?, // inner: RwLock::new(new_inner),
         })
     }
 
-    pub async fn reload_rules(&self, cfg: &[String]) -> anyhow::Result<()> {
-        let (rules, regexes) = parse_rules(cfg).map_err(|s| anyhow::anyhow!(s))?;
-        let new_inner = Self::create_inner(rules, regexes)?;
-        *self.inner.write().await = new_inner;
-        Ok(())
+    pub fn empty() -> Self {
+        Self {
+            rules: vec![],
+            regex_set: RegexSet::empty(),
+        }
     }
 
     pub async fn try_rewrite(&self, url: &str) -> Option<(UrlModType, Option<String>)> {
-        let inner = self.inner.read().await;
-        let matches = inner.regex_set.matches(url);
+        let matches = self.regex_set.matches(url);
         if matches.matched_any() {
             // rewrite with the first rule; the topper, the more priority
             let idx = matches.iter().next().unwrap();
-            inner.rules.get(idx).unwrap().rewrite(url)
+            self.rules.get(idx).unwrap().rewrite(url)
         } else {
             None
         }
@@ -197,7 +184,7 @@ fn parse_rules(cfg: &[String]) -> Result<(Vec<UrlModRule>, Vec<String>), String>
             None => return Err(line.clone()),
             Some(instance) => {
                 coll.push(instance);
-                str_coll.push(list.get(2).unwrap().to_string());
+                str_coll.push(list.get(1).unwrap().to_string());
             }
         }
     }
