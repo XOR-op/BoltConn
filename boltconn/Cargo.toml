@@ -13,7 +13,7 @@ anyhow = "1.0.66"
 async-trait = "0.1.58"
 libc = "0.2.137"
 regex = "1.7.0"
-tokio = { version = "1.22.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
+tokio = { version = "1.24.1", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
 tokio-rustls = "0.23.4"
 rustls-pemfile = "1.0.1"
 webpki-roots = "0.22.5"
