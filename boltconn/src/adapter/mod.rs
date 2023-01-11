@@ -17,15 +17,17 @@ mod direct;
 mod nat_adapter;
 mod shadowsocks;
 mod socks5;
+mod trojan;
 mod tun_adapter;
 
-pub use crate::adapter::shadowsocks::*;
+pub use super::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 pub use direct::*;
 pub use nat_adapter::*;
 pub use socks5::*;
+pub use trojan::*;
 pub use tun_adapter::*;
 
 pub struct TcpStatus {

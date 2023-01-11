@@ -46,6 +46,7 @@ aho-corasick = "0.7.20"
 reqwest = "0.11.13"
 fastrand = "1.8.0"
 is-root = "0.1.2"
+sha2 = "0.10.6"
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-sys = "0.8.3"
 netlink-packet-sock-diag = "0.4.0"
