@@ -1,6 +1,4 @@
-use ::shadowsocks::relay::Address;
-use ::shadowsocks::ProxySocket;
-use fast_socks5::util::target_addr::TargetAddr;
+use async_trait::async_trait;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -162,75 +160,17 @@ async fn established_tcp<T>(
     // tracing::debug!("Outbound incoming closed");
 }
 
-#[derive(Clone)]
-enum UdpSocketWrapper {
-    Direct(Arc<UdpSocket>),
-    Socks5(Arc<UdpSocket>, TargetAddr),
-    SS(Arc<ProxySocket>, Address),
-}
-
-impl UdpSocketWrapper {
-    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
-        match self {
-            UdpSocketWrapper::Direct(s) => {
-                s.send(data).await?;
-            }
-            UdpSocketWrapper::Socks5(s, target) => {
-                let mut buf = match target {
-                    TargetAddr::Ip(s) => fast_socks5::new_udp_header(s.clone())?,
-                    TargetAddr::Domain(s, p) => {
-                        fast_socks5::new_udp_header((s.as_str(), p.clone()))?
-                    }
-                };
-                buf.extend_from_slice(data);
-                s.send(buf.as_slice()).await?;
-            }
-            UdpSocketWrapper::SS(s, target) => {
-                s.send(target, data).await?;
-            }
-        }
-        Ok(())
-    }
+#[async_trait]
+trait UdpSocketAdapter: Clone + Send {
+    async fn send(&self, data: &[u8]) -> anyhow::Result<()>;
 
     // @return: <length>, <if addr matches target>
-    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
-        match self {
-            UdpSocketWrapper::Direct(s) => {
-                let (len, _) = s.recv_from(data).await?;
-                // s is established by connect
-                Ok((len, true))
-            }
-            UdpSocketWrapper::Socks5(s, target) => {
-                let mut buf = [0u8; 0x10000];
-                let (size, _) = s.recv_from(&mut buf).await?;
-                let (frag, target_addr, raw_data) =
-                    fast_socks5::parse_udp_request(&mut buf[..size]).await?;
-                if frag != 0 {
-                    return Err(anyhow::anyhow!("Unsupported frag value."));
-                }
-                data[..raw_data.len()].copy_from_slice(raw_data);
-                Ok((
-                    raw_data.len(),
-                    match (target, target_addr) {
-                        (TargetAddr::Ip(a), TargetAddr::Ip(b)) => *a == b,
-                        (TargetAddr::Domain(s1, p1), TargetAddr::Domain(s2, p2)) => {
-                            *p1 == p2 && *s1 == s2
-                        }
-                        _ => false,
-                    },
-                ))
-            }
-            UdpSocketWrapper::SS(s, target) => {
-                let (len, addr, _) = s.recv(data).await?;
-                Ok((len, addr == *target))
-            }
-        }
-    }
+    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)>;
 }
 
-async fn established_udp(
+async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     inbound: Connector,
-    outbound: UdpSocketWrapper,
+    outbound: S,
     allocator: PktBufPool,
     abort_handle: ConnAbortHandle,
 ) {

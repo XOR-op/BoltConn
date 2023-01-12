@@ -1,5 +1,5 @@
 use crate::adapter::{
-    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketWrapper,
+    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
@@ -7,6 +7,7 @@ use crate::common::{as_io_err, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use async_trait::async_trait;
 use fast_socks5::client::Socks5Stream;
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{AuthenticationMethod, Socks5Command};
@@ -14,7 +15,7 @@ use std::io;
 use std::io::Result;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone)]
@@ -133,7 +134,7 @@ impl Socks5Outbound {
         out_sock.connect(bound_addr).await?;
         established_udp(
             inbound,
-            UdpSocketWrapper::Socks5(out_sock, target),
+            Socks5UdpAdapter(out_sock, target),
             self.allocator,
             abort_handle,
         )
@@ -181,5 +182,40 @@ impl UdpOutBound for Socks5Outbound {
             DuplexChan::new(self.allocator.clone(), inner),
             tokio::spawn(self.clone().run_udp(outer, abort_handle)),
         )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Socks5UdpAdapter(Arc<UdpSocket>, TargetAddr);
+
+#[async_trait]
+impl UdpSocketAdapter for Socks5UdpAdapter {
+    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
+        let mut buf = match &self.1 {
+            TargetAddr::Ip(s) => fast_socks5::new_udp_header(s.clone())?,
+            TargetAddr::Domain(s, p) => fast_socks5::new_udp_header((s.as_str(), p.clone()))?,
+        };
+        buf.extend_from_slice(data);
+        self.0.send(buf.as_slice()).await?;
+        Ok(())
+    }
+
+    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
+        let mut buf = [0u8; 0x10000];
+        let (size, _) = self.0.recv_from(&mut buf).await?;
+        let (frag, target_addr, raw_data) =
+            fast_socks5::parse_udp_request(&mut buf[..size]).await?;
+        if frag != 0 {
+            return Err(anyhow::anyhow!("Unsupported frag value."));
+        }
+        data[..raw_data.len()].copy_from_slice(raw_data);
+        Ok((
+            raw_data.len(),
+            match (&self.1, target_addr) {
+                (TargetAddr::Ip(a), TargetAddr::Ip(b)) => *a == b,
+                (TargetAddr::Domain(s1, p1), TargetAddr::Domain(s2, p2)) => *p1 == p2 && *s1 == s2,
+                _ => false,
+            },
+        ))
     }
 }

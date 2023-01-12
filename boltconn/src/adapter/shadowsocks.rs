@@ -1,5 +1,5 @@
 use crate::adapter::{
-    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketWrapper,
+    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
@@ -7,10 +7,12 @@ use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use async_trait::async_trait;
 use io::Result;
 use shadowsocks::config::ServerType;
 use shadowsocks::context::SharedContext;
 use shadowsocks::relay::udprelay::proxy_socket::UdpSocketType;
+use shadowsocks::relay::Address;
 use shadowsocks::{relay, ProxyClientStream, ProxySocket, ServerAddr, ServerConfig};
 use std::io;
 use std::net::SocketAddr;
@@ -110,7 +112,7 @@ impl SSOutbound {
         ));
         established_udp(
             inbound,
-            UdpSocketWrapper::SS(proxy_socket, target_addr),
+            ShadowsocksUdpAdapter(proxy_socket, target_addr),
             self.allocator,
             abort_handle,
         )
@@ -158,5 +160,21 @@ impl UdpOutBound for SSOutbound {
             DuplexChan::new(self.allocator.clone(), inner),
             tokio::spawn(self.clone().run_udp(outer, abort_handle)),
         )
+    }
+}
+
+#[derive(Clone)]
+struct ShadowsocksUdpAdapter(Arc<ProxySocket>, Address);
+
+#[async_trait]
+impl UdpSocketAdapter for ShadowsocksUdpAdapter {
+    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
+        self.0.send(&self.1, data).await?;
+        Ok(())
+    }
+
+    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
+        let (len, addr, _) = self.0.recv(data).await?;
+        Ok((len, addr == self.1))
     }
 }

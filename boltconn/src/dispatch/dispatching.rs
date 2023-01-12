@@ -185,6 +185,16 @@ impl DispatchingBuilder {
                             )),
                         )));
                     }
+                    RawProxyLocalCfg::Trojan {
+                        server,
+                        port,
+                        sni,
+                        password,
+                        skip_cert_verify,
+                        websocket_path,
+                    } => {
+                        todo!()
+                    }
                 },
             }
         }

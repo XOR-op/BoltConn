@@ -1,10 +1,11 @@
-use crate::adapter::{established_tcp, established_udp, Connector, UdpSocketWrapper};
+use crate::adapter::{established_tcp, established_udp, Connector, UdpSocketAdapter};
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use anyhow::Result;
+use async_trait::async_trait;
 use sha2::{Digest, Sha224};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
@@ -75,9 +76,13 @@ impl TrojanOutbound {
     }
 
     async fn run_udp(self, mut inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        // let stream = self.first_packet(&mut inbound).await?;
-        todo!();
-        // established_udp(inbound, udp_socket, self.allocator, abort_handle).await;
+        let stream = self.first_packet(&mut inbound).await?;
+        let udp_socket = TrojanUdpSocket::bind(stream);
+        let adapter = TrojanUdpAdapter {
+            socket: Arc::new(udp_socket),
+            dest: self.dst,
+        };
+        established_udp(inbound, adapter, self.allocator, abort_handle).await;
         Ok(())
     }
 
@@ -264,7 +269,7 @@ impl TrojanUdpPacket {
 
 pub(crate) struct TrojanUdpSocket<S>
 where
-    S: AsyncRead + AsyncWrite,
+    S: AsyncRead + AsyncWrite + Sized,
 {
     read_half: Mutex<ReadHalf<S>>,
     write_half: Mutex<WriteHalf<S>>,
@@ -351,6 +356,48 @@ where
         // read payload
         reader.read_exact(&mut buffer[..len]).await?;
         Ok((len, src_addr))
+    }
+}
+
+struct TrojanUdpAdapter<S: AsyncRead + AsyncWrite> {
+    socket: Arc<TrojanUdpSocket<S>>,
+    dest: NetworkAddr,
+}
+
+impl<S> Clone for TrojanUdpAdapter<S>
+where
+    S: AsyncRead + AsyncWrite,
+{
+    fn clone(&self) -> Self {
+        Self {
+            socket: self.socket.clone(),
+            dest: self.dest.clone(),
+        }
+    }
+}
+
+impl<S> TrojanUdpAdapter<S>
+where
+    S: AsyncRead + AsyncWrite,
+{
+    fn test(&self) -> TrojanUdpAdapter<S> {
+        self.clone()
+    }
+}
+
+#[async_trait]
+impl<S> UdpSocketAdapter for TrojanUdpAdapter<S>
+where
+    S: AsyncRead + AsyncWrite + Send,
+{
+    async fn send(&self, data: &[u8]) -> Result<()> {
+        self.socket.send_to(data, self.dest.clone()).await?;
+        Ok(())
+    }
+
+    async fn recv(&self, data: &mut [u8]) -> Result<(usize, bool)> {
+        let (size, addr) = self.socket.recv_from(data).await?;
+        Ok((size, addr == self.dest))
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::adapter::{
-    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketWrapper,
+    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
@@ -7,10 +7,12 @@ use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::PktBufPool;
+use async_trait::async_trait;
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 
 #[derive(Clone)]
@@ -64,7 +66,7 @@ impl DirectOutbound {
         outbound.connect(dst_addr).await?;
         established_udp(
             inbound,
-            UdpSocketWrapper::Direct(outbound),
+            DirectUdpAdapter(outbound),
             self.allocator,
             abort_handle,
         )
@@ -112,5 +114,22 @@ impl UdpOutBound for DirectOutbound {
             DuplexChan::new(self.allocator.clone(), inner),
             tokio::spawn(self.clone().run_udp(outer, abort_handle)),
         )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DirectUdpAdapter(Arc<UdpSocket>);
+
+#[async_trait]
+impl UdpSocketAdapter for DirectUdpAdapter {
+    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
+        self.0.send(data).await?;
+        Ok(())
+    }
+
+    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
+        let (len, _) = self.0.recv_from(data).await?;
+        // s is established by connect
+        Ok((len, true))
     }
 }
