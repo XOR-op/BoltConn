@@ -56,6 +56,21 @@ pub enum RawProxyLocalCfg {
         password: String,
         cipher: String,
     },
+    #[serde(alias = "trojan")]
+    Trojan {
+        server: RawServerAddr,
+        port: u16,
+        password: String,
+        sni: String,
+        #[serde(alias = "skip-cert-verify", default = "default_true")]
+        skip_cert_verify: bool,
+        #[serde(alias = "websocket-path")]
+        websocket_path: Option<String>,
+    },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[ignore]
