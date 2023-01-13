@@ -10,6 +10,7 @@ use crate::external::ApiServer;
 use crate::mitm::{MitmModifier, Recorder, UrlModManager};
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
+use anyhow::anyhow;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
@@ -82,13 +83,12 @@ async fn load_config(
     state_path: &str,
 ) -> anyhow::Result<(RawRootCfg, RawState, HashMap<String, RuleSchema>)> {
     let config_text = fs::read_to_string(config_path)?;
-    let raw_config: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
+    let raw_config: RawRootCfg = serde_yaml::from_str(&config_text)?;
     let state_text = fs::read_to_string(state_path)?;
-    let raw_state: RawState = serde_yaml::from_str(&state_text).unwrap();
-    let config_folder = PathBuf::from_str(config_path)
-        .unwrap()
+    let raw_state: RawState = serde_yaml::from_str(&state_text)?;
+    let config_folder = PathBuf::from_str(config_path)?
         .parent()
-        .unwrap()
+        .ok_or(anyhow!("No parent"))?
         .display()
         .to_string();
     let schema = tokio::join!(config::read_schema(
