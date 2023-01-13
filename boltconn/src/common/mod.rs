@@ -2,6 +2,7 @@ use std::error::Error;
 
 pub mod async_raw_fd;
 pub mod async_socket;
+pub mod async_ws_stream;
 pub mod buf_pool;
 pub mod duplex_chan;
 pub mod host_matcher;

@@ -1,4 +1,4 @@
-use crate::adapter::Socks5Config;
+use crate::adapter::{Socks5Config, TrojanConfig};
 use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState, RuleSchema};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
@@ -193,7 +193,25 @@ impl DispatchingBuilder {
                         skip_cert_verify,
                         websocket_path,
                     } => {
-                        todo!()
+                        let addr = match server {
+                            RawServerAddr::IpAddr(ip) => {
+                                NetworkAddr::Raw(SocketAddr::new(ip.clone(), *port))
+                            }
+                            RawServerAddr::DomainName(dn) => NetworkAddr::DomainName {
+                                domain_name: dn.clone(),
+                                port: *port,
+                            },
+                        };
+                        e.insert(Arc::new(Proxy::new(
+                            name.clone(),
+                            ProxyImpl::Trojan(TrojanConfig {
+                                server_addr: addr,
+                                password: password.clone(),
+                                sni: sni.clone(),
+                                skip_cert_verify: *skip_cert_verify,
+                                websocket_path: websocket_path.clone(),
+                            }),
+                        )));
                     }
                 },
             }

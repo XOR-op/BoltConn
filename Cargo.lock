@@ -264,6 +264,7 @@ dependencies = [
  "errno",
  "fast-socks5",
  "fastrand",
+ "futures",
  "http",
  "httparse",
  "hyper",

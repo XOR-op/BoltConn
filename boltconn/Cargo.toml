@@ -13,6 +13,7 @@ anyhow = "1.0.66"
 async-trait = "0.1.58"
 libc = "0.2.137"
 regex = "1.7.0"
+futures = "0.3.25"
 tokio = { version = "1.24.1", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
 tokio-rustls = "0.23.4"
 tokio-tungstenite = "0.18.0"

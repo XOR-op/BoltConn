@@ -1,28 +1,37 @@
-use crate::adapter::{established_tcp, established_udp, Connector, UdpSocketAdapter};
+use crate::adapter::{
+    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+};
+use crate::common::async_ws_stream::AsyncWsStream;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
-use crate::common::io_err;
+use crate::common::duplex_chan::DuplexChan;
+use crate::common::{as_io_err, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use http::{StatusCode, Uri};
 use sha2::{Digest, Sha224};
+use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore, ServerName};
 use tokio_rustls::TlsConnector;
+use tokio_tungstenite::{client_async, WebSocketStream};
 
 #[derive(Clone, Debug)]
 pub struct TrojanConfig {
-    server_addr: NetworkAddr,
-    password: String,
-    sni: String,
-    skip_cert_verify: bool,
-    websocket_path: Option<String>,
+    pub(crate) server_addr: NetworkAddr,
+    pub(crate) password: String,
+    pub(crate) sni: String,
+    pub(crate) skip_cert_verify: bool,
+    pub(crate) websocket_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -37,7 +46,7 @@ pub struct TrojanOutbound {
 
 impl TrojanOutbound {
     pub fn new(
-        iface_name: String,
+        iface_name: &String,
         dst: NetworkAddr,
         allocator: PktBufPool,
         dns: Arc<Dns>,
@@ -60,7 +69,7 @@ impl TrojanOutbound {
                 .with_no_client_auth(),
         );
         Self {
-            iface_name,
+            iface_name: iface_name.clone(),
             dst,
             allocator,
             dns,
@@ -69,26 +78,62 @@ impl TrojanOutbound {
         }
     }
 
-    async fn run_tcp(self, mut inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let stream = self.first_packet(&mut inbound).await?;
-        established_tcp(inbound, stream, self.allocator, abort_handle).await;
-        Ok(())
-    }
-
-    async fn run_udp(self, mut inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let stream = self.first_packet(&mut inbound).await?;
-        let udp_socket = TrojanUdpSocket::bind(stream);
-        let adapter = TrojanUdpAdapter {
-            socket: Arc::new(udp_socket),
-            dest: self.dst,
-        };
-        established_udp(inbound, adapter, self.allocator, abort_handle).await;
-        Ok(())
-    }
-
-    async fn first_packet(&self, inbound: &mut Connector) -> Result<TlsStream<TcpStream>> {
+    async fn run_tcp(
+        self,
+        mut inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> io::Result<()> {
         let mut stream = self.connect_proxy().await?;
-        let first_packet = inbound.rx.recv().await.ok_or(anyhow::anyhow!("No resp"))?;
+        if let Some(ref uri) = self.config.websocket_path {
+            let mut stream = self
+                .with_websocket(stream, uri.as_str())
+                .await
+                .map_err(|e| io_err(e.to_string().as_str()))?;
+            self.first_packet(&mut inbound, &mut stream).await?;
+            established_tcp(inbound, stream, self.allocator, abort_handle).await;
+        } else {
+            self.first_packet(&mut inbound, &mut stream).await?;
+            established_tcp(inbound, stream, self.allocator, abort_handle).await;
+        }
+        Ok(())
+    }
+
+    async fn run_udp(
+        self,
+        mut inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> io::Result<()> {
+        let mut stream = self.connect_proxy().await?;
+        if let Some(ref uri) = self.config.websocket_path {
+            let mut stream = self
+                .with_websocket(stream, uri.as_str())
+                .await
+                .map_err(|e| io_err(e.to_string().as_str()))?;
+            self.first_packet(&mut inbound, &mut stream).await?;
+            let udp_socket = TrojanUdpSocket::bind(stream);
+            let adapter = TrojanUdpAdapter {
+                socket: Arc::new(udp_socket),
+                dest: self.dst,
+            };
+            established_udp(inbound, adapter, self.allocator, abort_handle).await;
+        } else {
+            self.first_packet(&mut inbound, &mut stream).await?;
+            let udp_socket = TrojanUdpSocket::bind(stream);
+            let adapter = TrojanUdpAdapter {
+                socket: Arc::new(udp_socket),
+                dest: self.dst,
+            };
+            established_udp(inbound, adapter, self.allocator, abort_handle).await;
+        }
+        Ok(())
+    }
+
+    async fn first_packet<S: AsyncWrite + Unpin>(
+        &self,
+        inbound: &mut Connector,
+        stream: &mut S,
+    ) -> io::Result<()> {
+        let first_packet = inbound.rx.recv().await.ok_or(io_err("No resp"))?;
         let trojan_req = TrojanRequest {
             password: self.config.password.clone(),
             request: TrojanReqInner {
@@ -100,10 +145,10 @@ impl TrojanOutbound {
         let res = stream.write_all(trojan_req.serialize().as_slice()).await;
         self.allocator.release(trojan_req.payload);
         res?;
-        Ok(stream)
+        Ok(())
     }
 
-    async fn connect_proxy(&self) -> Result<TlsStream<TcpStream>> {
+    async fn connect_proxy(&self) -> io::Result<TlsStream<TcpStream>> {
         let server_addr = match self.config.server_addr {
             NetworkAddr::Raw(addr) => addr,
             NetworkAddr::DomainName {
@@ -118,7 +163,8 @@ impl TrojanOutbound {
                 SocketAddr::new(resp, port)
             }
         };
-        let server_name = ServerName::try_from(self.config.sni.as_str())?;
+        let server_name =
+            ServerName::try_from(self.config.sni.as_str()).map_err(|e| as_io_err(e))?;
         let tcp_conn = match server_addr {
             SocketAddr::V4(_) => {
                 Egress::new(&self.iface_name)
@@ -134,6 +180,61 @@ impl TrojanOutbound {
         let tls_conn = TlsConnector::from(self.tls_config.clone());
         let stream = tls_conn.connect(server_name, tcp_conn).await?;
         Ok(stream)
+    }
+
+    async fn with_websocket<S: AsyncRead + AsyncWrite + Unpin + Send + Sync>(
+        &self,
+        stream: S,
+        path: &str,
+    ) -> Result<AsyncWsStream<S>> {
+        let uri = Uri::from_str(path)?;
+        let (stream, resp) = client_async(uri, stream).await?;
+        if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
+            return Err(anyhow!("Bad status:{}", resp.status()));
+        }
+        Ok(AsyncWsStream::new(stream))
+    }
+}
+
+impl TcpOutBound for TrojanOutbound {
+    fn spawn_tcp(
+        &self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
+    }
+
+    fn spawn_tcp_with_chan(
+        &self,
+        abort_handle: ConnAbortHandle,
+    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
+        let (inner, outer) = Connector::new_pair(10);
+        (
+            DuplexChan::new(self.allocator.clone(), inner),
+            tokio::spawn(self.clone().run_tcp(outer, abort_handle)),
+        )
+    }
+}
+
+impl UdpOutBound for TrojanOutbound {
+    fn spawn_udp(
+        &self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tokio::spawn(self.clone().run_udp(inbound, abort_handle))
+    }
+
+    fn spawn_udp_with_chan(
+        &self,
+        abort_handle: ConnAbortHandle,
+    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
+        let (inner, outer) = Connector::new_pair(10);
+        (
+            DuplexChan::new(self.allocator.clone(), inner),
+            tokio::spawn(self.clone().run_udp(outer, abort_handle)),
+        )
     }
 }
 
@@ -341,7 +442,7 @@ where
                     u16::from_be_bytes(port),
                 ))
             }
-            _ => return Err(anyhow::anyhow!("Bad trojan udp format")),
+            _ => return Err(anyhow!("Bad trojan udp format")),
         };
 
         // read payload length and skip CRLF
@@ -350,7 +451,7 @@ where
         let len = u16::from_be_bytes(buf) as usize;
         reader.read_exact(&mut header_buf[..2]).await?;
         if len > buffer.len() {
-            return Err(anyhow::anyhow!("Buffer too small"));
+            return Err(anyhow!("Buffer too small"));
         }
 
         // read payload

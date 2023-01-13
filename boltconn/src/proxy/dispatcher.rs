@@ -1,6 +1,6 @@
 use crate::adapter::{
     Connector, DirectOutbound, NatAdapter, OutboundType, SSOutbound, Socks5Outbound, TcpOutBound,
-    TunAdapter, UdpOutBound,
+    TrojanOutbound, TunAdapter, UdpOutBound,
 };
 use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
@@ -123,6 +123,16 @@ impl Dispatcher {
                     cfg.clone(),
                 )),
                 OutboundType::Shadowsocks,
+            ),
+            ProxyImpl::Trojan(cfg) => (
+                Box::new(TrojanOutbound::new(
+                    &self.iface_name,
+                    dst_addr.clone(),
+                    self.allocator.clone(),
+                    self.dns.clone(),
+                    cfg.clone(),
+                )),
+                OutboundType::Trojan,
             ),
         };
 
@@ -290,6 +300,16 @@ impl Dispatcher {
                     cfg.clone(),
                 )),
                 OutboundType::Shadowsocks,
+            ),
+            ProxyImpl::Trojan(cfg) => (
+                Box::new(TrojanOutbound::new(
+                    &self.iface_name,
+                    dst_addr.clone(),
+                    self.allocator.clone(),
+                    self.dns.clone(),
+                    cfg.clone(),
+                )),
+                OutboundType::Trojan,
             ),
         };
 
