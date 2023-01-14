@@ -1,4 +1,22 @@
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - 'main'
+    paths-ignore:
+      - '.github'
+      - 'docs'
+      - 'examples'
+      - 'README.md'
+      - 'LICENSE'
+  pull_request:
+    branches:
+      - 'main'
+    paths-ignore:
+      - '.github'
+      - 'docs'
+      - 'examples'
+      - 'README.md'
+      - 'LICENSE'
 
 name: check
 

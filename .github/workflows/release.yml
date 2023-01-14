@@ -51,11 +51,6 @@ jobs:
         shell: bash
       - run: rustup target add ${{ matrix.config.target_triple }}
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Get rust version
         id: rust-version
         run: echo "version=$(rustc --version)" >> $GITHUB_OUTPUT
