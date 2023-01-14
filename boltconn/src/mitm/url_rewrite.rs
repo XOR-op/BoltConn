@@ -1,7 +1,5 @@
 use regex::{Regex, RegexSet};
-use std::collections::HashMap;
 use std::str::FromStr;
-use tokio::sync::RwLock;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UrlModType {
