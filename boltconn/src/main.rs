@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 #![allow(dead_code)]
 
 extern crate core;
@@ -7,7 +6,7 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
-use crate::mitm::{MitmModifier, Recorder, UrlModManager};
+use crate::mitm::{MitmModifier, UrlModManager};
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
 use anyhow::anyhow;

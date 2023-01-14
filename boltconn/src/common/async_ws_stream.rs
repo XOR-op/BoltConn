@@ -5,7 +5,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio_tungstenite::tungstenite::{Error, Message};
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 pub struct AsyncWsStream<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> {

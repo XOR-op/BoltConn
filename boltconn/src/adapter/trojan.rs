@@ -14,16 +14,22 @@ use http::{StatusCode, Uri};
 use sha2::{Digest, Sha224};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::str::FromStr;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore, ServerName};
+use tokio_rustls::rustls::client::{
+    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+};
+use tokio_rustls::rustls::{
+    Certificate, ClientConfig, DigitallySignedStruct, Error, OwnedTrustAnchor, RootCertStore,
+    ServerName, SignatureScheme,
+};
 use tokio_rustls::TlsConnector;
-use tokio_tungstenite::{client_async, WebSocketStream};
+use tokio_tungstenite::client_async;
 
 #[derive(Clone, Debug)]
 pub struct TrojanConfig {
@@ -41,7 +47,6 @@ pub struct TrojanOutbound {
     allocator: PktBufPool,
     dns: Arc<Dns>,
     config: TrojanConfig,
-    tls_config: Arc<ClientConfig>,
 }
 
 impl TrojanOutbound {
@@ -52,29 +57,42 @@ impl TrojanOutbound {
         dns: Arc<Dns>,
         config: TrojanConfig,
     ) -> Self {
-        let mut root_cert_store = RootCertStore::empty();
-        root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
-            |ta| {
-                OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                )
-            },
-        ));
-        let tls_config = Arc::new(
-            ClientConfig::builder()
-                .with_safe_defaults()
-                .with_root_certificates(root_cert_store)
-                .with_no_client_auth(),
-        );
         Self {
             iface_name: iface_name.clone(),
             dst,
             allocator,
             dns,
             config,
-            tls_config,
+        }
+    }
+
+    fn make_tls_config(&self) -> Arc<ClientConfig> {
+        if self.config.skip_cert_verify {
+            let mut config = ClientConfig::builder()
+                .with_safe_defaults()
+                .with_root_certificates(RootCertStore::empty())
+                .with_no_client_auth();
+            config
+                .dangerous()
+                .set_certificate_verifier(Arc::new(NoCertVerification {}));
+            Arc::new(config)
+        } else {
+            let mut root_cert_store = RootCertStore::empty();
+            root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
+                |ta| {
+                    OwnedTrustAnchor::from_subject_spki_name_constraints(
+                        ta.subject,
+                        ta.spki,
+                        ta.name_constraints,
+                    )
+                },
+            ));
+            Arc::new(
+                ClientConfig::builder()
+                    .with_safe_defaults()
+                    .with_root_certificates(root_cert_store)
+                    .with_no_client_auth(),
+            )
         }
     }
 
@@ -177,7 +195,7 @@ impl TrojanOutbound {
                     .await?
             }
         };
-        let tls_conn = TlsConnector::from(self.tls_config.clone());
+        let tls_conn = TlsConnector::from(self.make_tls_config());
         let stream = tls_conn.connect(server_name, tcp_conn).await?;
         Ok(stream)
     }
@@ -187,7 +205,11 @@ impl TrojanOutbound {
         stream: S,
         path: &str,
     ) -> Result<AsyncWsStream<S>> {
-        let uri = Uri::from_str(path)?;
+        let uri = Uri::builder()
+            .scheme("wss")
+            .authority(self.config.sni.as_str())
+            .path_and_query(path)
+            .build()?;
         let (stream, resp) = client_async(uri, stream).await?;
         if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
             return Err(anyhow!("Bad status:{}", resp.status()));
@@ -499,6 +521,60 @@ where
     async fn recv(&self, data: &mut [u8]) -> Result<(usize, bool)> {
         let (size, addr) = self.socket.recv_from(data).await?;
         Ok((size, addr == self.dest))
+    }
+}
+
+struct NoCertVerification {}
+
+impl ServerCertVerifier for NoCertVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &Certificate,
+        _intermediates: &[Certificate],
+        _server_name: &ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _ocsp_response: &[u8],
+        _now: SystemTime,
+    ) -> std::result::Result<ServerCertVerified, Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &Certificate,
+        _dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &Certificate,
+        _dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ED25519,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA512,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::ECDSA_SHA1_Legacy,
+            SignatureScheme::RSA_PKCS1_SHA1,
+        ]
+    }
+
+    fn request_scts(&self) -> bool {
+        false
     }
 }
 

@@ -15,7 +15,7 @@ libc = "0.2.137"
 regex = "1.7.0"
 futures = "0.3.25"
 tokio = { version = "1.24.1", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
-tokio-rustls = "0.23.4"
+tokio-rustls = { version = "0.23.4", features = ["dangerous_configuration"] }
 tokio-tungstenite = "0.18.0"
 rustls-pemfile = "1.0.1"
 webpki-roots = "0.22.5"
@@ -32,7 +32,7 @@ dashmap = "5.4.0"
 arrayref = "0.3.6"
 libproc = "0.12.0"
 trust-dns-proto = "0.22.0"
-trust-dns-resolver = { version = "0.22.0", features = ['dns-over-rustls', 'dns-over-https-rustls', 'dns-over-https', 'dns-over-tls']}
+trust-dns-resolver = { version = "0.22.0", features = ['dns-over-rustls', 'dns-over-https-rustls', 'dns-over-https', 'dns-over-tls'] }
 serde = { version = "1.0.147", features = ["derive"] }
 serde_yaml = "0.9.14"
 serde_json = "1.0.89"
