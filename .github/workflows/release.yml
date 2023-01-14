@@ -1,0 +1,125 @@
+# .github/workflows/release.yml
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  release:
+    name: release ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {
+            name: "linux-x64", artifact: "linux-x64",
+            os: ubuntu-latest,
+            has_release: true,
+            rust: stable,
+            target_triple: x86_64-unknown-linux-gnu,
+            archive: tar.gz
+          }
+          - {
+            name: "macos-x64", artifact: "macos-x64",
+            os: macos-latest,
+            rust: stable,
+            has_release: true,
+            target_triple: x86_64-apple-darwin,
+            archive: zip
+          }
+          - {
+            name: "macos-aarch64", artifact: "macos-aarch64",
+            os: macos-latest,
+            rust: stable,
+            has_release: true,
+            target_triple: aarch64-apple-darwin,
+            archive: zip
+          }
+    steps:
+      - name: Set up NASM
+        uses: ilammy/setup-nasm@v1.4.0
+
+      - uses: actions/checkout@v3
+
+      - name: macOS - Build preparation - Install Packages
+        if: matrix.config.os == 'macos-latest'
+        run: |
+          brew install coreutils
+      - name: Install Rust (rustup)
+        run: rustup update ${{ matrix.config.rust }} --no-self-update && rustup default ${{ matrix.config.rust }}
+        shell: bash
+      - run: rustup target add ${{ matrix.config.target_triple }}
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get rust version
+        id: rust-version
+        run: echo "version=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo index
+        uses: actions/cache@v3.2.3
+        with:
+          path: ~/.cargo/registry/index
+          key: index-${{ runner.os }}-${{ github.run_number }}
+          restore-keys: |
+            index-${{ runner.os }}-
+            #    - name: Create lockfile
+            #      run: cargo generate-lockfile
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3.2.3
+        with:
+          path: ~/.cargo/registry/cache
+          key: registry-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Cache target directory
+        uses: actions/cache@v3.2.3
+        with:
+          path: target
+          key: cache-target-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+
+
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --release --target=${{matrix.config.target_triple}} 
+
+      - name: Run tests
+        shell: bash
+        run: |
+          cargo test --release --target=${{matrix.config.target_triple}}
+
+      - name: Copy files
+        shell: bash
+        run: |
+          mkdir release
+          cp ./target/release/boltconn ./release/
+          cp ./target/release/boltmgr ./release/
+
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: boltconn-${{ github.sha }}-${{ matrix.config.artifact }}.${{ matrix.config.archive}}
+          path: release
+
+      - name: Get the version
+        if: github.event_name == 'release' && matrix.config.has_release
+        id: get_version
+        run: echo VERSION=$(echo $GITHUB_REF | cut -d / -f 3) >> $GITHUB_OUTPUT
+
+      - name: Upload to GitHub Release
+        uses: svenstaro/upload-release-action@v2
+        if: github.event_name == 'release' && matrix.config.has_release
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: boltconn.
+          asset_name: boltconn-${{ steps.get_version.outputs.VERSION }}-${{ matrix.config.artifact }}.${{ matrix.config.archive}}
+          tag: ${{ github.ref }}
+          overwrite: true
