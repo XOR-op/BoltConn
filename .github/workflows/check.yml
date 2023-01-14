@@ -3,18 +3,18 @@ on:
     branches:
       - 'main'
     paths-ignore:
-      - '.github'
-      - 'docs'
-      - 'examples'
+      - '.github/**'
+      - 'docs/**'
+      - 'examples/**'
       - 'README.md'
       - 'LICENSE'
   pull_request:
     branches:
       - 'main'
     paths-ignore:
-      - '.github'
-      - 'docs'
-      - 'examples'
+      - '.github/**'
+      - 'docs/**'
+      - 'examples/**'
       - 'README.md'
       - 'LICENSE'
 
