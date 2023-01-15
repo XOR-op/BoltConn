@@ -1,36 +1,24 @@
 # BoltConn
 
-BoltConn is a transparent proxy for domain name/application level tunneling.
+[![check.yml](https://img.shields.io/github/actions/workflow/status/XOR-op/BoltConn/check.yml)](https://github.com/XOR-op/BoltConn/actions)
+[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/XOR-op/BoltConn?color=00b4f0)](https://github.com/XOR-op/BoltConn/releases)
 
-Supported platforms: Macos, Linux.
-
-*Warning: Since this project is under heavy development, breaking changes of features or API will happen.*
+A transparent proxy supporting L4/L7 tunneling with MitM, designed for privacy and security.
 
 ## Features
-
-- [x] TLS mitm
-- [x] DoH/DoT support
-- [x] symmetric UDP NAT
-- [x] socks5 & ss support
-- [x] clash-compatible ruleset configuration
-- [x] RESTful API controller
-- [x] command-line tool for controlling and monitoring
-- [x] graceful shutdown
-- [x] live reload without breaking existent connections
-
-## Documentations
-
-For architecture, see [design.md](./docs/design.md).
-
-For RESTful API, see [restful.md](./docs/restful.md).
-
-For comparison with other related projects, see [comparison.md](./docs/comparison.md).
+- Transparent proxy supported by Tun device, with route table managed automatically.
+- SOCKS5, Shadowsocks, Trojan outbound support.
+- Fake-ip DNS server to prevent DNS query leak. Support DoH/DoT upstream.
+- Rule based flexible routing, including domain name, process name, and other rules.
+- Compatible ruleset configuration with mainstream software (e.g. Clash, Surge).
+- MitM based URL rewrite/redirect, for fine-grained traffic control and privacy preservation.
+- Hot-reload without disconnecting existent connections
+- RESTful API together with command-line tool to configure program.
 
 ## Getting Started
 
-
-Execute `cargo build --release` at the root directory of the project, and cp all
-executables in `target/release` into directory you like.
+Download pre-built binaries from [release](https://github.com/XOR-op/BoltConn/releases) or build yourself, then add the path to `$PATH`.
 
 To run BoltConn:
 
@@ -46,16 +34,27 @@ boltmgr cert -p <your_desired_path>
 
 To control a running BoltConn service, use `boltmgr`. And you can use `boltmgr --help` to see more details.
 
+## Documentations
+For architecture, see [design.md](./docs/design.md).
+
+For RESTful API, see [restful.md](./docs/restful.md).
+
+For comparison with other related projects, see [comparison.md](./docs/comparison.md).
+
 ## Future Plan
 
-- multiple outbound protocols support
-    - [ ] http
-    - [ ] wireguard
-    - [ ] openvpn
-    - [ ] trojan
-    - [ ] other local interfaces
-- [ ] more configurations
+- outbound protocols support
+  - [ ] wireguard
+  - [ ] http
+  - [ ] local interfaces
+  - [ ] proxy relay
+- more MitM configuration
+  - [ ] modify HTTP header
+  - [ ] modify HTTP body
+  - [ ] custom scripts
 - [ ] web portal
-- [ ] on-demand privilege elevation
-- [ ] better IPv6 support
+- [ ] IPv6 support
 - [ ] Windows support with Wintun driver
+
+## License
+This software is released under the GPL-3.0 license.
