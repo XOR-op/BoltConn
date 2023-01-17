@@ -286,6 +286,7 @@ dependencies = [
  "sha2",
  "shadowsocks",
  "smoltcp",
+ "structopt",
  "thiserror",
  "tokio",
  "tokio-rustls",

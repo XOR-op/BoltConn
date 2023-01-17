@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -9,7 +10,7 @@ pub struct RawState {
 
 #[derive(Debug)]
 pub struct LinkedState {
-    pub state_path: String,
+    pub state_path: PathBuf,
     pub state: RawState,
 }
 

@@ -9,7 +9,6 @@ use crate::external::ApiServer;
 use crate::mitm::{MitmModifier, UrlModManager};
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
-use anyhow::anyhow;
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
@@ -26,10 +25,10 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::exit;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io};
+use structopt::StructOpt;
 use tokio::select;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tracing::{event, Level};
@@ -64,34 +63,59 @@ impl FormatTime for SystemTime {
     }
 }
 
-fn load_cert_and_key(
-    cert_path: &str,
-    key_path: &str,
-) -> io::Result<(Vec<Certificate>, PrivateKey)> {
-    let cert_raw = fs::read(cert_path)?;
+#[derive(Debug, StructOpt)]
+#[structopt(name = "boltconn", about = "BoltConn core binary")]
+struct Args {
+    /// Path of configutation. Default to $HOME/.config/boltconn
+    #[structopt(short, long)]
+    pub config: Option<PathBuf>,
+    /// Path of certificate. Default to ${config}/cert
+    #[structopt(long)]
+    pub cert: Option<PathBuf>,
+}
+
+fn parse_config_path(
+    config: &Option<PathBuf>,
+    cert: &Option<PathBuf>,
+) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let config_path = match config {
+        None => {
+            let home = PathBuf::from(std::env::var("HOME")?);
+            home.join(".config").join("boltconn")
+        }
+        Some(p) => p.clone(),
+    };
+    let cert_path = match cert {
+        None => config_path.join("cert"),
+        Some(p) => p.clone(),
+    };
+    Ok((config_path, cert_path))
+}
+
+fn load_cert_and_key(cert_path: &PathBuf) -> io::Result<(Vec<Certificate>, PrivateKey)> {
+    let cert_raw = fs::read(cert_path.join("crt.pem"))?;
     let mut cert_bytes = cert_raw.as_slice();
-    let key_raw = fs::read(key_path)?;
+    let key_raw = fs::read(cert_path.join("key.pem"))?;
     let mut key_bytes = key_raw.as_slice();
     let cert = Certificate(rustls_pemfile::certs(&mut cert_bytes)?.remove(0));
     let key = PrivateKey(rustls_pemfile::pkcs8_private_keys(&mut key_bytes)?.remove(0));
     Ok((vec![cert], key))
 }
 
+fn state_path(config_path: &PathBuf) -> PathBuf {
+    config_path.join("state.yml")
+}
+
 async fn load_config(
-    config_path: &str,
-    state_path: &str,
+    config_path: &PathBuf,
 ) -> anyhow::Result<(RawRootCfg, RawState, HashMap<String, RuleSchema>)> {
-    let config_text = fs::read_to_string(config_path)?;
+    let config_text = fs::read_to_string(config_path.join("config.yml"))?;
     let raw_config: RawRootCfg = serde_yaml::from_str(&config_text)?;
-    let state_text = fs::read_to_string(state_path)?;
+    let state_text = fs::read_to_string(state_path(config_path))?;
     let raw_state: RawState = serde_yaml::from_str(&state_text)?;
-    let config_folder = PathBuf::from_str(config_path)?
-        .parent()
-        .ok_or(anyhow!("No parent"))?
-        .display()
-        .to_string();
+
     let schema = tokio::join!(config::read_schema(
-        config_folder.as_str(),
+        config_path,
         &raw_config.rule_provider,
         false
     ))
@@ -138,19 +162,7 @@ fn read_mitm_hosts(arr: &Option<Vec<String>>) -> HostMatcher {
     builder.build()
 }
 
-fn main() {
-    let config_path = "./_private/config/config.yml";
-    let state_path = "./_private/config/state.yml";
-    let crt_path = "_private/ca/crt.pem";
-    let privkey_path = "_private/ca/key.pem";
-
-    if !is_root() {
-        println!("BoltConn must be run with root privilege.");
-        exit(-1);
-    }
-
-    // tokio and tracing
-    let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
+fn init_tracing() {
     let formatting_layer = fmt::layer()
         .compact()
         .with_writer(std::io::stdout)
@@ -159,6 +171,20 @@ fn main() {
         .with(formatting_layer)
         .with(EnvFilter::new("boltconn=trace"))
         .init();
+}
+
+fn main() {
+    if !is_root() {
+        println!("BoltConn must be run with root privilege.");
+        exit(-1);
+    }
+    let args: Args = Args::from_args();
+    let (config_path, cert_path) =
+        parse_config_path(&args.config, &args.cert).expect("Invalid config path");
+
+    // tokio and tracing
+    let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
+    init_tracing();
 
     // interface
     let (_, real_iface_name) = get_default_route().expect("failed to get default route");
@@ -178,7 +204,7 @@ fn main() {
     let udp_manager = Arc::new(UdpOutboundManager::new());
 
     // Read initial config
-    let (config, state, schema) = rt.block_on(load_config(config_path, state_path)).unwrap();
+    let (config, state, schema) = rt.block_on(load_config(&config_path)).unwrap();
 
     // initialize resources
     let (dns, dns_ips) = {
@@ -245,14 +271,14 @@ fn main() {
         api_dispatching_handler.clone(),
         sender,
         LinkedState {
-            state_path: state_path.to_string(),
+            state_path: state_path(&config_path),
             state,
         },
     );
 
     let dispatcher = {
         // tls mitm
-        let (cert, priv_key) = load_cert_and_key(crt_path, privkey_path).unwrap();
+        let (cert, priv_key) = load_cert_and_key(&cert_path).unwrap();
         let url_modifier = if let Some(rewrite_cfg) = &config.rewrite {
             let (url_mod, _hdr_mod) = mapping_rewrite(rewrite_cfg.as_slice()).unwrap();
             Arc::new(UrlModManager::new(url_mod.as_slice()).unwrap())
@@ -302,7 +328,7 @@ fn main() {
                 restart = receiver.recv() => {
                     if restart.is_some(){
                         // try restarting components
-                        match reload(config_path,state_path,dns.clone()).await{
+                        match reload(&config_path,dns.clone()).await{
                             Ok((dispatching, mitm_hosts,url_rewriter)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
                                 let hcap2 = http_capturer.clone();
@@ -328,11 +354,10 @@ fn main() {
 }
 
 async fn reload(
-    config_path: &str,
-    state_path: &str,
+    config_path: &PathBuf,
     dns: Arc<Dns>,
 ) -> anyhow::Result<(Arc<Dispatching>, HostMatcher, Arc<UrlModManager>)> {
-    let (config, state, schema) = load_config(config_path, state_path).await?;
+    let (config, state, schema) = load_config(config_path).await?;
     let url_mod = if let Some(rewrite) = &config.rewrite {
         let (url, _hdr) = mapping_rewrite(rewrite.as_slice())?;
         Arc::new(UrlModManager::new(url.as_slice())?)
