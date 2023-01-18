@@ -1,4 +1,5 @@
-use crate::adapter::{Socks5Config, TrojanConfig};
+use crate::adapter::Socks5Config;
+use crate::transport::trojan::TrojanConfig;
 use anyhow::anyhow;
 use shadowsocks::ServerConfig;
 use std::sync::{Arc, Mutex};

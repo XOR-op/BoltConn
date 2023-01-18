@@ -1,4 +1,4 @@
-use crate::adapter::{Socks5Config, TrojanConfig};
+use crate::adapter::Socks5Config;
 use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState, RuleSchema};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
@@ -6,6 +6,7 @@ use crate::dispatch::ruleset::RuleSetBuilder;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
+use crate::transport::trojan::TrojanConfig;
 use anyhow::anyhow;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::{ServerAddr, ServerConfig};

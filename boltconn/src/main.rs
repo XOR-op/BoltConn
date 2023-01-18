@@ -45,6 +45,7 @@ mod mitm;
 mod network;
 mod platform;
 mod proxy;
+mod transport;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct SystemTime;
