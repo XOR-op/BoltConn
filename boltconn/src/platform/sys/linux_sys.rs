@@ -1,14 +1,12 @@
 use super::linux_ffi::*;
-use crate::common::async_raw_fd;
 use crate::common::io_err;
 use crate::platform::{create_req, get_command_output, linux_ffi, run_command};
 use ipnet::IpNet;
-use libc::{bind, c_int, sockaddr, sockaddr_in, socklen_t, O_RDWR};
+use libc::{c_int, socklen_t, O_RDWR};
 use std::ffi::CStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
-use std::os::unix::io::RawFd;
 use std::{io, mem};
 
 use super::super::errno_err;

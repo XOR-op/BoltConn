@@ -330,11 +330,10 @@ pub(crate) fn make_tls_config(skip_cert_verify: bool) -> Arc<ClientConfig> {
         )
     }
 }
-#[test]
-use crate::common::buf_pool::PktBufPool;
 
 #[tokio::test]
 async fn test_trojan_packets() {
+    use crate::common::buf_pool::PktBufPool;
     let inner = TrojanReqInner {
         cmd: TrojanCmd::Connect,
         addr: TrojanAddr::Domain(("google.com".to_string(), 443)),

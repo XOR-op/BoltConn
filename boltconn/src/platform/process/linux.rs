@@ -2,16 +2,15 @@ use crate::platform::process::{NetworkType, ProcessInfo};
 use netlink_packet_sock_diag::{
     constants::*,
     inet::{ExtensionFlags, InetRequest, SocketId, StateFlags},
-    NetlinkBuffer, NetlinkHeader, NetlinkMessage, NetlinkPayload, SockDiagMessage,
+    NetlinkHeader, NetlinkMessage, NetlinkPayload, SockDiagMessage,
 };
 use netlink_sys::protocols::NETLINK_SOCK_DIAG;
 use netlink_sys::Socket;
+use std::io;
 use std::{
     fs::DirEntry,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    path::PathBuf,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
 };
-use std::{io, mem::MaybeUninit};
 use std::{io::Result, os::unix::prelude::MetadataExt};
 
 fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u32)> {
