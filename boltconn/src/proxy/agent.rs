@@ -33,6 +33,7 @@ pub enum TlsVersion {
     TLS,
 }
 
+/// Domain name with port or pure socket address.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NetworkAddr {
     Raw(SocketAddr),
