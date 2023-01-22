@@ -81,7 +81,7 @@ impl TunDevice {
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
         let raw_buffer = &mut handle.data;
-        receiver.read(raw_buffer.as_mut_slice()).await?;
+        let _ = receiver.read(raw_buffer.as_mut_slice()).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
         let start_offset = 4;

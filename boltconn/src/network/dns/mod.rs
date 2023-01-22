@@ -39,11 +39,11 @@ async fn resolve_dns(
         return Err(anyhow::anyhow!("Failed to resolve DNS {}", dn));
     };
     let result: Vec<IpAddr> = ips.iter().collect();
-    return if result.is_empty() {
+    if result.is_empty() {
         Err(anyhow::anyhow!("Failed to resolve DNS {}", dn))
     } else {
         Ok(result)
-    };
+    }
 }
 
 pub fn new_bootstrap_resolver(addr: &[IpAddr]) -> anyhow::Result<TokioAsyncResolver> {
@@ -66,12 +66,12 @@ pub async fn parse_dns_config(
 ) -> anyhow::Result<Vec<NameServerConfigGroup>> {
     let mut arr = Vec::new();
     for l in lines {
-        let parts: Vec<&str> = l.split(",").map(|s| s.trim()).collect();
+        let parts: Vec<&str> = l.split(',').map(|s| s.trim()).collect();
         if parts.len() != 2 {
             return Err(anyhow::anyhow!("Invalid dns format {}", l));
         }
         let (proto, content) = (
-            parts.get(0).unwrap().to_string(),
+            parts.first().unwrap().to_string(),
             parts.get(1).unwrap().to_string(),
         );
         match proto.as_str() {
@@ -122,16 +122,13 @@ pub async fn parse_dns_config(
     Ok(arr)
 }
 
-pub fn extract_address(group: &Vec<NameServerConfigGroup>) -> Vec<IpAddr> {
+pub fn extract_address(group: &[NameServerConfigGroup]) -> Vec<IpAddr> {
     group
-        .clone()
-        .into_iter()
-        .map(|cg| {
-            cg.into_inner()
-                .iter()
+        .iter()
+        .flat_map(|cg| {
+            cg.iter()
                 .map(|cfg| cfg.socket_addr.ip())
                 .collect::<Vec<IpAddr>>()
         })
-        .flatten()
         .collect()
 }

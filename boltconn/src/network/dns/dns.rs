@@ -50,21 +50,21 @@ impl Dns {
 
     /// Return fake ip for the domain name instantly.
     pub fn fake_ip_to_domain(&self, fake_ip: IpAddr) -> Option<String> {
-        self.table.query_by_ip(fake_ip).and_then(|record| {
+        self.table.query_by_ip(fake_ip).map(|record| {
             let domain = &record.domain_name;
-            Some(if domain.ends_with(".") {
+            if domain.ends_with('.') {
                 domain[..domain.len() - 1].to_string()
             } else {
                 domain.clone()
-            })
+            }
         })
     }
 
     pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
         for r in self.resolvers.read().await.iter() {
             if let Ok(result) = r.ipv4_lookup(domain_name).await {
-                for i in result {
-                    return Some(IpAddr::V4(i));
+                if let Some(i) = result.iter().next() {
+                    return Some(IpAddr::V4(*i));
                 }
             }
         }
