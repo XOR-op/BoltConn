@@ -1,41 +1,73 @@
 use crate::adapter::Connector;
 use bytes::BytesMut;
 use concurrent_queue::ConcurrentQueue;
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use smoltcp::iface::InterfaceBuilder;
+use smoltcp::iface::{Interface, InterfaceBuilder};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
+use std::io;
+use std::io::ErrorKind;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::select;
 use tokio::sync::{broadcast, mpsc};
 
+//          Program -- TCP/UDP -> SmolStack -> IP -- Internet
+//                   \ TCP/UDP <- SmolStack <- IP /
 pub struct SmolStack {
     tcp_conn: DashMap<u16, Arc<Connector>>,
     udp_conn: DashMap<u16, Arc<Connector>>,
+    iface: Interface<'static, VirtualIpDevice>,
 }
 
 impl SmolStack {
-    pub fn new(iface_ip: IpAddr) -> Self {
-        // let iface = InterfaceBuilder::new().ip_addrs(iface_ip).finalize();
-        todo!()
+    pub fn new(iface_ip: IpAddr, ip_device: VirtualIpDevice) -> Self {
+        let iface = InterfaceBuilder::new(ip_device, vec![])
+            .ip_addrs(iface_ip)
+            .finalize();
+        Self {
+            tcp_conn: Default::default(),
+            udp_conn: Default::default(),
+            iface,
+        }
     }
 
-    pub fn open_tcp(&self, port: u16, connector: Connector) {
-        self.tcp_conn.insert(port, Arc::new(connector));
+    pub fn open_tcp(&self, port: u16, connector: Connector) -> io::Result<()> {
+        match self.tcp_conn.entry(port) {
+            Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
+            Entry::Vacant(e) => {
+                e.insert(Arc::new(connector));
+                Ok(())
+            }
+        }
+    }
+
+    pub fn open_udp(&self, port: u16, connector: Connector) -> io::Result<()> {
+        match self.udp_conn.entry(port) {
+            Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
+            Entry::Vacant(e) => {
+                e.insert(Arc::new(connector));
+                Ok(())
+            }
+        }
+    }
+
+    async fn send_tcp(&self, port: u16, data: &[u8]) -> io::Result<()> {
+        todo!()
     }
 }
 
 // -----------------------------------------------------------------------------------
 
 /// Virtual IP device
-pub(crate) struct VirtualDevice {
+pub(crate) struct VirtualIpDevice {
     mtu: usize,
     outbound: mpsc::Sender<BytesMut>,
     packet_queue: Arc<ConcurrentQueue<BytesMut>>,
 }
 
-impl VirtualDevice {
+impl VirtualIpDevice {
     pub fn new(
         mtu: usize,
         mut inbound: mpsc::Receiver<BytesMut>,
@@ -68,7 +100,7 @@ impl VirtualDevice {
     }
 }
 
-impl<'a> Device<'a> for VirtualDevice {
+impl<'a> Device<'a> for VirtualIpDevice {
     type RxToken = VirtualRxToken;
     type TxToken = VirtualTxToken;
 
