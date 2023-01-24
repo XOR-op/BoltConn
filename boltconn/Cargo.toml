@@ -16,6 +16,7 @@ boringtun = "0.5.2"
 byteorder = "1.4.3"
 bytes = "1.2.1"
 chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
+concurrent-queue = "2.1.0"
 dashmap = "5.4.0"
 errno = "0.2.8"
 fast-socks5 = "0.8.1"

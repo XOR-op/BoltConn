@@ -270,6 +270,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
+ "concurrent-queue",
  "dashmap",
  "errno",
  "fast-socks5",
@@ -488,6 +489,15 @@ dependencies = [
  "atty",
  "lazy_static",
  "winapi",
+]
+
+[[package]]
+name = "concurrent-queue"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c278839b831783b70278b14df4d45e1beb1aad306c07bb796637de9a0e323e8e"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]
