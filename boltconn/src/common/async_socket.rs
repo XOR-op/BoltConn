@@ -23,7 +23,7 @@ impl AsyncRawSocket {
         };
 
         Ok(Self {
-            fd: unix::AsyncFd::new(RawFd::from(fd))?,
+            fd: unix::AsyncFd::new(fd)?,
             sockaddr,
         })
     }

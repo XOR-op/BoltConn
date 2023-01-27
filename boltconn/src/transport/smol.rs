@@ -3,14 +3,13 @@ use crate::common::buf_pool::{PktBufHandle, PktBufPool, MAX_PKT_SIZE};
 use bytes::BytesMut;
 use concurrent_queue::ConcurrentQueue;
 use dashmap::mapref::entry::Entry;
-use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
 use smoltcp::iface::{Interface, InterfaceBuilder, SocketHandle};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::TcpSocket as SmolTcpSocket;
 use smoltcp::socket::{TcpSocketBuffer, TcpState};
 use smoltcp::time::Instant;
-use smoltcp::wire::IpAddress;
+use smoltcp::wire::IpCidr;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
@@ -48,7 +47,7 @@ pub struct SmolStack {
 impl SmolStack {
     pub fn new(iface_ip: IpAddr, ip_device: VirtualIpDevice, allocator: PktBufPool) -> Self {
         let iface = InterfaceBuilder::new(ip_device, vec![])
-            .ip_addrs(iface_ip)
+            .ip_addrs(vec![IpCidr::new(iface_ip.into(), 32)])
             .finalize();
         Self {
             tcp_conn: Default::default(),
@@ -71,7 +70,7 @@ impl SmolStack {
                 // create socket resource
                 let tx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
                 let rx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
-                let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
+                let client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
                 let handle = self.iface.add_socket(client_socket);
 
                 // connect to remote
@@ -79,7 +78,7 @@ impl SmolStack {
                     self.iface.get_socket_and_context::<SmolTcpSocket>(handle);
                 client_socket
                     .connect(ctx, remote_addr, SocketAddr::new(self.ip_addr, local_port))
-                    .map_err(|| Err(ErrorKind::ConnectionRefused.into()))?;
+                    .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
 
                 e.insert(ConnTask::new(connector, handle));
                 Ok(())
@@ -90,7 +89,7 @@ impl SmolStack {
     async fn poll_tcp_socket(&mut self, task: &mut ConnTask) -> io::Result<()> {
         let socket = self
             .iface
-            .get_socket::<smoltcp::socket::TcpSocket>(*task.handle);
+            .get_socket::<smoltcp::socket::TcpSocket>(task.handle);
         // Send data
         if socket.can_send() {
             if let Some((buf, start)) = task.remain_to_send.take() {
@@ -138,12 +137,12 @@ impl SmolStack {
     }
 
     fn purge_closed_tcp(&mut self) {
-        self.tcp_conn.retain(|port, task| {
+        self.tcp_conn.retain(|_port, task| {
             let socket = self
                 .iface
-                .get_socket::<smoltcp::socket::TcpSocket>(*task.handle);
+                .get_socket::<smoltcp::socket::TcpSocket>(task.handle);
             if socket.state() == TcpState::Closed {
-                self.iface.remove_socket(*task.handle);
+                self.iface.remove_socket(task.handle);
                 false
             } else {
                 true
@@ -155,7 +154,7 @@ impl SmolStack {
 // -----------------------------------------------------------------------------------
 
 /// Virtual IP device
-pub(crate) struct VirtualIpDevice {
+pub struct VirtualIpDevice {
     mtu: usize,
     outbound: mpsc::Sender<BytesMut>,
     packet_queue: Arc<ConcurrentQueue<BytesMut>>,
@@ -224,7 +223,7 @@ impl<'a> Device<'a> for VirtualIpDevice {
     }
 }
 
-pub(crate) struct VirtualRxToken {
+pub struct VirtualRxToken {
     buf: BytesMut,
 }
 
@@ -237,7 +236,7 @@ impl RxToken for VirtualRxToken {
     }
 }
 
-pub(crate) struct VirtualTxToken {
+pub struct VirtualTxToken {
     sender: mpsc::Sender<BytesMut>,
 }
 

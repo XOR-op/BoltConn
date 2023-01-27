@@ -78,17 +78,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> AsyncWrite for AsyncWsStre
     ) -> Poll<Result<usize, io::Error>> {
         ready!(Pin::new(&mut self.stream)
             .poll_ready(cx)
-            .map_err(|e| as_io_err(e))?);
+            .map_err(as_io_err)?);
         Pin::new(&mut self.stream)
             .start_send(Message::Binary(buf.into()))
-            .map_err(|e| as_io_err(e))?;
+            .map_err(as_io_err)?;
         Poll::Ready(Ok(buf.remaining()))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        Pin::new(&mut self.stream)
-            .poll_flush(cx)
-            .map_err(|e| as_io_err(e))
+        Pin::new(&mut self.stream).poll_flush(cx).map_err(as_io_err)
     }
 
     fn poll_shutdown(
@@ -97,10 +95,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> AsyncWrite for AsyncWsStre
     ) -> Poll<Result<(), io::Error>> {
         ready!(Pin::new(&mut self.stream)
             .poll_ready(cx)
-            .map_err(|e| as_io_err(e))?);
+            .map_err(as_io_err)?);
         let _ = Pin::new(&mut self.stream).start_send(Message::Close(None));
-        Pin::new(&mut self.stream)
-            .poll_close(cx)
-            .map_err(|e| as_io_err(e))
+        Pin::new(&mut self.stream).poll_close(cx).map_err(as_io_err)
     }
 }

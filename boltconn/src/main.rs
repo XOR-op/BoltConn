@@ -23,7 +23,7 @@ use proxy::Dispatcher;
 use proxy::{Nat, SessionManager};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 use std::time::Duration;
@@ -93,7 +93,7 @@ fn parse_config_path(
     Ok((config_path, cert_path))
 }
 
-fn load_cert_and_key(cert_path: &PathBuf) -> io::Result<(Vec<Certificate>, PrivateKey)> {
+fn load_cert_and_key(cert_path: &Path) -> io::Result<(Vec<Certificate>, PrivateKey)> {
     let cert_raw = fs::read(cert_path.join("crt.pem"))?;
     let mut cert_bytes = cert_raw.as_slice();
     let key_raw = fs::read(cert_path.join("key.pem"))?;
@@ -103,7 +103,7 @@ fn load_cert_and_key(cert_path: &PathBuf) -> io::Result<(Vec<Certificate>, Priva
     Ok((vec![cert], key))
 }
 
-fn state_path(config_path: &PathBuf) -> PathBuf {
+fn state_path(config_path: &Path) -> PathBuf {
     config_path.join("state.yml")
 }
 
@@ -144,7 +144,7 @@ fn initialize_dispatching(
     raw_state: &RawState,
     schema: HashMap<String, RuleSchema>,
 ) -> anyhow::Result<Arc<Dispatching>> {
-    let builder = DispatchingBuilder::new_from_config(&raw_config, &raw_state, schema)?;
+    let builder = DispatchingBuilder::new_from_config(raw_config, raw_state, schema)?;
     Ok(Arc::new(builder.build()))
 }
 
@@ -152,7 +152,7 @@ fn read_mitm_hosts(arr: &Option<Vec<String>>) -> HostMatcher {
     let mut builder = HostMatcherBuilder::new();
     if let Some(arr) = arr.as_ref() {
         for s in arr {
-            if s.starts_with("*") {
+            if s.starts_with('*') {
                 let st: String = s.chars().skip(1).collect();
                 builder.add_suffix(st.as_str());
             } else {
@@ -290,8 +290,8 @@ fn main() {
             outbound_iface.as_str(),
             proxy_allocator.clone(),
             dns.clone(),
-            stat_center.clone(),
-            dispatching.clone(),
+            stat_center,
+            dispatching,
             cert,
             priv_key,
             Box::new(move |pi| {
@@ -309,11 +309,11 @@ fn main() {
         manager.clone(),
         dispatcher.clone(),
         dns.clone(),
-        proxy_allocator.clone(),
-        udp_manager.clone(),
+        proxy_allocator,
+        udp_manager,
     ));
     let nat_tcp = nat.clone();
-    let nat_udp = nat.clone();
+    let nat_udp = nat;
 
     // run
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));

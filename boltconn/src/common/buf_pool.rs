@@ -113,9 +113,8 @@ impl PktBufPool {
 
     pub async fn obtain(&self) -> PktBufHandle {
         loop {
-            match self.try_obtain() {
-                Some(v) => return v,
-                None => {}
+            if let Some(v) = self.try_obtain() {
+                return v;
             }
             self.notify.notified().await;
         }
