@@ -16,6 +16,7 @@ mod shadowsocks;
 mod socks5;
 mod trojan;
 mod tun_adapter;
+mod wireguard;
 
 pub use super::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
@@ -114,19 +115,12 @@ async fn established_tcp<T>(
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let _guard = DuplexCloseGuard::new(tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Some(buf) => {
-                    let res = out_write.write_all(buf.as_ready()).await;
-                    allocator2.release(buf);
-                    if let Err(err) = res {
-                        tracing::warn!("write to outbound failed: {}", err);
-                        break;
-                    }
-                }
-                None => {
-                    break;
-                }
+        while let Some(buf) = rx.recv().await {
+            let res = out_write.write_all(buf.as_ready()).await;
+            allocator2.release(buf);
+            if let Err(err) = res {
+                tracing::warn!("write to outbound failed: {}", err);
+                break;
             }
         }
         // tracing::debug!("Outbound outgoing closed");
@@ -179,20 +173,12 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let _guard = UdpDropGuard(tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Some(buf) => {
-                    let res = outbound2.send(buf.as_ready()).await;
-                    allocator2.release(buf);
-                    if let Err(err) = res {
-                        tracing::warn!("write to outbound failed: {}", err);
-
-                        break;
-                    }
-                }
-                None => {
-                    break;
-                }
+        while let Some(buf) = rx.recv().await {
+            let res = outbound2.send(buf.as_ready()).await;
+            allocator2.release(buf);
+            if let Err(err) = res {
+                tracing::warn!("write to outbound failed: {}", err);
+                break;
             }
         }
     }));

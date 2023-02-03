@@ -14,9 +14,8 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tokio::select;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::{broadcast, mpsc};
 
 struct ConnTask {
     connector: Connector,
@@ -165,22 +164,16 @@ impl VirtualIpDevice {
         mtu: usize,
         mut inbound: mpsc::Receiver<BytesMut>,
         outbound: mpsc::Sender<BytesMut>,
-        mut stop_signal: broadcast::Receiver<()>,
     ) -> Self {
         let queue = Arc::new(ConcurrentQueue::unbounded());
         let queue_clone = queue.clone();
         tokio::spawn(async move {
             // move data from inbound to internal buffer
             loop {
-                select! {
-                    _ = stop_signal.recv() =>return,
-                    res = inbound.recv() => {
-                        match res {
-                            None=>return,
-                            Some(item)=> {
-                                let _ = queue.push(item);
-                            }
-                        }
+                match inbound.recv().await {
+                    None => return,
+                    Some(item) => {
+                        let _ = queue.push(item);
                     }
                 }
             }
