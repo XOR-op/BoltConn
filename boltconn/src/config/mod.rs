@@ -1,4 +1,5 @@
-pub mod config;
+#[allow(clippy::module_inception)]
+mod config;
 mod rule_provider;
 mod state;
 

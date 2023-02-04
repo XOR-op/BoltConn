@@ -1,5 +1,7 @@
 use crate::adapter::Socks5Config;
-use crate::config::{RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawState, RuleSchema};
+use crate::config::{
+    RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawServerSockAddr, RawState, RuleSchema,
+};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
 use crate::dispatch::ruleset::RuleSetBuilder;
@@ -7,7 +9,9 @@ use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
 use crate::transport::trojan::TrojanConfig;
+use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
+use base64::Engine;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::{ServerAddr, ServerConfig};
 use std::collections::hash_map::Entry;
@@ -208,6 +212,66 @@ impl DispatchingBuilder {
                                 sni: sni.clone(),
                                 skip_cert_verify: *skip_cert_verify,
                                 websocket_path: websocket_path.clone(),
+                            }),
+                        )));
+                    }
+                    RawProxyLocalCfg::Wireguard {
+                        local_addr,
+                        private_key,
+                        public_key,
+                        endpoint,
+                        mtu,
+                        preshared_key,
+                        keepalive,
+                    } => {
+                        let endpoint = match endpoint {
+                            RawServerSockAddr::Ip(addr) => NetworkAddr::Raw(*addr),
+                            RawServerSockAddr::Domain(a) => {
+                                let parts = a.split(':').collect::<Vec<&str>>();
+                                let Some(port_str) = parts.get(1 )else {
+                                    return Err(anyhow!("No port"));
+                                };
+                                let port = port_str.parse::<u16>()?;
+                                #[allow(clippy::get_first)]
+                                NetworkAddr::DomainName {
+                                    domain_name: parts.get(0).unwrap().to_string(),
+                                    port,
+                                }
+                            }
+                        };
+                        // parse key
+                        let b64decoder = base64::engine::general_purpose::STANDARD;
+                        let private_key = {
+                            let val = b64decoder.decode(private_key)?;
+                            let val: [u8; 32] =
+                                val.try_into().map_err(|_| anyhow!("Decode private key"))?;
+                            x25519_dalek::StaticSecret::from(val)
+                        };
+                        let public_key = {
+                            let val = b64decoder.decode(public_key)?;
+                            let val: [u8; 32] =
+                                val.try_into().map_err(|_| anyhow!("Decode public key"))?;
+                            x25519_dalek::PublicKey::from(val)
+                        };
+                        let preshared_key = if let Some(v) = preshared_key {
+                            let val = b64decoder.decode(v)?;
+                            let val: [u8; 32] =
+                                val.try_into().map_err(|_| anyhow!("Decode PSK"))?;
+                            Some(val)
+                        } else {
+                            None
+                        };
+
+                        e.insert(Arc::new(Proxy::new(
+                            name.clone(),
+                            ProxyImpl::Wireguard(WireguardConfig {
+                                ip_addr: *local_addr,
+                                private_key,
+                                public_key,
+                                endpoint,
+                                mtu: *mtu,
+                                preshared_key,
+                                keepalive: *keepalive,
                             }),
                         )));
                     }

@@ -1,5 +1,6 @@
 use crate::adapter::Socks5Config;
 use crate::transport::trojan::TrojanConfig;
+use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
 use shadowsocks::ServerConfig;
 use std::sync::{Arc, Mutex};
@@ -34,6 +35,7 @@ pub enum ProxyImpl {
     Socks5(Socks5Config),
     Shadowsocks(ServerConfig),
     Trojan(TrojanConfig),
+    Wireguard(WireguardConfig),
 }
 
 /// A group of proxies

@@ -49,9 +49,9 @@ impl From<NetworkAddr> for TrojanAddr {
     }
 }
 
-impl Into<NetworkAddr> for TrojanAddr {
-    fn into(self) -> NetworkAddr {
-        match self {
+impl From<TrojanAddr> for NetworkAddr {
+    fn from(t: TrojanAddr) -> Self {
+        match t {
             TrojanAddr::Ipv4(v4) => NetworkAddr::Raw(SocketAddr::from(v4)),
             TrojanAddr::Domain((domain_name, port)) => {
                 NetworkAddr::DomainName { domain_name, port }

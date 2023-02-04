@@ -1,7 +1,7 @@
 use crate::config::RuleProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +29,13 @@ pub struct RawRootCfg {
 pub enum RawServerAddr {
     IpAddr(IpAddr),
     DomainName(String),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum RawServerSockAddr {
+    Ip(SocketAddr),
+    Domain(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -67,8 +74,23 @@ pub enum RawProxyLocalCfg {
         #[serde(alias = "websocket-path")]
         websocket_path: Option<String>,
     },
+    #[serde(alias = "wireguard")]
+    Wireguard {
+        #[serde(alias = "local-addr")]
+        local_addr: IpAddr,
+        #[serde(alias = "private-key")]
+        private_key: String,
+        #[serde(alias = "public-key")]
+        public_key: String,
+        endpoint: RawServerSockAddr,
+        mtu: usize,
+        #[serde(alias = "public-key")]
+        preshared_key: Option<String>,
+        keepalive: Option<u16>,
+    },
 }
 
+// Used for serde
 fn default_true() -> bool {
     true
 }

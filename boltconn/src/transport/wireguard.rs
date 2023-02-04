@@ -5,6 +5,7 @@ use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
 use boringtun::noise::{Tunn, TunnResult};
 use bytes::BytesMut;
+use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::ErrorKind;
@@ -25,6 +26,16 @@ pub struct WireguardConfig {
     pub mtu: usize,
     pub preshared_key: Option<[u8; 32]>,
     pub keepalive: Option<u16>,
+}
+
+impl Debug for WireguardConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("")
+            .field(&self.ip_addr)
+            .field(&self.endpoint)
+            .field(&self.preshared_key)
+            .finish()
+    }
 }
 
 impl PartialEq for WireguardConfig {

@@ -135,6 +135,9 @@ impl Dispatcher {
                 )),
                 OutboundType::Trojan,
             ),
+            ProxyImpl::Wireguard(cfg) => {
+                todo!()
+            }
         };
 
         // conn info
@@ -313,6 +316,9 @@ impl Dispatcher {
                 )),
                 OutboundType::Trojan,
             ),
+            ProxyImpl::Wireguard(cfg) => {
+                todo!()
+            }
         };
 
         // conn info

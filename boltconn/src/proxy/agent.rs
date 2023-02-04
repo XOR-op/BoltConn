@@ -29,8 +29,8 @@ impl Display for SessionProtocol {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlsVersion {
-    SSL30,
-    TLS,
+    Ssl30,
+    Tls,
 }
 
 /// Domain name with port or pure socket address.
@@ -196,8 +196,8 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
     // TLS handshake
     if packet.len() > 5 && packet[0] == 22 && packet[1] == 3 {
         return match packet[2] {
-            1 | 2 | 3 | 4 => SessionProtocol::Tls(TlsVersion::TLS),
-            0 => SessionProtocol::Tls(TlsVersion::SSL30),
+            1 | 2 | 3 | 4 => SessionProtocol::Tls(TlsVersion::Tls),
+            0 => SessionProtocol::Tls(TlsVersion::Ssl30),
             _ => SessionProtocol::Tcp, // unknown
         };
     }
