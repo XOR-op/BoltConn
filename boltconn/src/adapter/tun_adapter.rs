@@ -22,6 +22,7 @@ pub struct TunAdapter {
 impl TunAdapter {
     const BUF_SIZE: usize = 65536;
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
@@ -91,25 +92,17 @@ impl TunAdapter {
             indicator: ingoing_indicator,
             info: self.info.clone(),
         };
-        loop {
-            match rx.recv().await {
-                Some(buf) => {
-                    // tracing::trace!("[Direct] ingoing {} bytes", size);
-                    self.info.write().await.more_download(buf.len);
-                    if let Err(err) = in_write.write_all(buf.as_ready()).await {
-                        tracing::warn!("TunAdapter write to inbound failed: {}", err);
-                        self.abort_handle.cancel().await;
-                        duplex_guard.set_err_exit();
-                        self.allocator.release(buf);
-                        break;
-                    }
-                    self.allocator.release(buf);
-                }
-                None => {
-                    // closed
-                    break;
-                }
+        while let Some(buf) = rx.recv().await {
+            // tracing::trace!("[Direct] ingoing {} bytes", size);
+            self.info.write().await.more_download(buf.len);
+            if let Err(err) = in_write.write_all(buf.as_ready()).await {
+                tracing::warn!("TunAdapter write to inbound failed: {}", err);
+                self.abort_handle.cancel().await;
+                duplex_guard.set_err_exit();
+                self.allocator.release(buf);
+                break;
             }
+            self.allocator.release(buf);
         }
         // tracing::debug!("TUN incoming closed");
         Ok(())

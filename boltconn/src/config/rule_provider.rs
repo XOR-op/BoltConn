@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
 use tokio::task::JoinHandle;
@@ -25,8 +25,8 @@ pub struct RuleSchema {
     pub payload: Vec<String>,
 }
 
-fn safe_join_path(root: &PathBuf, file_path: &str) -> io::Result<PathBuf> {
-    let file_path = if file_path.starts_with("/") {
+fn safe_join_path(root: &Path, file_path: &str) -> io::Result<PathBuf> {
+    let file_path = if file_path.starts_with('/') {
         PathBuf::from_str(file_path).unwrap()
     } else {
         root.join(file_path)
@@ -34,7 +34,7 @@ fn safe_join_path(root: &PathBuf, file_path: &str) -> io::Result<PathBuf> {
     // we use parent path in order to ensure fs::canonicalize does not return Err
     let file_folder_path = file_path
         .parent()
-        .ok_or(io::Error::from(io::ErrorKind::AddrNotAvailable))?
+        .ok_or_else(|| io::Error::from(io::ErrorKind::AddrNotAvailable))?
         .canonicalize()?;
     if file_folder_path.starts_with(root.canonicalize()?) {
         Ok(file_path)
@@ -44,7 +44,7 @@ fn safe_join_path(root: &PathBuf, file_path: &str) -> io::Result<PathBuf> {
 }
 
 pub async fn read_schema(
-    config_path: &PathBuf,
+    config_path: &Path,
     providers: &HashMap<String, RuleProvider>,
     force_update: bool,
 ) -> anyhow::Result<HashMap<String, RuleSchema>> {
@@ -54,7 +54,7 @@ pub async fn read_schema(
         .clone()
         .into_iter()
         .map(|(name, item)| {
-            let root_path = config_path.clone();
+            let root_path = config_path.to_path_buf();
             tokio::spawn(async move {
                 match item {
                     RuleProvider::File { path } => {

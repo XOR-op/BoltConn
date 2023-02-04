@@ -44,7 +44,7 @@ impl SessionManager {
             *pair.value_mut() = TcpSessionCtl::new(src_addr, dst_addr);
         }
         pair.value_mut().update_time();
-        pair.key().clone()
+        *pair.key()
     }
 
     /// Use inbound.port to query session
@@ -56,7 +56,7 @@ impl SessionManager {
             Some(s) => Ok((s.source_addr, s.dest_addr, s.available.clone())),
             None => Err(io::Error::new(
                 ErrorKind::AddrNotAvailable,
-                format!("No record found"),
+                "No record found".to_string(),
             )),
         }
     }
@@ -83,8 +83,8 @@ impl SessionManager {
             udp_records: self.udp_records.clone(),
             udp_session_mapping: self.udp_session_mapping.clone(),
             occupied_key: self.occupied_key.clone(),
-            tcp_stale_time: self.tcp_stale_time.clone(),
-            udp_stale_time: self.udp_stale_time.clone(),
+            tcp_stale_time: self.tcp_stale_time,
+            udp_stale_time: self.udp_stale_time,
         };
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(dura);
@@ -103,10 +103,12 @@ impl SessionManager {
     }
 
     pub async fn lookup_udp_token(&self, src: SocketAddr, dst: SocketAddr) -> Option<IpAddr> {
-        match self.udp_session_mapping.entry((src.clone(), dst)) {
+        match self.udp_session_mapping.entry((src, dst)) {
             Entry::Occupied(v) => {
-                let key = v.get().clone();
-                self.udp_records.get_mut(&key).map(|mut p| p.update_time());
+                let key = *v.get();
+                if let Some(mut p) = self.udp_records.get_mut(&key) {
+                    p.update_time()
+                }
                 Some(match src {
                     SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(key)),
                     SocketAddr::V6(_) => IpAddr::V6(Ipv4Addr::from(key).to_ipv6_mapped()),
@@ -117,10 +119,12 @@ impl SessionManager {
     }
 
     pub async fn register_udp_session(&self, src: SocketAddr, dst: SocketAddr) -> IpAddr {
-        match self.udp_session_mapping.entry((src.clone(), dst)) {
+        match self.udp_session_mapping.entry((src, dst)) {
             Entry::Occupied(v) => {
-                let key = v.get().clone();
-                self.udp_records.get_mut(&key).map(|mut p| p.update_time());
+                let key = *v.get();
+                if let Some(mut p) = self.udp_records.get_mut(&key) {
+                    p.update_time()
+                }
                 match src {
                     SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(key)),
                     SocketAddr::V6(_) => IpAddr::V6(Ipv4Addr::from(key).to_ipv6_mapped()),
@@ -161,7 +165,7 @@ impl SessionManager {
                 None => {
                     return Err(io::Error::new(
                         ErrorKind::AddrNotAvailable,
-                        format!("Invalid key"),
+                        "Invalid key".to_string(),
                     ));
                 }
                 Some(v4) => v4.into(),
@@ -174,7 +178,7 @@ impl SessionManager {
             }
             None => Err(io::Error::new(
                 ErrorKind::AddrNotAvailable,
-                format!("No record found"),
+                "No record found".to_string(),
             )),
         }
     }

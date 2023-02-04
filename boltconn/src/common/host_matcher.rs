@@ -9,7 +9,7 @@ enum HostType {
 pub struct HostMatcher(Trie<String, HostType>);
 
 impl HostMatcher {
-    pub fn matches(&self, host: &String) -> bool {
+    pub fn matches(&self, host: &str) -> bool {
         let rev_dn: String = host.chars().rev().collect();
         if let Some(result) = self.0.get_ancestor(rev_dn.as_str()) {
             if let Some(val) = result.value() {
@@ -29,7 +29,7 @@ impl HostMatcher {
                 }
             }
         }
-        return false;
+        false
     }
 }
 
@@ -37,7 +37,7 @@ pub struct HostMatcherBuilder(Vec<(String, HostType)>);
 
 impl HostMatcherBuilder {
     pub fn new() -> Self {
-        Self { 0: Vec::new() }
+        Self(Vec::new())
     }
 
     pub fn add_exact(&mut self, host: &str) {

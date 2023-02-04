@@ -108,7 +108,7 @@ fn state_path(config_path: &Path) -> PathBuf {
 }
 
 async fn load_config(
-    config_path: &PathBuf,
+    config_path: &Path,
 ) -> anyhow::Result<(RawRootCfg, RawState, HashMap<String, RuleSchema>)> {
     let config_text = fs::read_to_string(config_path.join("config.yml"))?;
     let raw_config: RawRootCfg = serde_yaml::from_str(&config_text)?;
@@ -355,7 +355,7 @@ fn main() {
 }
 
 async fn reload(
-    config_path: &PathBuf,
+    config_path: &Path,
     dns: Arc<Dns>,
 ) -> anyhow::Result<(Arc<Dispatching>, HostMatcher, Arc<UrlModManager>)> {
     let (config, state, schema) = load_config(config_path).await?;

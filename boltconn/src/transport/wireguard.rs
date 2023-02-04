@@ -66,9 +66,9 @@ impl WireguardTunnel {
                 port,
             } => {
                 let resp = dns
-                    .genuine_lookup(&domain_name)
+                    .genuine_lookup(domain_name)
                     .await
-                    .ok_or(io_err("dns not found"))?;
+                    .ok_or_else(|| io_err("dns not found"))?;
                 SocketAddr::new(resp, port)
             }
         };
@@ -122,7 +122,7 @@ impl WireguardTunnel {
         let data = smol_rx
             .recv()
             .await
-            .ok_or(io::Error::from(ErrorKind::ConnectionAborted))?;
+            .ok_or_else(|| io::Error::from(ErrorKind::ConnectionAborted))?;
         match self.tunnel.encapsulate(data.as_ref(), wg_buf) {
             TunnResult::WriteToNetwork(packet) => {
                 if self.outbound.send(packet).await? != packet.len() {

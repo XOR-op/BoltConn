@@ -73,7 +73,7 @@ impl Socks5Outbound {
                     .dns
                     .genuine_lookup(domain_name.as_str())
                     .await
-                    .ok_or(io_err("dns not found"))?;
+                    .ok_or_else(|| io_err("dns not found"))?;
                 SocketAddr::new(resp, port)
             }
         };
@@ -94,7 +94,7 @@ impl Socks5Outbound {
         Ok((
             Socks5Stream::use_stream(socks_conn, Some(self.config.get_auth()), conn_cfg)
                 .await
-                .map_err(|e| as_io_err(e))?,
+                .map_err(as_io_err)?,
             server_addr,
         ))
     }
@@ -107,16 +107,16 @@ impl Socks5Outbound {
         let _bound_addr = socks_stream
             .request(Socks5Command::TCPConnect, target)
             .await
-            .map_err(|e| as_io_err(e))?;
+            .map_err(as_io_err)?;
         established_tcp(inbound, socks_stream, self.allocator, abort_handle).await;
         Ok(())
     }
 
     async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let target = match &self.dst {
-            NetworkAddr::Raw(addr) => TargetAddr::Ip(addr.clone()),
+            NetworkAddr::Raw(addr) => TargetAddr::Ip(*addr),
             NetworkAddr::DomainName { domain_name, port } => {
-                TargetAddr::Domain(domain_name.clone(), port.clone())
+                TargetAddr::Domain(domain_name.clone(), *port)
             }
         };
         let (mut socks_stream, server_addr) = self.connect_proxy().await?;
@@ -127,7 +127,7 @@ impl Socks5Outbound {
         let bound_addr = socks_stream
             .request(Socks5Command::UDPAssociate, target.clone())
             .await
-            .map_err(|e| as_io_err(e))?
+            .map_err(as_io_err)?
             .to_socket_addrs()?
             .next()
             .unwrap();
@@ -192,8 +192,8 @@ struct Socks5UdpAdapter(Arc<UdpSocket>, TargetAddr);
 impl UdpSocketAdapter for Socks5UdpAdapter {
     async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
         let mut buf = match &self.1 {
-            TargetAddr::Ip(s) => fast_socks5::new_udp_header(s.clone())?,
-            TargetAddr::Domain(s, p) => fast_socks5::new_udp_header((s.as_str(), p.clone()))?,
+            TargetAddr::Ip(s) => fast_socks5::new_udp_header(*s)?,
+            TargetAddr::Domain(s, p) => fast_socks5::new_udp_header((s.as_str(), *p))?,
         };
         buf.extend_from_slice(data);
         self.0.send(buf.as_slice()).await?;
@@ -203,8 +203,7 @@ impl UdpSocketAdapter for Socks5UdpAdapter {
     async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
         let mut buf = [0u8; 0x10000];
         let (size, _) = self.0.recv_from(&mut buf).await?;
-        let (frag, target_addr, raw_data) =
-            fast_socks5::parse_udp_request(&mut buf[..size]).await?;
+        let (frag, target_addr, raw_data) = fast_socks5::parse_udp_request(&buf[..size]).await?;
         if frag != 0 {
             return Err(anyhow::anyhow!("Unsupported frag value."));
         }

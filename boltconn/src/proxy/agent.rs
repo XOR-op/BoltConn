@@ -8,26 +8,26 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionProtocol {
-    TCP,
-    UDP,
-    HTTP,
-    TLS(TlsVersion),
+    Tcp,
+    Udp,
+    Http,
+    Tls(TlsVersion),
 }
 
 impl Display for SessionProtocol {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SessionProtocol::TCP => f.write_str("tcp"),
-            SessionProtocol::UDP => f.write_str("udp"),
-            SessionProtocol::HTTP => f.write_str("http"),
-            SessionProtocol::TLS(_) => f.write_str("tls"),
+            SessionProtocol::Tcp => f.write_str("tcp"),
+            SessionProtocol::Udp => f.write_str("udp"),
+            SessionProtocol::Http => f.write_str("http"),
+            SessionProtocol::Tls(_) => f.write_str("tls"),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlsVersion {
     SSL30,
     TLS,
@@ -58,13 +58,13 @@ impl NetworkAddr {
             NetworkAddr::DomainName {
                 domain_name: _,
                 port,
-            } => port.clone(),
+            } => *port,
         }
     }
 
     pub fn from(addr: &RawServerAddr, port: u16) -> Self {
         match addr {
-            RawServerAddr::IpAddr(ip) => Self::Raw(SocketAddr::new(ip.clone(), port)),
+            RawServerAddr::IpAddr(ip) => Self::Raw(SocketAddr::new(*ip, port)),
             RawServerAddr::DomainName(dn) => Self::DomainName {
                 domain_name: dn.clone(),
                 port,
@@ -155,8 +155,8 @@ impl ConnAgent {
             dest: dst,
             process_info,
             session_proto: match network_type {
-                NetworkType::TCP => SessionProtocol::TCP,
-                NetworkType::UDP => SessionProtocol::UDP,
+                NetworkType::TCP => SessionProtocol::Tcp,
+                NetworkType::UDP => SessionProtocol::Udp,
             },
             rule,
             upload_traffic: 0,
@@ -167,7 +167,7 @@ impl ConnAgent {
     }
 
     pub fn update_proto(&mut self, packet: &[u8]) {
-        if self.session_proto == SessionProtocol::TCP {
+        if self.session_proto == SessionProtocol::Tcp {
             self.session_proto = check_tcp_protocol(packet);
         }
     }
@@ -196,9 +196,9 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
     // TLS handshake
     if packet.len() > 5 && packet[0] == 22 && packet[1] == 3 {
         return match packet[2] {
-            1 | 2 | 3 | 4 => SessionProtocol::TLS(TlsVersion::TLS),
-            0 => SessionProtocol::TLS(TlsVersion::SSL30),
-            _ => SessionProtocol::TCP, // unknown
+            1 | 2 | 3 | 4 => SessionProtocol::Tls(TlsVersion::TLS),
+            0 => SessionProtocol::Tls(TlsVersion::SSL30),
+            _ => SessionProtocol::Tcp, // unknown
         };
     }
     // HTTP request line
@@ -208,12 +208,12 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
             let request_line = &packet[0..idx];
             if request_line.ends_with("HTTP/1.1".as_bytes()) {
                 // we just ignore legacy versions
-                return SessionProtocol::HTTP;
+                return SessionProtocol::Http;
             }
         }
     }
     // Unknown
-    SessionProtocol::TCP
+    SessionProtocol::Tcp
 }
 
 pub struct AgentCenter {
@@ -236,7 +236,7 @@ impl AgentCenter {
     }
 
     pub async fn get_nth(&self, idx: usize) -> Option<Arc<RwLock<ConnAgent>>> {
-        self.content.read().await.get(idx).map(|e| e.clone())
+        self.content.read().await.get(idx).cloned()
     }
 }
 
@@ -259,6 +259,7 @@ pub struct DumpedResponse {
     pub time: Instant,
 }
 
+#[allow(clippy::type_complexity)]
 pub struct HttpCapturer {
     contents: Mutex<Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>>,
 }
@@ -285,6 +286,8 @@ impl HttpCapturer {
     pub fn get_copy(&self) -> Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)> {
         self.contents.lock().unwrap().clone()
     }
+
+    #[allow(clippy::type_complexity)]
     pub fn get_range_copy(
         &self,
         start: usize,
@@ -295,12 +298,9 @@ impl HttpCapturer {
             return None;
         }
         Some(if let Some(end) = end {
-            arr.as_slice()[start..end]
-                .iter()
-                .map(|e| e.clone())
-                .collect()
+            arr.as_slice()[start..end].to_vec()
         } else {
-            arr.as_slice()[start..].iter().map(|e| e.clone()).collect()
+            arr.as_slice()[start..].to_vec()
         })
     }
 }

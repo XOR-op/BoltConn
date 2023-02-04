@@ -6,8 +6,8 @@ use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub enum SessionCtl {
-    TCP(TcpSessionCtl),
-    UDP(UdpSessionCtl),
+    Tcp(TcpSessionCtl),
+    Udp(UdpSessionCtl),
 }
 
 #[derive(Debug, Clone)]

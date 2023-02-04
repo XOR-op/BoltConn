@@ -42,6 +42,7 @@ impl RuleBuilder<'_> {
         }
     }
 
+    #[allow(clippy::get_first)]
     pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
@@ -71,6 +72,7 @@ impl RuleBuilder<'_> {
         Ok(())
     }
 
+    #[allow(clippy::get_first)]
     pub fn parse_ruleset(s: &str, general: GeneralProxy) -> Option<Rule> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();

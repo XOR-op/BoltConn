@@ -32,7 +32,7 @@ pub struct Dispatching {
 impl Dispatching {
     pub fn matches(&self, info: &ConnInfo) -> Arc<ProxyImpl> {
         for v in &self.rules {
-            if let Some(proxy) = v.matches(&info) {
+            if let Some(proxy) = v.matches(info) {
                 tracing::trace!("{} matches policy {:?}", info.dst, v);
                 return match &proxy {
                     GeneralProxy::Single(p) => p.get_impl(),
@@ -95,12 +95,9 @@ impl DispatchingBuilder {
             proxies: self.proxies,
             groups: self.groups,
             rules: self.rules,
-            fallback: self
-                .fallback
-                .unwrap_or(GeneralProxy::Single(Arc::new(Proxy::new(
-                    "Direct",
-                    ProxyImpl::Direct,
-                )))),
+            fallback: self.fallback.unwrap_or_else(|| {
+                GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct)))
+            }),
         }
     }
 }
@@ -171,7 +168,7 @@ impl DispatchingBuilder {
                         };
                         let addr = match server {
                             RawServerAddr::IpAddr(ip) => {
-                                ServerAddr::SocketAddr(SocketAddr::new(ip.clone(), *port))
+                                ServerAddr::SocketAddr(SocketAddr::new(*ip, *port))
                             }
                             RawServerAddr::DomainName(dn) => {
                                 ServerAddr::DomainName(dn.clone(), *port)
@@ -196,7 +193,7 @@ impl DispatchingBuilder {
                     } => {
                         let addr = match server {
                             RawServerAddr::IpAddr(ip) => {
-                                NetworkAddr::Raw(SocketAddr::new(ip.clone(), *port))
+                                NetworkAddr::Raw(SocketAddr::new(*ip, *port))
                             }
                             RawServerAddr::DomainName(dn) => NetworkAddr::DomainName {
                                 domain_name: dn.clone(),
@@ -262,7 +259,9 @@ impl DispatchingBuilder {
         for r in &cfg.rule_local {
             rule_builder.append_literal(r.as_str())?;
         }
-        builder.rules = rule_builder.build().ok_or(anyhow!("Fail to build rules"))?;
+        builder.rules = rule_builder
+            .build()
+            .ok_or_else(|| anyhow!("Fail to build rules"))?;
         tracing::info!("Loaded config successfully");
         Ok(builder)
     }
@@ -273,7 +272,7 @@ impl DispatchingBuilder {
             RuleImpl::RuleSet(ruleset),
             GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct))),
         )];
-        new_rules.extend(self.rules.drain(..));
+        new_rules.append(&mut self.rules);
         self.rules = new_rules
     }
 }

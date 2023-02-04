@@ -114,7 +114,7 @@ impl Nat {
                         dst,
                         receiver,
                         indicator.clone(),
-                        &udp_listener,
+                        udp_listener,
                         &self.session_mgr,
                     )
                     .await;

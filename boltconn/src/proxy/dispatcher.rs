@@ -32,6 +32,7 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         iface_name: &str,
         allocator: PktBufPool,
@@ -76,7 +77,7 @@ impl Dispatcher {
         stream: TcpStream,
     ) {
         let process_info = process::get_pid(src_addr, process::NetworkType::TCP)
-            .map_or(None, |pid| process::get_process_info(pid));
+            .map_or(None, process::get_process_info);
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
@@ -243,6 +244,7 @@ impl Dispatcher {
         self.stat_center.push(info).await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit_udp_pkt(
         &self,
         src_addr: SocketAddr,
@@ -253,8 +255,8 @@ impl Dispatcher {
         socket: &Arc<UdpSocket>,
         session_mgr: &Arc<SessionManager>,
     ) {
-        let process_info = process::get_pid(src_addr, NetworkType::UDP)
-            .map_or(None, |pid| process::get_process_info(pid));
+        let process_info =
+            process::get_pid(src_addr, NetworkType::UDP).map_or(None, process::get_process_info);
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),

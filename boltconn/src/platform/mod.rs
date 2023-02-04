@@ -143,7 +143,7 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
     let ctl_fd = {
         let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
         if fd < 0 {
-            return Err(errno_err("Unable to open control fd").into());
+            return Err(errno_err("Unable to open control fd"));
         }
         fd
     };

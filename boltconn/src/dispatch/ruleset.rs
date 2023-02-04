@@ -15,7 +15,7 @@ fn ip4_to_vec(ip: Ipv4Addr) -> Vec<u8> {
     let mut ret = vec![0; 32];
     for (idx, oct) in ip.octets().iter().enumerate() {
         for i in (0..8).rev() {
-            ret[idx * 8 + i] = if oct & (1 << i) != 0 { 1 } else { 0 };
+            ret[idx * 8 + i] = u8::from(oct & (1 << i) != 0);
         }
     }
     ret
@@ -30,7 +30,7 @@ fn ip4net_to_vec(ip: Ipv4Net) -> Vec<u8> {
             if idx == prefix_len {
                 return ret;
             }
-            ret.push(if oct & (1 << i) != 0 { 1 } else { 0 })
+            ret.push(u8::from(oct & (1 << i) != 0))
         }
     }
     ret
@@ -74,7 +74,7 @@ impl RuleSet {
                 {
                     return true;
                 }
-                port.clone()
+                *port
             }
         };
         if self.port.contains(&port) {
@@ -126,7 +126,7 @@ impl RuleSetBuilder {
                     RuleImpl::DomainSuffix(sfx) => retval.domain.add_suffix(sfx.as_str()),
                     RuleImpl::DomainKeyword(kw) => retval.domain_keyword.push(kw.clone()),
                     RuleImpl::IpCidr(ip) => match ip {
-                        IpNet::V4(v4) => retval.ip_cidr.push((ip4net_to_vec(v4.clone()), ())),
+                        IpNet::V4(v4) => retval.ip_cidr.push((ip4net_to_vec(*v4), ())),
                         IpNet::V6(_) => tracing::warn!("IpCidr6 is not supported now: {:?}", rule),
                     },
                     RuleImpl::Port(p) => {
