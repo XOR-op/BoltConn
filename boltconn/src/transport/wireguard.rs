@@ -5,6 +5,7 @@ use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
 use boringtun::noise::{Tunn, TunnResult};
 use bytes::BytesMut;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
@@ -24,6 +25,24 @@ pub struct WireguardConfig {
     pub mtu: usize,
     pub preshared_key: Option<[u8; 32]>,
     pub keepalive: Option<u16>,
+}
+
+impl PartialEq for WireguardConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.public_key == other.public_key
+            && self.ip_addr == other.ip_addr
+            && self.endpoint == other.endpoint
+    }
+}
+
+impl Eq for WireguardConfig {}
+
+impl Hash for WireguardConfig {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ip_addr.hash(state);
+        self.public_key.hash(state);
+        self.endpoint.hash(state);
+    }
 }
 
 /// Wireguard Tunnel, with only one peer.

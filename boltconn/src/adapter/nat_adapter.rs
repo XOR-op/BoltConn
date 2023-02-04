@@ -24,6 +24,7 @@ pub struct NatAdapter {
 impl NatAdapter {
     const BUF_SIZE: usize = 65536;
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         info: Arc<RwLock<ConnAgent>>,
         inbound_read: mpsc::Receiver<PktBufHandle>,
@@ -79,32 +80,24 @@ impl NatAdapter {
         }));
         duplex_guard.set_err_exit();
         // recv from outbound and send to inbound
-        loop {
-            match rx.recv().await {
-                Some(buf) => {
-                    let Some(token_ip) = self.session_mgr.lookup_udp_token(self.src, self.dst).await else {
-                        // no mapping, drop and return
-                        break;
-                    };
-                    // tracing::trace!("[NatAdapter] incoming {} bytes", buf.len);
-                    self.info.write().await.more_download(buf.len);
-                    if let Err(err) = self
-                        .inbound_write
-                        .send_to(buf.as_ready(), SocketAddr::new(token_ip, self.src.port()))
-                        .await
-                    {
-                        tracing::warn!("NatAdapter write to inbound failed: {}", err);
-                        self.allocator.release(buf);
-                        abort_handle.cancel().await;
-                        break;
-                    }
-                    self.allocator.release(buf);
-                }
-                None => {
-                    // closed
-                    break;
-                }
+        while let Some(buf) = rx.recv().await {
+            let Some(token_ip) = self.session_mgr.lookup_udp_token(self.src, self.dst).await else {
+                // no mapping, drop and return
+                break;
+            };
+            // tracing::trace!("[NatAdapter] incoming {} bytes", buf.len);
+            self.info.write().await.more_download(buf.len);
+            if let Err(err) = self
+                .inbound_write
+                .send_to(buf.as_ready(), SocketAddr::new(token_ip, self.src.port()))
+                .await
+            {
+                tracing::warn!("NatAdapter write to inbound failed: {}", err);
+                self.allocator.release(buf);
+                abort_handle.cancel().await;
+                break;
             }
+            self.allocator.release(buf);
         }
         Ok(())
     }

@@ -37,14 +37,14 @@ pub struct TrojanOutbound {
 
 impl TrojanOutbound {
     pub fn new(
-        iface_name: &String,
+        iface_name: &str,
         dst: NetworkAddr,
         allocator: PktBufPool,
         dns: Arc<Dns>,
         config: TrojanConfig,
     ) -> Self {
         Self {
-            iface_name: iface_name.clone(),
+            iface_name: iface_name.to_string(),
             dst,
             allocator,
             dns,
@@ -107,7 +107,7 @@ impl TrojanOutbound {
         inbound: &mut Connector,
         stream: &mut S,
     ) -> io::Result<()> {
-        let first_packet = inbound.rx.recv().await.ok_or(io_err("No resp"))?;
+        let first_packet = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         let trojan_req = TrojanRequest {
             password: self.config.password.clone(),
             request: TrojanReqInner {
@@ -133,12 +133,11 @@ impl TrojanOutbound {
                     .dns
                     .genuine_lookup(domain_name.as_str())
                     .await
-                    .ok_or(io_err("dns not found"))?;
+                    .ok_or_else(|| io_err("dns not found"))?;
                 SocketAddr::new(resp, port)
             }
         };
-        let server_name =
-            ServerName::try_from(self.config.sni.as_str()).map_err(|e| as_io_err(e))?;
+        let server_name = ServerName::try_from(self.config.sni.as_str()).map_err(as_io_err)?;
         let tcp_conn = match server_addr {
             SocketAddr::V4(_) => {
                 Egress::new(&self.iface_name)

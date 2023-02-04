@@ -49,9 +49,9 @@ impl SSOutbound {
         &self,
     ) -> Result<(relay::Address, SharedContext, ServerConfig, SocketAddr)> {
         let target_addr = match &self.dst {
-            NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(s.clone()),
+            NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(*s),
             NetworkAddr::DomainName { domain_name, port } => {
-                shadowsocks::relay::Address::from((domain_name.clone(), port.clone()))
+                shadowsocks::relay::Address::from((domain_name.clone(), *port))
             }
         };
         // ss configs
@@ -63,15 +63,15 @@ impl SSOutbound {
                     .dns
                     .genuine_lookup(domain_name.as_str())
                     .await
-                    .ok_or(io_err("dns not found"))?;
+                    .ok_or_else(|| io_err("dns not found"))?;
                 let addr = SocketAddr::new(resp, port);
                 (
                     ServerConfig::new(addr, self.config.password(), self.config.method()),
-                    addr.clone(),
+                    addr,
                 )
             }
         };
-        Ok((target_addr, context, resolved_config.clone(), server_addr))
+        Ok((target_addr, context, resolved_config, server_addr))
     }
 
     async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {

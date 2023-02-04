@@ -41,11 +41,11 @@ impl DirectOutbound {
                     self.dns
                         .genuine_lookup(domain_name.as_str())
                         .await
-                        .ok_or(io_err("DNS failed"))?,
-                    port.clone(),
+                        .ok_or_else(|| io_err("DNS failed"))?,
+                    *port,
                 )
             }
-            NetworkAddr::Raw(s) => s.clone(),
+            NetworkAddr::Raw(s) => *s,
         })
     }
 

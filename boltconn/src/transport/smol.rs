@@ -1,5 +1,6 @@
 use crate::adapter::Connector;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool, MAX_PKT_SIZE};
+use crate::proxy::ConnAbortHandle;
 use bytes::BytesMut;
 use concurrent_queue::ConcurrentQueue;
 use dashmap::mapref::entry::Entry;
@@ -13,6 +14,7 @@ use smoltcp::wire::IpCidr;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
+use std::ops::DerefMut;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -20,14 +22,16 @@ use tokio::sync::mpsc::error::TryRecvError;
 struct ConnTask {
     connector: Connector,
     handle: SocketHandle,
+    abort_handle: ConnAbortHandle,
     remain_to_send: Option<(PktBufHandle, usize)>, // buffer, start_offset
 }
 
 impl ConnTask {
-    pub fn new(connector: Connector, handle: SocketHandle) -> Self {
+    pub fn new(connector: Connector, handle: SocketHandle, abort_handle: ConnAbortHandle) -> Self {
         Self {
             connector,
             handle,
+            abort_handle,
             remain_to_send: None,
         }
     }
@@ -62,6 +66,7 @@ impl SmolStack {
         local_port: u16,
         remote_addr: SocketAddr,
         connector: Connector,
+        abort_handle: ConnAbortHandle,
     ) -> io::Result<()> {
         match self.tcp_conn.entry(local_port) {
             Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
@@ -79,16 +84,35 @@ impl SmolStack {
                     .connect(ctx, remote_addr, SocketAddr::new(self.ip_addr, local_port))
                     .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
 
-                e.insert(ConnTask::new(connector, handle));
+                e.insert(ConnTask::new(connector, handle, abort_handle));
                 Ok(())
             }
         }
     }
 
-    async fn poll_tcp_socket(&mut self, task: &mut ConnTask) -> io::Result<()> {
-        let socket = self
-            .iface
-            .get_socket::<smoltcp::socket::TcpSocket>(task.handle);
+    pub async fn poll_all_tcp(&mut self) {
+        for mut item in self.tcp_conn.iter_mut() {
+            let socket = self
+                .iface
+                .get_socket::<smoltcp::socket::TcpSocket>(item.handle);
+            #[allow(clippy::collapsible_if)]
+            if socket.state() != TcpState::Closed {
+                if Self::poll_tcp_socket(socket, item.deref_mut(), &mut self.allocator)
+                    .await
+                    .is_err()
+                {
+                    socket.close();
+                    item.abort_handle.cancel().await;
+                }
+            }
+        }
+    }
+
+    async fn poll_tcp_socket<'a>(
+        socket: &mut smoltcp::socket::TcpSocket<'a>,
+        task: &mut ConnTask,
+        allocator: &mut PktBufPool,
+    ) -> io::Result<()> {
         // Send data
         if socket.can_send() {
             if let Some((buf, start)) = task.remain_to_send.take() {
@@ -97,7 +121,7 @@ impl SmolStack {
                     if start + sent < buf.len {
                         task.remain_to_send = Some((buf, sent + start));
                     } else {
-                        self.allocator.release(buf)
+                        allocator.release(buf)
                     }
                 } else {
                     return Err(ErrorKind::ConnectionAborted.into());
@@ -111,7 +135,7 @@ impl SmolStack {
                             if sent < buf.len {
                                 task.remain_to_send = Some((buf, sent));
                             } else {
-                                self.allocator.release(buf);
+                                allocator.release(buf);
                             }
                         } else {
                             return Err(ErrorKind::ConnectionAborted.into());
@@ -125,7 +149,7 @@ impl SmolStack {
 
         // Receive data
         if socket.can_recv() && task.connector.tx.capacity() < task.connector.tx.max_capacity() {
-            let mut buf = self.allocator.obtain().await;
+            let mut buf = allocator.obtain().await;
             if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
                 buf.len = size;
                 // must not fail because there is only 1 sender
