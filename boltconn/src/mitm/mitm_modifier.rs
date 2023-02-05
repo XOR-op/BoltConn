@@ -45,7 +45,7 @@ impl Modifier for MitmModifier {
         let mut req_copy = DumpedRequest {
             uri: parts.uri.clone(),
             method: parts.method.clone(),
-            version: parts.version.clone(),
+            version: parts.version,
             headers: parts.headers.clone(),
             body: whole_body.clone(),
             time: Instant::now(),
@@ -68,45 +68,51 @@ impl Modifier for MitmModifier {
             Version::HTTP_2 => Some(parts.uri.to_string()),
             _ => None,
         };
-        if url.is_none() {
-            self.pending.insert(ctx.tag, req_copy);
-            Ok((Request::from_parts(parts, Body::from(whole_body)), None))
-        } else {
-            let url = url.unwrap();
-            if let Ok(uri) = http::Uri::from_str(url.as_str()) {
-                req_copy.uri = uri;
-            }
-            if let Some((mod_type, new_url)) = self.url_rewriter.try_rewrite(url.as_str()).await {
-                // no real connection
-                let resp = match mod_type {
-                    UrlModType::R404 => generate_404(&parts),
-                    UrlModType::R301 | UrlModType::R302 | UrlModType::R307 | UrlModType::R308 => {
-                        generate_redirect(&parts, mod_type, new_url.unwrap().as_str())
-                    }
-                };
-                // record request and fake resp
-                let (resp_parts, body) = resp.into_parts();
-                let resp_body = hyper::body::to_bytes(body).await?;
-                let resp_copy = DumpedResponse {
-                    status: resp_parts.status,
-                    version: resp_parts.version,
-                    headers: resp_parts.headers.clone(),
-                    body: resp_body.clone(),
-                    time: Instant::now(),
-                };
-                let host = match &ctx.conn_info.read().await.dest {
-                    NetworkAddr::Raw(addr) => addr.ip().to_string(),
-                    NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
-                };
-                self.contents
-                    .push((req_copy, resp_copy), host, self.client.clone());
-                Ok((
-                    Request::from_parts(parts, Body::from(whole_body)),
-                    Some(Response::from_parts(resp_parts, Body::from(resp_body))),
-                ))
-            } else {
+        match url {
+            None => {
                 self.pending.insert(ctx.tag, req_copy);
                 Ok((Request::from_parts(parts, Body::from(whole_body)), None))
+            }
+            Some(url) => {
+                if let Ok(uri) = http::Uri::from_str(url.as_str()) {
+                    req_copy.uri = uri;
+                }
+                if let Some((mod_type, new_url)) = self.url_rewriter.try_rewrite(url.as_str()).await
+                {
+                    // no real connection
+                    let resp = match mod_type {
+                        UrlModType::R404 => generate_404(&parts),
+                        UrlModType::R301
+                        | UrlModType::R302
+                        | UrlModType::R307
+                        | UrlModType::R308 => {
+                            generate_redirect(&parts, mod_type, new_url.unwrap().as_str())
+                        }
+                    };
+                    // record request and fake resp
+                    let (resp_parts, body) = resp.into_parts();
+                    let resp_body = hyper::body::to_bytes(body).await?;
+                    let resp_copy = DumpedResponse {
+                        status: resp_parts.status,
+                        version: resp_parts.version,
+                        headers: resp_parts.headers.clone(),
+                        body: resp_body.clone(),
+                        time: Instant::now(),
+                    };
+                    let host = match &ctx.conn_info.read().await.dest {
+                        NetworkAddr::Raw(addr) => addr.ip().to_string(),
+                        NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
+                    };
+                    self.contents
+                        .push((req_copy, resp_copy), host, self.client.clone());
+                    Ok((
+                        Request::from_parts(parts, Body::from(whole_body)),
+                        Some(Response::from_parts(resp_parts, Body::from(resp_body))),
+                    ))
+                } else {
+                    self.pending.insert(ctx.tag, req_copy);
+                    Ok((Request::from_parts(parts, Body::from(whole_body)), None))
+                }
             }
         }
     }
@@ -120,13 +126,17 @@ impl Modifier for MitmModifier {
         let whole_body = hyper::body::to_bytes(body).await?;
         // todo: optimize for large body
         let resp_copy = DumpedResponse {
-            status: parts.status.clone(),
-            version: parts.version.clone(),
+            status: parts.status,
+            version: parts.version,
             headers: parts.headers.clone(),
             body: whole_body.clone(),
             time: Instant::now(),
         };
-        let req = self.pending.remove(&ctx.tag).ok_or(anyhow!("no id"))?.1;
+        let req = self
+            .pending
+            .remove(&ctx.tag)
+            .ok_or_else(|| anyhow!("no id"))?
+            .1;
         let host = match &ctx.conn_info.read().await.dest {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
@@ -141,7 +151,7 @@ fn generate_404(req_parts: &http::request::Parts) -> Response<Body> {
     let resp_builder = http::response::Builder::new();
     resp_builder
         .status(404)
-        .version(req_parts.version.clone())
+        .version(req_parts.version)
         .header(header::CONNECTION, "close")
         .header(header::CONTENT_LENGTH, 0)
         .body(Body::empty())
@@ -163,7 +173,7 @@ fn generate_redirect(
     let resp_builder = http::response::Builder::new();
     resp_builder
         .status(status)
-        .version(req_parts.version.clone())
+        .version(req_parts.version)
         .header(header::CONNECTION, "close")
         .header(header::CONTENT_LENGTH, 0)
         .header(header::LOCATION, target_url)

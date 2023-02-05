@@ -103,7 +103,7 @@ impl Modifier for Recorder {
         let req_copy = DumpedRequest {
             uri: parts.uri.clone(),
             method: parts.method.clone(),
-            version: parts.version.clone(),
+            version: parts.version,
             headers: parts.headers.clone(),
             body: whole_body.clone(),
             time: Instant::now(),
@@ -121,13 +121,17 @@ impl Modifier for Recorder {
         let whole_body = hyper::body::to_bytes(body).await?;
         // todo: optimize for large body
         let resp_copy = DumpedResponse {
-            status: parts.status.clone(),
-            version: parts.version.clone(),
+            status: parts.status,
+            version: parts.version,
             headers: parts.headers.clone(),
             body: whole_body.clone(),
             time: Instant::now(),
         };
-        let req = self.pending.remove(&ctx.tag).ok_or(anyhow!("no id"))?.1;
+        let req = self
+            .pending
+            .remove(&ctx.tag)
+            .ok_or_else(|| anyhow!("no id"))?
+            .1;
         let host = match &ctx.conn_info.read().await.dest {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),

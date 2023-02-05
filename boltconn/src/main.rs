@@ -24,7 +24,7 @@ use proxy::{Nat, SessionManager};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::process::exit;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io};
@@ -174,10 +174,10 @@ fn init_tracing() {
         .init();
 }
 
-fn main() {
+fn main() -> ExitCode {
     if !is_root() {
-        println!("BoltConn must be run with root privilege.");
-        exit(-1);
+        eprintln!("BoltConn must be run with root privilege.");
+        return ExitCode::from(1);
     }
     let args: Args = Args::from_args();
     let (config_path, cert_path) =
@@ -205,14 +205,24 @@ fn main() {
     let udp_manager = Arc::new(UdpOutboundManager::new());
 
     // Read initial config
-    let (config, state, schema) = rt.block_on(load_config(&config_path)).unwrap();
+    let (config, state, schema) = match rt.block_on(load_config(&config_path)) {
+        Ok((config, state, schema)) => (config, state, schema),
+        Err(e) => {
+            eprintln!("Load config from {:?} failed: {}", &config_path, e);
+            return ExitCode::from(1);
+        }
+    };
 
     // initialize resources
     let (dns, dns_ips) = {
         let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice()).unwrap();
-        let group = rt
-            .block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap)))
-            .unwrap();
+        let group = match rt.block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap))) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("Parse dns config failed: {}", e);
+                return ExitCode::from(1);
+            }
+        };
         let dns_ips = if config.dns.force_direct_dns {
             Some(extract_address(&group))
         } else {
@@ -254,7 +264,13 @@ fn main() {
     );
 
     let dispatching = {
-        let mut builder = DispatchingBuilder::new_from_config(&config, &state, schema).unwrap();
+        let mut builder = match DispatchingBuilder::new_from_config(&config, &state, schema) {
+            Ok(builder) => builder,
+            Err(e) => {
+                eprintln!("Parse routing rules failed: {}", e);
+                return ExitCode::from(1);
+            }
+        };
         if let Some(list) = dns_ips {
             builder.direct_prioritize(list);
         }
@@ -279,10 +295,28 @@ fn main() {
 
     let dispatcher = {
         // tls mitm
-        let (cert, priv_key) = load_cert_and_key(&cert_path).unwrap();
+        let (cert, priv_key) = match load_cert_and_key(&cert_path) {
+            Ok((cert, priv_key)) => (cert, priv_key),
+            Err(e) => {
+                eprintln!("Load certs from path {:?} failed: {}", cert_path, e);
+                return ExitCode::from(1);
+            }
+        };
         let url_modifier = if let Some(rewrite_cfg) = &config.rewrite {
-            let (url_mod, _hdr_mod) = mapping_rewrite(rewrite_cfg.as_slice()).unwrap();
-            Arc::new(UrlModManager::new(url_mod.as_slice()).unwrap())
+            let (url_mod, _hdr_mod) = match mapping_rewrite(rewrite_cfg.as_slice()) {
+                Ok((url_mod, hdr_mod)) => (url_mod, hdr_mod),
+                Err(e) => {
+                    eprintln!("Parse url modifier rules, syntax failed: {}", e);
+                    return ExitCode::from(1);
+                }
+            };
+            Arc::new(match UrlModManager::new(url_mod.as_slice()) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("Parse url modifier rules, invalid regexes: {}", e);
+                    return ExitCode::from(1);
+                }
+            })
         } else {
             Arc::new(UrlModManager::empty())
         };
@@ -342,7 +376,7 @@ fn main() {
                                 tracing::warn!("Reloading config failed: {}",err);
                             }
                         }
-                    }else {
+                    } else {
                         return;
                     }
                 }
@@ -352,6 +386,7 @@ fn main() {
     tracing::info!("Exiting...");
     drop(_dns_guard);
     rt.shutdown_background();
+    ExitCode::from(0)
 }
 
 async fn reload(

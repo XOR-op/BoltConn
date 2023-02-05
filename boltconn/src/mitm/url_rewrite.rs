@@ -1,7 +1,7 @@
 use regex::{Regex, RegexSet};
 use std::str::FromStr;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum UrlModType {
     R301,
     R302,
@@ -38,12 +38,10 @@ impl UrlModRule {
         let replaced_url = replaced_url.unwrap();
         // test num ref validity
         for caps in pattern.captures_iter(replaced_url) {
-            for m in caps.iter() {
-                if let Some(idx) = m {
-                    match get_id(idx.as_str()) {
-                        Ok(idx) if idx < regex.captures_len() as u8 => {}
-                        _ => return None,
-                    }
+            for idx in caps.iter().flatten() {
+                match get_id(idx.as_str()) {
+                    Ok(idx) if idx < regex.captures_len() as u8 => {}
+                    _ => return None,
                 }
             }
         }
@@ -156,6 +154,7 @@ fn parse_rules(cfg: &[String]) -> Result<(Vec<UrlModRule>, Vec<String>), String>
             return Err(line.clone());
         }
         // check rule
+        #[allow(clippy::get_first)]
         if *list.get(0).unwrap() != "url" {
             return Err(line.clone());
         }
