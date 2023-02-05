@@ -43,6 +43,7 @@ impl Endpoint {
             config.ip_addr,
             device,
             allocator,
+            Duration::from_secs(120),
         )));
 
         let last_active = Arc::new(Mutex::new(Instant::now()));
@@ -92,8 +93,12 @@ impl Endpoint {
             let smol_stack = smol_stack.clone();
             tokio::spawn(async move {
                 loop {
+                    // todo: make loop not busy
                     let mut stack_handle = smol_stack.lock().await;
                     stack_handle.poll_all_tcp().await;
+                    stack_handle.poll_all_udp().await;
+                    stack_handle.purge_closed_tcp();
+                    stack_handle.purge_timeout_udp();
                 }
             })
         };
@@ -196,12 +201,23 @@ impl WireguardHandle {
     }
 
     async fn attach_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
+        // todo: remote dns
         let dst = get_dst(&self.dns, &self.dst).await?;
         self.endpoint
             .stack
             .lock()
             .await
             .open_tcp(self.src_port, dst, inbound, abort_handle)
+    }
+
+    async fn attach_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
+        // todo: remote dns
+        let dst = get_dst(&self.dns, &self.dst).await?;
+        self.endpoint
+            .stack
+            .lock()
+            .await
+            .open_udp(self.src_port, dst, inbound, abort_handle)
     }
 }
 
@@ -232,14 +248,18 @@ impl UdpOutBound for WireguardHandle {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<std::io::Result<()>> {
-        todo!()
+        tokio::spawn(self.clone().attach_udp(inbound, abort_handle))
     }
 
     fn spawn_udp_with_chan(
         &self,
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<std::io::Result<()>>) {
-        todo!()
+        let (inner, outer) = Connector::new_pair(10);
+        (
+            DuplexChan::new(self.allocator.clone(), inner),
+            tokio::spawn(self.clone().attach_udp(outer, abort_handle)),
+        )
     }
 }
 

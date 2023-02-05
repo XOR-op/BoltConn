@@ -123,6 +123,9 @@ impl ConnAbortHandle {
 
     pub async fn fulfill(&self, handles: Vec<JoinHandle<()>>) {
         let mut got = self.0.write().await;
+        if got.state != CancelState::NotReady {
+            tracing::warn!("Fulfill a cancel handle twice");
+        }
         got.handles = handles;
         got.state = CancelState::Ready;
     }

@@ -27,6 +27,7 @@ pub use nat_adapter::*;
 pub use socks5::*;
 pub use trojan::*;
 pub use tun_adapter::*;
+pub use wireguard::*;
 
 pub struct TcpStatus {
     src: SocketAddr,

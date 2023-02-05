@@ -7,26 +7,29 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use smoltcp::iface::{Interface, InterfaceBuilder, SocketHandle};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
-use smoltcp::socket::TcpSocket as SmolTcpSocket;
+use smoltcp::socket::{
+    TcpSocket as SmolTcpSocket, UdpPacketMetadata, UdpSocket as SmolUdpSocket, UdpSocketBuffer,
+};
 use smoltcp::socket::{TcpSocketBuffer, TcpState};
-use smoltcp::time::Instant;
-use smoltcp::wire::IpCidr;
+use smoltcp::time::Instant as SmolInstant;
+use smoltcp::wire::{IpCidr, IpEndpoint};
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::DerefMut;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
-struct ConnTask {
+struct TcpConnTask {
     connector: Connector,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     remain_to_send: Option<(PktBufHandle, usize)>, // buffer, start_offset
 }
 
-impl ConnTask {
+impl TcpConnTask {
     pub fn new(connector: Connector, handle: SocketHandle, abort_handle: ConnAbortHandle) -> Self {
         Self {
             connector,
@@ -37,18 +40,49 @@ impl ConnTask {
     }
 }
 
+struct UdpConnTask {
+    connector: Connector,
+    handle: SocketHandle,
+    abort_handle: ConnAbortHandle,
+    dest: IpEndpoint,
+    last_active: Instant,
+}
+
+impl UdpConnTask {
+    pub fn new(
+        connector: Connector,
+        dest: IpEndpoint,
+        handle: SocketHandle,
+        abort_handle: ConnAbortHandle,
+    ) -> Self {
+        Self {
+            connector,
+            handle,
+            abort_handle,
+            dest,
+            last_active: Instant::now(),
+        }
+    }
+}
+
 //          Program -- TCP/UDP -> SmolStack -> IP -- Internet
 //                   \ TCP/UDP <- SmolStack <- IP /
 pub struct SmolStack {
-    tcp_conn: DashMap<u16, ConnTask>,
-    udp_conn: DashMap<u16, ConnTask>,
+    tcp_conn: DashMap<u16, TcpConnTask>,
+    udp_conn: DashMap<u16, UdpConnTask>,
     allocator: PktBufPool,
     ip_addr: IpAddr,
     iface: Interface<'static, VirtualIpDevice>,
+    udp_timeout: Duration,
 }
 
 impl SmolStack {
-    pub fn new(iface_ip: IpAddr, ip_device: VirtualIpDevice, allocator: PktBufPool) -> Self {
+    pub fn new(
+        iface_ip: IpAddr,
+        ip_device: VirtualIpDevice,
+        allocator: PktBufPool,
+        udp_timeout: Duration,
+    ) -> Self {
         let iface = InterfaceBuilder::new(ip_device, vec![])
             .ip_addrs(vec![IpCidr::new(iface_ip.into(), 32)])
             .finalize();
@@ -58,6 +92,7 @@ impl SmolStack {
             allocator,
             ip_addr: iface_ip,
             iface,
+            udp_timeout,
         }
     }
 
@@ -84,7 +119,45 @@ impl SmolStack {
                     .connect(ctx, remote_addr, SocketAddr::new(self.ip_addr, local_port))
                     .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
 
-                e.insert(ConnTask::new(connector, handle, abort_handle));
+                e.insert(TcpConnTask::new(connector, handle, abort_handle));
+                Ok(())
+            }
+        }
+    }
+
+    pub fn open_udp(
+        &mut self,
+        local_port: u16,
+        remote_addr: SocketAddr,
+        connector: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> io::Result<()> {
+        match self.udp_conn.entry(local_port) {
+            Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
+            Entry::Vacant(e) => {
+                let remote_addr = IpEndpoint::from(remote_addr);
+                // create socket resource
+                let tx_buf = UdpSocketBuffer::new(
+                    vec![UdpPacketMetadata::EMPTY; 16],
+                    vec![0u8; MAX_PKT_SIZE],
+                );
+                let rx_buf = UdpSocketBuffer::new(
+                    vec![UdpPacketMetadata::EMPTY; 16],
+                    vec![0u8; MAX_PKT_SIZE],
+                );
+                let mut client_socket = SmolUdpSocket::new(rx_buf, tx_buf);
+
+                client_socket
+                    .bind(remote_addr)
+                    .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
+                let handle = self.iface.add_socket(client_socket);
+
+                e.insert(UdpConnTask::new(
+                    connector,
+                    remote_addr,
+                    handle,
+                    abort_handle,
+                ));
                 Ok(())
             }
         }
@@ -92,9 +165,7 @@ impl SmolStack {
 
     pub async fn poll_all_tcp(&mut self) {
         for mut item in self.tcp_conn.iter_mut() {
-            let socket = self
-                .iface
-                .get_socket::<smoltcp::socket::TcpSocket>(item.handle);
+            let socket = self.iface.get_socket::<SmolTcpSocket>(item.handle);
             #[allow(clippy::collapsible_if)]
             if socket.state() != TcpState::Closed {
                 if Self::poll_tcp_socket(socket, item.deref_mut(), &mut self.allocator)
@@ -109,8 +180,8 @@ impl SmolStack {
     }
 
     async fn poll_tcp_socket<'a>(
-        socket: &mut smoltcp::socket::TcpSocket<'a>,
-        task: &mut ConnTask,
+        socket: &mut SmolTcpSocket<'a>,
+        task: &mut TcpConnTask,
         allocator: &mut PktBufPool,
     ) -> io::Result<()> {
         // Send data
@@ -159,13 +230,81 @@ impl SmolStack {
         Ok(())
     }
 
-    fn purge_closed_tcp(&mut self) {
+    pub async fn poll_all_udp(&mut self) {
+        for mut item in self.udp_conn.iter_mut() {
+            let socket = self.iface.get_socket::<SmolUdpSocket>(item.handle);
+            #[allow(clippy::collapsible_if)]
+            if socket.is_open() {
+                if Self::poll_udp_socket(socket, item.deref_mut(), &mut self.allocator)
+                    .await
+                    .is_err()
+                {
+                    socket.close();
+                    item.abort_handle.cancel().await;
+                }
+            }
+        }
+    }
+
+    async fn poll_udp_socket<'a>(
+        socket: &mut SmolUdpSocket<'a>,
+        task: &mut UdpConnTask,
+        allocator: &mut PktBufPool,
+    ) -> io::Result<()> {
+        // Send data
+        if socket.can_send() {
+            // fetch new data
+            match task.connector.rx.try_recv() {
+                Ok(buf) => {
+                    if socket.send_slice(buf.as_ready(), task.dest).is_ok() {
+                        allocator.release(buf);
+                        task.last_active = Instant::now();
+                    } else {
+                        return Err(ErrorKind::ConnectionAborted.into());
+                    }
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(_) => return Err(ErrorKind::ConnectionAborted.into()),
+            }
+        }
+
+        // Receive data
+        if socket.can_recv() && task.connector.tx.capacity() < task.connector.tx.max_capacity() {
+            let mut buf = allocator.obtain().await;
+            if let Ok((size, ep)) = socket.recv_slice(buf.as_uninited()) {
+                if ep == task.dest {
+                    buf.len = size;
+                    task.last_active = Instant::now();
+                    // must not fail because there is only 1 sender
+                    let _ = task.connector.tx.send(buf).await;
+                }
+                // discard mismatched packet
+            }
+        }
+        Ok(())
+    }
+
+    pub fn purge_closed_tcp(&mut self) {
         self.tcp_conn.retain(|_port, task| {
-            let socket = self
-                .iface
-                .get_socket::<smoltcp::socket::TcpSocket>(task.handle);
+            let socket = self.iface.get_socket::<SmolTcpSocket>(task.handle);
             if socket.state() == TcpState::Closed {
                 self.iface.remove_socket(task.handle);
+                // Here we only abort normally closed sockets. Maybe unnecessary?
+                let c = task.abort_handle.clone();
+                tokio::spawn(async move { c.cancel().await });
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    pub fn purge_timeout_udp(&mut self) {
+        self.udp_conn.retain(|_port, task| {
+            if task.last_active.elapsed() > self.udp_timeout {
+                self.iface.remove_socket(task.handle);
+                let c = task.abort_handle.clone();
+                tokio::spawn(async move { c.cancel().await });
                 false
             } else {
                 true
@@ -245,7 +384,7 @@ pub struct VirtualRxToken {
 }
 
 impl RxToken for VirtualRxToken {
-    fn consume<R, F>(mut self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(mut self, _timestamp: SmolInstant, f: F) -> smoltcp::Result<R>
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
@@ -258,7 +397,7 @@ pub struct VirtualTxToken {
 }
 
 impl TxToken for VirtualTxToken {
-    fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, _timestamp: SmolInstant, len: usize, f: F) -> smoltcp::Result<R>
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {

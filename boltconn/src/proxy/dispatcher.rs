@@ -1,6 +1,6 @@
 use crate::adapter::{
     Connector, DirectOutbound, NatAdapter, OutboundType, SSOutbound, Socks5Outbound, TcpOutBound,
-    TrojanOutbound, TunAdapter, UdpOutBound,
+    TrojanOutbound, TunAdapter, UdpOutBound, WireguardHandle, WireguardManager,
 };
 use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
@@ -15,6 +15,7 @@ use crate::PktBufPool;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 use tokio_rustls::rustls::{Certificate, PrivateKey};
@@ -29,6 +30,7 @@ pub struct Dispatcher {
     priv_key: PrivateKey,
     modifier: RwLock<ModifierClosure>,
     mitm_hosts: RwLock<HostMatcher>,
+    wireguard_mgr: WireguardManager,
 }
 
 impl Dispatcher {
@@ -44,6 +46,12 @@ impl Dispatcher {
         modifier: ModifierClosure,
         mitm_hosts: HostMatcher,
     ) -> Self {
+        let wg_mgr = WireguardManager::new(
+            iface_name,
+            dns.clone(),
+            allocator.clone(),
+            Duration::from_secs(300),
+        );
         Self {
             iface_name: iface_name.into(),
             allocator,
@@ -54,6 +62,7 @@ impl Dispatcher {
             priv_key,
             modifier: RwLock::new(modifier),
             mitm_hosts: RwLock::new(mitm_hosts),
+            wireguard_mgr: wg_mgr,
         }
     }
 
@@ -85,60 +94,68 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) = match self
-            .dispatching
-            .read()
-            .unwrap()
-            .matches(&conn_info)
-            .as_ref()
-        {
-            ProxyImpl::Direct => (
-                Box::new(DirectOutbound::new(
-                    &self.iface_name,
-                    dst_addr.clone(),
-                    self.allocator.clone(),
-                    self.dns.clone(),
-                )),
-                OutboundType::Direct,
-            ),
-            ProxyImpl::Reject => {
-                indicator.store(0, Ordering::Relaxed);
-                return;
-            }
-            ProxyImpl::Socks5(cfg) => (
-                Box::new(Socks5Outbound::new(
-                    &self.iface_name,
-                    dst_addr.clone(),
-                    self.allocator.clone(),
-                    self.dns.clone(),
-                    cfg.clone(),
-                )),
-                OutboundType::Socks5,
-            ),
-            ProxyImpl::Shadowsocks(cfg) => (
-                Box::new(SSOutbound::new(
-                    &self.iface_name,
-                    dst_addr.clone(),
-                    self.allocator.clone(),
-                    self.dns.clone(),
-                    cfg.clone(),
-                )),
-                OutboundType::Shadowsocks,
-            ),
-            ProxyImpl::Trojan(cfg) => (
-                Box::new(TrojanOutbound::new(
-                    &self.iface_name,
-                    dst_addr.clone(),
-                    self.allocator.clone(),
-                    self.dns.clone(),
-                    cfg.clone(),
-                )),
-                OutboundType::Trojan,
-            ),
-            ProxyImpl::Wireguard(cfg) => {
-                todo!()
-            }
-        };
+        let proxy_config = self.dispatching.read().unwrap().matches(&conn_info).clone();
+        let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
+            match proxy_config.as_ref() {
+                ProxyImpl::Direct => (
+                    Box::new(DirectOutbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                    )),
+                    OutboundType::Direct,
+                ),
+                ProxyImpl::Reject => {
+                    indicator.store(0, Ordering::Relaxed);
+                    return;
+                }
+                ProxyImpl::Socks5(cfg) => (
+                    Box::new(Socks5Outbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                        cfg.clone(),
+                    )),
+                    OutboundType::Socks5,
+                ),
+                ProxyImpl::Shadowsocks(cfg) => (
+                    Box::new(SSOutbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                        cfg.clone(),
+                    )),
+                    OutboundType::Shadowsocks,
+                ),
+                ProxyImpl::Trojan(cfg) => (
+                    Box::new(TrojanOutbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                        cfg.clone(),
+                    )),
+                    OutboundType::Trojan,
+                ),
+                ProxyImpl::Wireguard(cfg) => {
+                    let Ok(outbound) = self.wireguard_mgr.get_wg_conn(cfg).await else{
+                        return;
+                    };
+                    (
+                        Box::new(WireguardHandle::new(
+                            src_addr.port(),
+                            dst_addr.clone(),
+                            outbound,
+                            self.dns.clone(),
+                            self.allocator.clone(),
+                        )),
+                        OutboundType::Wireguard,
+                    )
+                }
+            };
 
         // conn info
         let abort_handle = ConnAbortHandle::new();
@@ -266,60 +283,68 @@ impl Dispatcher {
             connection_type: NetworkType::UDP,
             process_info: process_info.clone(),
         };
-        let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) = match self
-            .dispatching
-            .read()
-            .unwrap()
-            .matches(&conn_info)
-            .as_ref()
-        {
-            ProxyImpl::Direct => (
-                Box::new(DirectOutbound::new(
-                    &self.iface_name,
-                    dst_addr.clone(),
-                    self.allocator.clone(),
-                    self.dns.clone(),
-                )),
-                OutboundType::Direct,
-            ),
-            ProxyImpl::Reject => {
-                indicator.store(false, Ordering::Relaxed);
-                return;
-            }
-            ProxyImpl::Socks5(cfg) => (
-                Box::new(Socks5Outbound::new(
-                    &self.iface_name,
-                    dst_addr.clone(),
-                    self.allocator.clone(),
-                    self.dns.clone(),
-                    cfg.clone(),
-                )),
-                OutboundType::Socks5,
-            ),
-            ProxyImpl::Shadowsocks(cfg) => (
-                Box::new(SSOutbound::new(
-                    &self.iface_name,
-                    dst_addr.clone(),
-                    self.allocator.clone(),
-                    self.dns.clone(),
-                    cfg.clone(),
-                )),
-                OutboundType::Shadowsocks,
-            ),
-            ProxyImpl::Trojan(cfg) => (
-                Box::new(TrojanOutbound::new(
-                    &self.iface_name,
-                    dst_addr.clone(),
-                    self.allocator.clone(),
-                    self.dns.clone(),
-                    cfg.clone(),
-                )),
-                OutboundType::Trojan,
-            ),
-            ProxyImpl::Wireguard(cfg) => {
-                todo!()
-            }
-        };
+        let proxy_config = self.dispatching.read().unwrap().matches(&conn_info).clone();
+        let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) =
+            match proxy_config.as_ref() {
+                ProxyImpl::Direct => (
+                    Box::new(DirectOutbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                    )),
+                    OutboundType::Direct,
+                ),
+                ProxyImpl::Reject => {
+                    indicator.store(false, Ordering::Relaxed);
+                    return;
+                }
+                ProxyImpl::Socks5(cfg) => (
+                    Box::new(Socks5Outbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                        cfg.clone(),
+                    )),
+                    OutboundType::Socks5,
+                ),
+                ProxyImpl::Shadowsocks(cfg) => (
+                    Box::new(SSOutbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                        cfg.clone(),
+                    )),
+                    OutboundType::Shadowsocks,
+                ),
+                ProxyImpl::Trojan(cfg) => (
+                    Box::new(TrojanOutbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                        cfg.clone(),
+                    )),
+                    OutboundType::Trojan,
+                ),
+                ProxyImpl::Wireguard(cfg) => {
+                    let Ok(outbound) = self.wireguard_mgr.get_wg_conn(cfg).await else{
+                        return;
+                    };
+                    (
+                        Box::new(WireguardHandle::new(
+                            src_addr.port(),
+                            dst_addr.clone(),
+                            outbound,
+                            self.dns.clone(),
+                            self.allocator.clone(),
+                        )),
+                        OutboundType::Wireguard,
+                    )
+                }
+            };
 
         // conn info
         let abort_handle = ConnAbortHandle::new();
