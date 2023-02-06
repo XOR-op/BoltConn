@@ -11,7 +11,6 @@ pub fn generate_cert<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     distinguished_name.push(DnType::CommonName, "*");
     distinguished_name.push(DnType::OrganizationName, "BoltConn-MITM");
     distinguished_name.push(DnType::CountryName, "US");
-    distinguished_name.push(DnType::LocalityName, "US");
 
     let mut params = CertificateParams::default();
     params.distinguished_name = distinguished_name;
@@ -26,6 +25,7 @@ pub fn generate_cert<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     let cert = Certificate::from_params(params)?;
     let cert_crt = cert.serialize_pem().unwrap();
     let private_key = cert.serialize_private_key_pem();
+    // todo: chown root && chmod 600
     fs::write(path.as_ref().join("crt.pem"), cert_crt)?;
     fs::write(path.as_ref().join("key.pem"), private_key)?;
     println!("Successfully generated certificate and private key.");
