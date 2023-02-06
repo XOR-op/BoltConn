@@ -3,7 +3,9 @@ mod clean;
 mod request;
 
 use crate::request::Requester;
+use anyhow::anyhow;
 use is_root::is_root;
+use std::path::PathBuf;
 use std::process::exit;
 use structopt::StructOpt;
 
@@ -48,8 +50,8 @@ enum DebugOptions {
 
 #[derive(Debug, StructOpt)]
 struct CertOptions {
-    #[structopt(short, long, default_value = "./_private/ca")]
-    path: String,
+    #[structopt(short, long)]
+    path: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -104,7 +106,28 @@ async fn main() {
         SubCommand::Debug(opt) => match opt {
             DebugOptions::Session => requestor.get_sessions().await,
         },
-        SubCommand::Cert(opt) => cert::generate_cert(opt.path),
+        SubCommand::Cert(opt) => {
+            fn fetch_path() -> anyhow::Result<String> {
+                let p = PathBuf::from(std::env::var("HOME")?)
+                    .join(".config")
+                    .join("boltconn");
+                if !p.exists() {
+                    Err(anyhow!("${{HOME}}/.config/boltconn does not exist"))?;
+                }
+                let p = p.join("cert");
+                if !p.exists() {
+                    std::fs::create_dir(p.clone())?;
+                }
+                Ok(p.to_string_lossy().to_string())
+            }
+            match match opt.path {
+                None => fetch_path(),
+                Some(p) => Ok(p),
+            } {
+                Ok(path) => cert::generate_cert(path),
+                Err(e) => Err(e),
+            }
+        }
         SubCommand::Mitm(opt) => match opt {
             MitmOptions::List => requestor.get_mitm(None).await,
             MitmOptions::Range { start, end } => requestor.get_mitm(Some((start, end))).await,
