@@ -1,0 +1,53 @@
+# Unable to reload
+interface: auto
+api-port: 18086
+
+# Able to reload
+dns:
+  force-direct-dns: true
+  bootstrap:
+    - 127.0.0.1:8853
+  nameserver:
+    - udp, 127.0.0.1:8853
+proxy-local:
+  socks_p:
+    proto: socks5
+    server: socks.test
+    port: 9876
+  ss_p:
+    proto: ss
+    server: shadowsocks.test
+    port: 8388
+    password: passwd
+    cipher: aes-256-gcm
+  trojan_p:
+    proto: trojan
+    server: trojan.test
+    port: 8443
+    password: passwd
+    sni: trojan.test
+#  wg_p:
+#    proto: wireguard
+
+proxy-group:
+  Socks:
+    - socks_p
+
+rule-provider:
+  SOCKS:
+    type: file
+    path: ./Rules/socks.yml
+  APPLE:
+    type: file
+    path: ./Rules/Apple
+
+rule-local:
+  - DOMAIN-SUFFIX, direct.test, DIRECT
+  - DOMAIN, shadowsocks.test, ss_p
+  - DOMAIN-SUFFIX, trojan.test, trojan_p
+#  - DOMAIN, wireguard.test, wg_p
+  - RULE-SET, SOCKS, Socks
+
+mitm-host:
+  - direct.test
+  - socks.test
