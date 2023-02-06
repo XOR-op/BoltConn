@@ -21,16 +21,16 @@ use network::{
 use platform::get_default_route;
 use proxy::Dispatcher;
 use proxy::{Nat, SessionManager};
+use rcgen::{Certificate, CertificateParams, KeyPair};
 use std::collections::HashMap;
+use std::fs;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{fs, io};
 use structopt::StructOpt;
 use tokio::select;
-use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tracing::{event, Level};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
@@ -93,14 +93,13 @@ fn parse_config_path(
     Ok((config_path, cert_path))
 }
 
-fn load_cert_and_key(cert_path: &Path) -> io::Result<(Vec<Certificate>, PrivateKey)> {
-    let cert_raw = fs::read(cert_path.join("crt.pem"))?;
-    let mut cert_bytes = cert_raw.as_slice();
-    let key_raw = fs::read(cert_path.join("key.pem"))?;
-    let mut key_bytes = key_raw.as_slice();
-    let cert = Certificate(rustls_pemfile::certs(&mut cert_bytes)?.remove(0));
-    let key = PrivateKey(rustls_pemfile::pkcs8_private_keys(&mut key_bytes)?.remove(0));
-    Ok((vec![cert], key))
+fn load_cert_and_key(cert_path: &Path) -> anyhow::Result<Certificate> {
+    let cert_str = fs::read_to_string(cert_path.join("crt.pem"))?;
+    let key_str = fs::read_to_string(cert_path.join("key.pem"))?;
+    let key_pair = KeyPair::from_pem(key_str.as_str())?;
+    let params = CertificateParams::from_ca_cert_pem(cert_str.as_str(), key_pair)?;
+    let cert = Certificate::from_params(params)?;
+    Ok(cert)
 }
 
 fn state_path(config_path: &Path) -> PathBuf {
@@ -295,8 +294,8 @@ fn main() -> ExitCode {
 
     let dispatcher = {
         // tls mitm
-        let (cert, priv_key) = match load_cert_and_key(&cert_path) {
-            Ok((cert, priv_key)) => (cert, priv_key),
+        let cert = match load_cert_and_key(&cert_path) {
+            Ok(cert) => cert,
             Err(e) => {
                 eprintln!("Load certs from path {:?} failed: {}", cert_path, e);
                 return ExitCode::from(1);
@@ -327,7 +326,6 @@ fn main() -> ExitCode {
             stat_center,
             dispatching,
             cert,
-            priv_key,
             Box::new(move |pi| {
                 Arc::new(MitmModifier::new(
                     hcap_copy.clone(),

@@ -2,12 +2,13 @@ use crate::adapter::TcpOutBound;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::mitm::modifier::Modifier;
-use crate::mitm::ModifierContext;
+use crate::mitm::{sign_site_cert, ModifierContext};
 use crate::proxy::{ConnAbortHandle, ConnAgent};
 use hyper::client::conn;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
+use rcgen::Certificate as CaCertificate;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -29,15 +30,15 @@ pub struct HttpsMitm {
 
 impl HttpsMitm {
     pub fn new(
-        cert: Vec<Certificate>,
-        priv_key: PrivateKey,
+        ca_cert: &CaCertificate,
         server_name: String,
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn TcpOutBound>,
         conn_info: Arc<RwLock<ConnAgent>>,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        let (cert, priv_key) = sign_site_cert(server_name.as_str(), ca_cert)?;
+        Ok(Self {
             cert,
             priv_key,
             server_name,
@@ -45,7 +46,7 @@ impl HttpsMitm {
             modifier,
             creator: Arc::from(creator),
             conn_info,
-        }
+        })
     }
 
     async fn proxy(

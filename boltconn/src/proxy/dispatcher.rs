@@ -12,13 +12,13 @@ use crate::platform::process;
 use crate::platform::process::NetworkType;
 use crate::proxy::{AgentCenter, ConnAbortHandle, ConnAgent, NetworkAddr, SessionManager};
 use crate::PktBufPool;
+use rcgen::Certificate;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
-use tokio_rustls::rustls::{Certificate, PrivateKey};
 
 pub struct Dispatcher {
     iface_name: String,
@@ -26,8 +26,7 @@ pub struct Dispatcher {
     dns: Arc<Dns>,
     stat_center: Arc<AgentCenter>,
     dispatching: RwLock<Arc<Dispatching>>,
-    certificate: Vec<Certificate>,
-    priv_key: PrivateKey,
+    ca_certificate: Certificate,
     modifier: RwLock<ModifierClosure>,
     mitm_hosts: RwLock<HostMatcher>,
     wireguard_mgr: WireguardManager,
@@ -41,8 +40,7 @@ impl Dispatcher {
         dns: Arc<Dns>,
         stat_center: Arc<AgentCenter>,
         dispatching: Arc<Dispatching>,
-        certificate: Vec<Certificate>,
-        priv_key: PrivateKey,
+        ca_certificate: Certificate,
         modifier: ModifierClosure,
         mitm_hosts: HostMatcher,
     ) -> Self {
@@ -58,8 +56,7 @@ impl Dispatcher {
             dns,
             stat_center,
             dispatching: RwLock::new(dispatching),
-            certificate,
-            priv_key,
+            ca_certificate,
             modifier: RwLock::new(modifier),
             mitm_hosts: RwLock::new(mitm_hosts),
             wireguard_mgr: wg_mgr,
@@ -225,20 +222,26 @@ impl Dispatcher {
                         tracing::trace!("HTTPS MitM for {}", domain_name);
                         handles.push({
                             let allocator = self.allocator.clone();
-                            let cert = self.certificate.clone();
-                            let key = self.priv_key.clone();
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
+                            let mocker = match HttpsMitm::new(
+                                &self.ca_certificate,
+                                domain_name,
+                                DuplexChan::new(allocator, tun_next),
+                                modifier,
+                                outbounding,
+                                info,
+                            ) {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    tracing::error!(
+                                        "[Dispatcher] sign certificate failed: {}",
+                                        err
+                                    );
+                                    return;
+                                }
+                            };
                             tokio::spawn(async move {
-                                let mocker = HttpsMitm::new(
-                                    cert,
-                                    key,
-                                    domain_name,
-                                    DuplexChan::new(allocator, tun_next),
-                                    modifier,
-                                    outbounding,
-                                    info,
-                                );
                                 if let Err(err) = mocker.run(abort_handle).await {
                                     tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
                                 }

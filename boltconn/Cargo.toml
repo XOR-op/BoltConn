@@ -32,6 +32,7 @@ is-root = "0.1.2"
 libc = "0.2.137"
 libproc = "0.12.0"
 radix_trie = "0.2.1"
+rcgen = { version = "0.10.0", features = ["pem", "x509-parser"] }
 regex = "1.7.0"
 reqwest = "0.11.13"
 rustls-pemfile = "1.0.1"
