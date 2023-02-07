@@ -96,7 +96,7 @@ jobs:
         run: |
           mkdir release
           cp ./target/${{matrix.config.target_triple}}/release/boltconn ./release/
-          cp ./target/${{matrix.config.target_triple}}/release/boltmgr ./release/
+          cp ./target/${{matrix.config.target_triple}}/release/boltadm ./release/
 
       - name: Compress Zip
         if: matrix.config.archive == 'zip'

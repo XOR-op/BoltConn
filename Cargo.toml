@@ -2,7 +2,7 @@
 members = [
     "boltapi",
     "boltconn",
-    "boltmgr"
+    "boltadm"
 ]
 
 [profile.release]

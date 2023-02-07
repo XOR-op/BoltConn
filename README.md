@@ -29,10 +29,10 @@ boltconn
 To generate CA certificate:
 
 ```bash
-boltmgr cert -p <your_desired_path>
+boltadm cert -p <your_desired_path>
 ```
 
-To control a running BoltConn service, use `boltmgr`. And you can use `boltmgr --help` to see more details.
+To control a running BoltConn service, use `boltadm`. And you can use `boltadm --help` to see more details.
 
 ## Documentations
 For architecture, see [design.md](./docs/design.md).

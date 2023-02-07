@@ -10,7 +10,7 @@ use std::process::exit;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "boltmgr", about = "Controller for BoltConn")]
+#[structopt(name = "boltadm", about = "Controller for BoltConn")]
 struct Args {
     /// RESTful API port
     #[structopt(short, long, default_value = "18086")]

@@ -293,6 +293,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "boltadm"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "boltapi",
+ "colored",
+ "ipnet",
+ "is-root",
+ "rcgen",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "structopt",
+ "tabular",
+ "tokio",
+]
+
+[[package]]
 name = "boltapi"
 version = "0.1.0"
 dependencies = [
@@ -355,24 +373,6 @@ dependencies = [
  "trust-dns-resolver",
  "webpki-roots",
  "x25519-dalek",
-]
-
-[[package]]
-name = "boltmgr"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "boltapi",
- "colored",
- "ipnet",
- "is-root",
- "rcgen",
- "reqwest",
- "serde",
- "serde_json",
- "structopt",
- "tabular",
- "tokio",
 ]
 
 [[package]]
