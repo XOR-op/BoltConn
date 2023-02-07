@@ -26,8 +26,13 @@ proxy-local:
     port: 8443
     password: passwd
     sni: trojan.test
-#  wg_p:
-#    proto: wireguard
+  wg_p:
+    proto: wireguard
+    local-addr: 10.33.0.2
+    private-key: "QFz0i5nO5mfZhVnwHMONUzox8uXD3GeneMwSaB1exE0="
+    public-key: "HMPDFTiazShO/yvlpUB03BzkdIWBFyu23p+dzdJdCl0="
+    endpoint: 127.0.0.1:51820
+    mtu: 1280
 
 proxy-group:
   Socks:
@@ -45,7 +50,7 @@ rule-local:
   - DOMAIN-SUFFIX, direct.test, DIRECT
   - DOMAIN, shadowsocks.test, ss_p
   - DOMAIN-SUFFIX, trojan.test, trojan_p
-#  - DOMAIN, wireguard.test, wg_p
+  - DOMAIN, wireguard.test, wg_p
   - RULE-SET, SOCKS, Socks
 
 mitm-host:

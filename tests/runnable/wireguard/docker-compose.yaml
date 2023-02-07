@@ -1,0 +1,28 @@
+# Server key pair:
+# Private: SA2exfIVdzvnxzYWUujxaMjaGpmtaZc7V8KHo+MCf0M=
+# Public:  HMPDFTiazShO/yvlpUB03BzkdIWBFyu23p+dzdJdCl0=
+
+# Client key pair:
+# Private: QFz0i5nO5mfZhVnwHMONUzox8uXD3GeneMwSaB1exE0=
+# Public:  /vMVxvUMfgl1vZZ6H+Q9a/QSX25I4IbkzdE9wAf6wgM=
+
+version: '3.3'
+services:
+  wireguard:
+    image: masipcat/wireguard-go:latest
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      # Folder with 'publickey', 'privatekey' and 'wg0.conf'
+      - ./wireguard:/etc/wireguard
+    environment:
+      - WG_COLOR_MODE=always
+      - LOG_LEVEL=info
+    ports:
+      - "51820:51820/udp"
+    # Uncomment the following line when 'AllowedIPs' is '0.0.0.0/0'
+    # privileged: true
+    restart: always
