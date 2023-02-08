@@ -139,6 +139,7 @@ impl Dispatcher {
                 ),
                 ProxyImpl::Wireguard(cfg) => {
                     let Ok(outbound) = self.wireguard_mgr.get_wg_conn(cfg).await else{
+                        tracing::warn!("Failed to create wireguard connection");
                         return;
                     };
                     (
@@ -334,6 +335,7 @@ impl Dispatcher {
                 ),
                 ProxyImpl::Wireguard(cfg) => {
                     let Ok(outbound) = self.wireguard_mgr.get_wg_conn(cfg).await else{
+                        tracing::warn!("Failed to create wireguard connection");
                         return;
                     };
                     (

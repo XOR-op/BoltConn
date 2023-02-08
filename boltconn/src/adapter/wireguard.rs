@@ -55,6 +55,7 @@ impl Endpoint {
             let timer = last_active.clone();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
+                tracing::debug!("Wireguard started to send");
                 loop {
                     if tunnel
                         .send_outgoing_packet(&mut smol_wg_rx, &mut buf)
@@ -75,6 +76,7 @@ impl Endpoint {
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 let mut wg_buf = [0u8; MAX_PKT_SIZE];
+                tracing::debug!("Wireguard started to receive");
                 loop {
                     if tunnel
                         .receive_incoming_packet(&mut wg_smol_tx, &mut buf, &mut wg_buf)
@@ -92,13 +94,17 @@ impl Endpoint {
         let smol_drive = {
             let smol_stack = smol_stack.clone();
             tokio::spawn(async move {
+                tracing::debug!("smol started");
                 loop {
-                    // todo: make loop not busy
+                    let mut immediate_next_loop = false;
                     let mut stack_handle = smol_stack.lock().await;
-                    stack_handle.poll_all_tcp().await;
-                    stack_handle.poll_all_udp().await;
+                    immediate_next_loop |= stack_handle.poll_all_tcp().await;
+                    immediate_next_loop |= stack_handle.poll_all_udp().await;
                     stack_handle.purge_closed_tcp();
                     stack_handle.purge_timeout_udp();
+                    if !immediate_next_loop {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                 }
             })
         };

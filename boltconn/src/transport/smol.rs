@@ -120,6 +120,7 @@ impl SmolStack {
                     .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
 
                 e.insert(TcpConnTask::new(connector, handle, abort_handle));
+                tracing::debug!("Open tcp at port {local_port} to {remote_addr}");
                 Ok(())
             }
         }
@@ -158,37 +159,48 @@ impl SmolStack {
                     handle,
                     abort_handle,
                 ));
+                tracing::debug!("Open udp at port {local_port} to {remote_addr}");
                 Ok(())
             }
         }
     }
 
-    pub async fn poll_all_tcp(&mut self) {
+    pub async fn poll_all_tcp(&mut self) -> bool {
+        let mut has_activity = false;
         for mut item in self.tcp_conn.iter_mut() {
             let socket = self.iface.get_socket::<SmolTcpSocket>(item.handle);
-            #[allow(clippy::collapsible_if)]
+            tracing::debug!(
+                "POLL tcp {}({}): {:?}",
+                *item.key(),
+                socket.local_endpoint(),
+                socket.state()
+            );
             if socket.state() != TcpState::Closed {
-                if Self::poll_tcp_socket(socket, item.deref_mut(), &mut self.allocator)
-                    .await
-                    .is_err()
-                {
-                    socket.close();
-                    item.abort_handle.cancel().await;
+                match Self::poll_tcp_socket(socket, item.deref_mut(), &mut self.allocator).await {
+                    Ok(v) => has_activity |= v,
+                    Err(_) => {
+                        socket.close();
+                        item.abort_handle.cancel().await;
+                    }
                 }
             }
         }
+        has_activity
     }
 
     async fn poll_tcp_socket<'a>(
         socket: &mut SmolTcpSocket<'a>,
         task: &mut TcpConnTask,
         allocator: &mut PktBufPool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
+        let mut has_activity = false;
         // Send data
         if socket.can_send() {
+            tracing::debug!("CAN SEND!");
             if let Some((buf, start)) = task.remain_to_send.take() {
                 if let Ok(sent) = socket.send_slice(&buf.as_ready()[start..]) {
                     // successfully sent
+                    has_activity = true;
                     if start + sent < buf.len {
                         task.remain_to_send = Some((buf, sent + start));
                     } else {
@@ -203,6 +215,7 @@ impl SmolStack {
                     Ok(buf) => {
                         if let Ok(sent) = socket.send_slice(buf.as_ready()) {
                             // successfully sent
+                            has_activity = true;
                             if sent < buf.len {
                                 task.remain_to_send = Some((buf, sent));
                             } else {
@@ -222,40 +235,44 @@ impl SmolStack {
         if socket.can_recv() && task.connector.tx.capacity() < task.connector.tx.max_capacity() {
             let mut buf = allocator.obtain().await;
             if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
+                has_activity = true;
                 buf.len = size;
                 // must not fail because there is only 1 sender
                 let _ = task.connector.tx.send(buf).await;
             }
         }
-        Ok(())
+        Ok(has_activity)
     }
 
-    pub async fn poll_all_udp(&mut self) {
+    pub async fn poll_all_udp(&mut self) -> bool {
+        let mut has_activity = false;
         for mut item in self.udp_conn.iter_mut() {
             let socket = self.iface.get_socket::<SmolUdpSocket>(item.handle);
-            #[allow(clippy::collapsible_if)]
             if socket.is_open() {
-                if Self::poll_udp_socket(socket, item.deref_mut(), &mut self.allocator)
-                    .await
-                    .is_err()
-                {
-                    socket.close();
-                    item.abort_handle.cancel().await;
+                match Self::poll_udp_socket(socket, item.deref_mut(), &mut self.allocator).await {
+                    Ok(v) => has_activity |= v,
+                    Err(_) => {
+                        socket.close();
+                        item.abort_handle.cancel().await;
+                    }
                 }
             }
         }
+        has_activity
     }
 
     async fn poll_udp_socket<'a>(
         socket: &mut SmolUdpSocket<'a>,
         task: &mut UdpConnTask,
         allocator: &mut PktBufPool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
+        let mut has_activity = false;
         // Send data
         if socket.can_send() {
             // fetch new data
             match task.connector.rx.try_recv() {
                 Ok(buf) => {
+                    has_activity = true;
                     if socket.send_slice(buf.as_ready(), task.dest).is_ok() {
                         allocator.release(buf);
                         task.last_active = Instant::now();
@@ -272,6 +289,7 @@ impl SmolStack {
         if socket.can_recv() && task.connector.tx.capacity() < task.connector.tx.max_capacity() {
             let mut buf = allocator.obtain().await;
             if let Ok((size, ep)) = socket.recv_slice(buf.as_uninited()) {
+                has_activity = true;
                 if ep == task.dest {
                     buf.len = size;
                     task.last_active = Instant::now();
@@ -281,7 +299,7 @@ impl SmolStack {
                 // discard mismatched packet
             }
         }
-        Ok(())
+        Ok(has_activity)
     }
 
     pub fn purge_closed_tcp(&mut self) {
@@ -354,6 +372,7 @@ impl<'a> Device<'a> for VirtualIpDevice {
     type TxToken = VirtualTxToken;
 
     fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+        tracing::debug!("Allocate RxToken");
         match self.packet_queue.pop() {
             Ok(item) => Some((
                 VirtualRxToken { buf: item },
@@ -366,6 +385,7 @@ impl<'a> Device<'a> for VirtualIpDevice {
     }
 
     fn transmit(&'a mut self) -> Option<Self::TxToken> {
+        tracing::debug!("Allocate TxToken");
         Some(VirtualTxToken {
             sender: self.outbound.clone(),
         })
@@ -388,6 +408,7 @@ impl RxToken for VirtualRxToken {
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
+        tracing::trace!("RxToken: Receive");
         f(&mut self.buf)
     }
 }
@@ -402,6 +423,7 @@ impl TxToken for VirtualTxToken {
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
         let mut buf = BytesMut::with_capacity(len);
+        tracing::trace!("TxToken: Transmit {len} size");
         let result = f(&mut buf);
         if result.is_ok() {
             let _ = self.sender.send(buf);

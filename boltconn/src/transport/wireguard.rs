@@ -107,6 +107,7 @@ impl WireguardTunnel {
         wg_buf: &mut [u8; MAX_PKT_SIZE],
     ) -> anyhow::Result<()> {
         let len = self.outbound.recv(buf).await?;
+        tracing::debug!("Receive {len} bytes from Wireguard remote endpoint");
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
         match self.tunnel.decapsulate(None, &buf[..len], wg_buf) {
@@ -134,6 +135,10 @@ impl WireguardTunnel {
             .recv()
             .await
             .ok_or_else(|| io::Error::from(ErrorKind::ConnectionAborted))?;
+        tracing::debug!(
+            "Try to send {} bytes to Wireguard remote endpoint",
+            data.len()
+        );
         match self.tunnel.encapsulate(data.as_ref(), wg_buf) {
             TunnResult::WriteToNetwork(packet) => {
                 if self.outbound.send(packet).await? != packet.len() {
