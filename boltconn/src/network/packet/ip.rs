@@ -24,7 +24,7 @@ impl Display for IPPkt {
                     IpAddr::V4(d.src_addr().into()),
                     IpAddr::V4(d.dst_addr().into()),
                     d.payload().len(),
-                    d.protocol(),
+                    d.next_header(),
                 )
             }
             Self::V6(_) => {
@@ -106,7 +106,7 @@ impl IPPkt {
 
     pub fn protocol(&self) -> IpProtocol {
         match self {
-            IPPkt::V4(_) => Ipv4Packet::new_unchecked(self.packet_data()).protocol(),
+            IPPkt::V4(_) => Ipv4Packet::new_unchecked(self.packet_data()).next_header(),
             IPPkt::V6(_) => Ipv6Packet::new_unchecked(self.packet_data()).next_header(),
         }
     }

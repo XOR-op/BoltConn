@@ -5,12 +5,13 @@ use bytes::BytesMut;
 use concurrent_queue::ConcurrentQueue;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use smoltcp::iface::{Interface, InterfaceBuilder, SocketHandle};
+use smoltcp::iface::{Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::{
-    TcpSocket as SmolTcpSocket, UdpPacketMetadata, UdpSocket as SmolUdpSocket, UdpSocketBuffer,
+    tcp::Socket as SmolTcpSocket, udp::PacketBuffer as UdpSocketBuffer,
+    udp::PacketMetadata as UdpPacketMetadata, udp::Socket as SmolUdpSocket,
 };
-use smoltcp::socket::{TcpSocketBuffer, TcpState};
+use smoltcp::socket::{tcp::SocketBuffer as TcpSocketBuffer, tcp::State as TcpState};
 use smoltcp::time::Instant as SmolInstant;
 use smoltcp::wire::{IpCidr, IpEndpoint};
 use std::io;
@@ -72,26 +73,30 @@ pub struct SmolStack {
     udp_conn: DashMap<u16, UdpConnTask>,
     allocator: PktBufPool,
     ip_addr: IpAddr,
-    iface: Interface<'static, VirtualIpDevice>,
+    iface: Interface,
+    socket_set: SocketSet<'static>,
     udp_timeout: Duration,
 }
 
 impl SmolStack {
     pub fn new(
         iface_ip: IpAddr,
-        ip_device: VirtualIpDevice,
+        mut ip_device: VirtualIpDevice,
         allocator: PktBufPool,
         udp_timeout: Duration,
     ) -> Self {
-        let iface = InterfaceBuilder::new(ip_device, vec![])
-            .ip_addrs(vec![IpCidr::new(iface_ip.into(), 32)])
-            .finalize();
+        let config = smoltcp::iface::Config::default();
+        let mut iface = Interface::new(config, &mut ip_device);
+        iface.update_ip_addrs(|v| {
+            let _ = v.insert(0, IpCidr::new(iface_ip.into(), 32));
+        });
         Self {
             tcp_conn: Default::default(),
             udp_conn: Default::default(),
             allocator,
             ip_addr: iface_ip,
             iface,
+            socket_set: SocketSet::new(vec![]),
             udp_timeout,
         }
     }
@@ -109,16 +114,18 @@ impl SmolStack {
                 // create socket resource
                 let tx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
                 let rx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
-                let client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
-                let handle = self.iface.add_socket(client_socket);
+                let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
 
                 // connect to remote
-                let (client_socket, ctx) =
-                    self.iface.get_socket_and_context::<SmolTcpSocket>(handle);
                 client_socket
-                    .connect(ctx, remote_addr, SocketAddr::new(self.ip_addr, local_port))
+                    .connect(
+                        self.iface.context(),
+                        remote_addr,
+                        SocketAddr::new(self.ip_addr, local_port),
+                    )
                     .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
 
+                let handle = self.socket_set.add(client_socket);
                 e.insert(TcpConnTask::new(connector, handle, abort_handle));
                 tracing::debug!("Open tcp at port {local_port} to {remote_addr}");
                 Ok(())
@@ -151,7 +158,7 @@ impl SmolStack {
                 client_socket
                     .bind(remote_addr)
                     .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
-                let handle = self.iface.add_socket(client_socket);
+                let handle = self.socket_set.add(client_socket);
 
                 e.insert(UdpConnTask::new(
                     connector,
@@ -168,9 +175,9 @@ impl SmolStack {
     pub async fn poll_all_tcp(&mut self) -> bool {
         let mut has_activity = false;
         for mut item in self.tcp_conn.iter_mut() {
-            let socket = self.iface.get_socket::<SmolTcpSocket>(item.handle);
+            let socket = self.socket_set.get_mut::<SmolTcpSocket>(item.handle);
             tracing::debug!(
-                "POLL tcp {}({}): {:?}",
+                "POLL tcp {}({:?}): {:?}",
                 *item.key(),
                 socket.local_endpoint(),
                 socket.state()
@@ -247,7 +254,7 @@ impl SmolStack {
     pub async fn poll_all_udp(&mut self) -> bool {
         let mut has_activity = false;
         for mut item in self.udp_conn.iter_mut() {
-            let socket = self.iface.get_socket::<SmolUdpSocket>(item.handle);
+            let socket = self.socket_set.get_mut::<SmolUdpSocket>(item.handle);
             if socket.is_open() {
                 match Self::poll_udp_socket(socket, item.deref_mut(), &mut self.allocator).await {
                     Ok(v) => has_activity |= v,
@@ -304,9 +311,9 @@ impl SmolStack {
 
     pub fn purge_closed_tcp(&mut self) {
         self.tcp_conn.retain(|_port, task| {
-            let socket = self.iface.get_socket::<SmolTcpSocket>(task.handle);
+            let socket = self.socket_set.get_mut::<SmolTcpSocket>(task.handle);
             if socket.state() == TcpState::Closed {
-                self.iface.remove_socket(task.handle);
+                self.socket_set.remove(task.handle);
                 // Here we only abort normally closed sockets. Maybe unnecessary?
                 let c = task.abort_handle.clone();
                 tokio::spawn(async move { c.cancel().await });
@@ -320,7 +327,7 @@ impl SmolStack {
     pub fn purge_timeout_udp(&mut self) {
         self.udp_conn.retain(|_port, task| {
             if task.last_active.elapsed() > self.udp_timeout {
-                self.iface.remove_socket(task.handle);
+                self.socket_set.remove(task.handle);
                 let c = task.abort_handle.clone();
                 tokio::spawn(async move { c.cancel().await });
                 false
@@ -367,11 +374,14 @@ impl VirtualIpDevice {
     }
 }
 
-impl<'a> Device<'a> for VirtualIpDevice {
-    type RxToken = VirtualRxToken;
-    type TxToken = VirtualTxToken;
+impl Device for VirtualIpDevice {
+    type RxToken<'a> = VirtualRxToken;
+    type TxToken<'a> = VirtualTxToken;
 
-    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+    fn receive(
+        &mut self,
+        _timestamp: SmolInstant,
+    ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         tracing::debug!("Allocate RxToken");
         match self.packet_queue.pop() {
             Ok(item) => Some((
@@ -384,7 +394,7 @@ impl<'a> Device<'a> for VirtualIpDevice {
         }
     }
 
-    fn transmit(&'a mut self) -> Option<Self::TxToken> {
+    fn transmit(&mut self, _timestamp: SmolInstant) -> Option<Self::TxToken<'_>> {
         tracing::debug!("Allocate TxToken");
         Some(VirtualTxToken {
             sender: self.outbound.clone(),
@@ -404,10 +414,7 @@ pub struct VirtualRxToken {
 }
 
 impl RxToken for VirtualRxToken {
-    fn consume<R, F>(mut self, _timestamp: SmolInstant, f: F) -> smoltcp::Result<R>
-    where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
-    {
+    fn consume<R, F: FnOnce(&mut [u8]) -> R>(mut self, f: F) -> R {
         tracing::trace!("RxToken: Receive");
         f(&mut self.buf)
     }
@@ -418,16 +425,11 @@ pub struct VirtualTxToken {
 }
 
 impl TxToken for VirtualTxToken {
-    fn consume<R, F>(self, _timestamp: SmolInstant, len: usize, f: F) -> smoltcp::Result<R>
-    where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
-    {
+    fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
         let mut buf = BytesMut::with_capacity(len);
         tracing::trace!("TxToken: Transmit {len} size");
-        let result = f(&mut buf);
-        if result.is_ok() {
-            let _ = self.sender.send(buf);
-        }
-        result
+        let r = f(&mut buf);
+        let _ = self.sender.send(buf);
+        r
     }
 }
