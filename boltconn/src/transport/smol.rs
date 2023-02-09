@@ -102,12 +102,11 @@ impl SmolStack {
     }
 
     pub fn drive_iface(&mut self) -> bool {
-        let r = self.iface.poll(
+        self.iface.poll(
             SmolInstant::now(),
             &mut self.ip_device,
             &mut self.socket_set,
-        );
-        r
+        )
     }
 
     pub fn open_tcp(

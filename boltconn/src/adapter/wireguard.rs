@@ -88,6 +88,18 @@ impl Endpoint {
                 }
             })
         };
+        let wg_tick = {
+            let tunnel = tunnel.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; MAX_PKT_SIZE];
+                loop {
+                    tunnel.tick(&mut buf).await;
+                    // From boringtun, the recommended interval is 100ms.
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+        };
+
         // drive smol
         let smol_drive = {
             let smol_stack = smol_stack.clone();
@@ -115,12 +127,14 @@ impl Endpoint {
                     // stop_recv got signal
                     wg_out.abort();
                     wg_in.abort();
+                    wg_tick.abort();
                     smol_drive.abort();
                     return;
                 } else if last_active.lock().await.elapsed() > timeout {
                     // timeout
                     wg_out.abort();
                     wg_in.abort();
+                    wg_tick.abort();
                     smol_drive.abort();
                     return;
                 }

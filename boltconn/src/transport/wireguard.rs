@@ -3,6 +3,7 @@ use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
+use boringtun::noise::errors::WireGuardError;
 use boringtun::noise::{Tunn, TunnResult};
 use bytes::BytesMut;
 use std::fmt::{Debug, Formatter};
@@ -99,6 +100,15 @@ impl WireguardTunnel {
         })
     }
 
+    async fn flush_pending_queue(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> anyhow::Result<()> {
+        // flush pending queue
+        while let TunnResult::WriteToNetwork(data) = self.tunnel.decapsulate(None, &[], buf) {
+            tracing::debug!("Send pending data: {} bytes", data.len());
+            self.outbound.send(data).await?;
+        }
+        Ok(())
+    }
+
     /// Receive wg packet from Internet
     pub async fn receive_incoming_packet(
         &self,
@@ -119,6 +129,10 @@ impl WireguardTunnel {
                 let data = BytesMut::from_iter(data.iter());
                 smol_tx.send(data).await?;
             }
+            TunnResult::WriteToNetwork(data) => {
+                self.outbound.send(data).await?;
+                self.flush_pending_queue(wg_buf).await?;
+            }
             a => {
                 tracing::warn!("Unknown result: {:?}", a);
                 return Err(anyhow!("Unexpected result at endpoint"));
@@ -135,7 +149,7 @@ impl WireguardTunnel {
         let data = smol_rx
             .recv_async()
             .await
-            .or_else(|_| Err(io::Error::from(ErrorKind::ConnectionAborted)))?;
+            .map_err(|_| io::Error::from(ErrorKind::ConnectionAborted))?;
         tracing::debug!(
             "Try to send {} bytes to Wireguard remote endpoint",
             data.len()
@@ -151,11 +165,44 @@ impl WireguardTunnel {
             TunnResult::Done => {
                 tracing::debug!("Sent done?");
             }
-            _ => {
-                tracing::debug!("Sent failed");
+            other => {
+                tracing::warn!("Sent failed: {:?}", other);
                 Err(io::Error::from(ErrorKind::InvalidData))?
             }
         }
         Ok(())
+    }
+
+    /// Used for ticking tunnel, keeping internal state healthy.
+    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) {
+        match self.tunnel.update_timers(buf) {
+            TunnResult::Done => {
+                // do nothing
+            }
+            TunnResult::Err(WireGuardError::ConnectionExpired) => {
+                match self.tunnel.format_handshake_initiation(buf, false) {
+                    TunnResult::Done => {
+                        // handshake ongoing, ignore
+                        tracing::debug!("timer: ongoing");
+                    }
+                    TunnResult::WriteToNetwork(data) => {
+                        tracing::debug!("Expiration: Write timer message: {} bytes", data.len());
+                        let _ = self.outbound.send(data).await;
+                    }
+                    other => {
+                        tracing::warn!("Unexpected wireguard timer message: {:?}", other);
+                    }
+                }
+            }
+            TunnResult::WriteToNetwork(packet) => {
+                tracing::debug!("Write timer message: {} bytes", packet.len());
+                if let Err(e) = self.outbound.send(packet).await {
+                    tracing::warn!("Failed to send timer message: {}", e);
+                }
+            }
+            other => {
+                tracing::warn!("Unexpected wireguard timer message: {:?}", other);
+            }
+        }
     }
 }
