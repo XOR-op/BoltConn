@@ -36,7 +36,7 @@ impl Endpoint {
         let (stop_send, mut stop_recv) = broadcast::channel(1);
 
         let (mut wg_smol_tx, wg_smol_rx) = mpsc::channel(128);
-        let (smol_wg_tx, mut smol_wg_rx) = mpsc::channel(128);
+        let (smol_wg_tx, mut smol_wg_rx) = flume::unbounded();
         let tunnel = Arc::new(WireguardTunnel::new(outbound, config, dns).await?);
         let device = VirtualIpDevice::new(config.mtu, wg_smol_rx, smol_wg_tx);
         let smol_stack = Arc::new(Mutex::new(SmolStack::new(
@@ -55,7 +55,6 @@ impl Endpoint {
             let timer = last_active.clone();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
-                tracing::debug!("Wireguard started to send");
                 loop {
                     if tunnel
                         .send_outgoing_packet(&mut smol_wg_rx, &mut buf)
@@ -76,7 +75,6 @@ impl Endpoint {
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 let mut wg_buf = [0u8; MAX_PKT_SIZE];
-                tracing::debug!("Wireguard started to receive");
                 loop {
                     if tunnel
                         .receive_incoming_packet(&mut wg_smol_tx, &mut buf, &mut wg_buf)
@@ -94,16 +92,17 @@ impl Endpoint {
         let smol_drive = {
             let smol_stack = smol_stack.clone();
             tokio::spawn(async move {
-                tracing::debug!("smol started");
                 loop {
                     let mut immediate_next_loop = false;
                     let mut stack_handle = smol_stack.lock().await;
-                    immediate_next_loop |= stack_handle.poll_all_tcp().await;
-                    immediate_next_loop |= stack_handle.poll_all_udp().await;
+                    if stack_handle.drive_iface() {
+                        immediate_next_loop |= stack_handle.poll_all_tcp().await;
+                        immediate_next_loop |= stack_handle.poll_all_udp().await;
+                    }
                     stack_handle.purge_closed_tcp();
                     stack_handle.purge_timeout_udp();
                     if !immediate_next_loop {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                     }
                 }
             })
@@ -162,7 +161,11 @@ impl WireguardManager {
             Entry::Vacant(entry) => {
                 let server_addr = get_dst(&self.dns, &config.endpoint).await?;
                 let outbound = match server_addr {
-                    SocketAddr::V4(_) => Egress::new(&self.iface).udpv4_socket().await?,
+                    SocketAddr::V4(_) => {
+                        let socket = Egress::new(&self.iface).udpv4_socket().await?;
+                        socket.connect(server_addr).await?;
+                        socket
+                    }
                     SocketAddr::V6(_) => unimplemented!(),
                 };
                 let ep = Endpoint::new(

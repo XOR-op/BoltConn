@@ -2,7 +2,6 @@ use crate::adapter::Connector;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool, MAX_PKT_SIZE};
 use crate::proxy::ConnAbortHandle;
 use bytes::BytesMut;
-use concurrent_queue::ConcurrentQueue;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use smoltcp::iface::{Interface, SocketHandle, SocketSet};
@@ -18,7 +17,6 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::DerefMut;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -73,6 +71,7 @@ pub struct SmolStack {
     udp_conn: DashMap<u16, UdpConnTask>,
     allocator: PktBufPool,
     ip_addr: IpAddr,
+    ip_device: VirtualIpDevice,
     iface: Interface,
     socket_set: SocketSet<'static>,
     udp_timeout: Duration,
@@ -95,10 +94,20 @@ impl SmolStack {
             udp_conn: Default::default(),
             allocator,
             ip_addr: iface_ip,
+            ip_device,
             iface,
             socket_set: SocketSet::new(vec![]),
             udp_timeout,
         }
+    }
+
+    pub fn drive_iface(&mut self) -> bool {
+        let r = self.iface.poll(
+            SmolInstant::now(),
+            &mut self.ip_device,
+            &mut self.socket_set,
+        );
+        r
     }
 
     pub fn open_tcp(
@@ -248,6 +257,9 @@ impl SmolStack {
                 let _ = task.connector.tx.send(buf).await;
             }
         }
+        if socket.state() == TcpState::CloseWait {
+            socket.close();
+        }
         Ok(has_activity)
     }
 
@@ -343,25 +355,24 @@ impl SmolStack {
 /// Virtual IP device
 pub struct VirtualIpDevice {
     mtu: usize,
-    outbound: mpsc::Sender<BytesMut>,
-    packet_queue: Arc<ConcurrentQueue<BytesMut>>,
+    outbound: flume::Sender<BytesMut>,
+    packet_queue: flume::Receiver<BytesMut>,
 }
 
 impl VirtualIpDevice {
     pub fn new(
         mtu: usize,
         mut inbound: mpsc::Receiver<BytesMut>,
-        outbound: mpsc::Sender<BytesMut>,
+        outbound: flume::Sender<BytesMut>,
     ) -> Self {
-        let queue = Arc::new(ConcurrentQueue::unbounded());
-        let queue_clone = queue.clone();
+        let (queue_in, queue_out) = flume::unbounded();
         tokio::spawn(async move {
             // move data from inbound to internal buffer
             loop {
                 match inbound.recv().await {
                     None => return,
                     Some(item) => {
-                        let _ = queue.push(item);
+                        let _ = queue_in.send_async(item).await;
                     }
                 }
             }
@@ -369,7 +380,7 @@ impl VirtualIpDevice {
         Self {
             mtu,
             outbound,
-            packet_queue: queue_clone,
+            packet_queue: queue_out,
         }
     }
 }
@@ -382,8 +393,7 @@ impl Device for VirtualIpDevice {
         &mut self,
         _timestamp: SmolInstant,
     ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        tracing::debug!("Allocate RxToken");
-        match self.packet_queue.pop() {
+        match self.packet_queue.try_recv() {
             Ok(item) => Some((
                 VirtualRxToken { buf: item },
                 VirtualTxToken {
@@ -395,7 +405,6 @@ impl Device for VirtualIpDevice {
     }
 
     fn transmit(&mut self, _timestamp: SmolInstant) -> Option<Self::TxToken<'_>> {
-        tracing::debug!("Allocate TxToken");
         Some(VirtualTxToken {
             sender: self.outbound.clone(),
         })
@@ -415,19 +424,21 @@ pub struct VirtualRxToken {
 
 impl RxToken for VirtualRxToken {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(mut self, f: F) -> R {
-        tracing::trace!("RxToken: Receive");
         f(&mut self.buf)
     }
 }
 
 pub struct VirtualTxToken {
-    sender: mpsc::Sender<BytesMut>,
+    sender: flume::Sender<BytesMut>,
 }
 
 impl TxToken for VirtualTxToken {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
         let mut buf = BytesMut::with_capacity(len);
-        tracing::trace!("TxToken: Transmit {len} size");
+        // Safety: f exactly writes _len_ bytes, so all bytes are initialized.
+        unsafe {
+            buf.set_len(len);
+        }
         let r = f(&mut buf);
         let _ = self.sender.send(buf);
         r

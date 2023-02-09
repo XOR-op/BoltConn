@@ -119,7 +119,8 @@ impl WireguardTunnel {
                 let data = BytesMut::from_iter(data.iter());
                 smol_tx.send(data).await?;
             }
-            _ => {
+            a => {
+                tracing::warn!("Unknown result: {:?}", a);
                 return Err(anyhow!("Unexpected result at endpoint"));
             }
         }
@@ -128,13 +129,13 @@ impl WireguardTunnel {
 
     pub async fn send_outgoing_packet(
         &self,
-        smol_rx: &mut mpsc::Receiver<BytesMut>,
+        smol_rx: &mut flume::Receiver<BytesMut>,
         wg_buf: &mut [u8; MAX_PKT_SIZE],
     ) -> anyhow::Result<()> {
         let data = smol_rx
-            .recv()
+            .recv_async()
             .await
-            .ok_or_else(|| io::Error::from(ErrorKind::ConnectionAborted))?;
+            .or_else(|_| Err(io::Error::from(ErrorKind::ConnectionAborted)))?;
         tracing::debug!(
             "Try to send {} bytes to Wireguard remote endpoint",
             data.len()
@@ -145,9 +146,15 @@ impl WireguardTunnel {
                     // size exceeded
                     Err(io::Error::from(ErrorKind::WouldBlock))?;
                 }
+                tracing::debug!("Sent {} bytes successfully", packet.len());
             }
-            TunnResult::Done => {}
-            _ => Err(io::Error::from(ErrorKind::InvalidData))?,
+            TunnResult::Done => {
+                tracing::debug!("Sent done?");
+            }
+            _ => {
+                tracing::debug!("Sent failed");
+                Err(io::Error::from(ErrorKind::InvalidData))?
+            }
         }
         Ok(())
     }
