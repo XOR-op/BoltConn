@@ -50,13 +50,13 @@ impl TunDevice {
         let ctl_fd = {
             let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
             if fd < 0 {
-                return Err(errno_err("Unable to open control fd").into());
+                return Err(errno_err("Unable to open control fd"));
             }
             fd
         };
 
         Ok(TunDevice {
-            fd: Some(AsyncRawFd::try_from(RawFd::from(fd))?),
+            fd: Some(AsyncRawFd::try_from(fd)?),
             ctl_fd,
             dev_name: name,
             gw_name: outbound_iface.parse().unwrap(),
@@ -188,29 +188,13 @@ impl TunDevice {
                 IpProtocol::Tcp => {
                     let pkt = TcpPkt::new(pkt);
                     let mut pkt = scopeguard::guard(pkt, |p| self.pool.release(p.into_handle()));
-                    // tracing::trace!(
-                    //     "[TUN] {}:{} -> {}:{}",
-                    //     src,
-                    //     pkt.src_port(),
-                    //     dst,
-                    //     pkt.dst_port()
-                    // );
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
                             self.session_mgr.lookup_tcp_session(pkt.dst_port())
                         {
                             pkt.rewrite_addr(conn_dst, conn_src);
-                            // tracing::trace!(
-                            //     "[TUN] inbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
-                            //     conn_dst,
-                            //     conn_src,
-                            //     pkt.packet_payload().len(),
-                            //     pkt.as_tcp_packet().syn(),
-                            //     pkt.as_tcp_packet().ack(),
-                            //     pkt.as_tcp_packet().seq_number()
-                            // );
-                            if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
+                            if Self::send_ip(&mut fd_write, pkt.ip_pkt()).await.is_err() {
                                 tracing::warn!("Send to NAT failed");
                                 continue;
                             }
@@ -229,16 +213,7 @@ impl TunDevice {
                             SocketAddr::from(SocketAddrV4::new(dst, inbound_port)),
                             SocketAddr::from(nat_addr),
                         );
-                        // tracing::trace!(
-                        //     "[TUN] outbound rewrite {} -> {}: {} bytes (SYN={},ACK={},seq={})",
-                        //     SocketAddr::from(SocketAddrV4::new(Ipv4Addr::new(254,254,254,254), inbound_port)),
-                        //     SocketAddr::from(nat_addr),
-                        //     pkt.packet_payload().len(),
-                        //     pkt.as_tcp_packet().syn(),
-                        //     pkt.as_tcp_packet().ack(),
-                        //     pkt.as_tcp_packet().seq_number()
-                        // );
-                        if let Err(_) = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await {
+                        if Self::send_ip(&mut fd_write, pkt.ip_pkt()).await.is_err() {
                             tracing::warn!("Send to NAT failed");
                             continue;
                         }

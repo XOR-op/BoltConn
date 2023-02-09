@@ -184,12 +184,6 @@ impl SmolStack {
         let mut has_activity = false;
         for mut item in self.tcp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(item.handle);
-            tracing::debug!(
-                "POLL tcp {}({:?}): {:?}",
-                *item.key(),
-                socket.local_endpoint(),
-                socket.state()
-            );
             if socket.state() != TcpState::Closed {
                 match Self::poll_tcp_socket(socket, item.deref_mut(), &mut self.allocator).await {
                     Ok(v) => has_activity |= v,
@@ -211,7 +205,6 @@ impl SmolStack {
         let mut has_activity = false;
         // Send data
         if socket.can_send() {
-            tracing::debug!("CAN SEND!");
             if let Some((buf, start)) = task.remain_to_send.take() {
                 if let Ok(sent) = socket.send_slice(&buf.as_ready()[start..]) {
                     // successfully sent
@@ -247,13 +240,14 @@ impl SmolStack {
         }
 
         // Receive data
-        if socket.can_recv() && task.connector.tx.capacity() < task.connector.tx.max_capacity() {
+        if socket.can_recv() && task.connector.tx.capacity() > 0 {
             let mut buf = allocator.obtain().await;
             if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
                 has_activity = true;
                 buf.len = size;
                 // must not fail because there is only 1 sender
                 let _ = task.connector.tx.send(buf).await;
+                tracing::debug!("[smol] sent back {} bytes", size);
             }
         }
         if socket.state() == TcpState::CloseWait {

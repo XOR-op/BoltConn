@@ -10,10 +10,10 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::*;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkType {
-    TCP,
-    UDP,
+    Tcp,
+    Udp,
 }
 
 #[derive(Debug, Default, Clone)]

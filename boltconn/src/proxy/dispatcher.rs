@@ -82,12 +82,12 @@ impl Dispatcher {
         indicator: Arc<AtomicU8>,
         stream: TcpStream,
     ) {
-        let process_info = process::get_pid(src_addr, process::NetworkType::TCP)
+        let process_info = process::get_pid(src_addr, process::NetworkType::Tcp)
             .map_or(None, process::get_process_info);
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
-            connection_type: NetworkType::TCP,
+            connection_type: NetworkType::Tcp,
             process_info: process_info.clone(),
         };
         // match outbound proxy
@@ -161,7 +161,7 @@ impl Dispatcher {
             dst_addr.clone(),
             process_info.clone(),
             proxy_type,
-            NetworkType::TCP,
+            NetworkType::Tcp,
             abort_handle.clone(),
         )));
 
@@ -280,11 +280,11 @@ impl Dispatcher {
         session_mgr: &Arc<SessionManager>,
     ) {
         let process_info =
-            process::get_pid(src_addr, NetworkType::UDP).map_or(None, process::get_process_info);
+            process::get_pid(src_addr, NetworkType::Udp).map_or(None, process::get_process_info);
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
-            connection_type: NetworkType::UDP,
+            connection_type: NetworkType::Udp,
             process_info: process_info.clone(),
         };
         let proxy_config = self.dispatching.read().unwrap().matches(&conn_info).clone();
@@ -357,7 +357,7 @@ impl Dispatcher {
             dst_addr.clone(),
             process_info.clone(),
             proxy_type,
-            NetworkType::UDP,
+            NetworkType::Udp,
             abort_handle.clone(),
         )));
         let mut handles = Vec::new();

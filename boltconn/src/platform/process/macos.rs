@@ -51,8 +51,8 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
      */
     let basic_len = get_os_basic_len()?;
     let (sys_ctl_name, item_size) = match net_type {
-        NetworkType::TCP => (TCP_SYSCTL_NAME, basic_len + 208),
-        NetworkType::UDP => (UDP_SYSCTL_NAME, basic_len),
+        NetworkType::Tcp => (TCP_SYSCTL_NAME, basic_len + 208),
+        NetworkType::Udp => (UDP_SYSCTL_NAME, basic_len),
     };
     let sys_ctl_name = CString::new(sys_ctl_name).unwrap();
     let mut len: usize = 0;
@@ -99,7 +99,7 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
             let ipv6_equal = addr.is_ipv6()
                 && ip_version & 0x2 != 0
                 && Ipv6Addr::from(*arrayref::array_ref![pcb, 64, 16]) == addr.ip();
-            let udp_any = net_type == NetworkType::UDP
+            let udp_any = net_type == NetworkType::Udp
                 && addr.is_ipv4()
                 && addr.ip() == Ipv4Addr::new(0, 0, 0, 0);
             if ipv4_equal || ipv6_equal || udp_any {

@@ -158,8 +158,8 @@ impl ConnAgent {
             dest: dst,
             process_info,
             session_proto: match network_type {
-                NetworkType::TCP => SessionProtocol::Tcp,
-                NetworkType::UDP => SessionProtocol::Udp,
+                NetworkType::Tcp => SessionProtocol::Tcp,
+                NetworkType::Udp => SessionProtocol::Udp,
             },
             rule,
             upload_traffic: 0,

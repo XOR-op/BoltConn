@@ -27,8 +27,8 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
         payload: SockDiagMessage::InetRequest(InetRequest {
             family: AF_INET,
             protocol: match net_type {
-                NetworkType::TCP => IPPROTO_TCP,
-                NetworkType::UDP => IPPROTO_UDP,
+                NetworkType::Tcp => IPPROTO_TCP,
+                NetworkType::Udp => IPPROTO_UDP,
             },
             extensions: ExtensionFlags::empty(),
             states: StateFlags::all(),

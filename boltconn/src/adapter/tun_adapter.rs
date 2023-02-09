@@ -93,7 +93,6 @@ impl TunAdapter {
             info: self.info.clone(),
         };
         while let Some(buf) = rx.recv().await {
-            // tracing::trace!("[Direct] ingoing {} bytes", size);
             self.info.write().await.more_download(buf.len);
             if let Err(err) = in_write.write_all(buf.as_ready()).await {
                 tracing::warn!("TunAdapter write to inbound failed: {}", err);

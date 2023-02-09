@@ -150,10 +150,6 @@ impl WireguardTunnel {
             .recv_async()
             .await
             .map_err(|_| io::Error::from(ErrorKind::ConnectionAborted))?;
-        tracing::debug!(
-            "Try to send {} bytes to Wireguard remote endpoint",
-            data.len()
-        );
         match self.tunnel.encapsulate(data.as_ref(), wg_buf) {
             TunnResult::WriteToNetwork(packet) => {
                 if self.outbound.send(packet).await? != packet.len() {
@@ -162,9 +158,7 @@ impl WireguardTunnel {
                 }
                 tracing::debug!("Sent {} bytes successfully", packet.len());
             }
-            TunnResult::Done => {
-                tracing::debug!("Sent done?");
-            }
+            TunnResult::Done => {}
             other => {
                 tracing::warn!("Sent failed: {:?}", other);
                 Err(io::Error::from(ErrorKind::InvalidData))?
@@ -183,7 +177,7 @@ impl WireguardTunnel {
                 match self.tunnel.format_handshake_initiation(buf, false) {
                     TunnResult::Done => {
                         // handshake ongoing, ignore
-                        tracing::debug!("timer: ongoing");
+                        tracing::debug!("handshake: ongoing");
                     }
                     TunnResult::WriteToNetwork(data) => {
                         tracing::debug!("Expiration: Write timer message: {} bytes", data.len());
@@ -195,7 +189,6 @@ impl WireguardTunnel {
                 }
             }
             TunnResult::WriteToNetwork(packet) => {
-                tracing::debug!("Write timer message: {} bytes", packet.len());
                 if let Err(e) = self.outbound.send(packet).await {
                     tracing::warn!("Failed to send timer message: {}", e);
                 }

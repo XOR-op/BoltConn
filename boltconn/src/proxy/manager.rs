@@ -40,7 +40,13 @@ impl SessionManager {
         let mut pair = entry.or_insert(TcpSessionCtl::new(src_addr, dst_addr));
         // If original connection silently expired
         if pair.dest_addr != dst_addr {
-            tracing::debug!("[Session] Recreate record {}", src_addr.port());
+            tracing::warn!(
+                "[Session] Recreate record {}: src={}, old={}, new={}",
+                src_addr.port(),
+                src_addr,
+                pair.dest_addr,
+                dst_addr
+            );
             *pair.value_mut() = TcpSessionCtl::new(src_addr, dst_addr);
         }
         pair.value_mut().update_time();

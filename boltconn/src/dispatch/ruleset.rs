@@ -204,7 +204,7 @@ fn test_rule_provider() {
             domain_name: "kb.apple.com".to_string(),
             port: 1234,
         },
-        connection_type: NetworkType::TCP,
+        connection_type: NetworkType::Tcp,
         process_info: None,
     };
     assert!(ruleset.matches(&info1));
@@ -214,7 +214,7 @@ fn test_rule_provider() {
             domain_name: "apple.com".to_string(),
             port: 1234,
         },
-        connection_type: NetworkType::TCP,
+        connection_type: NetworkType::Tcp,
         process_info: None,
     };
     assert!(ruleset.matches(&info2));
@@ -224,7 +224,7 @@ fn test_rule_provider() {
             domain_name: "icloud.com.akadns.net.com".to_string(),
             port: 1234,
         },
-        connection_type: NetworkType::TCP,
+        connection_type: NetworkType::Tcp,
         process_info: None,
     };
     assert!(ruleset.matches(&info3));
@@ -234,7 +234,7 @@ fn test_rule_provider() {
             domain_name: "apple.io".to_string(),
             port: 1234,
         },
-        connection_type: NetworkType::TCP,
+        connection_type: NetworkType::Tcp,
         process_info: None,
     };
     assert!(!ruleset.matches(&info4));
