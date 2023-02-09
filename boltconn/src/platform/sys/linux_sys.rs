@@ -59,7 +59,7 @@ pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
 
 pub fn get_default_route() -> io::Result<(IpAddr, String)> {
     let words: Vec<String> = get_command_output("ip", ["-s", "route", "get", "1.1.1.1"])?
-        .split(" ")
+        .split(' ')
         .map(|s| s.to_string())
         .collect();
     // example: 1.1.1.1 via 192.168.0.1 dev en0 src 192.168.0.100 uid 1000

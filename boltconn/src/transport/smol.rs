@@ -135,7 +135,6 @@ impl SmolStack {
 
                 let handle = self.socket_set.add(client_socket);
                 e.insert(TcpConnTask::new(connector, handle, abort_handle));
-                tracing::debug!("Open tcp at port {local_port} to {remote_addr}");
                 Ok(())
             }
         }
@@ -174,7 +173,6 @@ impl SmolStack {
                     handle,
                     abort_handle,
                 ));
-                tracing::debug!("Open udp at port {local_port} to {remote_addr}");
                 Ok(())
             }
         }
@@ -247,7 +245,6 @@ impl SmolStack {
                 buf.len = size;
                 // must not fail because there is only 1 sender
                 let _ = task.connector.tx.send(buf).await;
-                tracing::debug!("[smol] sent back {} bytes", size);
             }
         }
         if socket.state() == TcpState::CloseWait {

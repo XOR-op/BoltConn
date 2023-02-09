@@ -138,7 +138,7 @@ impl Requester {
         for ele in result {
             table.add_row(
                 Row::new()
-                    .with_cell(ele.client.unwrap_or("".to_string()))
+                    .with_cell(ele.client.unwrap_or_default())
                     .with_cell(ele.uri)
                     .with_cell(ele.method)
                     .with_cell(format!("{}", ele.status))

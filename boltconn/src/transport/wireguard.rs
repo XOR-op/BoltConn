@@ -103,7 +103,6 @@ impl WireguardTunnel {
     async fn flush_pending_queue(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> anyhow::Result<()> {
         // flush pending queue
         while let TunnResult::WriteToNetwork(data) = self.tunnel.decapsulate(None, &[], buf) {
-            tracing::debug!("Send pending data: {} bytes", data.len());
             self.outbound.send(data).await?;
         }
         Ok(())
@@ -117,7 +116,6 @@ impl WireguardTunnel {
         wg_buf: &mut [u8; MAX_PKT_SIZE],
     ) -> anyhow::Result<()> {
         let len = self.outbound.recv(buf).await?;
-        tracing::debug!("Receive {len} bytes from Wireguard remote endpoint");
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
         match self.tunnel.decapsulate(None, &buf[..len], wg_buf) {
@@ -156,7 +154,6 @@ impl WireguardTunnel {
                     // size exceeded
                     Err(io::Error::from(ErrorKind::WouldBlock))?;
                 }
-                tracing::debug!("Sent {} bytes successfully", packet.len());
             }
             TunnResult::Done => {}
             other => {
@@ -177,10 +174,8 @@ impl WireguardTunnel {
                 match self.tunnel.format_handshake_initiation(buf, false) {
                     TunnResult::Done => {
                         // handshake ongoing, ignore
-                        tracing::debug!("handshake: ongoing");
                     }
                     TunnResult::WriteToNetwork(data) => {
-                        tracing::debug!("Expiration: Write timer message: {} bytes", data.len());
                         let _ = self.outbound.send(data).await;
                     }
                     other => {

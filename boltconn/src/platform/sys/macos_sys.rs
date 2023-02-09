@@ -124,11 +124,9 @@ pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
 }
 
 pub fn get_default_route() -> io::Result<(IpAddr, String)> {
-    let lines: Vec<String> = get_command_output("route", ["-n", "get", "1.1.1.1"])?
-        .split("\n")
+    let kv: HashMap<String, String> = get_command_output("route", ["-n", "get", "1.1.1.1"])?
+        .split('\n')
         .map(|s| s.to_string())
-        .collect();
-    let kv: HashMap<String, String> = lines
         .into_iter()
         .filter_map(|l| {
             let vec: Vec<&str> = l.split(": ").collect();
@@ -160,15 +158,15 @@ impl SystemDnsHandle {
     pub fn new(ip: Ipv4Addr) -> io::Result<Self> {
         let services: Vec<String> =
             get_command_output("networksetup", ["-listallnetworkservices"])?
-                .split("\n")
+                .split('\n')
                 .map(|s| {
-                    if s.len() > 0 && !s.contains("*") {
+                    if !s.is_empty() && !s.contains('*') {
                         Some(s)
                     } else {
                         None
                     }
                 })
-                .filter_map(|x| x.and_then(|s| Some(s.to_string())))
+                .filter_map(|x| x.map(|s| s.to_string()))
                 .collect();
         let mut old_dns = Vec::new();
         // get old records
@@ -178,9 +176,9 @@ impl SystemDnsHandle {
             if !dns_list.starts_with("There") {
                 v.extend(
                     dns_list
-                        .split("\n")
-                        .map(|s| if s.len() > 0 { Some(s) } else { None })
-                        .filter_map(|x| x.and_then(|s| Some(String::from(s)))),
+                        .split('\n')
+                        .map(|s| if !s.is_empty() { Some(s) } else { None })
+                        .filter_map(|x| x.map(String::from)),
                 );
             } else {
                 v.push("empty".parse().unwrap());

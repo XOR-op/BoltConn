@@ -88,34 +88,32 @@ fn read_proc(fd: Result<DirEntry>, name: &str) -> Result<bool> {
 pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
     let (inode, uid) = get_inode_and_uid(addr, net_type)?;
     let target_name = format!("socket:[{}]", inode);
-    for proc in std::fs::read_dir("/proc")? {
-        if let Ok(proc) = proc {
-            if !proc
-                .file_name()
-                .to_string_lossy()
-                .chars()
-                .all(char::is_numeric)
-            {
+    for proc in std::fs::read_dir("/proc")?.flatten() {
+        if !proc
+            .file_name()
+            .to_string_lossy()
+            .chars()
+            .all(char::is_numeric)
+        {
+            continue;
+        }
+        if let Ok(meta) = proc.metadata() {
+            if !(meta.uid() == uid && meta.is_dir()) {
                 continue;
             }
-            if let Ok(meta) = proc.metadata() {
-                if !(meta.uid() == uid && meta.is_dir()) {
-                    continue;
-                }
-                // read fds to search for socket:[]
-                let mut fd_path = proc.path();
-                fd_path.push("fd");
-                if let Ok(internal) = std::fs::read_dir(fd_path) {
-                    for fd in internal {
-                        if let Ok(true) = read_proc(fd, &target_name) {
-                            return Ok(proc
-                                .file_name()
-                                .to_string_lossy()
-                                .chars()
-                                .as_str()
-                                .parse()
-                                .unwrap());
-                        }
+            // read fds to search for socket:[]
+            let mut fd_path = proc.path();
+            fd_path.push("fd");
+            if let Ok(internal) = std::fs::read_dir(fd_path) {
+                for fd in internal {
+                    if let Ok(true) = read_proc(fd, &target_name) {
+                        return Ok(proc
+                            .file_name()
+                            .to_string_lossy()
+                            .chars()
+                            .as_str()
+                            .parse()
+                            .unwrap());
                     }
                 }
             }
@@ -131,10 +129,10 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
         if let Ok(name) = std::fs::read(format!("/proc/{}/comm", pid)) {
             return Some(ProcessInfo {
                 pid,
-                path: path.replace("\n", ""),
+                path: path.replace('\n', ""),
                 name: String::from_utf8_lossy(name.as_slice())
                     .into_owned()
-                    .replace("\n", ""),
+                    .replace('\n', ""),
             });
         }
     }

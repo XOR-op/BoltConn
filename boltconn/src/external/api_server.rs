@@ -88,7 +88,7 @@ impl ApiServer {
                 destination: info.dest.to_string(),
                 protocol: info.session_proto.to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
-                process: info.process_info.as_ref().map(|ref i| i.name.clone()),
+                process: info.process_info.as_ref().map(|i| i.name.clone()),
                 upload: pretty_size(info.upload_traffic),
                 download: pretty_size(info.download_traffic),
                 time: pretty_time(elapsed),
@@ -123,7 +123,7 @@ impl ApiServer {
             ele.write().await.abort().await;
             return Json(serde_json::Value::Bool(true));
         }
-        return Json(serde_json::Value::Bool(false));
+        Json(serde_json::Value::Bool(false))
     }
 
     async fn get_sessions(State(server): State<Self>) -> Json<serde_json::Value> {
@@ -274,15 +274,12 @@ impl ApiServer {
         State(server): State<Self>,
         Json(args): Json<SetGroupReqSchema>,
     ) -> Json<serde_json::Value> {
-        let r = match server
+        let r = server
             .dispatching
             .read()
             .await
             .set_group_selection(args.group.as_str(), args.selected.as_str())
-        {
-            Ok(_) => true,
-            Err(_) => false,
-        };
+            .is_ok();
         if r {
             let mut state = server.state.lock().unwrap();
             if let Some(val) = state.state.group_selection.get_mut(&args.group) {
