@@ -104,8 +104,9 @@ impl Endpoint {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 loop {
                     tunnel.tick(&mut buf).await;
-                    // From boringtun, the recommended interval is 100ms.
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // <del>From boringtun, the recommended interval is 100ms.</del>
+                    // Comments from Tunn::update_timers says one second interval is enough.
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
                 }
             })
         };
