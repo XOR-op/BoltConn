@@ -74,6 +74,7 @@ impl Endpoint {
                 }
             })
         };
+
         let wg_in = {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
@@ -82,18 +83,21 @@ impl Endpoint {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 let mut wg_buf = [0u8; MAX_PKT_SIZE];
                 loop {
-                    if tunnel
+                    if let Ok(newer) = tunnel
                         .receive_incoming_packet(&mut wg_smol_tx, &mut buf, &mut wg_buf)
                         .await
-                        .is_err()
                     {
+                        if newer {
+                            *timer.lock().await = Instant::now();
+                        }
+                    } else {
                         let _ = stop_send.send(());
                         return;
                     }
-                    *timer.lock().await = Instant::now();
                 }
             })
         };
+
         let wg_tick = {
             let tunnel = tunnel.clone();
             tokio::spawn(async move {
@@ -130,31 +134,34 @@ impl Endpoint {
             })
         };
 
-        tokio::spawn(async move {
-            // kill all coroutine when error or timeout
-            loop {
-                if let Ok(Ok(_)) = tokio::time::timeout(timeout, stop_recv.recv()).await {
-                    // stop_recv got signal
-                    indi_write.store(false, Ordering::Relaxed);
-                    wg_out.abort();
-                    wg_in.abort();
-                    wg_tick.abort();
-                    smol_drive.abort();
-                    return;
-                } else if last_active.lock().await.elapsed() > timeout {
-                    indi_write.store(false, Ordering::Relaxed);
-                    tracing::trace!(
-                        "[Wireguard] Stop inactive tunnel after for {}s.",
-                        timeout.as_secs()
-                    );
-                    // timeout
-                    wg_out.abort();
-                    wg_in.abort();
-                    wg_tick.abort();
-                    smol_drive.abort();
-                    return;
+        // timeout inactive tunnel
+        {
+            let stop_send = stop_send.clone();
+            let indi_write = indi_write.clone();
+            tokio::spawn(async move {
+                loop {
+                    if last_active.lock().await.elapsed() > timeout {
+                        indi_write.store(false, Ordering::Relaxed);
+                        let _ = stop_send.send(());
+                        tracing::trace!(
+                            "[Wireguard] Stop inactive tunnel after for {}s.",
+                            timeout.as_secs()
+                        );
+                        break;
+                    }
+                    tokio::time::sleep(timeout / 2).await;
                 }
-            }
+            });
+        }
+
+        tokio::spawn(async move {
+            // kill all coroutine
+            let _ = stop_recv.recv().await;
+            indi_write.store(false, Ordering::Relaxed);
+            wg_out.abort();
+            wg_in.abort();
+            wg_tick.abort();
+            smol_drive.abort();
         });
 
         Ok(Arc::new(Self {

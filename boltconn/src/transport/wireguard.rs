@@ -116,28 +116,30 @@ impl WireguardTunnel {
         smol_tx: &mut flume::Sender<BytesMut>,
         buf: &mut [u8; MAX_PKT_SIZE],
         wg_buf: &mut [u8; MAX_PKT_SIZE],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let len = self.outbound.recv(buf).await?;
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
-        match self.tunnel.decapsulate(None, &buf[..len], wg_buf) {
+        Ok(match self.tunnel.decapsulate(None, &buf[..len], wg_buf) {
             TunnResult::WriteToTunnelV4(data, _addr) => {
                 let data = BytesMut::from_iter(data.iter());
                 smol_tx.send_async(data).await?;
                 self.smol_notify.notify_one();
+                true
             }
             TunnResult::WriteToTunnelV6(data, _addr) => {
                 let data = BytesMut::from_iter(data.iter());
                 smol_tx.send_async(data).await?;
                 self.smol_notify.notify_one();
+                true
             }
             TunnResult::WriteToNetwork(data) => {
                 self.outbound.send(data).await?;
                 self.flush_pending_queue(wg_buf).await?;
+                false
             }
-            _ => {}
-        }
-        Ok(())
+            _ => false,
+        })
     }
 
     pub async fn send_outgoing_packet(
