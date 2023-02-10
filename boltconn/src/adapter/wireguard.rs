@@ -11,6 +11,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
@@ -23,6 +24,7 @@ pub struct Endpoint {
     stack: Arc<Mutex<SmolStack>>,
     stop_sender: broadcast::Sender<()>,
     notify: Arc<Notify>,
+    is_active: Arc<AtomicBool>,
 }
 
 impl Endpoint {
@@ -49,6 +51,8 @@ impl Endpoint {
         )));
 
         let last_active = Arc::new(Mutex::new(Instant::now()));
+        let indicator = Arc::new(AtomicBool::new(true));
+        let indi_write = indicator.clone();
 
         // drive wg tunnel
         let wg_out = {
@@ -106,19 +110,22 @@ impl Endpoint {
         let smol_drive = {
             let smol_stack = smol_stack.clone();
             let notifier = notify.clone();
+
             tokio::spawn(async move {
+                let mut immediate_next_loop = false;
+                notifier.notified().await;
                 loop {
-                    let mut immediate_next_loop = false;
-                    notifier.notified().await;
                     let mut stack_handle = smol_stack.lock().await;
                     stack_handle.drive_iface();
                     immediate_next_loop |= stack_handle.poll_all_tcp().await;
                     immediate_next_loop |= stack_handle.poll_all_udp().await;
                     stack_handle.purge_closed_tcp();
                     stack_handle.purge_timeout_udp();
+                    drop(stack_handle);
                     if !immediate_next_loop {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        notifier.notified().await;
                     }
+                    immediate_next_loop = false;
                 }
             })
         };
@@ -128,12 +135,14 @@ impl Endpoint {
             loop {
                 if let Ok(Ok(_)) = tokio::time::timeout(timeout, stop_recv.recv()).await {
                     // stop_recv got signal
+                    indi_write.store(false, Ordering::Relaxed);
                     wg_out.abort();
                     wg_in.abort();
                     wg_tick.abort();
                     smol_drive.abort();
                     return;
                 } else if last_active.lock().await.elapsed() > timeout {
+                    indi_write.store(false, Ordering::Relaxed);
                     tracing::trace!(
                         "[Wireguard] Stop inactive tunnel after for {}s.",
                         timeout.as_secs()
@@ -153,6 +162,7 @@ impl Endpoint {
             stack: smol_stack,
             stop_sender: stop_send,
             notify,
+            is_active: indicator,
         }))
     }
 
@@ -181,30 +191,38 @@ impl WireguardManager {
     }
 
     pub async fn get_wg_conn(&self, config: &WireguardConfig) -> anyhow::Result<Arc<Endpoint>> {
-        // get an existing conn, or create
-        match self.active_conn.entry(config.clone()) {
-            Entry::Occupied(conn) => Ok(conn.get().clone()),
-            Entry::Vacant(entry) => {
-                let server_addr = get_dst(&self.dns, &config.endpoint).await?;
-                let outbound = match server_addr {
-                    SocketAddr::V4(_) => {
-                        let socket = Egress::new(&self.iface).udpv4_socket().await?;
-                        socket.connect(server_addr).await?;
-                        socket
+        loop {
+            // get an existing conn, or create
+            return match self.active_conn.entry(config.clone()) {
+                Entry::Occupied(conn) => {
+                    if !conn.get().is_active.load(Ordering::Relaxed) {
+                        conn.remove_entry();
+                        continue;
                     }
-                    SocketAddr::V6(_) => unimplemented!(),
-                };
-                let ep = Endpoint::new(
-                    outbound,
-                    config,
-                    self.dns.clone(),
-                    self.allocator.clone(),
-                    self.timeout,
-                )
-                .await?;
-                entry.insert(ep.clone());
-                Ok(ep)
-            }
+                    Ok(conn.get().clone())
+                }
+                Entry::Vacant(entry) => {
+                    let server_addr = get_dst(&self.dns, &config.endpoint).await?;
+                    let outbound = match server_addr {
+                        SocketAddr::V4(_) => {
+                            let socket = Egress::new(&self.iface).udpv4_socket().await?;
+                            socket.connect(server_addr).await?;
+                            socket
+                        }
+                        SocketAddr::V6(_) => unimplemented!(),
+                    };
+                    let ep = Endpoint::new(
+                        outbound,
+                        config,
+                        self.dns.clone(),
+                        self.allocator.clone(),
+                        self.timeout,
+                    )
+                    .await?;
+                    entry.insert(ep.clone());
+                    Ok(ep)
+                }
+            };
         }
     }
 }
