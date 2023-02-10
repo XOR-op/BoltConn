@@ -37,9 +37,9 @@ impl TcpConnTask {
         }
     }
 
-    pub async fn try_send<'a>(
+    pub async fn try_send(
         &mut self,
-        socket: &mut SmolTcpSocket<'a>,
+        socket: &mut SmolTcpSocket<'_>,
         allocator: &mut PktBufPool,
     ) -> io::Result<bool> {
         let mut has_activity = false;
@@ -84,9 +84,9 @@ impl TcpConnTask {
         Ok(has_activity)
     }
 
-    pub async fn try_recv<'a>(
+    pub async fn try_recv(
         &self,
-        socket: &mut SmolTcpSocket<'a>,
+        socket: &mut SmolTcpSocket<'_>,
         allocator: &mut PktBufPool,
     ) -> bool {
         // Receive data
@@ -127,9 +127,9 @@ impl UdpConnTask {
         }
     }
 
-    pub async fn try_send<'a>(
+    pub async fn try_send(
         &mut self,
-        socket: &mut SmolUdpSocket<'a>,
+        socket: &mut SmolUdpSocket<'_>,
         allocator: &mut PktBufPool,
     ) -> io::Result<bool> {
         let mut has_activity = false;
@@ -153,9 +153,9 @@ impl UdpConnTask {
         Ok(has_activity)
     }
 
-    pub async fn try_recv<'a>(
+    pub async fn try_recv(
         &mut self,
-        socket: &mut SmolUdpSocket<'a>,
+        socket: &mut SmolUdpSocket<'_>,
         allocator: &mut PktBufPool,
     ) -> bool {
         // Receive data
