@@ -16,7 +16,6 @@ use smoltcp::wire::{IpCidr, IpEndpoint};
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
-use std::ops::DerefMut;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -36,6 +35,71 @@ impl TcpConnTask {
             abort_handle,
             remain_to_send: None,
         }
+    }
+
+    pub async fn try_send<'a>(
+        &mut self,
+        socket: &mut SmolTcpSocket<'a>,
+        allocator: &mut PktBufPool,
+    ) -> io::Result<bool> {
+        let mut has_activity = false;
+        // Send data
+        if socket.can_send() {
+            if let Some((buf, start)) = self.remain_to_send.take() {
+                if let Ok(sent) = socket.send_slice(&buf.as_ready()[start..]) {
+                    // successfully sent
+                    has_activity = true;
+                    if start + sent < buf.len {
+                        self.remain_to_send = Some((buf, sent + start));
+                    } else {
+                        allocator.release(buf)
+                    }
+                } else {
+                    return Err(ErrorKind::ConnectionAborted.into());
+                }
+            } else {
+                // fetch new data
+                match self.connector.rx.try_recv() {
+                    Ok(buf) => {
+                        if let Ok(sent) = socket.send_slice(buf.as_ready()) {
+                            // successfully sent
+                            has_activity = true;
+                            if sent < buf.len {
+                                self.remain_to_send = Some((buf, sent));
+                            } else {
+                                allocator.release(buf);
+                            }
+                        } else {
+                            return Err(ErrorKind::ConnectionAborted.into());
+                        }
+                    }
+                    Err(TryRecvError::Empty) => {}
+                    Err(_) => return Err(ErrorKind::ConnectionAborted.into()),
+                }
+            }
+        }
+        if socket.state() == TcpState::CloseWait {
+            socket.close();
+        }
+        Ok(has_activity)
+    }
+
+    pub async fn try_recv<'a>(
+        &self,
+        socket: &mut SmolTcpSocket<'a>,
+        allocator: &mut PktBufPool,
+    ) -> bool {
+        // Receive data
+        if socket.can_recv() && self.connector.tx.capacity() > 0 {
+            let mut buf = allocator.obtain().await;
+            if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
+                buf.len = size;
+                // must not fail because there is only 1 sender
+                let _ = self.connector.tx.send(buf).await;
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -61,6 +125,54 @@ impl UdpConnTask {
             dest,
             last_active: Instant::now(),
         }
+    }
+
+    pub async fn try_send<'a>(
+        &mut self,
+        socket: &mut SmolUdpSocket<'a>,
+        allocator: &mut PktBufPool,
+    ) -> io::Result<bool> {
+        let mut has_activity = false;
+        // Send data
+        if socket.can_send() {
+            // fetch new data
+            match self.connector.rx.try_recv() {
+                Ok(buf) => {
+                    has_activity = true;
+                    if socket.send_slice(buf.as_ready(), self.dest).is_ok() {
+                        allocator.release(buf);
+                        self.last_active = Instant::now();
+                    } else {
+                        return Err(ErrorKind::ConnectionAborted.into());
+                    }
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(_) => return Err(ErrorKind::ConnectionAborted.into()),
+            }
+        }
+        Ok(has_activity)
+    }
+
+    pub async fn try_recv<'a>(
+        &mut self,
+        socket: &mut SmolUdpSocket<'a>,
+        allocator: &mut PktBufPool,
+    ) -> bool {
+        // Receive data
+        if socket.can_recv() && self.connector.tx.capacity() < self.connector.tx.max_capacity() {
+            let mut buf = allocator.obtain().await;
+            if let Ok((size, ep)) = socket.recv_slice(buf.as_uninited()) {
+                if ep == self.dest {
+                    buf.len = size;
+                    self.last_active = Instant::now();
+                    // must not fail because there is only 1 sender
+                    let _ = self.connector.tx.send(buf).await;
+                    return true;
+                }
+                // discard mismatched packet
+            }
+        }
+        false
     }
 }
 
@@ -183,85 +295,17 @@ impl SmolStack {
         for mut item in self.tcp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(item.handle);
             if socket.state() != TcpState::Closed {
-                match Self::poll_tcp_socket_send(socket, item.deref_mut(), &mut self.allocator)
-                    .await
-                {
+                match item.try_send(socket, &mut self.allocator).await {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();
                         item.abort_handle.cancel().await;
                     }
                 }
-                has_activity |=
-                    Self::poll_tcp_socket_recv(socket, item.deref_mut(), &mut self.allocator).await;
+                has_activity |= item.try_recv(socket, &mut self.allocator).await;
             }
         }
         has_activity
-    }
-
-    async fn poll_tcp_socket_send<'a>(
-        socket: &mut SmolTcpSocket<'a>,
-        task: &mut TcpConnTask,
-        allocator: &mut PktBufPool,
-    ) -> io::Result<bool> {
-        let mut has_activity = false;
-        // Send data
-        if socket.can_send() {
-            if let Some((buf, start)) = task.remain_to_send.take() {
-                if let Ok(sent) = socket.send_slice(&buf.as_ready()[start..]) {
-                    // successfully sent
-                    has_activity = true;
-                    if start + sent < buf.len {
-                        task.remain_to_send = Some((buf, sent + start));
-                    } else {
-                        allocator.release(buf)
-                    }
-                } else {
-                    return Err(ErrorKind::ConnectionAborted.into());
-                }
-            } else {
-                // fetch new data
-                match task.connector.rx.try_recv() {
-                    Ok(buf) => {
-                        if let Ok(sent) = socket.send_slice(buf.as_ready()) {
-                            // successfully sent
-                            has_activity = true;
-                            if sent < buf.len {
-                                task.remain_to_send = Some((buf, sent));
-                            } else {
-                                allocator.release(buf);
-                            }
-                        } else {
-                            return Err(ErrorKind::ConnectionAborted.into());
-                        }
-                    }
-                    Err(TryRecvError::Empty) => {}
-                    Err(_) => return Err(ErrorKind::ConnectionAborted.into()),
-                }
-            }
-        }
-        if socket.state() == TcpState::CloseWait {
-            socket.close();
-        }
-        Ok(has_activity)
-    }
-
-    async fn poll_tcp_socket_recv<'a>(
-        socket: &mut SmolTcpSocket<'a>,
-        task: &mut TcpConnTask,
-        allocator: &mut PktBufPool,
-    ) -> bool {
-        // Receive data
-        if socket.can_recv() && task.connector.tx.capacity() > 0 {
-            let mut buf = allocator.obtain().await;
-            if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
-                buf.len = size;
-                // must not fail because there is only 1 sender
-                let _ = task.connector.tx.send(buf).await;
-                return true;
-            }
-        }
-        false
     }
 
     pub async fn poll_all_udp(&mut self) -> bool {
@@ -269,68 +313,17 @@ impl SmolStack {
         for mut item in self.udp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolUdpSocket>(item.handle);
             if socket.is_open() {
-                match Self::poll_udp_socket_send(socket, item.deref_mut(), &mut self.allocator)
-                    .await
-                {
+                match item.try_send(socket, &mut self.allocator).await {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();
                         item.abort_handle.cancel().await;
                     }
                 }
-                has_activity |=
-                    Self::poll_udp_socket_recv(socket, item.deref_mut(), &mut self.allocator).await;
+                has_activity |= item.try_recv(socket, &mut self.allocator).await;
             }
         }
         has_activity
-    }
-
-    async fn poll_udp_socket_send<'a>(
-        socket: &mut SmolUdpSocket<'a>,
-        task: &mut UdpConnTask,
-        allocator: &mut PktBufPool,
-    ) -> io::Result<bool> {
-        let mut has_activity = false;
-        // Send data
-        if socket.can_send() {
-            // fetch new data
-            match task.connector.rx.try_recv() {
-                Ok(buf) => {
-                    has_activity = true;
-                    if socket.send_slice(buf.as_ready(), task.dest).is_ok() {
-                        allocator.release(buf);
-                        task.last_active = Instant::now();
-                    } else {
-                        return Err(ErrorKind::ConnectionAborted.into());
-                    }
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(_) => return Err(ErrorKind::ConnectionAborted.into()),
-            }
-        }
-        Ok(has_activity)
-    }
-
-    async fn poll_udp_socket_recv<'a>(
-        socket: &mut SmolUdpSocket<'a>,
-        task: &mut UdpConnTask,
-        allocator: &mut PktBufPool,
-    ) -> bool {
-        // Receive data
-        if socket.can_recv() && task.connector.tx.capacity() < task.connector.tx.max_capacity() {
-            let mut buf = allocator.obtain().await;
-            if let Ok((size, ep)) = socket.recv_slice(buf.as_uninited()) {
-                if ep == task.dest {
-                    buf.len = size;
-                    task.last_active = Instant::now();
-                    // must not fail because there is only 1 sender
-                    let _ = task.connector.tx.send(buf).await;
-                    return true;
-                }
-                // discard mismatched packet
-            }
-        }
-        false
     }
 
     pub fn purge_closed_tcp(&mut self) {
