@@ -48,7 +48,7 @@ impl Dispatcher {
             iface_name,
             dns.clone(),
             allocator.clone(),
-            Duration::from_secs(300),
+            Duration::from_secs(180),
         );
         Self {
             iface_name: iface_name.into(),

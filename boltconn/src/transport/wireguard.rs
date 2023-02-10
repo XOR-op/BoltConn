@@ -12,7 +12,7 @@ use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 
 // We left AllowedIPs since it's boltconn that manages routing.
 #[derive(Clone)]
@@ -62,6 +62,7 @@ pub struct WireguardTunnel {
     tunnel: Box<Tunn>,
     /// remote address on the genuine Internet
     endpoint: SocketAddr,
+    smol_notify: Arc<Notify>,
 }
 
 impl WireguardTunnel {
@@ -69,6 +70,7 @@ impl WireguardTunnel {
         outbound: UdpSocket,
         config: &WireguardConfig,
         dns: Arc<Dns>,
+        smol_notify: Arc<Notify>,
     ) -> anyhow::Result<Self> {
         let endpoint = match config.endpoint {
             NetworkAddr::Raw(addr) => addr,
@@ -96,6 +98,7 @@ impl WireguardTunnel {
             outbound,
             tunnel,
             endpoint,
+            smol_notify,
         })
     }
 
@@ -110,7 +113,7 @@ impl WireguardTunnel {
     /// Receive wg packet from Internet
     pub async fn receive_incoming_packet(
         &self,
-        smol_tx: &mut mpsc::Sender<BytesMut>,
+        smol_tx: &mut flume::Sender<BytesMut>,
         buf: &mut [u8; MAX_PKT_SIZE],
         wg_buf: &mut [u8; MAX_PKT_SIZE],
     ) -> anyhow::Result<()> {
@@ -120,11 +123,13 @@ impl WireguardTunnel {
         match self.tunnel.decapsulate(None, &buf[..len], wg_buf) {
             TunnResult::WriteToTunnelV4(data, _addr) => {
                 let data = BytesMut::from_iter(data.iter());
-                smol_tx.send(data).await?;
+                smol_tx.send_async(data).await?;
+                self.smol_notify.notify_one();
             }
             TunnResult::WriteToTunnelV6(data, _addr) => {
                 let data = BytesMut::from_iter(data.iter());
-                smol_tx.send(data).await?;
+                smol_tx.send_async(data).await?;
+                self.smol_notify.notify_one();
             }
             TunnResult::WriteToNetwork(data) => {
                 self.outbound.send(data).await?;

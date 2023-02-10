@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinHandle;
 
 // Shared Wireguard Tunnel between multiple client connections
@@ -22,6 +22,7 @@ pub struct Endpoint {
     wg: Arc<WireguardTunnel>,
     stack: Arc<Mutex<SmolStack>>,
     stop_sender: broadcast::Sender<()>,
+    notify: Arc<Notify>,
 }
 
 impl Endpoint {
@@ -32,12 +33,13 @@ impl Endpoint {
         allocator: PktBufPool,
         timeout: Duration,
     ) -> anyhow::Result<Arc<Self>> {
+        let notify = Arc::new(Notify::new());
         // control conn
         let (stop_send, mut stop_recv) = broadcast::channel(1);
 
-        let (mut wg_smol_tx, wg_smol_rx) = mpsc::channel(128);
+        let (mut wg_smol_tx, wg_smol_rx) = flume::unbounded();
         let (smol_wg_tx, mut smol_wg_rx) = flume::unbounded();
-        let tunnel = Arc::new(WireguardTunnel::new(outbound, config, dns).await?);
+        let tunnel = Arc::new(WireguardTunnel::new(outbound, config, dns, notify.clone()).await?);
         let device = VirtualIpDevice::new(config.mtu, wg_smol_rx, smol_wg_tx);
         let smol_stack = Arc::new(Mutex::new(SmolStack::new(
             config.ip_addr,
@@ -103,9 +105,11 @@ impl Endpoint {
         // drive smol
         let smol_drive = {
             let smol_stack = smol_stack.clone();
+            let notifier = notify.clone();
             tokio::spawn(async move {
                 loop {
                     let mut immediate_next_loop = false;
+                    notifier.notified().await;
                     let mut stack_handle = smol_stack.lock().await;
                     stack_handle.drive_iface();
                     immediate_next_loop |= stack_handle.poll_all_tcp().await;
@@ -130,6 +134,10 @@ impl Endpoint {
                     smol_drive.abort();
                     return;
                 } else if last_active.lock().await.elapsed() > timeout {
+                    tracing::trace!(
+                        "[Wireguard] Stop inactive tunnel after for {}s.",
+                        timeout.as_secs()
+                    );
                     // timeout
                     wg_out.abort();
                     wg_in.abort();
@@ -144,7 +152,12 @@ impl Endpoint {
             wg: tunnel,
             stack: smol_stack,
             stop_sender: stop_send,
+            notify,
         }))
+    }
+
+    pub fn clone_notify(&self) -> Arc<Notify> {
+        self.notify.clone()
     }
 }
 
@@ -225,21 +238,23 @@ impl WireguardHandle {
     async fn attach_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
         // todo: remote dns
         let dst = get_dst(&self.dns, &self.dst).await?;
+        let notify = self.endpoint.clone_notify();
         self.endpoint
             .stack
             .lock()
             .await
-            .open_tcp(self.src_port, dst, inbound, abort_handle)
+            .open_tcp(self.src_port, dst, inbound, abort_handle, notify)
     }
 
     async fn attach_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
         // todo: remote dns
         let dst = get_dst(&self.dns, &self.dst).await?;
+        let notify = self.endpoint.clone_notify();
         self.endpoint
             .stack
             .lock()
             .await
-            .open_udp(self.src_port, dst, inbound, abort_handle)
+            .open_udp(self.src_port, dst, inbound, abort_handle, notify)
     }
 }
 

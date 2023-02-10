@@ -4,6 +4,7 @@ use crate::proxy::ConnAbortHandle;
 use bytes::BytesMut;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
+use flume::TryRecvError;
 use smoltcp::iface::{Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::{
@@ -16,32 +17,50 @@ use smoltcp::wire::{IpCidr, IpEndpoint};
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::{mpsc, Notify};
 
 struct TcpConnTask {
-    connector: Connector,
+    back_tx: mpsc::Sender<PktBufHandle>,
+    rx: flume::Receiver<PktBufHandle>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     remain_to_send: Option<(PktBufHandle, usize)>, // buffer, start_offset
+    allocator: PktBufPool,
 }
 
 impl TcpConnTask {
-    pub fn new(connector: Connector, handle: SocketHandle, abort_handle: ConnAbortHandle) -> Self {
+    pub fn new(
+        connector: Connector,
+        handle: SocketHandle,
+        abort_handle: ConnAbortHandle,
+        allocator: PktBufPool,
+        notify: Arc<Notify>,
+    ) -> Self {
+        let Connector {
+            tx: back_tx,
+            rx: mut back_rx,
+        } = connector;
+        let (tx, rx) = flume::unbounded();
+        // notify smol when new message comes
+        tokio::spawn(async move {
+            while let Some(buf) = back_rx.recv().await {
+                let _ = tx.send(buf);
+                notify.notify_one();
+            }
+        });
         Self {
-            connector,
+            back_tx,
+            rx,
             handle,
             abort_handle,
             remain_to_send: None,
+            allocator,
         }
     }
 
-    pub async fn try_send(
-        &mut self,
-        socket: &mut SmolTcpSocket<'_>,
-        allocator: &mut PktBufPool,
-    ) -> io::Result<bool> {
+    pub async fn try_send(&mut self, socket: &mut SmolTcpSocket<'_>) -> io::Result<bool> {
         let mut has_activity = false;
         // Send data
         if socket.can_send() {
@@ -52,14 +71,14 @@ impl TcpConnTask {
                     if start + sent < buf.len {
                         self.remain_to_send = Some((buf, sent + start));
                     } else {
-                        allocator.release(buf)
+                        self.allocator.release(buf)
                     }
                 } else {
                     return Err(ErrorKind::ConnectionAborted.into());
                 }
             } else {
                 // fetch new data
-                match self.connector.rx.try_recv() {
+                match self.rx.try_recv() {
                     Ok(buf) => {
                         if let Ok(sent) = socket.send_slice(buf.as_ready()) {
                             // successfully sent
@@ -67,7 +86,7 @@ impl TcpConnTask {
                             if sent < buf.len {
                                 self.remain_to_send = Some((buf, sent));
                             } else {
-                                allocator.release(buf);
+                                self.allocator.release(buf);
                             }
                         } else {
                             return Err(ErrorKind::ConnectionAborted.into());
@@ -84,18 +103,14 @@ impl TcpConnTask {
         Ok(has_activity)
     }
 
-    pub async fn try_recv(
-        &self,
-        socket: &mut SmolTcpSocket<'_>,
-        allocator: &mut PktBufPool,
-    ) -> bool {
+    pub async fn try_recv(&self, socket: &mut SmolTcpSocket<'_>) -> bool {
         // Receive data
-        if socket.can_recv() && self.connector.tx.capacity() > 0 {
-            let mut buf = allocator.obtain().await;
+        if socket.can_recv() && self.back_tx.capacity() > 0 {
+            let mut buf = self.allocator.obtain().await;
             if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
                 buf.len = size;
                 // must not fail because there is only 1 sender
-                let _ = self.connector.tx.send(buf).await;
+                let _ = self.back_tx.send(buf).await;
                 return true;
             }
         }
@@ -104,9 +119,11 @@ impl TcpConnTask {
 }
 
 struct UdpConnTask {
-    connector: Connector,
+    back_tx: mpsc::Sender<PktBufHandle>,
+    rx: flume::Receiver<PktBufHandle>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
+    allocator: PktBufPool,
     dest: IpEndpoint,
     last_active: Instant,
 }
@@ -117,30 +134,41 @@ impl UdpConnTask {
         dest: IpEndpoint,
         handle: SocketHandle,
         abort_handle: ConnAbortHandle,
+        allocator: PktBufPool,
+        notify: Arc<Notify>,
     ) -> Self {
+        let Connector {
+            tx: back_tx,
+            rx: mut back_rx,
+        } = connector;
+        let (tx, rx) = flume::unbounded();
+        tokio::spawn(async move {
+            while let Some(buf) = back_rx.recv().await {
+                let _ = tx.send(buf);
+                notify.notify_one();
+            }
+        });
         Self {
-            connector,
+            back_tx,
+            rx,
             handle,
             abort_handle,
+            allocator,
             dest,
             last_active: Instant::now(),
         }
     }
 
-    pub async fn try_send(
-        &mut self,
-        socket: &mut SmolUdpSocket<'_>,
-        allocator: &mut PktBufPool,
-    ) -> io::Result<bool> {
+    pub async fn try_send(&mut self, socket: &mut SmolUdpSocket<'_>) -> io::Result<bool> {
         let mut has_activity = false;
         // Send data
         if socket.can_send() {
             // fetch new data
-            match self.connector.rx.try_recv() {
+            match self.rx.try_recv() {
                 Ok(buf) => {
                     has_activity = true;
                     if socket.send_slice(buf.as_ready(), self.dest).is_ok() {
-                        allocator.release(buf);
+                        self.allocator.release(buf);
                         self.last_active = Instant::now();
                     } else {
                         return Err(ErrorKind::ConnectionAborted.into());
@@ -153,20 +181,16 @@ impl UdpConnTask {
         Ok(has_activity)
     }
 
-    pub async fn try_recv(
-        &mut self,
-        socket: &mut SmolUdpSocket<'_>,
-        allocator: &mut PktBufPool,
-    ) -> bool {
+    pub async fn try_recv(&mut self, socket: &mut SmolUdpSocket<'_>) -> bool {
         // Receive data
-        if socket.can_recv() && self.connector.tx.capacity() < self.connector.tx.max_capacity() {
-            let mut buf = allocator.obtain().await;
+        if socket.can_recv() && self.back_tx.capacity() > 0 {
+            let mut buf = self.allocator.obtain().await;
             if let Ok((size, ep)) = socket.recv_slice(buf.as_uninited()) {
                 if ep == self.dest {
                     buf.len = size;
                     self.last_active = Instant::now();
                     // must not fail because there is only 1 sender
-                    let _ = self.connector.tx.send(buf).await;
+                    let _ = self.back_tx.send(buf).await;
                     return true;
                 }
                 // discard mismatched packet
@@ -227,6 +251,7 @@ impl SmolStack {
         remote_addr: SocketAddr,
         connector: Connector,
         abort_handle: ConnAbortHandle,
+        notify: Arc<Notify>,
     ) -> io::Result<()> {
         match self.tcp_conn.entry(local_port) {
             Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
@@ -235,6 +260,8 @@ impl SmolStack {
                 let tx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
                 let rx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
                 let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
+                // Since we are behind kernel's TCP/IP stack, no second Nagle is needed.
+                client_socket.set_nagle_enabled(false);
 
                 // connect to remote
                 client_socket
@@ -246,7 +273,13 @@ impl SmolStack {
                     .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
 
                 let handle = self.socket_set.add(client_socket);
-                e.insert(TcpConnTask::new(connector, handle, abort_handle));
+                e.insert(TcpConnTask::new(
+                    connector,
+                    handle,
+                    abort_handle,
+                    self.allocator.clone(),
+                    notify,
+                ));
                 Ok(())
             }
         }
@@ -258,6 +291,7 @@ impl SmolStack {
         remote_addr: SocketAddr,
         connector: Connector,
         abort_handle: ConnAbortHandle,
+        notify: Arc<Notify>,
     ) -> io::Result<()> {
         match self.udp_conn.entry(local_port) {
             Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
@@ -284,6 +318,8 @@ impl SmolStack {
                     remote_addr,
                     handle,
                     abort_handle,
+                    self.allocator.clone(),
+                    notify,
                 ));
                 Ok(())
             }
@@ -295,14 +331,14 @@ impl SmolStack {
         for mut item in self.tcp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(item.handle);
             if socket.state() != TcpState::Closed {
-                match item.try_send(socket, &mut self.allocator).await {
+                match item.try_send(socket).await {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();
                         item.abort_handle.cancel().await;
                     }
                 }
-                has_activity |= item.try_recv(socket, &mut self.allocator).await;
+                has_activity |= item.try_recv(socket).await;
             }
         }
         has_activity
@@ -313,14 +349,14 @@ impl SmolStack {
         for mut item in self.udp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolUdpSocket>(item.handle);
             if socket.is_open() {
-                match item.try_send(socket, &mut self.allocator).await {
+                match item.try_send(socket).await {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();
                         item.abort_handle.cancel().await;
                     }
                 }
-                has_activity |= item.try_recv(socket, &mut self.allocator).await;
+                has_activity |= item.try_recv(socket).await;
             }
         }
         has_activity
@@ -367,25 +403,13 @@ pub struct VirtualIpDevice {
 impl VirtualIpDevice {
     pub fn new(
         mtu: usize,
-        mut inbound: mpsc::Receiver<BytesMut>,
+        inbound: flume::Receiver<BytesMut>,
         outbound: flume::Sender<BytesMut>,
     ) -> Self {
-        let (queue_in, queue_out) = flume::unbounded();
-        tokio::spawn(async move {
-            // move data from inbound to internal buffer
-            loop {
-                match inbound.recv().await {
-                    None => return,
-                    Some(item) => {
-                        let _ = queue_in.send_async(item).await;
-                    }
-                }
-            }
-        });
         Self {
             mtu,
             outbound,
-            packet_queue: queue_out,
+            packet_queue: inbound,
         }
     }
 }
