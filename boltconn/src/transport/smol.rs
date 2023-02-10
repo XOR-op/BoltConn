@@ -183,19 +183,23 @@ impl SmolStack {
         for mut item in self.tcp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(item.handle);
             if socket.state() != TcpState::Closed {
-                match Self::poll_tcp_socket(socket, item.deref_mut(), &mut self.allocator).await {
+                match Self::poll_tcp_socket_send(socket, item.deref_mut(), &mut self.allocator)
+                    .await
+                {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();
                         item.abort_handle.cancel().await;
                     }
                 }
+                has_activity |=
+                    Self::poll_tcp_socket_recv(socket, item.deref_mut(), &mut self.allocator).await;
             }
         }
         has_activity
     }
 
-    async fn poll_tcp_socket<'a>(
+    async fn poll_tcp_socket_send<'a>(
         socket: &mut SmolTcpSocket<'a>,
         task: &mut TcpConnTask,
         allocator: &mut PktBufPool,
@@ -236,21 +240,28 @@ impl SmolStack {
                 }
             }
         }
-
-        // Receive data
-        if socket.can_recv() && task.connector.tx.capacity() > 0 {
-            let mut buf = allocator.obtain().await;
-            if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
-                has_activity = true;
-                buf.len = size;
-                // must not fail because there is only 1 sender
-                let _ = task.connector.tx.send(buf).await;
-            }
-        }
         if socket.state() == TcpState::CloseWait {
             socket.close();
         }
         Ok(has_activity)
+    }
+
+    async fn poll_tcp_socket_recv<'a>(
+        socket: &mut SmolTcpSocket<'a>,
+        task: &mut TcpConnTask,
+        allocator: &mut PktBufPool,
+    ) -> bool {
+        // Receive data
+        if socket.can_recv() && task.connector.tx.capacity() > 0 {
+            let mut buf = allocator.obtain().await;
+            if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
+                buf.len = size;
+                // must not fail because there is only 1 sender
+                let _ = task.connector.tx.send(buf).await;
+                return true;
+            }
+        }
+        false
     }
 
     pub async fn poll_all_udp(&mut self) -> bool {
@@ -258,19 +269,23 @@ impl SmolStack {
         for mut item in self.udp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolUdpSocket>(item.handle);
             if socket.is_open() {
-                match Self::poll_udp_socket(socket, item.deref_mut(), &mut self.allocator).await {
+                match Self::poll_udp_socket_send(socket, item.deref_mut(), &mut self.allocator)
+                    .await
+                {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();
                         item.abort_handle.cancel().await;
                     }
                 }
+                has_activity |=
+                    Self::poll_udp_socket_recv(socket, item.deref_mut(), &mut self.allocator).await;
             }
         }
         has_activity
     }
 
-    async fn poll_udp_socket<'a>(
+    async fn poll_udp_socket_send<'a>(
         socket: &mut SmolUdpSocket<'a>,
         task: &mut UdpConnTask,
         allocator: &mut PktBufPool,
@@ -293,22 +308,29 @@ impl SmolStack {
                 Err(_) => return Err(ErrorKind::ConnectionAborted.into()),
             }
         }
+        Ok(has_activity)
+    }
 
+    async fn poll_udp_socket_recv<'a>(
+        socket: &mut SmolUdpSocket<'a>,
+        task: &mut UdpConnTask,
+        allocator: &mut PktBufPool,
+    ) -> bool {
         // Receive data
         if socket.can_recv() && task.connector.tx.capacity() < task.connector.tx.max_capacity() {
             let mut buf = allocator.obtain().await;
             if let Ok((size, ep)) = socket.recv_slice(buf.as_uninited()) {
-                has_activity = true;
                 if ep == task.dest {
                     buf.len = size;
                     task.last_active = Instant::now();
                     // must not fail because there is only 1 sender
                     let _ = task.connector.tx.send(buf).await;
+                    return true;
                 }
                 // discard mismatched packet
             }
         }
-        Ok(has_activity)
+        false
     }
 
     pub fn purge_closed_tcp(&mut self) {

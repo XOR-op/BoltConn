@@ -2,7 +2,6 @@ use crate::common::buf_pool::MAX_PKT_SIZE;
 use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
-use anyhow::anyhow;
 use boringtun::noise::errors::WireGuardError;
 use boringtun::noise::{Tunn, TunnResult};
 use bytes::BytesMut;
@@ -131,10 +130,7 @@ impl WireguardTunnel {
                 self.outbound.send(data).await?;
                 self.flush_pending_queue(wg_buf).await?;
             }
-            a => {
-                tracing::warn!("Unknown result: {:?}", a);
-                return Err(anyhow!("Unexpected result at endpoint"));
-            }
+            _ => {}
         }
         Ok(())
     }
