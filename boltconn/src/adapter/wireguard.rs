@@ -107,10 +107,9 @@ impl Endpoint {
                 loop {
                     let mut immediate_next_loop = false;
                     let mut stack_handle = smol_stack.lock().await;
-                    if stack_handle.drive_iface() {
-                        immediate_next_loop |= stack_handle.poll_all_tcp().await;
-                        immediate_next_loop |= stack_handle.poll_all_udp().await;
-                    }
+                    stack_handle.drive_iface();
+                    immediate_next_loop |= stack_handle.poll_all_tcp().await;
+                    immediate_next_loop |= stack_handle.poll_all_udp().await;
                     stack_handle.purge_closed_tcp();
                     stack_handle.purge_timeout_udp();
                     if !immediate_next_loop {
