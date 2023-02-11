@@ -28,6 +28,8 @@ httparse = "1.8.0"
 hyper = { version = "0.14.23", features = ["stream", "server", "client", "http1", "http2"] }
 ioctl-sys = "0.8.0"
 ipnet = "2.5.1"
+ip_network = "0.4.1"
+ip_network_table = "0.2.0"
 is-root = "0.1.2"
 libc = "0.2.137"
 libproc = "0.13.0"

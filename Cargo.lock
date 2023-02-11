@@ -354,6 +354,8 @@ dependencies = [
  "httparse",
  "hyper",
  "ioctl-sys",
+ "ip_network",
+ "ip_network_table",
  "ipnet",
  "is-root",
  "libc",
