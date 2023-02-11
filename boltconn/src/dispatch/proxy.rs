@@ -1,8 +1,7 @@
-use crate::adapter::Socks5Config;
+use crate::adapter::{ShadowSocksConfig, Socks5Config};
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
-use shadowsocks::ServerConfig;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, RwLock};
 
@@ -34,9 +33,20 @@ pub enum ProxyImpl {
     Direct,
     Reject,
     Socks5(Socks5Config),
-    Shadowsocks(ServerConfig),
+    Shadowsocks(ShadowSocksConfig),
     Trojan(TrojanConfig),
     Wireguard(WireguardConfig),
+}
+
+impl ProxyImpl {
+    pub fn support_udp(&self) -> bool {
+        match self {
+            ProxyImpl::Socks5(c) => c.udp,
+            ProxyImpl::Shadowsocks(c) => c.udp,
+            ProxyImpl::Trojan(c) => c.udp,
+            _ => true,
+        }
+    }
 }
 
 /// A group of proxies

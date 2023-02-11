@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 pub struct Socks5Config {
     pub(crate) server_addr: NetworkAddr,
     pub(crate) auth: Option<(String, String)>,
+    pub(crate) udp: bool,
 }
 
 impl Socks5Config {

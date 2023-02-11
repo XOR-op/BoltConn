@@ -1,4 +1,4 @@
-use crate::adapter::Socks5Config;
+use crate::adapter::{ShadowSocksConfig, Socks5Config};
 use crate::config::{
     RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawServerSockAddr, RawState, RuleSchema,
 };
@@ -13,7 +13,7 @@ use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
 use base64::Engine;
 use shadowsocks::crypto::CipherKind;
-use shadowsocks::{ServerAddr, ServerConfig};
+use shadowsocks::ServerAddr;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -37,18 +37,34 @@ impl Dispatching {
     pub fn matches(&self, info: &ConnInfo) -> Arc<ProxyImpl> {
         for v in &self.rules {
             if let Some(proxy) = v.matches(info) {
-                tracing::info!("[{:?}] {} => {}", v, info.dst, proxy);
-                return match &proxy {
+                let proxy_impl = match &proxy {
                     GeneralProxy::Single(p) => p.get_impl(),
                     GeneralProxy::Group(g) => g.get_proxy().get_impl(),
                 };
+                if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
+                    tracing::info!("[{:?}] {} => {} failed: UDP disabled", v, info.dst, proxy);
+                    return Arc::new(ProxyImpl::Reject);
+                }
+                tracing::info!("[{:?}] {} => {}", v, info.dst, proxy);
+                return proxy_impl;
             }
         }
-        tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
-        match &self.fallback {
+
+        // fallback proxy
+        let proxy_impl = match &self.fallback {
             GeneralProxy::Single(p) => p.get_impl(),
             GeneralProxy::Group(g) => g.get_proxy().get_impl(),
+        };
+        if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
+            tracing::info!(
+                "[Fallback] {} => {} failed: UDP disabled",
+                info.dst,
+                self.fallback
+            );
+            return Arc::new(ProxyImpl::Reject);
         }
+        tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
+        proxy_impl
     }
 
     pub fn set_group_selection(&self, group: &str, proxy: &str) -> anyhow::Result<()> {
@@ -135,6 +151,7 @@ impl DispatchingBuilder {
                         port,
                         username,
                         password,
+                        udp,
                     } => {
                         let auth = {
                             if let (Some(username), Some(passwd)) = (username, password) {
@@ -151,6 +168,7 @@ impl DispatchingBuilder {
                             ProxyImpl::Socks5(Socks5Config {
                                 server_addr: NetworkAddr::from(server, *port),
                                 auth,
+                                udp: *udp,
                             }),
                         )));
                     }
@@ -159,6 +177,7 @@ impl DispatchingBuilder {
                         port,
                         password,
                         cipher,
+                        udp,
                     } => {
                         let cipher_kind = match cipher.as_str() {
                             "chacha20-ietf-poly1305" => CipherKind::CHACHA20_POLY1305,
@@ -181,11 +200,12 @@ impl DispatchingBuilder {
                         };
                         e.insert(Arc::new(Proxy::new(
                             name.clone(),
-                            ProxyImpl::Shadowsocks(ServerConfig::new(
-                                addr,
-                                password.clone(),
+                            ProxyImpl::Shadowsocks(ShadowSocksConfig {
+                                server_addr: addr,
+                                password: password.clone(),
                                 cipher_kind,
-                            )),
+                                udp: *udp,
+                            }),
                         )));
                     }
                     RawProxyLocalCfg::Trojan {
@@ -195,6 +215,7 @@ impl DispatchingBuilder {
                         password,
                         skip_cert_verify,
                         websocket_path,
+                        udp,
                     } => {
                         let addr = match server {
                             RawServerAddr::IpAddr(ip) => {
@@ -213,6 +234,7 @@ impl DispatchingBuilder {
                                 sni: sni.clone(),
                                 skip_cert_verify: *skip_cert_verify,
                                 websocket_path: websocket_path.clone(),
+                                udp: *udp,
                             }),
                         )));
                     }

@@ -55,6 +55,8 @@ pub enum RawProxyLocalCfg {
         port: u16,
         username: Option<String>,
         password: Option<String>,
+        #[serde(default = "default_true")]
+        udp: bool,
     },
     #[serde(alias = "ss")]
     Shadowsocks {
@@ -62,6 +64,8 @@ pub enum RawProxyLocalCfg {
         port: u16,
         password: String,
         cipher: String,
+        #[serde(default = "default_true")]
+        udp: bool,
     },
     #[serde(alias = "trojan")]
     Trojan {
@@ -73,6 +77,8 @@ pub enum RawProxyLocalCfg {
         skip_cert_verify: bool,
         #[serde(alias = "websocket-path")]
         websocket_path: Option<String>,
+        #[serde(default = "default_true")]
+        udp: bool,
     },
     #[serde(alias = "wireguard")]
     Wireguard {

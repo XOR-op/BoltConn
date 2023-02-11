@@ -22,6 +22,7 @@ pub struct TrojanConfig {
     pub(crate) sni: String,
     pub(crate) skip_cert_verify: bool,
     pub(crate) websocket_path: Option<String>,
+    pub(crate) udp: bool,
 }
 
 #[derive(Copy, Clone, Debug)]

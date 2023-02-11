@@ -19,6 +19,20 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
+#[derive(Clone, Debug)]
+pub struct ShadowSocksConfig {
+    pub(crate) server_addr: ServerAddr,
+    pub(crate) password: String,
+    pub(crate) cipher_kind: shadowsocks::crypto::CipherKind,
+    pub(crate) udp: bool,
+}
+
+impl From<ShadowSocksConfig> for ServerConfig {
+    fn from(value: ShadowSocksConfig) -> Self {
+        ServerConfig::new(value.server_addr, value.password, value.cipher_kind)
+    }
+}
+
 #[derive(Clone)]
 pub struct SSOutbound {
     iface_name: String,
@@ -34,14 +48,14 @@ impl SSOutbound {
         dst: NetworkAddr,
         allocator: PktBufPool,
         dns: Arc<Dns>,
-        config: ServerConfig,
+        config: ShadowSocksConfig,
     ) -> Self {
         Self {
             iface_name: iface_name.to_string(),
             dst,
             allocator,
             dns,
-            config,
+            config: config.into(),
         }
     }
 
