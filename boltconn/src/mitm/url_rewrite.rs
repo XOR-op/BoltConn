@@ -118,7 +118,7 @@ impl UrlModManager {
         let (rules, regexes) = parse_rules(cfg).map_err(|s| anyhow::anyhow!(s))?;
         Ok(Self {
             rules,
-            regex_set: RegexSet::new(&regexes)?, // inner: RwLock::new(new_inner),
+            regex_set: RegexSet::new(regexes)?, // inner: RwLock::new(new_inner),
         })
     }
 

@@ -12,8 +12,7 @@ pub(crate) mod base64ext {
 
     pub fn deserialize<'a, D: Deserializer<'a>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
         use serde::de::Error;
-        String::deserialize(deserializer).and_then(|string| {
-            base64::decode(&string).map_err(|err| Error::custom(err.to_string()))
-        })
+        String::deserialize(deserializer)
+            .and_then(|string| base64::decode(string).map_err(|err| Error::custom(err.to_string())))
     }
 }

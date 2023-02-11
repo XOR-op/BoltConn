@@ -61,7 +61,7 @@ impl Dispatching {
     }
 
     pub fn get_group_list(&self) -> Vec<Arc<ProxyGroup>> {
-        self.groups.iter().map(|(_, g)| g.clone()).collect()
+        self.groups.values().cloned().collect()
     }
 }
 

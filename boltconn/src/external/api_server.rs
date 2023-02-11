@@ -224,7 +224,7 @@ impl ApiServer {
             }
         };
         if let Some(capturer) = &server.http_capturer {
-            if let Some(list) = capturer.get_range_copy(id as usize, Some((id + 1) as usize)) {
+            if let Some(list) = capturer.get_range_copy(id, Some(id + 1)) {
                 if list.len() == 1 {
                     let (_, _, req, resp) = list.get(0).unwrap();
                     let result = GetMitmDataResp {
