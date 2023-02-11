@@ -37,14 +37,14 @@ impl Dispatching {
     pub fn matches(&self, info: &ConnInfo) -> Arc<ProxyImpl> {
         for v in &self.rules {
             if let Some(proxy) = v.matches(info) {
-                tracing::trace!("{} matches policy {:?}", info.dst, v);
+                tracing::info!("[{:?}] {} => {}", v, info.dst, proxy);
                 return match &proxy {
                     GeneralProxy::Single(p) => p.get_impl(),
                     GeneralProxy::Group(g) => g.get_proxy().get_impl(),
                 };
             }
         }
-        tracing::trace!("{} Fallback policy", info.dst);
+        tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
         match &self.fallback {
             GeneralProxy::Single(p) => p.get_impl(),
             GeneralProxy::Group(g) => g.get_proxy().get_impl(),
@@ -316,7 +316,7 @@ impl DispatchingBuilder {
         // read rules
         let mut ruleset = HashMap::new();
         for (name, schema) in schema {
-            let Some(builder) = RuleSetBuilder::new(schema)else {
+            let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Failed to parse provider {}",name));
             };
             ruleset.insert(name, builder);
@@ -337,8 +337,8 @@ impl DispatchingBuilder {
         Ok(builder)
     }
 
-    pub fn direct_prioritize(&mut self, prioritized: Vec<IpAddr>) {
-        let ruleset = RuleSetBuilder::from_ipaddrs(prioritized).build();
+    pub fn direct_prioritize(&mut self, name: &str, prioritized: Vec<IpAddr>) {
+        let ruleset = RuleSetBuilder::from_ipaddrs(name, prioritized).build();
         let mut new_rules = vec![Rule::new(
             RuleImpl::RuleSet(ruleset),
             GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct))),

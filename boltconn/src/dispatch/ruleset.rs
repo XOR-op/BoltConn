@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 /// Matcher for rules in the same group
 pub struct RuleSet {
+    name: String,
     domain: HostMatcher,
     ip: IpNetworkTable<()>,
     port: HashSet<u16>,
@@ -23,7 +24,7 @@ pub struct RuleSet {
 
 impl Debug for RuleSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RULE-SET")
+        f.write_str(self.name.as_str())
     }
 }
 
@@ -62,6 +63,7 @@ impl RuleSet {
 }
 
 pub struct RuleSetBuilder {
+    name: String,
     domain: HostMatcherBuilder,
     domain_keyword: Vec<String>,
     ip_cidr: IpNetworkTable<()>,
@@ -72,8 +74,9 @@ pub struct RuleSetBuilder {
 }
 
 impl RuleSetBuilder {
-    pub fn new(payload: RuleSchema) -> Option<Self> {
+    pub fn new(name: &str, payload: RuleSchema) -> Option<Self> {
         let mut retval = Self {
+            name: name.to_string(),
             domain: HostMatcherBuilder::new(),
             domain_keyword: vec![],
             ip_cidr: Default::default(),
@@ -127,6 +130,7 @@ impl RuleSetBuilder {
 
     pub fn build(self) -> RuleSet {
         RuleSet {
+            name: self.name,
             domain: self.domain.build(),
             ip: self.ip_cidr,
             port: self.port,
@@ -137,12 +141,13 @@ impl RuleSetBuilder {
         }
     }
 
-    pub fn from_ipaddrs(list: Vec<IpAddr>) -> Self {
+    pub fn from_ipaddrs(name: &str, list: Vec<IpAddr>) -> Self {
         let mut table = IpNetworkTable::new();
         list.iter().for_each(|ip| {
             table.insert(*ip, ());
         });
         Self {
+            name: name.to_string(),
             domain: HostMatcherBuilder::new(),
             domain_keyword: vec![],
             ip_cidr: table,
@@ -161,7 +166,7 @@ fn test_rule_provider() {
     let config_text = std::fs::read_to_string("../examples/Rules/Apple").unwrap();
     let deserialized: RuleSchema = serde_yaml::from_str(&config_text).unwrap();
     println!("{:?}", deserialized);
-    let builder = RuleSetBuilder::new(deserialized);
+    let builder = RuleSetBuilder::new("Test", deserialized);
     assert!(builder.is_some());
     let ruleset = builder.unwrap().build();
     // println!("kw:{}, domain:{}", ruleset.domain_keyword.pattern_count(), ruleset.domain.len());

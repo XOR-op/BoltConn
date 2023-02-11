@@ -3,7 +3,8 @@ use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
 use shadowsocks::ServerConfig;
-use std::sync::{Arc, Mutex};
+use std::fmt::{Display, Formatter};
+use std::sync::{Arc, RwLock};
 
 /// Single proxy configuation.
 #[derive(Debug)]
@@ -43,7 +44,7 @@ pub enum ProxyImpl {
 pub struct ProxyGroup {
     name: String,
     proxies: Vec<GeneralProxy>,
-    selection: Mutex<GeneralProxy>,
+    selection: RwLock<GeneralProxy>,
 }
 
 impl ProxyGroup {
@@ -55,12 +56,12 @@ impl ProxyGroup {
         Self {
             name: name.into(),
             proxies,
-            selection: Mutex::new(selection),
+            selection: RwLock::new(selection),
         }
     }
 
     pub fn get_proxy(&self) -> Arc<Proxy> {
-        let selected = self.selection.lock().unwrap();
+        let selected = self.selection.read().unwrap();
         match *selected {
             GeneralProxy::Single(ref p) => p.clone(),
             GeneralProxy::Group(ref g) => g.get_proxy(),
@@ -76,7 +77,7 @@ impl ProxyGroup {
     }
 
     pub fn get_selection(&self) -> GeneralProxy {
-        self.selection.lock().unwrap().clone()
+        self.selection.read().unwrap().clone()
     }
 
     pub fn set_selection(&self, name: &str) -> anyhow::Result<()> {
@@ -84,13 +85,13 @@ impl ProxyGroup {
             match p {
                 GeneralProxy::Single(p) => {
                     if p.name == name {
-                        *self.selection.lock().unwrap() = GeneralProxy::Single(p.clone());
+                        *self.selection.write().unwrap() = GeneralProxy::Single(p.clone());
                         return Ok(());
                     }
                 }
                 GeneralProxy::Group(g) => {
                     if g.name == name {
-                        *self.selection.lock().unwrap() = GeneralProxy::Group(g.clone());
+                        *self.selection.write().unwrap() = GeneralProxy::Group(g.clone());
                         return Ok(());
                     }
                 }
@@ -104,6 +105,15 @@ impl ProxyGroup {
 pub enum GeneralProxy {
     Single(Arc<Proxy>),
     Group(Arc<ProxyGroup>),
+}
+
+impl Display for GeneralProxy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GeneralProxy::Single(s) => f.write_str(s.name.as_str()),
+            GeneralProxy::Group(g) => write!(f, "{}<{}>", g.name, g.selection.read().unwrap()),
+        }
+    }
 }
 
 impl PartialEq for GeneralProxy {

@@ -271,7 +271,7 @@ fn main() -> ExitCode {
             }
         };
         if let Some(list) = dns_ips {
-            builder.direct_prioritize(list);
+            builder.direct_prioritize("DNS-PRIO", list);
         }
         let result = match builder.build() {
             Ok(r) => r,
@@ -410,7 +410,7 @@ async fn reload(
     let dispatching = {
         let mut builder = DispatchingBuilder::new_from_config(&config, &state, schema)?;
         if config.dns.force_direct_dns {
-            builder.direct_prioritize(extract_address(&group));
+            builder.direct_prioritize("DNS_PRIO", extract_address(&group));
         }
         Arc::new(builder.build()?)
     };
