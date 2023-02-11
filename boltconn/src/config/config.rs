@@ -1,4 +1,4 @@
-use crate::config::RuleProvider;
+use crate::config::{ProxyProvider, RuleProvider};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -10,13 +10,15 @@ pub struct RawRootCfg {
     #[serde(alias = "api-port")]
     pub api_port: u16,
     pub dns: RawDnsConfig,
-    #[serde(alias = "proxy-local")]
+    #[serde(alias = "proxy-local", default = "default_local_proxy")]
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
+    #[serde(alias = "proxy-provider", default = "default_proxy_provider")]
+    pub proxy_provider: HashMap<String, ProxyProvider>,
     #[serde(alias = "proxy-group")]
     pub proxy_group: HashMap<String, Vec<String>>,
     #[serde(alias = "rule-local")]
     pub rule_local: Vec<String>,
-    #[serde(alias = "rule-provider")]
+    #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
     #[serde(alias = "mitm-host")]
     pub mitm_host: Option<Vec<String>>,
@@ -47,7 +49,7 @@ pub struct RawDnsConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields, tag = "proto")]
+#[serde(deny_unknown_fields, tag = "type")]
 pub enum RawProxyLocalCfg {
     #[serde(alias = "socks5")]
     Socks5 {
@@ -99,6 +101,18 @@ pub enum RawProxyLocalCfg {
 // Used for serde
 fn default_true() -> bool {
     true
+}
+
+fn default_local_proxy() -> HashMap<String, RawProxyLocalCfg> {
+    Default::default()
+}
+
+fn default_proxy_provider() -> HashMap<String, ProxyProvider> {
+    Default::default()
+}
+
+fn default_rule_provider() -> HashMap<String, RuleProvider> {
+    Default::default()
 }
 
 #[ignore]

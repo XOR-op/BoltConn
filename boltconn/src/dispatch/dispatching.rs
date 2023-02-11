@@ -1,6 +1,7 @@
 use crate::adapter::{ShadowSocksConfig, Socks5Config};
 use crate::config::{
-    RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawServerSockAddr, RawState, RuleSchema,
+    ProxySchema, RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawServerSockAddr, RawState,
+    RuleSchema,
 };
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
@@ -14,7 +15,6 @@ use anyhow::anyhow;
 use base64::Engine;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -124,10 +124,213 @@ impl DispatchingBuilder {
 }
 
 impl DispatchingBuilder {
+    fn parse_proxies<'a, I: Iterator<Item = (&'a String, &'a RawProxyLocalCfg)>>(
+        &mut self,
+        proxies: I,
+    ) -> anyhow::Result<()> {
+        for (name, proxy) in proxies {
+            // avoid duplication
+            if self.proxies.contains_key(name) || self.groups.contains_key(name) {
+                return Err(anyhow!("Duplicate proxy name:{}", *name));
+            }
+            let p = match proxy {
+                RawProxyLocalCfg::Socks5 {
+                    server,
+                    port,
+                    username,
+                    password,
+                    udp,
+                } => {
+                    let auth = {
+                        if let (Some(username), Some(passwd)) = (username, password) {
+                            Some((username.clone(), passwd.clone()))
+                        } else if let (None, None) = (username, password) {
+                            None
+                        } else {
+                            return Err(anyhow!("Bad Socks5 {}: invalid configuration", *name));
+                        }
+                    };
+
+                    Arc::new(Proxy::new(
+                        name.clone(),
+                        ProxyImpl::Socks5(Socks5Config {
+                            server_addr: NetworkAddr::from(server, *port),
+                            auth,
+                            udp: *udp,
+                        }),
+                    ))
+                }
+                RawProxyLocalCfg::Shadowsocks {
+                    server,
+                    port,
+                    password,
+                    cipher,
+                    udp,
+                } => {
+                    let cipher_kind = match cipher.as_str() {
+                        "chacha20-ietf-poly1305" => CipherKind::CHACHA20_POLY1305,
+                        "aes-256-gcm" => CipherKind::AES_256_GCM,
+                        "aes-128-gcm" => CipherKind::AES_128_GCM,
+                        _ => {
+                            return Err(anyhow!("Bad Shadowsocks {}: unsupported cipher", *name));
+                        }
+                    };
+                    let addr = match server {
+                        RawServerAddr::IpAddr(ip) => {
+                            ServerAddr::SocketAddr(SocketAddr::new(*ip, *port))
+                        }
+                        RawServerAddr::DomainName(dn) => ServerAddr::DomainName(dn.clone(), *port),
+                    };
+                    Arc::new(Proxy::new(
+                        name.clone(),
+                        ProxyImpl::Shadowsocks(ShadowSocksConfig {
+                            server_addr: addr,
+                            password: password.clone(),
+                            cipher_kind,
+                            udp: *udp,
+                        }),
+                    ))
+                }
+                RawProxyLocalCfg::Trojan {
+                    server,
+                    port,
+                    sni,
+                    password,
+                    skip_cert_verify,
+                    websocket_path,
+                    udp,
+                } => {
+                    let addr = match server {
+                        RawServerAddr::IpAddr(ip) => NetworkAddr::Raw(SocketAddr::new(*ip, *port)),
+                        RawServerAddr::DomainName(dn) => NetworkAddr::DomainName {
+                            domain_name: dn.clone(),
+                            port: *port,
+                        },
+                    };
+                    Arc::new(Proxy::new(
+                        name.clone(),
+                        ProxyImpl::Trojan(TrojanConfig {
+                            server_addr: addr,
+                            password: password.clone(),
+                            sni: sni.clone(),
+                            skip_cert_verify: *skip_cert_verify,
+                            websocket_path: websocket_path.clone(),
+                            udp: *udp,
+                        }),
+                    ))
+                }
+                RawProxyLocalCfg::Wireguard {
+                    local_addr,
+                    private_key,
+                    public_key,
+                    endpoint,
+                    mtu,
+                    preshared_key,
+                    keepalive,
+                } => {
+                    let endpoint = match endpoint {
+                        RawServerSockAddr::Ip(addr) => NetworkAddr::Raw(*addr),
+                        RawServerSockAddr::Domain(a) => {
+                            let parts = a.split(':').collect::<Vec<&str>>();
+                            let Some(port_str) = parts.get(1)else {
+                                return Err(anyhow!("No port"));
+                            };
+                            let port = port_str.parse::<u16>()?;
+                            #[allow(clippy::get_first)]
+                            NetworkAddr::DomainName {
+                                domain_name: parts.get(0).unwrap().to_string(),
+                                port,
+                            }
+                        }
+                    };
+                    // parse key
+                    let b64decoder = base64::engine::general_purpose::STANDARD;
+                    let private_key = {
+                        let val = b64decoder.decode(private_key)?;
+                        let val: [u8; 32] =
+                            val.try_into().map_err(|_| anyhow!("Decode private key"))?;
+                        x25519_dalek::StaticSecret::from(val)
+                    };
+                    let public_key = {
+                        let val = b64decoder.decode(public_key)?;
+                        let val: [u8; 32] =
+                            val.try_into().map_err(|_| anyhow!("Decode public key"))?;
+                        x25519_dalek::PublicKey::from(val)
+                    };
+                    let preshared_key = if let Some(v) = preshared_key {
+                        let val = b64decoder.decode(v)?;
+                        let val: [u8; 32] = val.try_into().map_err(|_| anyhow!("Decode PSK"))?;
+                        Some(val)
+                    } else {
+                        None
+                    };
+
+                    Arc::new(Proxy::new(
+                        name.clone(),
+                        ProxyImpl::Wireguard(WireguardConfig {
+                            ip_addr: *local_addr,
+                            private_key,
+                            public_key,
+                            endpoint,
+                            mtu: *mtu,
+                            preshared_key,
+                            keepalive: *keepalive,
+                        }),
+                    ))
+                }
+            };
+            self.proxies.insert(name.to_string(), p);
+        }
+        Ok(())
+    }
+
+    fn parse_group<'a, I: Iterator<Item = &'a String>>(
+        &mut self,
+        name: &str,
+        state: &RawState,
+        proxies: I,
+    ) -> anyhow::Result<()> {
+        if self.groups.contains_key(name) || self.proxies.contains_key(name) {
+            return Err(anyhow!("Duplicate group name {}", name));
+        }
+        let mut arr = Vec::new();
+        let mut selection = None;
+        for p in proxies {
+            let content = GeneralProxy::Single(
+                self.proxies
+                    .get(p)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Unrecognized name {:?}; nested group is unimplemented now",
+                            p.clone()
+                        )
+                    })?
+                    .clone(),
+            );
+
+            if p == state.group_selection.get(name).unwrap_or(&String::new()) {
+                selection = Some(content.clone());
+            }
+            arr.push(content);
+        }
+        let first = arr.first().unwrap().clone();
+        // If there is no selection now, select the first.
+        self.groups.insert(
+            name.to_string(),
+            Arc::new(ProxyGroup::new(
+                name.to_string(),
+                arr,
+                selection.unwrap_or(first),
+            )),
+        );
+        Ok(())
+    }
+
     pub fn new_from_config(
         cfg: &RawRootCfg,
         state: &RawState,
-        schema: HashMap<String, RuleSchema>,
+        rule_schema: HashMap<String, RuleSchema>,
+        proxy_schema: HashMap<String, ProxySchema>,
     ) -> anyhow::Result<Self> {
         let mut builder = Self::new();
         builder.proxies.insert(
@@ -139,205 +342,22 @@ impl DispatchingBuilder {
             Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)),
         );
         // read all proxies
-        for (name, proxy) in &cfg.proxy_local {
-            // avoid duplication
-            match builder.proxies.entry(name.clone()) {
-                Entry::Occupied(_) => {
-                    return Err(anyhow!("Duplicate proxy name:{}", *name));
-                }
-                Entry::Vacant(e) => match proxy {
-                    RawProxyLocalCfg::Socks5 {
-                        server,
-                        port,
-                        username,
-                        password,
-                        udp,
-                    } => {
-                        let auth = {
-                            if let (Some(username), Some(passwd)) = (username, password) {
-                                Some((username.clone(), passwd.clone()))
-                            } else if let (None, None) = (username, password) {
-                                None
-                            } else {
-                                return Err(anyhow!("Bad Socks5 {}: invalid configuration", *name));
-                            }
-                        };
-
-                        e.insert(Arc::new(Proxy::new(
-                            name.clone(),
-                            ProxyImpl::Socks5(Socks5Config {
-                                server_addr: NetworkAddr::from(server, *port),
-                                auth,
-                                udp: *udp,
-                            }),
-                        )));
-                    }
-                    RawProxyLocalCfg::Shadowsocks {
-                        server,
-                        port,
-                        password,
-                        cipher,
-                        udp,
-                    } => {
-                        let cipher_kind = match cipher.as_str() {
-                            "chacha20-ietf-poly1305" => CipherKind::CHACHA20_POLY1305,
-                            "aes-256-gcm" => CipherKind::AES_256_GCM,
-                            "aes-128-gcm" => CipherKind::AES_128_GCM,
-                            _ => {
-                                return Err(anyhow!(
-                                    "Bad Shadowsocks {}: unsupported cipher",
-                                    *name
-                                ));
-                            }
-                        };
-                        let addr = match server {
-                            RawServerAddr::IpAddr(ip) => {
-                                ServerAddr::SocketAddr(SocketAddr::new(*ip, *port))
-                            }
-                            RawServerAddr::DomainName(dn) => {
-                                ServerAddr::DomainName(dn.clone(), *port)
-                            }
-                        };
-                        e.insert(Arc::new(Proxy::new(
-                            name.clone(),
-                            ProxyImpl::Shadowsocks(ShadowSocksConfig {
-                                server_addr: addr,
-                                password: password.clone(),
-                                cipher_kind,
-                                udp: *udp,
-                            }),
-                        )));
-                    }
-                    RawProxyLocalCfg::Trojan {
-                        server,
-                        port,
-                        sni,
-                        password,
-                        skip_cert_verify,
-                        websocket_path,
-                        udp,
-                    } => {
-                        let addr = match server {
-                            RawServerAddr::IpAddr(ip) => {
-                                NetworkAddr::Raw(SocketAddr::new(*ip, *port))
-                            }
-                            RawServerAddr::DomainName(dn) => NetworkAddr::DomainName {
-                                domain_name: dn.clone(),
-                                port: *port,
-                            },
-                        };
-                        e.insert(Arc::new(Proxy::new(
-                            name.clone(),
-                            ProxyImpl::Trojan(TrojanConfig {
-                                server_addr: addr,
-                                password: password.clone(),
-                                sni: sni.clone(),
-                                skip_cert_verify: *skip_cert_verify,
-                                websocket_path: websocket_path.clone(),
-                                udp: *udp,
-                            }),
-                        )));
-                    }
-                    RawProxyLocalCfg::Wireguard {
-                        local_addr,
-                        private_key,
-                        public_key,
-                        endpoint,
-                        mtu,
-                        preshared_key,
-                        keepalive,
-                    } => {
-                        let endpoint = match endpoint {
-                            RawServerSockAddr::Ip(addr) => NetworkAddr::Raw(*addr),
-                            RawServerSockAddr::Domain(a) => {
-                                let parts = a.split(':').collect::<Vec<&str>>();
-                                let Some(port_str) = parts.get(1 )else {
-                                    return Err(anyhow!("No port"));
-                                };
-                                let port = port_str.parse::<u16>()?;
-                                #[allow(clippy::get_first)]
-                                NetworkAddr::DomainName {
-                                    domain_name: parts.get(0).unwrap().to_string(),
-                                    port,
-                                }
-                            }
-                        };
-                        // parse key
-                        let b64decoder = base64::engine::general_purpose::STANDARD;
-                        let private_key = {
-                            let val = b64decoder.decode(private_key)?;
-                            let val: [u8; 32] =
-                                val.try_into().map_err(|_| anyhow!("Decode private key"))?;
-                            x25519_dalek::StaticSecret::from(val)
-                        };
-                        let public_key = {
-                            let val = b64decoder.decode(public_key)?;
-                            let val: [u8; 32] =
-                                val.try_into().map_err(|_| anyhow!("Decode public key"))?;
-                            x25519_dalek::PublicKey::from(val)
-                        };
-                        let preshared_key = if let Some(v) = preshared_key {
-                            let val = b64decoder.decode(v)?;
-                            let val: [u8; 32] =
-                                val.try_into().map_err(|_| anyhow!("Decode PSK"))?;
-                            Some(val)
-                        } else {
-                            None
-                        };
-
-                        e.insert(Arc::new(Proxy::new(
-                            name.clone(),
-                            ProxyImpl::Wireguard(WireguardConfig {
-                                ip_addr: *local_addr,
-                                private_key,
-                                public_key,
-                                endpoint,
-                                mtu: *mtu,
-                                preshared_key,
-                                keepalive: *keepalive,
-                            }),
-                        )));
-                    }
-                },
-            }
+        builder.parse_proxies(cfg.proxy_local.iter())?;
+        for proxies in proxy_schema.values() {
+            builder.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
         }
+
         // read proxy groups
         for (name, group) in &cfg.proxy_group {
-            let mut arr = Vec::new();
-            let mut selection = None;
-            for p in group {
-                let content = GeneralProxy::Single(
-                    builder
-                        .proxies
-                        .get(p)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "Unrecognized name {:?}; nested group is unimplemented now",
-                                p.clone()
-                            )
-                        })?
-                        .clone(),
-                );
-                if p == state.group_selection.get(name).unwrap_or(&String::new()) {
-                    selection = Some(content.clone());
-                }
-                arr.push(content);
-            }
-            // todo: add some check
-            let first = arr.first().unwrap().clone();
-            // If there is no selection now, select the first.
-            builder.groups.insert(
-                name.clone(),
-                Arc::new(ProxyGroup::new(
-                    name.clone(),
-                    arr,
-                    selection.unwrap_or(first),
-                )),
-            );
+            builder.parse_group(name, state, group.iter())?;
         }
+        for (name, schema) in &proxy_schema {
+            builder.parse_group(name, state, schema.proxies.iter().map(|c| &c.name))?;
+        }
+
         // read rules
         let mut ruleset = HashMap::new();
-        for (name, schema) in schema {
+        for (name, schema) in rule_schema {
             let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Failed to parse provider {}",name));
             };

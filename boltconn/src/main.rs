@@ -3,7 +3,7 @@
 extern crate core;
 
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
-use crate::config::{LinkedState, RawRootCfg, RawState, RuleSchema};
+use crate::config::{LinkedState, ProxySchema, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
 use crate::mitm::{MitmModifier, UrlModManager};
@@ -108,19 +108,30 @@ fn state_path(config_path: &Path) -> PathBuf {
 
 async fn load_config(
     config_path: &Path,
-) -> anyhow::Result<(RawRootCfg, RawState, HashMap<String, RuleSchema>)> {
+) -> anyhow::Result<(
+    RawRootCfg,
+    RawState,
+    HashMap<String, RuleSchema>,
+    HashMap<String, ProxySchema>,
+)> {
     let config_text = fs::read_to_string(config_path.join("config.yml"))?;
     let raw_config: RawRootCfg = serde_yaml::from_str(&config_text)?;
     let state_text = fs::read_to_string(state_path(config_path))?;
     let raw_state: RawState = serde_yaml::from_str(&state_text)?;
 
-    let schema = tokio::join!(config::read_schema(
+    let rule_schema = tokio::join!(config::read_rule_schema(
         config_path,
         &raw_config.rule_provider,
         false
     ))
     .0?;
-    Ok((raw_config, raw_state, schema))
+    let proxy_schema = tokio::join!(config::read_proxy_schema(
+        config_path,
+        &raw_config.proxy_provider,
+        false
+    ))
+    .0?;
+    Ok((raw_config, raw_state, rule_schema, proxy_schema))
 }
 
 fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)> {
@@ -136,15 +147,6 @@ fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)
         }
     }
     Ok((url_list, header_list))
-}
-
-fn initialize_dispatching(
-    raw_config: &RawRootCfg,
-    raw_state: &RawState,
-    schema: HashMap<String, RuleSchema>,
-) -> anyhow::Result<Arc<Dispatching>> {
-    let builder = DispatchingBuilder::new_from_config(raw_config, raw_state, schema)?;
-    Ok(Arc::new(builder.build()?))
 }
 
 fn read_mitm_hosts(arr: &Option<Vec<String>>) -> HostMatcher {
@@ -204,8 +206,8 @@ fn main() -> ExitCode {
     let udp_manager = Arc::new(UdpOutboundManager::new());
 
     // Read initial config
-    let (config, state, schema) = match rt.block_on(load_config(&config_path)) {
-        Ok((config, state, schema)) => (config, state, schema),
+    let (config, state, rule_schema, proxy_schema) = match rt.block_on(load_config(&config_path)) {
+        Ok((config, state, rs, ps)) => (config, state, rs, ps),
         Err(e) => {
             eprintln!("Load config from {:?} failed: {}", &config_path, e);
             return ExitCode::from(1);
@@ -263,13 +265,14 @@ fn main() -> ExitCode {
     );
 
     let dispatching = {
-        let mut builder = match DispatchingBuilder::new_from_config(&config, &state, schema) {
-            Ok(builder) => builder,
-            Err(e) => {
-                eprintln!("Parse routing rules failed: {}", e);
-                return ExitCode::from(1);
-            }
-        };
+        let mut builder =
+            match DispatchingBuilder::new_from_config(&config, &state, rule_schema, proxy_schema) {
+                Ok(builder) => builder,
+                Err(e) => {
+                    eprintln!("Parse routing rules failed: {}", e);
+                    return ExitCode::from(1);
+                }
+            };
         if let Some(list) = dns_ips {
             builder.direct_prioritize("DNS-PRIO", list);
         }
@@ -398,7 +401,7 @@ async fn reload(
     config_path: &Path,
     dns: Arc<Dns>,
 ) -> anyhow::Result<(Arc<Dispatching>, HostMatcher, Arc<UrlModManager>)> {
-    let (config, state, schema) = load_config(config_path).await?;
+    let (config, state, rule_schema, proxy_schema) = load_config(config_path).await?;
     let url_mod = if let Some(rewrite) = &config.rewrite {
         let (url, _hdr) = mapping_rewrite(rewrite.as_slice())?;
         Arc::new(UrlModManager::new(url.as_slice())?)
@@ -408,7 +411,8 @@ async fn reload(
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
-        let mut builder = DispatchingBuilder::new_from_config(&config, &state, schema)?;
+        let mut builder =
+            DispatchingBuilder::new_from_config(&config, &state, rule_schema, proxy_schema)?;
         if config.dns.force_direct_dns {
             builder.direct_prioritize("DNS_PRIO", extract_address(&group));
         }
