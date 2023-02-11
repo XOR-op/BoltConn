@@ -94,15 +94,16 @@ impl DispatchingBuilder {
         self
     }
 
-    pub fn build(self) -> Dispatching {
-        Dispatching {
+    pub fn build(self) -> anyhow::Result<Dispatching> {
+        if self.fallback.is_none() {
+            return Err(anyhow!("Bad rules: missing fallback"));
+        }
+        Ok(Dispatching {
             proxies: self.proxies,
             groups: self.groups,
             rules: self.rules,
-            fallback: self.fallback.unwrap_or_else(|| {
-                GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct)))
-            }),
-        }
+            fallback: self.fallback.unwrap(),
+        })
     }
 }
 
@@ -302,6 +303,7 @@ impl DispatchingBuilder {
             }
             // todo: add some check
             let first = arr.first().unwrap().clone();
+            // If there is no selection now, select the first.
             builder.groups.insert(
                 name.clone(),
                 Arc::new(ProxyGroup::new(
@@ -320,8 +322,13 @@ impl DispatchingBuilder {
             ruleset.insert(name, builder);
         }
         let mut rule_builder = RuleBuilder::new(&builder.proxies, &builder.groups, ruleset);
-        for r in &cfg.rule_local {
-            rule_builder.append_literal(r.as_str())?;
+        for (idx, r) in cfg.rule_local.iter().enumerate() {
+            if idx != cfg.rule_local.len() - 1 {
+                rule_builder.append_literal(r.as_str())?;
+            } else {
+                // check Fallback
+                builder.fallback = Some(rule_builder.parse_fallback(r.as_str())?);
+            }
         }
         builder.rules = rule_builder
             .build()

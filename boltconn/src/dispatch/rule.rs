@@ -72,6 +72,24 @@ impl RuleBuilder<'_> {
         Ok(())
     }
 
+    pub fn parse_fallback(&mut self, s: &str) -> anyhow::Result<GeneralProxy> {
+        let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
+        let list: Vec<&str> = processed_str.split(',').collect();
+        if list.len() != 2 || *list.first().unwrap() != "FALLBACK" {
+            return Err(anyhow!("Invalid FALLBACK rule"));
+        }
+        let general = {
+            if let Some(p) = self.proxies.get(*list.get(1).unwrap()) {
+                GeneralProxy::Single(p.clone())
+            } else if let Some(p) = self.groups.get(*list.get(1).unwrap()) {
+                GeneralProxy::Group(p.clone())
+            } else {
+                return Err(anyhow!("Group not found"));
+            }
+        };
+        Ok(general)
+    }
+
     #[allow(clippy::get_first)]
     pub fn parse_ruleset(s: &str, general: GeneralProxy) -> Option<Rule> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();

@@ -144,7 +144,7 @@ fn initialize_dispatching(
     schema: HashMap<String, RuleSchema>,
 ) -> anyhow::Result<Arc<Dispatching>> {
     let builder = DispatchingBuilder::new_from_config(raw_config, raw_state, schema)?;
-    Ok(Arc::new(builder.build()))
+    Ok(Arc::new(builder.build()?))
 }
 
 fn read_mitm_hosts(arr: &Option<Vec<String>>) -> HostMatcher {
@@ -273,7 +273,14 @@ fn main() -> ExitCode {
         if let Some(list) = dns_ips {
             builder.direct_prioritize(list);
         }
-        Arc::new(builder.build())
+        let result = match builder.build() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Parse routing rules failed: {}", e);
+                return ExitCode::from(1);
+            }
+        };
+        Arc::new(result)
     };
 
     // external controller
@@ -405,7 +412,7 @@ async fn reload(
         if config.dns.force_direct_dns {
             builder.direct_prioritize(extract_address(&group));
         }
-        Arc::new(builder.build())
+        Arc::new(builder.build()?)
     };
     dns.replace_resolvers(group).await?;
     Ok((dispatching, read_mitm_hosts(&config.mitm_host), url_mod))
