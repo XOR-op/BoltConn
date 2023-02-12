@@ -89,25 +89,62 @@ pub struct DispatchingBuilder {
 }
 
 impl DispatchingBuilder {
-    pub fn new() -> Self {
-        Self {
-            proxies: HashMap::new(),
-            groups: Default::default(),
-            rules: vec![],
-            fallback: None,
-        }
-    }
-    pub fn add_proxy<S: Into<String>>(&mut self, name: S, cfg: Arc<Proxy>) -> &mut Self {
-        self.proxies.insert(name.into(), cfg);
-        self
-    }
     pub fn add_rule(&mut self, cfg: Rule) -> &mut Self {
         self.rules.push(cfg);
         self
     }
-    pub fn add_fallback(&mut self, cfg: GeneralProxy) -> &mut Self {
-        self.fallback = Some(cfg);
-        self
+
+    pub fn new_from_config(
+        cfg: &RawRootCfg,
+        state: &RawState,
+        rule_schema: HashMap<String, RuleSchema>,
+        proxy_schema: HashMap<String, ProxySchema>,
+    ) -> anyhow::Result<Self> {
+        let mut builder = Self::new();
+        builder.proxies.insert(
+            "DIRECT".into(),
+            Arc::new(Proxy::new("DIRECT", ProxyImpl::Direct)),
+        );
+        builder.proxies.insert(
+            "REJECT".into(),
+            Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)),
+        );
+        // read all proxies
+        builder.parse_proxies(cfg.proxy_local.iter())?;
+        for proxies in proxy_schema.values() {
+            builder.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
+        }
+
+        // read proxy groups
+        for (name, group) in &cfg.proxy_group {
+            builder.parse_group(name, state, group.iter())?;
+        }
+        for (name, schema) in &proxy_schema {
+            builder.parse_group(name, state, schema.proxies.iter().map(|c| &c.name))?;
+        }
+
+        // read rules
+        let mut ruleset = HashMap::new();
+        for (name, schema) in rule_schema {
+            let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
+                return Err(anyhow!("Failed to parse provider {}",name));
+            };
+            ruleset.insert(name, builder);
+        }
+        let mut rule_builder = RuleBuilder::new(&builder.proxies, &builder.groups, ruleset);
+        for (idx, r) in cfg.rule_local.iter().enumerate() {
+            if idx != cfg.rule_local.len() - 1 {
+                rule_builder.append_literal(r.as_str())?;
+            } else {
+                // check Fallback
+                builder.fallback = Some(rule_builder.parse_fallback(r.as_str())?);
+            }
+        }
+        builder.rules = rule_builder
+            .build()
+            .ok_or_else(|| anyhow!("Fail to build rules"))?;
+        tracing::info!("Loaded config successfully");
+        Ok(builder)
     }
 
     pub fn build(self) -> anyhow::Result<Dispatching> {
@@ -121,9 +158,17 @@ impl DispatchingBuilder {
             fallback: self.fallback.unwrap(),
         })
     }
-}
 
-impl DispatchingBuilder {
+    pub fn direct_prioritize(&mut self, name: &str, prioritized: Vec<IpAddr>) {
+        let ruleset = RuleSetBuilder::from_ipaddrs(name, prioritized).build();
+        let mut new_rules = vec![Rule::new(
+            RuleImpl::RuleSet(ruleset),
+            GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct))),
+        )];
+        new_rules.append(&mut self.rules);
+        self.rules = new_rules
+    }
+
     fn parse_proxies<'a, I: Iterator<Item = (&'a String, &'a RawProxyLocalCfg)>>(
         &mut self,
         proxies: I,
@@ -324,68 +369,5 @@ impl DispatchingBuilder {
             )),
         );
         Ok(())
-    }
-
-    pub fn new_from_config(
-        cfg: &RawRootCfg,
-        state: &RawState,
-        rule_schema: HashMap<String, RuleSchema>,
-        proxy_schema: HashMap<String, ProxySchema>,
-    ) -> anyhow::Result<Self> {
-        let mut builder = Self::new();
-        builder.proxies.insert(
-            "DIRECT".into(),
-            Arc::new(Proxy::new("DIRECT", ProxyImpl::Direct)),
-        );
-        builder.proxies.insert(
-            "REJECT".into(),
-            Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)),
-        );
-        // read all proxies
-        builder.parse_proxies(cfg.proxy_local.iter())?;
-        for proxies in proxy_schema.values() {
-            builder.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
-        }
-
-        // read proxy groups
-        for (name, group) in &cfg.proxy_group {
-            builder.parse_group(name, state, group.iter())?;
-        }
-        for (name, schema) in &proxy_schema {
-            builder.parse_group(name, state, schema.proxies.iter().map(|c| &c.name))?;
-        }
-
-        // read rules
-        let mut ruleset = HashMap::new();
-        for (name, schema) in rule_schema {
-            let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
-                return Err(anyhow!("Failed to parse provider {}",name));
-            };
-            ruleset.insert(name, builder);
-        }
-        let mut rule_builder = RuleBuilder::new(&builder.proxies, &builder.groups, ruleset);
-        for (idx, r) in cfg.rule_local.iter().enumerate() {
-            if idx != cfg.rule_local.len() - 1 {
-                rule_builder.append_literal(r.as_str())?;
-            } else {
-                // check Fallback
-                builder.fallback = Some(rule_builder.parse_fallback(r.as_str())?);
-            }
-        }
-        builder.rules = rule_builder
-            .build()
-            .ok_or_else(|| anyhow!("Fail to build rules"))?;
-        tracing::info!("Loaded config successfully");
-        Ok(builder)
-    }
-
-    pub fn direct_prioritize(&mut self, name: &str, prioritized: Vec<IpAddr>) {
-        let ruleset = RuleSetBuilder::from_ipaddrs(name, prioritized).build();
-        let mut new_rules = vec![Rule::new(
-            RuleImpl::RuleSet(ruleset),
-            GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct))),
-        )];
-        new_rules.append(&mut self.rules);
-        self.rules = new_rules
     }
 }
