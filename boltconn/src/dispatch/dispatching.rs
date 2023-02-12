@@ -15,7 +15,7 @@ use anyhow::anyhow;
 use base64::Engine;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
@@ -89,38 +89,60 @@ pub struct DispatchingBuilder {
 }
 
 impl DispatchingBuilder {
-    pub fn add_rule(&mut self, cfg: Rule) -> &mut Self {
-        self.rules.push(cfg);
-        self
+    pub fn new() -> Self {
+        let mut r = Self {
+            proxies: Default::default(),
+            groups: Default::default(),
+            rules: vec![],
+            fallback: None,
+        };
+        r.proxies.insert(
+            "DIRECT".into(),
+            Arc::new(Proxy::new("DIRECT", ProxyImpl::Direct)),
+        );
+        r.proxies.insert(
+            "REJECT".into(),
+            Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)),
+        );
+        r
     }
 
-    pub fn new_from_config(
+    pub fn build(
+        mut self,
         cfg: &RawRootCfg,
         state: &RawState,
         rule_schema: HashMap<String, RuleSchema>,
         proxy_schema: HashMap<String, ProxySchema>,
-    ) -> anyhow::Result<Self> {
-        let mut builder = Self::new();
-        builder.proxies.insert(
-            "DIRECT".into(),
-            Arc::new(Proxy::new("DIRECT", ProxyImpl::Direct)),
-        );
-        builder.proxies.insert(
-            "REJECT".into(),
-            Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)),
-        );
+    ) -> anyhow::Result<Dispatching> {
         // read all proxies
-        builder.parse_proxies(cfg.proxy_local.iter())?;
+        self.parse_proxies(cfg.proxy_local.iter())?;
         for proxies in proxy_schema.values() {
-            builder.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
+            self.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
         }
 
         // read proxy groups
+        let mut queued_groups = HashSet::new();
         for (name, group) in &cfg.proxy_group {
-            builder.parse_group(name, state, group.iter())?;
+            self.parse_group(
+                name,
+                state,
+                group.iter(),
+                &cfg.proxy_group,
+                &proxy_schema,
+                &mut queued_groups,
+                false,
+            )?;
         }
         for (name, schema) in &proxy_schema {
-            builder.parse_group(name, state, schema.proxies.iter().map(|c| &c.name))?;
+            self.parse_group(
+                name,
+                state,
+                schema.proxies.iter().map(|c| &c.name),
+                &cfg.proxy_group,
+                &proxy_schema,
+                &mut queued_groups,
+                false,
+            )?;
         }
 
         // read rules
@@ -131,26 +153,24 @@ impl DispatchingBuilder {
             };
             ruleset.insert(name, builder);
         }
-        let mut rule_builder = RuleBuilder::new(&builder.proxies, &builder.groups, ruleset);
+        let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
         for (idx, r) in cfg.rule_local.iter().enumerate() {
             if idx != cfg.rule_local.len() - 1 {
                 rule_builder.append_literal(r.as_str())?;
             } else {
                 // check Fallback
-                builder.fallback = Some(rule_builder.parse_fallback(r.as_str())?);
+                self.fallback = Some(rule_builder.parse_fallback(r.as_str())?);
             }
         }
-        builder.rules = rule_builder
-            .build()
-            .ok_or_else(|| anyhow!("Fail to build rules"))?;
-        tracing::info!("Loaded config successfully");
-        Ok(builder)
-    }
-
-    pub fn build(self) -> anyhow::Result<Dispatching> {
+        self.rules.extend(
+            rule_builder
+                .build()
+                .ok_or_else(|| anyhow!("Fail to build rules"))?,
+        );
         if self.fallback.is_none() {
             return Err(anyhow!("Bad rules: missing fallback"));
         }
+        tracing::info!("Loaded config successfully");
         Ok(Dispatching {
             proxies: self.proxies,
             groups: self.groups,
@@ -329,29 +349,67 @@ impl DispatchingBuilder {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    // recursion for topological order
     fn parse_group<'a, I: Iterator<Item = &'a String>>(
         &mut self,
         name: &str,
         state: &RawState,
         proxies: I,
+        proxy_group: &HashMap<String, Vec<String>>,
+        proxy_schema: &HashMap<String, ProxySchema>,
+        queued_groups: &mut HashSet<String>,
+        dup_as_error: bool,
     ) -> anyhow::Result<()> {
-        if self.groups.contains_key(name) || self.proxies.contains_key(name) {
-            return Err(anyhow!("Duplicate group name {}", name));
+        if self.groups.contains_key(name)
+            || self.proxies.contains_key(name)
+            || queued_groups.contains(name)
+        {
+            return if dup_as_error {
+                Err(anyhow!("Duplicate group name {}", name))
+            } else {
+                // has been processed, just skip
+                Ok(())
+            };
         }
         let mut arr = Vec::new();
         let mut selection = None;
         for p in proxies {
-            let content = GeneralProxy::Single(
-                self.proxies
-                    .get(p)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Unrecognized name {:?}; nested group is unimplemented now",
-                            p.clone()
-                        )
-                    })?
-                    .clone(),
-            );
+            let content = if let Some(single) = self.proxies.get(p) {
+                GeneralProxy::Single(single.clone())
+            } else if let Some(group) = self.groups.get(p) {
+                GeneralProxy::Group(group.clone())
+            } else {
+                // toposort
+                queued_groups.insert(p.clone());
+
+                if let Some(sub) = proxy_group.get(p) {
+                    self.parse_group(
+                        p,
+                        state,
+                        sub.iter(),
+                        proxy_group,
+                        proxy_schema,
+                        queued_groups,
+                        true,
+                    )?;
+                } else if let Some(schema) = proxy_schema.get(p) {
+                    self.parse_group(
+                        p,
+                        state,
+                        schema.proxies.iter().map(|c| &c.name),
+                        proxy_group,
+                        proxy_schema,
+                        queued_groups,
+                        true,
+                    )?;
+                } else {
+                    return Err(anyhow!("No [{}] in group [{}]", p, name));
+                }
+
+                queued_groups.remove(p);
+                GeneralProxy::Group(self.groups.get(p).unwrap().clone())
+            };
 
             if p == state.group_selection.get(name).unwrap_or(&String::new()) {
                 selection = Some(content.clone());

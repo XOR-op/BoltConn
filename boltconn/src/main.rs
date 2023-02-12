@@ -265,18 +265,11 @@ fn main() -> ExitCode {
     );
 
     let dispatching = {
-        let mut builder =
-            match DispatchingBuilder::new_from_config(&config, &state, rule_schema, proxy_schema) {
-                Ok(builder) => builder,
-                Err(e) => {
-                    eprintln!("Parse routing rules failed: {}", e);
-                    return ExitCode::from(1);
-                }
-            };
+        let mut builder = DispatchingBuilder::new();
         if let Some(list) = dns_ips {
             builder.direct_prioritize("DNS-PRIO", list);
         }
-        let result = match builder.build() {
+        let result = match builder.build(&config, &state, rule_schema, proxy_schema) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Parse routing rules failed: {}", e);
@@ -411,12 +404,11 @@ async fn reload(
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
-        let mut builder =
-            DispatchingBuilder::new_from_config(&config, &state, rule_schema, proxy_schema)?;
+        let mut builder = DispatchingBuilder::new();
         if config.dns.force_direct_dns {
             builder.direct_prioritize("DNS_PRIO", extract_address(&group));
         }
-        Arc::new(builder.build()?)
+        Arc::new(builder.build(&config, &state, rule_schema, proxy_schema)?)
     };
     dns.replace_resolvers(group).await?;
     Ok((dispatching, read_mitm_hosts(&config.mitm_host), url_mod))
