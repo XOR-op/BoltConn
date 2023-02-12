@@ -26,6 +26,12 @@ pub struct RawProxyProviderCfg {
     pub cfg: RawProxyLocalCfg,
 }
 
+impl RawProxyProviderCfg {
+    pub fn get_name(&self) -> &String {
+        &self.name
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ProxySchema {

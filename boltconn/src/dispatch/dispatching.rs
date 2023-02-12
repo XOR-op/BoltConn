@@ -1,7 +1,7 @@
 use crate::adapter::{ShadowSocksConfig, Socks5Config};
 use crate::config::{
-    ProxySchema, RawProxyLocalCfg, RawRootCfg, RawServerAddr, RawServerSockAddr, RawState,
-    RuleSchema,
+    ProxySchema, RawProxyLocalCfg, RawProxyProviderCfg, RawRootCfg, RawServerAddr,
+    RawServerSockAddr, RawState, RuleSchema,
 };
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
@@ -137,7 +137,7 @@ impl DispatchingBuilder {
             self.parse_group(
                 name,
                 state,
-                schema.proxies.iter().map(|c| &c.name),
+                schema.proxies.iter().map(RawProxyProviderCfg::get_name),
                 &cfg.proxy_group,
                 &proxy_schema,
                 &mut queued_groups,
@@ -381,7 +381,7 @@ impl DispatchingBuilder {
                 GeneralProxy::Group(group.clone())
             } else {
                 // toposort
-                queued_groups.insert(p.clone());
+                queued_groups.insert(name.to_string());
 
                 if let Some(sub) = proxy_group.get(p) {
                     self.parse_group(
@@ -397,7 +397,7 @@ impl DispatchingBuilder {
                     self.parse_group(
                         p,
                         state,
-                        schema.proxies.iter().map(|c| &c.name),
+                        schema.proxies.iter().map(RawProxyProviderCfg::get_name),
                         proxy_group,
                         proxy_schema,
                         queued_groups,
@@ -407,7 +407,7 @@ impl DispatchingBuilder {
                     return Err(anyhow!("No [{}] in group [{}]", p, name));
                 }
 
-                queued_groups.remove(p);
+                queued_groups.remove(name);
                 GeneralProxy::Group(self.groups.get(p).unwrap().clone())
             };
 
