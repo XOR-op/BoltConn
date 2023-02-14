@@ -1,4 +1,4 @@
-use crate::adapter::{ShadowSocksConfig, Socks5Config};
+use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
@@ -32,6 +32,7 @@ impl Proxy {
 pub enum ProxyImpl {
     Direct,
     Reject,
+    Http(HttpConfig),
     Socks5(Socks5Config),
     Shadowsocks(ShadowSocksConfig),
     Trojan(TrojanConfig),

@@ -1,4 +1,4 @@
-use crate::adapter::{ShadowSocksConfig, Socks5Config};
+use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
     ProxySchema, RawProxyLocalCfg, RawProxyProviderCfg, RawRootCfg, RawServerAddr,
     RawServerSockAddr, RawState, RuleSchema,
@@ -199,6 +199,30 @@ impl DispatchingBuilder {
                 return Err(anyhow!("Duplicate proxy name:{}", *name));
             }
             let p = match proxy {
+                RawProxyLocalCfg::Http {
+                    server,
+                    port,
+                    username,
+                    password,
+                } => {
+                    let auth = {
+                        if let (Some(username), Some(passwd)) = (username, password) {
+                            Some((username.clone(), passwd.clone()))
+                        } else if let (None, None) = (username, password) {
+                            None
+                        } else {
+                            return Err(anyhow!("Bad Http {}: invalid configuration", *name));
+                        }
+                    };
+
+                    Arc::new(Proxy::new(
+                        name.clone(),
+                        ProxyImpl::Http(HttpConfig {
+                            server_addr: NetworkAddr::from(server, *port),
+                            auth,
+                        }),
+                    ))
+                }
                 RawProxyLocalCfg::Socks5 {
                     server,
                     port,

@@ -51,6 +51,13 @@ pub struct RawDnsConfig {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields, tag = "type")]
 pub enum RawProxyLocalCfg {
+    #[serde(alias = "http")]
+    Http {
+        server: RawServerAddr,
+        port: u16,
+        username: Option<String>,
+        password: Option<String>,
+    },
     #[serde(alias = "socks5")]
     Socks5 {
         server: RawServerAddr,

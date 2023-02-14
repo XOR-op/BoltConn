@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 mod direct;
+mod http;
 mod nat_adapter;
 mod shadowsocks;
 mod socks5;
@@ -18,6 +19,7 @@ mod trojan;
 mod tun_adapter;
 mod wireguard;
 
+pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;

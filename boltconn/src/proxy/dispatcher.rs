@@ -1,6 +1,6 @@
 use crate::adapter::{
-    Connector, DirectOutbound, NatAdapter, OutboundType, SSOutbound, Socks5Outbound, TcpOutBound,
-    TrojanOutbound, TunAdapter, UdpOutBound, WireguardHandle, WireguardManager,
+    Connector, DirectOutbound, HttpOutbound, NatAdapter, OutboundType, SSOutbound, Socks5Outbound,
+    TcpOutBound, TrojanOutbound, TunAdapter, UdpOutBound, WireguardHandle, WireguardManager,
 };
 use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
@@ -107,6 +107,16 @@ impl Dispatcher {
                     indicator.store(0, Ordering::Relaxed);
                     return;
                 }
+                ProxyImpl::Http(cfg) => (
+                    Box::new(HttpOutbound::new(
+                        &self.iface_name,
+                        dst_addr.clone(),
+                        self.allocator.clone(),
+                        self.dns.clone(),
+                        cfg.clone(),
+                    )),
+                    OutboundType::Http,
+                ),
                 ProxyImpl::Socks5(cfg) => (
                     Box::new(Socks5Outbound::new(
                         &self.iface_name,
@@ -302,6 +312,10 @@ impl Dispatcher {
                 ProxyImpl::Reject => {
                     indicator.store(false, Ordering::Relaxed);
                     return;
+                }
+                ProxyImpl::Http(_) => {
+                    // http proxy doesn't support udp
+                    unreachable!()
                 }
                 ProxyImpl::Socks5(cfg) => (
                     Box::new(Socks5Outbound::new(
