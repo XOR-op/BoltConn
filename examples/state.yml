@@ -1,2 +1,4 @@
+# This file is managed by BoltConn. Do not edit unless you know what you are doing.
 group_selection:
-  Relay: ss_server
+  Relay: ss_01
+  US: Redmond

@@ -1,34 +1,65 @@
-# Unable to reload; require full restarting
+# Unable to reload
 interface: auto
-api_port: 18086
+api-port: 18086
 
-# Able to reload by API calling
+# Able to reload
 dns:
+  force-direct-dns: true
   bootstrap:
-    - 114.114.114.114
+    - 8.8.8.8
   nameserver:
+#    - dot-preset, cloudflare
+#    - doh-preset, google
+    - udp, 208.67.222.222
+    - doh, dns.adguard.com
     - udp, 8.8.8.8
-    - doh, cloudflare-dns.com
-    - dot, dns.alidns.com
-    - doh-preset, google
-proxy_local:
+
+proxy-local:
+  lan_http:
+    type: http
+    server: 172.17.1.10
+    port: 8080
   lan_socks:
-    proto: socks5
-    server: 192.168.1.100
-    port: 5678
-  ss_server:
-    proto: ss
-    server: 4.3.2.1
-    port: 9999
-    password: qwertyuiop
-    cipher: aes-128-gcm
+    type: socks5
+    server: 192.168.1.5
+    port: 1080
+  ss_01:
+    type: ss
+    server: shadowsocks.net
+    port: 12345
+    password: ccddeeff
+    cipher: aes-256-gcm
+  trojan_02:
+    type: trojan
+    server: trojan.org
+    port: 443
+    password: 2ef4a0fa-a078-4b55-8329-f2953feb0c54
+    sni: windowsupdate.microsoft.com
+    skip-cert-verify: false
+    websocket-path: /windows11/
+  wg_proxy:
+    type: wireguard
+    local-addr: 10.55.0.10
+    private-key: "eGYmWKmGmzUyX0NgJSsZa7GWVDixo0I3p42Bt7Xcx1w="
+    public-key: "kzIZGEzTOoo8KVWMDBpm4FYQM/aXX5LG3f9Ks54eED0="
+    endpoint: 192.168.1.20:51820
+    mtu: 1280
 
-proxy_group:
+proxy-provider:
+  US:
+    type: file
+    path: ./Remote/US.yaml
+
+proxy-group:
   Relay:
+    - lan_http
     - lan_socks
-    - ss_server
+    - ss_01
+    - trojan_02
+    - wg_proxy
+    - US
 
-rule_provider:
+rule-provider:
   APPLE:
     type: file
     path: ./Rules/Apple
@@ -36,8 +67,21 @@ rule_provider:
     type: file
     path: ./Rules/Telegram
 
-rule_local:
+rule-local:
+  - DOMAIN-SUFFIX, wikipedia.org, DIRECT
   - DOMAIN-SUFFIX, google.com, Relay
-  - DOMAIN-SUFFIX, twitter.com, Relay
-  - RULE-SET, APPLE, DIRECT
-  - RULE-SET, TELEGRAM, Relay
+  - DOMAIN-SUFFIX, twitter.com, REJECT
+  - RULE-SET, Apple, US
+  - RULE-SET, TELEGRAM, lan_socks
+  - FALLBACK, wg_proxy
+
+mitm-host:
+  - twitter.com
+  - '*.twitter.com'
+  - google.com
+  - '*.google.com'
+  - '*.google.co.uk'
+
+rewrite:
+  - url, ^https://www.google.co.uk(.*), 302, https://www.google.com
+  - url, ^https://mail.google.com, 404
