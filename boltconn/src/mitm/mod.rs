@@ -12,6 +12,8 @@ pub use modifier::*;
 use rcgen::{
     date_time_ymd, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose,
 };
+use regex::Regex;
+use std::str::FromStr;
 use tokio_rustls::rustls::{Certificate as RustlsCertificate, PrivateKey as RustlsPrivateKey};
 pub use url_rewrite::*;
 
@@ -40,4 +42,79 @@ fn sign_site_cert(
         rustls_pemfile::pkcs8_private_keys(&mut private_key.as_bytes())?.remove(0),
     );
     Ok((vec![res_cert], res_key))
+}
+
+#[derive(Clone, Debug)]
+pub(self) enum ReplacedChunk {
+    Literal(String),
+    Captured(u8),
+}
+
+impl ReplacedChunk {
+    pub fn parse_chunks(regex: &Regex, source: &str) -> Option<Vec<Self>> {
+        let pattern = Regex::new(r"\$\d+").unwrap();
+        // test num ref validity
+        for caps in pattern.captures_iter(source) {
+            for idx in caps.iter().flatten() {
+                match get_id(idx.as_str()) {
+                    Ok(idx) if idx < regex.captures_len() as u8 => {}
+                    _ => return None,
+                }
+            }
+        }
+        // ok, construct
+        let mut chunks = vec![];
+        let mut last = 0;
+        for ma in pattern.find_iter(source) {
+            if last != ma.start() {
+                chunks.push(ReplacedChunk::Literal(source[last..ma.start()].to_string()));
+            }
+            chunks.push(ReplacedChunk::Captured(get_id(ma.as_str()).unwrap()));
+            last = ma.end();
+        }
+        if last < source.len() {
+            chunks.push(ReplacedChunk::Literal(source[last..].to_string()));
+        }
+        Some(chunks)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(self) struct Replacement {
+    reg: Regex,
+    chunks: Vec<ReplacedChunk>,
+}
+
+impl Replacement {
+    pub fn new(regex: Regex, target: &str) -> Option<Self> {
+        ReplacedChunk::parse_chunks(&regex, target).map(|v| Self {
+            reg: regex,
+            chunks: v,
+        })
+    }
+
+    pub fn rewrite(&self, data: &str) -> Option<String> {
+        if let Some(caps) = &self.reg.captures(data) {
+            let mut res = String::new();
+            for item in &self.chunks {
+                match item {
+                    ReplacedChunk::Literal(s) => res += s.as_str(),
+                    ReplacedChunk::Captured(id) => {
+                        if let Some(content) = caps.get(*id as usize) {
+                            res += content.as_str()
+                        } else {
+                            // do nothing, "" as intended
+                        }
+                    }
+                }
+            }
+            Some(res)
+        } else {
+            None
+        }
+    }
+}
+
+fn get_id(s: &str) -> Result<u8, core::num::ParseIntError> {
+    u8::from_str(s.chars().skip(1).collect::<String>().as_str())
 }

@@ -1,5 +1,5 @@
+use crate::mitm::ReplacedChunk;
 use regex::{Regex, RegexSet};
-use std::str::FromStr;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum UrlModType {
@@ -14,11 +14,7 @@ pub enum UrlModType {
 pub struct UrlModRule {
     mod_type: UrlModType,
     regex: Regex,
-    replaced_url: Vec<ReplacedUrlChunk>,
-}
-
-fn get_id(s: &str) -> Result<u8, core::num::ParseIntError> {
-    u8::from_str(s.chars().skip(1).collect::<String>().as_str())
+    replaced_url: Vec<ReplacedChunk>,
 }
 
 impl UrlModRule {
@@ -33,33 +29,11 @@ impl UrlModRule {
                 replaced_url: vec![],
             });
         }
+        replaced_url?;
 
-        let pattern = Regex::new(r"\$\d+").unwrap();
-        let replaced_url = replaced_url.unwrap();
-        // test num ref validity
-        for caps in pattern.captures_iter(replaced_url) {
-            for idx in caps.iter().flatten() {
-                match get_id(idx.as_str()) {
-                    Ok(idx) if idx < regex.captures_len() as u8 => {}
-                    _ => return None,
-                }
-            }
-        }
-        // ok, construct
-        let mut chunks = vec![];
-        let mut last = 0;
-        for ma in pattern.find_iter(replaced_url) {
-            if last != ma.start() {
-                chunks.push(ReplacedUrlChunk::Literal(
-                    replaced_url[last..ma.start()].to_string(),
-                ));
-            }
-            chunks.push(ReplacedUrlChunk::Captured(get_id(ma.as_str()).unwrap()));
-            last = ma.end();
-        }
-        if last < replaced_url.len() {
-            chunks.push(ReplacedUrlChunk::Literal(replaced_url[last..].to_string()));
-        }
+        let Some(chunks) = ReplacedChunk::parse_chunks(&regex,replaced_url.unwrap()) else{
+            return None;
+        };
         Some(Self {
             mod_type,
             regex,
@@ -74,8 +48,8 @@ impl UrlModRule {
                     let mut res = String::new();
                     for item in &self.replaced_url {
                         match item {
-                            ReplacedUrlChunk::Literal(s) => res += s.as_str(),
-                            ReplacedUrlChunk::Captured(id) => {
+                            ReplacedChunk::Literal(s) => res += s.as_str(),
+                            ReplacedChunk::Captured(id) => {
                                 if let Some(content) = caps.get(*id as usize) {
                                     res += content.as_str()
                                 } else {
@@ -98,12 +72,6 @@ impl UrlModRule {
             }
         }
     }
-}
-
-#[derive(Clone, Debug)]
-enum ReplacedUrlChunk {
-    Literal(String),
-    Captured(u8),
 }
 
 #[derive(Debug)]
