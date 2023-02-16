@@ -6,7 +6,7 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, ProxySchema, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
-use crate::mitm::{MitmModifier, UrlModManager};
+use crate::mitm::{HeaderModManager, MitmModifier, UrlModManager};
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
 use chrono::Timelike;
@@ -140,7 +140,7 @@ fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)
     for s in list.iter() {
         if s.starts_with("url,") {
             url_list.push(s.clone());
-        } else if s.starts_with("header,") {
+        } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
             header_list.push(s.clone());
         } else {
             return Err(anyhow::anyhow!("Unexpected: {}", s));
@@ -304,23 +304,35 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let url_modifier = if let Some(rewrite_cfg) = &config.rewrite {
-            let (url_mod, _hdr_mod) = match mapping_rewrite(rewrite_cfg.as_slice()) {
+        let (url_modifier, hdr_modifier) = if let Some(rewrite_cfg) = &config.rewrite {
+            let (url_mod, hdr_mod) = match mapping_rewrite(rewrite_cfg.as_slice()) {
                 Ok((url_mod, hdr_mod)) => (url_mod, hdr_mod),
                 Err(e) => {
                     eprintln!("Parse url modifier rules, syntax failed: {}", e);
                     return ExitCode::from(1);
                 }
             };
-            Arc::new(match UrlModManager::new(url_mod.as_slice()) {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("Parse url modifier rules, invalid regexes: {}", e);
-                    return ExitCode::from(1);
-                }
-            })
+            (
+                Arc::new(match UrlModManager::new(url_mod.as_slice()) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("Parse url modifier rules, invalid regexes: {}", e);
+                        return ExitCode::from(1);
+                    }
+                }),
+                Arc::new(match HeaderModManager::new(hdr_mod.as_slice()) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("Parse header modifier rules, invalid regexes: {}", e);
+                        return ExitCode::from(1);
+                    }
+                }),
+            )
         } else {
-            Arc::new(UrlModManager::empty())
+            (
+                Arc::new(UrlModManager::empty()),
+                Arc::new(HeaderModManager::empty()),
+            )
         };
         Arc::new(Dispatcher::new(
             outbound_iface.as_str(),
@@ -333,6 +345,7 @@ fn main() -> ExitCode {
                 Arc::new(MitmModifier::new(
                     hcap_copy.clone(),
                     url_modifier.clone(),
+                    hdr_modifier.clone(),
                     pi,
                 ))
             }),
@@ -365,12 +378,12 @@ fn main() -> ExitCode {
                     if restart.is_some(){
                         // try restarting components
                         match reload(&config_path,dns.clone()).await{
-                            Ok((dispatching, mitm_hosts,url_rewriter)) => {
+                            Ok((dispatching, mitm_hosts,url_rewriter,header_rewriter)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
                                 let hcap2 = http_capturer.clone();
                                 dispatcher.replace_dispatching(dispatching);
                                 dispatcher.replace_mitm_list(mitm_hosts);
-                                dispatcher.replace_modifier(Box::new(move |pi| Arc::new(MitmModifier::new(hcap2.clone(),url_rewriter.clone(),pi))));
+                                dispatcher.replace_modifier(Box::new(move |pi| Arc::new(MitmModifier::new(hcap2.clone(),url_rewriter.clone(),header_rewriter.clone(),pi))));
                                 tracing::info!("Reloaded config successfully");
                             }
                             Err(err)=>{
@@ -393,13 +406,24 @@ fn main() -> ExitCode {
 async fn reload(
     config_path: &Path,
     dns: Arc<Dns>,
-) -> anyhow::Result<(Arc<Dispatching>, HostMatcher, Arc<UrlModManager>)> {
+) -> anyhow::Result<(
+    Arc<Dispatching>,
+    HostMatcher,
+    Arc<UrlModManager>,
+    Arc<HeaderModManager>,
+)> {
     let (config, state, rule_schema, proxy_schema) = load_config(config_path).await?;
-    let url_mod = if let Some(rewrite) = &config.rewrite {
-        let (url, _hdr) = mapping_rewrite(rewrite.as_slice())?;
-        Arc::new(UrlModManager::new(url.as_slice())?)
+    let (url_mod, hdr_mod) = if let Some(rewrite) = &config.rewrite {
+        let (url, hdr) = mapping_rewrite(rewrite.as_slice())?;
+        (
+            Arc::new(UrlModManager::new(url.as_slice())?),
+            Arc::new(HeaderModManager::new(hdr.as_slice())?),
+        )
     } else {
-        Arc::new(UrlModManager::empty())
+        (
+            Arc::new(UrlModManager::empty()),
+            Arc::new(HeaderModManager::empty()),
+        )
     };
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
@@ -411,5 +435,10 @@ async fn reload(
         Arc::new(builder.build(&config, &state, rule_schema, proxy_schema)?)
     };
     dns.replace_resolvers(group).await?;
-    Ok((dispatching, read_mitm_hosts(&config.mitm_host), url_mod))
+    Ok((
+        dispatching,
+        read_mitm_hosts(&config.mitm_host),
+        url_mod,
+        hdr_mod,
+    ))
 }

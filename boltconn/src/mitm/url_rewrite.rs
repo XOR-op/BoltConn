@@ -78,7 +78,6 @@ impl UrlModRule {
 pub struct UrlModManager {
     rules: Vec<UrlModRule>,
     regex_set: RegexSet,
-    // inner: RwLock<UrlModManagerInner>,
 }
 
 impl UrlModManager {
@@ -86,7 +85,7 @@ impl UrlModManager {
         let (rules, regexes) = parse_rules(cfg).map_err(|s| anyhow::anyhow!(s))?;
         Ok(Self {
             rules,
-            regex_set: RegexSet::new(regexes)?, // inner: RwLock::new(new_inner),
+            regex_set: RegexSet::new(regexes)?,
         })
     }
 
@@ -113,7 +112,7 @@ fn parse_rules(cfg: &[String]) -> Result<(Vec<UrlModRule>, Vec<String>), String>
     let mut coll = vec![];
     let mut str_coll = vec![];
     for line in cfg {
-        // url, <Rewrite_type>, <original_url>, <modified_url>
+        // url, <original_url>, <Rewrite_type>, <modified_url>
         // Example: url, ^https://twitter.com(.*), 302, https://nitter.it$1
         //          url, ^https://doubleclick.com, 404
         let processed_str: String = line.chars().filter(|c| *c != ' ').collect();

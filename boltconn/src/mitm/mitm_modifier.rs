@@ -1,5 +1,5 @@
 use crate::mitm::url_rewrite::{UrlModManager, UrlModType};
-use crate::mitm::{Modifier, ModifierContext};
+use crate::mitm::{HeaderModManager, Modifier, ModifierContext};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
 use anyhow::anyhow;
@@ -15,6 +15,7 @@ pub struct MitmModifier {
     client: Option<ProcessInfo>,
     contents: Arc<HttpCapturer>,
     url_rewriter: Arc<UrlModManager>,
+    header_rewriter: Arc<HeaderModManager>,
     pending: DashMap<u64, DumpedRequest>,
 }
 
@@ -22,12 +23,14 @@ impl MitmModifier {
     pub fn new(
         contents: Arc<HttpCapturer>,
         url_rewriter: Arc<UrlModManager>,
+        header_rewriter: Arc<HeaderModManager>,
         proc: Option<ProcessInfo>,
     ) -> Self {
         Self {
             client: proc,
             contents,
             url_rewriter,
+            header_rewriter,
             pending: Default::default(),
         }
     }
