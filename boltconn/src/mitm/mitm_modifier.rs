@@ -43,16 +43,9 @@ impl Modifier for MitmModifier {
         req: Request<Body>,
         ctx: &ModifierContext,
     ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
-        let (parts, body) = req.into_parts();
+        let (mut parts, body) = req.into_parts();
         let whole_body = hyper::body::to_bytes(body).await?;
-        let mut req_copy = DumpedRequest {
-            uri: parts.uri.clone(),
-            method: parts.method.clone(),
-            version: parts.version,
-            headers: parts.headers.clone(),
-            body: whole_body.clone(),
-            time: Instant::now(),
-        };
+
         let url = match parts.version {
             Version::HTTP_11 => {
                 let prefix = if ctx.conn_info.read().await.dest.port() == 443 {
@@ -73,13 +66,14 @@ impl Modifier for MitmModifier {
         };
         match url {
             None => {
+                let req_copy = DumpedRequest::from_parts(&parts, &whole_body);
                 self.pending.insert(ctx.tag, req_copy);
                 Ok((Request::from_parts(parts, Body::from(whole_body)), None))
             }
             Some(url) => {
-                if let Ok(uri) = http::Uri::from_str(url.as_str()) {
-                    req_copy.uri = uri;
-                }
+                self.header_rewriter
+                    .try_rewrite_request(url.as_str(), &mut parts.headers)
+                    .await;
                 if let Some((mod_type, new_url)) = self.url_rewriter.try_rewrite(url.as_str()).await
                 {
                     // no real connection
@@ -106,6 +100,12 @@ impl Modifier for MitmModifier {
                         NetworkAddr::Raw(addr) => addr.ip().to_string(),
                         NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
                     };
+
+                    // store copy
+                    let mut req_copy = DumpedRequest::from_parts(&parts, &whole_body);
+                    if let Ok(uri) = http::Uri::from_str(url.as_str()) {
+                        req_copy.uri = uri;
+                    }
                     self.contents
                         .push((req_copy, resp_copy), host, self.client.clone());
                     Ok((
@@ -113,6 +113,7 @@ impl Modifier for MitmModifier {
                         Some(Response::from_parts(resp_parts, Body::from(resp_body))),
                     ))
                 } else {
+                    let req_copy = DumpedRequest::from_parts(&parts, &whole_body);
                     self.pending.insert(ctx.tag, req_copy);
                     Ok((Request::from_parts(parts, Body::from(whole_body)), None))
                 }
@@ -125,21 +126,18 @@ impl Modifier for MitmModifier {
         resp: Response<Body>,
         ctx: &ModifierContext,
     ) -> anyhow::Result<Response<Body>> {
-        let (parts, body) = resp.into_parts();
-        let whole_body = hyper::body::to_bytes(body).await?;
+        let (mut parts, body) = resp.into_parts();
         // todo: optimize for large body
-        let resp_copy = DumpedResponse {
-            status: parts.status,
-            version: parts.version,
-            headers: parts.headers.clone(),
-            body: whole_body.clone(),
-            time: Instant::now(),
-        };
+        let whole_body = hyper::body::to_bytes(body).await?;
         let req = self
             .pending
             .remove(&ctx.tag)
             .ok_or_else(|| anyhow!("no id"))?
             .1;
+        self.header_rewriter
+            .try_rewrite_response(req.uri.to_string().as_str(), &mut parts.headers)
+            .await;
+        let resp_copy = DumpedResponse::from_parts(&parts, &whole_body);
         let host = match &ctx.conn_info.read().await.dest {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),

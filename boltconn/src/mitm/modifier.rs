@@ -17,6 +17,7 @@ pub struct ModifierContext {
 
 #[async_trait]
 pub trait Modifier: Send + Sync {
+    /// Return: new request and generated response, if any.
     async fn modify_request(
         &self,
         req: Request<Body>,

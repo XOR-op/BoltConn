@@ -177,7 +177,7 @@ fn split_at_nth(raw: &str, p: char, n: usize) -> Option<&str> {
 }
 
 fn deserialize_values<T: DeserializeOwned>(raw: &str) -> Option<T> {
-    let part = split_at_nth(raw, ',', 3)?;
+    let part = split_at_nth(raw, ',', 2)?;
     if part.len() == 1 {
         return None;
     }
