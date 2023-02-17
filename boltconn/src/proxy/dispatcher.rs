@@ -1,6 +1,6 @@
 use crate::adapter::{
-    Connector, DirectOutbound, HttpOutbound, NatAdapter, OutboundType, SSOutbound, Socks5Outbound,
-    TcpOutBound, TrojanOutbound, TunAdapter, UdpOutBound, WireguardHandle, WireguardManager,
+    Connector, DirectOutbound, HttpOutbound, OutboundType, SSOutbound, Socks5Outbound, TcpAdapter,
+    TcpOutBound, TrojanOutbound, UdpAdapter, UdpOutBound, WireguardHandle, WireguardManager,
 };
 use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
@@ -185,7 +185,7 @@ impl Dispatcher {
             let dst_addr = dst_addr.clone();
             let abort_handle = abort_handle.clone();
             tokio::spawn(async move {
-                let tun = TunAdapter::new(
+                let tun = TcpAdapter::new(
                     src_addr,
                     dst_addr,
                     info,
@@ -385,7 +385,7 @@ impl Dispatcher {
             let info = info.clone();
             let abort_handle = abort_handle.clone();
             tokio::spawn(async move {
-                let nat_adp = NatAdapter::new(
+                let nat_adp = UdpAdapter::new(
                     info,
                     receiver,
                     socket,
