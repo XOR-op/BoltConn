@@ -20,7 +20,7 @@ use network::{
 };
 use platform::get_default_route;
 use proxy::Dispatcher;
-use proxy::{Nat, SessionManager};
+use proxy::{SessionManager, TunInbound};
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use std::collections::HashMap;
 use std::fs;
@@ -352,7 +352,7 @@ fn main() -> ExitCode {
             read_mitm_hosts(&config.mitm_host),
         ))
     };
-    let nat = Arc::new(Nat::new(
+    let tun_inbound = Arc::new(TunInbound::new(
         nat_addr,
         manager.clone(),
         dispatcher.clone(),
@@ -360,13 +360,13 @@ fn main() -> ExitCode {
         proxy_allocator,
         udp_manager,
     ));
-    let nat_tcp = nat.clone();
-    let nat_udp = nat;
+    let tun_inbound_tcp = tun_inbound.clone();
+    let tun_inbound_udp = tun_inbound;
 
     // run
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
-    let _nat_tcp_handle = rt.spawn(async move { nat_tcp.run_tcp().await });
-    let _nat_udp_handle = rt.spawn(async move { nat_udp.run_udp().await });
+    let _tun_inbound_tcp_handle = rt.spawn(async move { tun_inbound_tcp.run_tcp().await });
+    let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run_udp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
 
