@@ -253,6 +253,19 @@ pub struct DumpedRequest {
     pub time: Instant,
 }
 
+impl DumpedRequest {
+    pub fn from_parts(parts: &http::request::Parts, body: &hyper::body::Bytes) -> Self {
+        Self {
+            uri: parts.uri.clone(),
+            method: parts.method.clone(),
+            version: parts.version,
+            headers: parts.headers.clone(),
+            body: body.clone(),
+            time: Instant::now(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DumpedResponse {
     pub status: http::StatusCode,
@@ -260,6 +273,18 @@ pub struct DumpedResponse {
     pub headers: http::HeaderMap<http::HeaderValue>,
     pub body: hyper::body::Bytes,
     pub time: Instant,
+}
+
+impl DumpedResponse {
+    pub fn from_parts(parts: &http::response::Parts, body: &hyper::body::Bytes) -> Self {
+        Self {
+            status: parts.status,
+            version: parts.version,
+            headers: parts.headers.clone(),
+            body: body.clone(),
+            time: Instant::now(),
+        }
+    }
 }
 
 #[allow(clippy::type_complexity)]
