@@ -1,6 +1,7 @@
 use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
 use crate::platform::process::{NetworkType, ProcessInfo};
+use fast_socks5::util::target_addr::TargetAddr;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -48,6 +49,24 @@ impl Display for NetworkAddr {
             NetworkAddr::DomainName { domain_name, port } => {
                 f.write_str(format!("{}:{}", domain_name, port).as_str())
             }
+        }
+    }
+}
+
+impl From<NetworkAddr> for TargetAddr {
+    fn from(value: NetworkAddr) -> Self {
+        match value {
+            NetworkAddr::Raw(s) => TargetAddr::Ip(s),
+            NetworkAddr::DomainName { domain_name, port } => TargetAddr::Domain(domain_name, port),
+        }
+    }
+}
+
+impl From<TargetAddr> for NetworkAddr {
+    fn from(value: TargetAddr) -> Self {
+        match value {
+            TargetAddr::Ip(s) => NetworkAddr::Raw(s),
+            TargetAddr::Domain(domain_name, port) => NetworkAddr::DomainName { domain_name, port },
         }
     }
 }

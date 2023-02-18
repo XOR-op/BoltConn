@@ -101,10 +101,7 @@ impl Socks5Outbound {
     }
     async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let (mut socks_stream, _) = self.connect_proxy().await?;
-        let target = match self.dst {
-            NetworkAddr::Raw(addr) => TargetAddr::Ip(addr),
-            NetworkAddr::DomainName { domain_name, port } => TargetAddr::Domain(domain_name, port),
-        };
+        let target = self.dst.into();
         let _bound_addr = socks_stream
             .request(Socks5Command::TCPConnect, target)
             .await

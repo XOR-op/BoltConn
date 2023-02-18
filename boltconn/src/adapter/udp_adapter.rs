@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, RwLock};
 
-pub struct UdpAdapter {
+pub struct TunUdpAdapter {
     info: Arc<RwLock<ConnAgent>>,
     inbound_read: mpsc::Receiver<PktBufHandle>,
     inbound_write: Arc<UdpSocket>,
@@ -21,7 +21,7 @@ pub struct UdpAdapter {
     session_mgr: Arc<SessionManager>,
 }
 
-impl UdpAdapter {
+impl TunUdpAdapter {
     const BUF_SIZE: usize = 65536;
 
     #[allow(clippy::too_many_arguments)]

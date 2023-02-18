@@ -108,7 +108,7 @@ impl TunInbound {
                 let _ = send_side.sender.send(pkt).await;
                 entry.insert(send_side);
                 self.dispatcher
-                    .submit_udp_pkt(
+                    .submit_tun_udp_pkt(
                         src,
                         real_dst.clone(),
                         dst,

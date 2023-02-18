@@ -1,6 +1,6 @@
 use crate::adapter::{
     Connector, DirectOutbound, HttpOutbound, OutboundType, SSOutbound, Socks5Outbound, TcpAdapter,
-    TcpOutBound, TrojanOutbound, UdpAdapter, UdpOutBound, WireguardHandle, WireguardManager,
+    TcpOutBound, TrojanOutbound, TunUdpAdapter, UdpOutBound, WireguardHandle, WireguardManager,
 };
 use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
@@ -279,7 +279,7 @@ impl Dispatcher {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn submit_udp_pkt(
+    pub async fn submit_tun_udp_pkt(
         &self,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
@@ -385,7 +385,7 @@ impl Dispatcher {
             let info = info.clone();
             let abort_handle = abort_handle.clone();
             tokio::spawn(async move {
-                let nat_adp = UdpAdapter::new(
+                let nat_adp = TunUdpAdapter::new(
                     info,
                     receiver,
                     socket,
@@ -408,5 +408,14 @@ impl Dispatcher {
         }));
         abort_handle.fulfill(handles).await;
         self.stat_center.push(info.clone()).await;
+    }
+
+    pub async fn submit_socks_udp_pkt(
+        &self,
+        src_addr: SocketAddr,
+        dst_addr: NetworkAddr,
+        indicator: Arc<AtomicBool>,
+        socket: UdpSocket,
+    ) {
     }
 }
