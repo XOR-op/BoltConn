@@ -1,6 +1,7 @@
 use crate::adapter::{
-    Connector, DirectOutbound, HttpOutbound, OutboundType, SSOutbound, Socks5Outbound, TcpAdapter,
-    TcpOutBound, TrojanOutbound, TunUdpAdapter, UdpOutBound, WireguardHandle, WireguardManager,
+    Connector, DirectOutbound, HttpOutbound, OutboundType, SSOutbound, Socks5Outbound,
+    StandardUdpAdapter, TcpAdapter, TcpOutBound, TrojanOutbound, TunUdpAdapter, UdpOutBound,
+    WireguardHandle, WireguardManager,
 };
 use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
@@ -278,17 +279,18 @@ impl Dispatcher {
         self.stat_center.push(info).await;
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn submit_tun_udp_pkt(
+    async fn route_udp(
         &self,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
-        dst_fake_addr: SocketAddr,
-        receiver: mpsc::Receiver<PktBufHandle>,
-        indicator: Arc<AtomicBool>,
-        socket: &Arc<UdpSocket>,
-        session_mgr: &Arc<SessionManager>,
-    ) {
+    ) -> Result<
+        (
+            Box<dyn UdpOutBound>,
+            Arc<tokio::sync::RwLock<ConnAgent>>,
+            ConnAbortHandle,
+        ),
+        (),
+    > {
         let process_info =
             process::get_pid(src_addr, NetworkType::Udp).map_or(None, process::get_process_info);
         let conn_info = ConnInfo {
@@ -310,8 +312,7 @@ impl Dispatcher {
                     OutboundType::Direct,
                 ),
                 ProxyImpl::Reject => {
-                    indicator.store(false, Ordering::Relaxed);
-                    return;
+                    return Err(());
                 }
                 ProxyImpl::Http(_) => {
                     // http proxy doesn't support udp
@@ -350,7 +351,7 @@ impl Dispatcher {
                 ProxyImpl::Wireguard(cfg) => {
                     let Ok(outbound) = self.wireguard_mgr.get_wg_conn(cfg).await else{
                         tracing::warn!("Failed to create wireguard connection");
-                        return;
+                        return Err(());
                     };
                     (
                         Box::new(WireguardHandle::new(
@@ -374,6 +375,26 @@ impl Dispatcher {
             NetworkType::Udp,
             abort_handle.clone(),
         )));
+        Ok((outbounding, info, abort_handle))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_tun_udp_pkt(
+        &self,
+        src_addr: SocketAddr,
+        dst_addr: NetworkAddr,
+        dst_fake_addr: SocketAddr,
+        receiver: mpsc::Receiver<PktBufHandle>,
+        indicator: Arc<AtomicBool>,
+        socket: &Arc<UdpSocket>,
+        session_mgr: &Arc<SessionManager>,
+    ) {
+        let Ok((outbounding,info, abort_handle)) =
+            self.route_udp(src_addr,dst_addr).await else {
+            indicator.store(false,Ordering::Relaxed);
+            return;
+        };
+
         let mut handles = Vec::new();
 
         let (nat_conn, nat_next) = Connector::new_pair(10);
@@ -417,5 +438,34 @@ impl Dispatcher {
         indicator: Arc<AtomicBool>,
         socket: UdpSocket,
     ) {
+        let Ok((outbounding,info, abort_handle)) =
+            self.route_udp(src_addr,dst_addr).await else {
+            indicator.store(false,Ordering::Relaxed);
+            return;
+        };
+        let mut handles = Vec::new();
+
+        let (adapter_conn, adapter_next) = Connector::new_pair(10);
+        let udp_allocator = self.allocator.clone();
+
+        handles.push({
+            let info = info.clone();
+            let abort_handle = abort_handle.clone();
+            tokio::spawn(async move {
+                let udp_adapter =
+                    StandardUdpAdapter::new(info, socket, src_addr, udp_allocator, adapter_conn);
+                if let Err(err) = udp_adapter.run(abort_handle).await {
+                    tracing::error!("[Dispatcher] run StandardUdpAdapter failed: {}", err)
+                }
+            })
+        });
+        let abort_handle2 = abort_handle.clone();
+        handles.push(tokio::spawn(async move {
+            if let Err(err) = outbounding.spawn_udp(adapter_next, abort_handle2).await {
+                tracing::error!("[Dispatcher] create failed: {}", err)
+            }
+        }));
+        abort_handle.fulfill(handles).await;
+        self.stat_center.push(info.clone()).await;
     }
 }
