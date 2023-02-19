@@ -1,14 +1,13 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::RuleSchema;
 use crate::dispatch::rule::{RuleBuilder, RuleImpl};
-use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyImpl};
+use crate::dispatch::ConnInfo;
 use crate::proxy::NetworkAddr;
 use aho_corasick::AhoCorasick;
 use ip_network_table::IpNetworkTable;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
-use std::sync::Arc;
 
 /// Matcher for rules in the same group
 pub struct RuleSet {
@@ -85,10 +84,9 @@ impl RuleSetBuilder {
             procpath_keyword: vec![],
             port: HashSet::new(),
         };
-        let fake = GeneralProxy::Single(Arc::new(Proxy::new("FAKE", ProxyImpl::Direct)));
         for str in &payload.payload {
-            if let Some(rule) = RuleBuilder::parse_ruleset(str, fake.clone()) {
-                match rule.get_impl() {
+            if let Some(rule) = RuleBuilder::parse_ruleset(str) {
+                match rule {
                     RuleImpl::ProcessName(pn) => {
                         retval.process_name.insert(pn.clone());
                     }
@@ -103,9 +101,13 @@ impl RuleSetBuilder {
                         retval.ip_cidr.insert(ip, ());
                     }
                     RuleImpl::Port(p) => {
-                        retval.port.insert(*p);
+                        retval.port.insert(p);
                     }
-                    RuleImpl::RuleSet(_) => return None,
+                    // Slow for ruleset; better to write as a standalone rule
+                    RuleImpl::RuleSet(_)
+                    | RuleImpl::And(..)
+                    | RuleImpl::Or(..)
+                    | RuleImpl::Not(_) => return None,
                 }
             } else {
                 return None;

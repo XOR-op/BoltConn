@@ -151,7 +151,7 @@ impl DispatchingBuilder {
             let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Failed to parse provider {}",name));
             };
-            ruleset.insert(name, builder);
+            ruleset.insert(name, Arc::new(builder.build()));
         }
         let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
         for (idx, r) in cfg.rule_local.iter().enumerate() {
@@ -162,11 +162,7 @@ impl DispatchingBuilder {
                 self.fallback = Some(rule_builder.parse_fallback(r.as_str())?);
             }
         }
-        self.rules.extend(
-            rule_builder
-                .build(false)
-                .ok_or_else(|| anyhow!("Fail to build rules"))?,
-        );
+        self.rules.extend(rule_builder.build());
         if self.fallback.is_none() {
             return Err(anyhow!("Bad rules: missing fallback"));
         }
@@ -180,7 +176,7 @@ impl DispatchingBuilder {
     }
 
     pub fn direct_prioritize(&mut self, name: &str, prioritized: Vec<IpAddr>) {
-        let ruleset = RuleSetBuilder::from_ipaddrs(name, prioritized).build();
+        let ruleset = Arc::new(RuleSetBuilder::from_ipaddrs(name, prioritized).build());
         let mut new_rules = vec![Rule::new(
             RuleImpl::RuleSet(ruleset),
             GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct))),
