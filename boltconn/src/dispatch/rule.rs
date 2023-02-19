@@ -164,53 +164,75 @@ impl RuleBuilder<'_> {
         }
     }
 
-    pub fn build(mut self) -> Option<Vec<Rule>> {
+    // Although compressing ruleset will reduce matching time, it can lead to confusing ruleset logging.
+    // So only compress rulesets if you do not care logging info.
+    pub fn build(mut self, will_compress: bool) -> Option<Vec<Rule>> {
         let mut ret = Vec::new();
-        // compress adjacent ruleset
-        let mut compressed: Option<(RuleSetBuilder, GeneralProxy)> = None;
-        for (prefix, content, target) in self.buffer {
-            if prefix == "RULE-SET" {
-                let Some(ruleset) = self.rulesets.remove(&content) else {
-                    return None;
-                };
-                // determine if we can compress them
-                compressed = match compressed {
-                    None => Some((ruleset, target)),
-                    Some((prev_ruleset, prev_target)) => {
-                        if prev_target == target {
-                            Some((prev_ruleset.merge(ruleset), prev_target))
-                        } else {
-                            // push old, leave new
-                            ret.push(Rule {
-                                rule: RuleImpl::RuleSet(prev_ruleset.build()),
-                                policy: prev_target,
-                            });
-                            Some((ruleset, target))
+        if will_compress {
+            // compress adjacent ruleset
+            let mut compressed: Option<(RuleSetBuilder, GeneralProxy)> = None;
+            for (prefix, content, target) in self.buffer {
+                if prefix == "RULE-SET" {
+                    let Some(ruleset) = self.rulesets.remove(&content) else {
+                        return None;
+                    };
+                    // determine if we can compress them
+                    compressed = match compressed {
+                        None => Some((ruleset, target)),
+                        Some((prev_ruleset, prev_target)) => {
+                            if prev_target == target {
+                                Some((prev_ruleset.merge(ruleset), prev_target))
+                            } else {
+                                // push old, leave new
+                                ret.push(Rule {
+                                    rule: RuleImpl::RuleSet(prev_ruleset.build()),
+                                    policy: prev_target,
+                                });
+                                Some((ruleset, target))
+                            }
                         }
+                    };
+                } else {
+                    // not able to merge next, push
+                    if let Some((builder, dest)) = compressed.take() {
+                        ret.push(Rule {
+                            rule: RuleImpl::RuleSet(builder.build()),
+                            policy: dest,
+                        });
                     }
-                };
-            } else {
-                // not able to merge next, push
-                if let Some((builder, dest)) = compressed.take() {
-                    ret.push(Rule {
-                        rule: RuleImpl::RuleSet(builder.build()),
-                        policy: dest,
-                    });
-                }
-                match Self::parse(prefix, content, target) {
-                    None => return None,
-                    Some(r) => ret.push(r),
+                    match Self::parse(prefix, content, target) {
+                        None => return None,
+                        Some(r) => ret.push(r),
+                    }
                 }
             }
+            // push remaining
+            if let Some((builder, dest)) = compressed.take() {
+                ret.push(Rule {
+                    rule: RuleImpl::RuleSet(builder.build()),
+                    policy: dest,
+                });
+            }
+            Some(ret)
+        } else {
+            for (prefix, content, target) in self.buffer {
+                if prefix == "RULE-SET" {
+                    let Some(ruleset) = self.rulesets.remove(&content) else {
+                        return None;
+                    };
+                    ret.push(Rule {
+                        rule: RuleImpl::RuleSet(ruleset.build()),
+                        policy: target,
+                    });
+                } else {
+                    match Self::parse(prefix, content, target) {
+                        None => return None,
+                        Some(r) => ret.push(r),
+                    }
+                }
+            }
+            Some(ret)
         }
-        // push remaining
-        if let Some((builder, dest)) = compressed.take() {
-            ret.push(Rule {
-                rule: RuleImpl::RuleSet(builder.build()),
-                policy: dest,
-            });
-        }
-        Some(ret)
     }
 }
 

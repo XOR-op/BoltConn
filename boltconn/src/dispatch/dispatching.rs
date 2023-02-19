@@ -164,7 +164,7 @@ impl DispatchingBuilder {
         }
         self.rules.extend(
             rule_builder
-                .build()
+                .build(false)
                 .ok_or_else(|| anyhow!("Fail to build rules"))?,
         );
         if self.fallback.is_none() {
