@@ -12,11 +12,11 @@ use tokio::task::JoinHandle;
 
 mod direct;
 mod http;
-mod nat_adapter;
 mod shadowsocks;
 mod socks5;
+mod tcp_adapter;
 mod trojan;
-mod tun_adapter;
+mod udp_adapter;
 mod wireguard;
 
 pub use self::http::*;
@@ -25,10 +25,10 @@ use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 pub use direct::*;
-pub use nat_adapter::*;
 pub use socks5::*;
+pub use tcp_adapter::*;
 pub use trojan::*;
-pub use tun_adapter::*;
+pub use udp_adapter::*;
 pub use wireguard::*;
 
 pub struct TcpStatus {

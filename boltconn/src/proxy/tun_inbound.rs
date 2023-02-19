@@ -24,7 +24,7 @@ struct SendSide {
     indicator: Arc<AtomicBool>,
 }
 
-pub struct Nat {
+pub struct TunInbound {
     nat_addr: SocketAddr,
     session_mgr: Arc<SessionManager>,
     dispatcher: Arc<Dispatcher>,
@@ -33,7 +33,7 @@ pub struct Nat {
     udp_mgr: Arc<UdpOutboundManager>,
 }
 
-impl Nat {
+impl TunInbound {
     pub fn new(
         addr: SocketAddr,
         session_mgr: Arc<SessionManager>,
@@ -108,7 +108,7 @@ impl Nat {
                 let _ = send_side.sender.send(pkt).await;
                 entry.insert(send_side);
                 self.dispatcher
-                    .submit_udp_pkt(
+                    .submit_tun_udp_pkt(
                         src,
                         real_dst.clone(),
                         dst,

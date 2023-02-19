@@ -9,6 +9,10 @@ pub struct RawRootCfg {
     pub interface: String,
     #[serde(alias = "api-port")]
     pub api_port: u16,
+    #[serde(alias = "http-port")]
+    pub http_port: Option<u16>,
+    #[serde(alias = "socks5-port")]
+    pub socks5_port: Option<u16>,
     pub dns: RawDnsConfig,
     #[serde(alias = "proxy-local", default = "default_local_proxy")]
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,

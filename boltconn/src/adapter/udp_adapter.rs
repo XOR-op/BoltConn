@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, RwLock};
 
-pub struct NatAdapter {
+pub struct TunUdpAdapter {
     info: Arc<RwLock<ConnAgent>>,
     inbound_read: mpsc::Receiver<PktBufHandle>,
     inbound_write: Arc<UdpSocket>,
@@ -21,7 +21,7 @@ pub struct NatAdapter {
     session_mgr: Arc<SessionManager>,
 }
 
-impl NatAdapter {
+impl TunUdpAdapter {
     const BUF_SIZE: usize = 65536;
 
     #[allow(clippy::too_many_arguments)]
@@ -93,6 +93,80 @@ impl NatAdapter {
                 .await
             {
                 tracing::warn!("NatAdapter write to inbound failed: {}", err);
+                self.allocator.release(buf);
+                abort_handle.cancel().await;
+                break;
+            }
+            self.allocator.release(buf);
+        }
+        Ok(())
+    }
+}
+
+pub struct StandardUdpAdapter {
+    info: Arc<RwLock<ConnAgent>>,
+    inbound: UdpSocket,
+    src: SocketAddr,
+    allocator: PktBufPool,
+    connector: Connector,
+}
+
+impl StandardUdpAdapter {
+    pub fn new(
+        info: Arc<RwLock<ConnAgent>>,
+        inbound: UdpSocket,
+        src: SocketAddr,
+        allocator: PktBufPool,
+        connector: Connector,
+    ) -> Self {
+        Self {
+            info,
+            inbound,
+            src,
+            allocator,
+            connector,
+        }
+    }
+
+    pub async fn run(self, abort_handle: ConnAbortHandle) -> Result<()> {
+        let mut first_packet = true;
+        let outgoing_info_arc = self.info.clone();
+        let allocator = self.allocator.clone();
+        let inbound_read = Arc::new(self.inbound);
+        let inbound_write = inbound_read.clone();
+        let src_addr = self.src;
+        let Connector { tx, mut rx } = self.connector;
+        let abort_handle2 = abort_handle.clone();
+        // recv from inbound and send to outbound
+        let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
+            loop {
+                let mut buf = allocator.obtain().await;
+                if let Ok((len, pkt_src)) = inbound_read.recv_from(buf.as_uninited()).await {
+                    if src_addr == pkt_src {
+                        buf.len = len;
+                        if first_packet {
+                            first_packet = false;
+                            outgoing_info_arc.write().await.update_proto(buf.as_ready());
+                        }
+                        outgoing_info_arc.write().await.more_upload(buf.len);
+                        if let Err(err) = tx.send(buf).await {
+                            allocator.release(err.0);
+                            abort_handle2.cancel().await;
+                            break;
+                        }
+                    } else {
+                        // drop silently
+                    }
+                }
+            }
+        }));
+        duplex_guard.set_err_exit();
+
+        // recv from outbound and send to inbound
+        while let Some(buf) = rx.recv().await {
+            self.info.write().await.more_download(buf.len);
+            if let Err(err) = inbound_write.send_to(buf.as_ready(), self.src).await {
+                tracing::warn!("StandardUdpAdapter write to inbound failed: {}", err);
                 self.allocator.release(buf);
                 abort_handle.cancel().await;
                 break;

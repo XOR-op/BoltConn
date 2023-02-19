@@ -1,8 +1,10 @@
 use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
 use crate::platform::process::{NetworkType, ProcessInfo};
+use fast_socks5::util::target_addr::TargetAddr;
 use std::fmt::{Display, Formatter};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -51,6 +53,24 @@ impl Display for NetworkAddr {
     }
 }
 
+impl From<NetworkAddr> for TargetAddr {
+    fn from(value: NetworkAddr) -> Self {
+        match value {
+            NetworkAddr::Raw(s) => TargetAddr::Ip(s),
+            NetworkAddr::DomainName { domain_name, port } => TargetAddr::Domain(domain_name, port),
+        }
+    }
+}
+
+impl From<TargetAddr> for NetworkAddr {
+    fn from(value: TargetAddr) -> Self {
+        match value {
+            TargetAddr::Ip(s) => NetworkAddr::Raw(s),
+            TargetAddr::Domain(domain_name, port) => NetworkAddr::DomainName { domain_name, port },
+        }
+    }
+}
+
 impl NetworkAddr {
     pub fn port(&self) -> u16 {
         match self {
@@ -69,6 +89,23 @@ impl NetworkAddr {
                 domain_name: dn.clone(),
                 port,
             },
+        }
+    }
+}
+
+impl FromStr for NetworkAddr {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (left, right) = s.split_once(':').ok_or(())?;
+        let port = right.parse::<u16>().map_err(|_| ())?;
+        if let Ok(addr) = left.parse::<IpAddr>() {
+            Ok(NetworkAddr::Raw(SocketAddr::new(addr, port)))
+        } else {
+            Ok(NetworkAddr::DomainName {
+                domain_name: left.to_string(),
+                port,
+            })
         }
     }
 }

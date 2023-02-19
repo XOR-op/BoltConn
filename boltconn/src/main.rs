@@ -8,7 +8,7 @@ use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
 use crate::mitm::{HeaderModManager, MitmModifier, UrlModManager};
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
-use crate::proxy::{AgentCenter, HttpCapturer, UdpOutboundManager};
+use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, UdpOutboundManager};
 use chrono::Timelike;
 use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
@@ -20,15 +20,15 @@ use network::{
 };
 use platform::get_default_route;
 use proxy::Dispatcher;
-use proxy::{Nat, SessionManager};
+use proxy::{SessionManager, TunInbound};
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use std::collections::HashMap;
-use std::fs;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fs, io};
 use structopt::StructOpt;
 use tokio::select;
 use tracing::{event, Level};
@@ -352,7 +352,7 @@ fn main() -> ExitCode {
             read_mitm_hosts(&config.mitm_host),
         ))
     };
-    let nat = Arc::new(Nat::new(
+    let tun_inbound = Arc::new(TunInbound::new(
         nat_addr,
         manager.clone(),
         dispatcher.clone(),
@@ -360,15 +360,31 @@ fn main() -> ExitCode {
         proxy_allocator,
         udp_manager,
     ));
-    let nat_tcp = nat.clone();
-    let nat_udp = nat;
+    let tun_inbound_tcp = tun_inbound.clone();
+    let tun_inbound_udp = tun_inbound;
 
     // run
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
-    let _nat_tcp_handle = rt.spawn(async move { nat_tcp.run_tcp().await });
-    let _nat_udp_handle = rt.spawn(async move { nat_udp.run_udp().await });
+    let _tun_inbound_tcp_handle = rt.spawn(async move { tun_inbound_tcp.run_tcp().await });
+    let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run_udp().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
+    if let Some(http_port) = config.http_port {
+        let dispatcher = dispatcher.clone();
+        rt.spawn(async move {
+            let http_proxy = HttpInbound::new(http_port, None, dispatcher).await?;
+            http_proxy.run().await;
+            Ok::<(), io::Error>(())
+        });
+    }
+    if let Some(socks5_port) = config.socks5_port {
+        let dispatcher = dispatcher.clone();
+        rt.spawn(async move {
+            let socks_proxy = Socks5Inbound::new(socks5_port, None, dispatcher).await?;
+            socks_proxy.run().await;
+            Ok::<(), io::Error>(())
+        });
+    }
 
     rt.block_on(async move {
         loop {

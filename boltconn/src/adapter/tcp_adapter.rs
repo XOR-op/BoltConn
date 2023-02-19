@@ -10,7 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 
-pub struct TunAdapter {
+pub struct TcpAdapter {
     stat: TcpStatus,
     info: Arc<RwLock<ConnAgent>>,
     inbound: TcpStream,
@@ -19,7 +19,7 @@ pub struct TunAdapter {
     abort_handle: ConnAbortHandle,
 }
 
-impl TunAdapter {
+impl TcpAdapter {
     const BUF_SIZE: usize = 65536;
 
     #[allow(clippy::too_many_arguments)]
