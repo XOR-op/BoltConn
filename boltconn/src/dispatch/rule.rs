@@ -1,4 +1,4 @@
-use crate::dispatch::ruleset::{RuleSet, RuleSetBuilder};
+use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
@@ -8,7 +8,7 @@ use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RuleImpl {
     ProcessName(String),
     ProcessKeyword(String),
@@ -18,21 +18,106 @@ pub enum RuleImpl {
     DomainKeyword(String),
     IpCidr(IpNet),
     Port(u16),
-    RuleSet(RuleSet),
+    RuleSet(Arc<RuleSet>),
+    And(Box<RuleImpl>, Box<RuleImpl>),
+    Or(Box<RuleImpl>, Box<RuleImpl>),
+    Not(Box<RuleImpl>),
+}
+
+impl RuleImpl {
+    pub fn matches(&self, info: &ConnInfo) -> bool {
+        match &self {
+            RuleImpl::Domain(d) => {
+                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
+                    if d == domain_name {
+                        return true;
+                    }
+                }
+            }
+            RuleImpl::DomainSuffix(d) => {
+                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
+                    if domain_name.ends_with(d) {
+                        return true;
+                    }
+                }
+            }
+            RuleImpl::DomainKeyword(kw) => {
+                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
+                    if domain_name.contains(kw) {
+                        return true;
+                    }
+                }
+            }
+            RuleImpl::IpCidr(net) => {
+                if let NetworkAddr::Raw(addr) = &info.dst {
+                    if net.contains(&addr.ip()) {
+                        return true;
+                    }
+                }
+            }
+            RuleImpl::Port(port) => {
+                if *port == info.dst.port() {
+                    return true;
+                }
+            }
+            RuleImpl::ProcessName(proc) => {
+                if let Some(proc_info) = &info.process_info {
+                    if proc_info.name == *proc {
+                        return true;
+                    }
+                }
+            }
+            RuleImpl::ProcessKeyword(proc) => {
+                if let Some(proc_info) = &info.process_info {
+                    if proc_info.name.contains(proc) {
+                        return true;
+                    }
+                }
+            }
+            RuleImpl::ProcPathKeyword(proc) => {
+                if let Some(proc_info) = &info.process_info {
+                    if proc_info.path.contains(proc) {
+                        return true;
+                    }
+                }
+            }
+            RuleImpl::RuleSet(rs) => {
+                if rs.matches(info) {
+                    return true;
+                }
+            }
+            RuleImpl::And(r1, r2) => {
+                if r1.matches(info) && r2.matches(info) {
+                    return true;
+                }
+            }
+            RuleImpl::Or(r1, r2) => {
+                if r1.matches(info) || r2.matches(info) {
+                    return true;
+                }
+            }
+            RuleImpl::Not(r) => {
+                if !r.matches(info) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 pub(crate) struct RuleBuilder<'a> {
     proxies: &'a HashMap<String, Arc<Proxy>>,
     groups: &'a HashMap<String, Arc<ProxyGroup>>,
-    rulesets: HashMap<String, RuleSetBuilder>,
-    buffer: Vec<(String, String, GeneralProxy)>,
+    rulesets: HashMap<String, Arc<RuleSet>>,
+    buffer: Vec<(RuleImpl, GeneralProxy)>,
 }
 
 impl RuleBuilder<'_> {
     pub fn new<'a>(
         proxies: &'a HashMap<String, Arc<Proxy>>,
         groups: &'a HashMap<String, Arc<ProxyGroup>>,
-        rulesets: HashMap<String, RuleSetBuilder>,
+        rulesets: HashMap<String, Arc<RuleSet>>,
     ) -> RuleBuilder<'a> {
         RuleBuilder {
             proxies,
@@ -44,32 +129,85 @@ impl RuleBuilder<'_> {
 
     #[allow(clippy::get_first)]
     pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
-        let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
-        let list: Vec<&str> = processed_str.split(',').collect();
-        // ignore IP-CIDR,#ip#,#out#,no-resolve
-        if list.len() != 3
-            && !(list.len() == 4
-                && (*list.get(0).unwrap() == "IP-CIDR" || *list.get(0).unwrap() == "IP-CIDR6")
-                && *list.get(3).unwrap() == "no-resolve")
-        {
+        let processed_str = "[".to_string() + s + "]";
+        let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
+        if list.len() < 3 {
             return Err(anyhow!("Invalid length"));
         }
+        let (mut first, mut may_proxy) = list.split_at(list.len() - 1);
+        let mut may_proxy_str = retrive_string(may_proxy.get(0).unwrap())?;
+        // e.g. IP-CIDR, #ip#, #proxy#, no-resolve
+        if may_proxy_str.as_str() == "no-resolve" {
+            (first, may_proxy) = first.split_at(first.len() - 1);
+            may_proxy_str = retrive_string(may_proxy.get(0).unwrap())?;
+        }
+
         let general = {
-            if let Some(p) = self.proxies.get(*list.get(2).unwrap()) {
+            if let Some(p) = self.proxies.get(&may_proxy_str) {
                 GeneralProxy::Single(p.clone())
-            } else if let Some(p) = self.groups.get(*list.get(2).unwrap()) {
+            } else if let Some(p) = self.groups.get(&may_proxy_str) {
                 GeneralProxy::Group(p.clone())
             } else {
                 return Err(anyhow!("Group not found"));
             }
         };
-        let (prefix, content) = (
-            String::from(*list.get(0).unwrap()),
-            String::from(*list.get(1).unwrap()),
-        );
 
-        self.buffer.push((prefix, content, general));
+        let rule = self.parse_sub_rule(first)?;
+
+        self.buffer.push((rule, general));
         Ok(())
+    }
+
+    fn parse_sub_rule(&self, list: &[serde_yaml::Value]) -> anyhow::Result<RuleImpl> {
+        let prefix = retrive_string(list.get(0).unwrap())?;
+        match list.len() {
+            2 => match prefix.as_str() {
+                "AND" | "OR" => Err(anyhow!("Invalid length")),
+                "NOT" => {
+                    let serde_yaml::Value::Sequence(seq) = list.get(1).unwrap() else {
+                        return Err(anyhow!("Invalid NOT rule"));
+                    };
+                    Ok(RuleImpl::Not(Box::new(self.parse_sub_rule(seq)?)))
+                }
+                _ => {
+                    let content = retrive_string(list.get(1).unwrap())?;
+                    Self::parse(prefix, content, Some(&self.rulesets))
+                        .ok_or_else(|| anyhow!("Failed to parse"))
+                }
+            },
+            3 => {
+                match prefix.as_str() {
+                    "IP-CIDR" | "IP-CIDR6" => {
+                        // ignore IP-CIDR,#ip#,no-resolve
+                        if *list.get(2).unwrap()
+                            != serde_yaml::Value::String("no-resolve".to_string())
+                        {
+                            return Err(anyhow!("Invalid length"));
+                        }
+                        let content = retrive_string(list.get(1).unwrap())?;
+                        Self::parse(prefix, content, Some(&self.rulesets))
+                            .ok_or_else(|| anyhow!("Failed to parse"))
+                    }
+                    "AND" | "OR" => {
+                        let serde_yaml::Value::Sequence(seq1) = list.get(1).unwrap() else {
+                            return Err(anyhow!("Invalid NOT rule"));
+                        };
+                        let serde_yaml::Value::Sequence(seq2) = list.get(2).unwrap() else {
+                            return Err(anyhow!("Invalid NOT rule"));
+                        };
+                        let v1 = Box::new(self.parse_sub_rule(seq1)?);
+                        let v2 = Box::new(self.parse_sub_rule(seq2)?);
+                        match prefix.as_str() {
+                            "AND" => Ok(RuleImpl::And(v1, v2)),
+                            "OR" => Ok(RuleImpl::Or(v1, v2)),
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => Err(anyhow!("Invalid length")),
+                }
+            }
+            _ => Err(anyhow!("Invalid length")),
+        }
     }
 
     pub fn parse_fallback(&mut self, s: &str) -> anyhow::Result<GeneralProxy> {
@@ -91,18 +229,10 @@ impl RuleBuilder<'_> {
     }
 
     #[allow(clippy::get_first)]
-    pub fn parse_ruleset(s: &str, general: GeneralProxy) -> Option<Rule> {
+    pub fn parse_ruleset(s: &str) -> Option<RuleImpl> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
         // ignore no-resolve
-        // if list.len() != 2
-        //     && !(list.len() == 3
-        //     && (*list.get(0).unwrap() == "IP-CIDR"
-        //     || *list.get(0).unwrap() == "IP-CIDR6")
-        //     && *list.get(2).unwrap() == "no-resolve")
-        // {
-        //     return None;
-        // }
         // For compatibility with Clash, we cannot have strict syntax constraint on ruleset rules.
         if list.len() < 2 {
             return None;
@@ -111,128 +241,35 @@ impl RuleBuilder<'_> {
             String::from(*list.get(0).unwrap()),
             String::from(*list.get(1).unwrap()),
         );
-        Self::parse(prefix, content, general)
+        Self::parse(prefix, content, None)
     }
 
-    fn parse(prefix: String, content: String, general: GeneralProxy) -> Option<Rule> {
+    fn parse(
+        prefix: String,
+        content: String,
+        rulesets: Option<&HashMap<String, Arc<RuleSet>>>,
+    ) -> Option<RuleImpl> {
         match prefix.as_str() {
-            "DOMAIN-SUFFIX" => Some(Rule {
-                rule: RuleImpl::DomainSuffix(content),
-                policy: general,
-            }),
-            "DOMAIN-KEYWORD" => Some(Rule {
-                rule: RuleImpl::DomainKeyword(content),
-                policy: general,
-            }),
-            "DOMAIN" => Some(Rule {
-                rule: RuleImpl::Domain(content),
-                policy: general,
-            }),
-            "PROCESS-NAME" => Some(Rule {
-                rule: RuleImpl::ProcessName(content),
-                policy: general,
-            }),
-            "PROCESS-KEYWORD" => Some(Rule {
-                rule: RuleImpl::ProcessKeyword(content),
-                policy: general,
-            }),
-            "PROCPATH-KEYWORD" => Some(Rule {
-                rule: RuleImpl::ProcPathKeyword(content),
-                policy: general,
-            }),
-            "IP-CIDR" | "IP-CIDR6" => {
-                if let Ok(cidr) = IpNet::from_str(content.as_str()) {
-                    Some(Rule {
-                        rule: RuleImpl::IpCidr(cidr),
-                        policy: general,
-                    })
-                } else {
-                    None
-                }
-            }
-            "DST-PORT" => {
-                if let Ok(port) = content.parse::<u16>() {
-                    Some(Rule {
-                        rule: RuleImpl::Port(port),
-                        policy: general,
-                    })
-                } else {
-                    None
-                }
-            }
+            "DOMAIN-SUFFIX" => Some(RuleImpl::DomainSuffix(content)),
+            "DOMAIN-KEYWORD" => Some(RuleImpl::DomainKeyword(content)),
+            "DOMAIN" => Some(RuleImpl::Domain(content)),
+            "PROCESS-NAME" => Some(RuleImpl::ProcessName(content)),
+            "PROCESS-KEYWORD" => Some(RuleImpl::ProcessKeyword(content)),
+            "PROCPATH-KEYWORD" => Some(RuleImpl::ProcPathKeyword(content)),
+            "IP-CIDR" | "IP-CIDR6" => IpNet::from_str(content.as_str()).ok().map(RuleImpl::IpCidr),
+            "DST-PORT" => content.parse::<u16>().ok().map(RuleImpl::Port),
+            "RULE-SET" => rulesets
+                .and_then(|table| table.get(&content))
+                .map(|rs| RuleImpl::RuleSet(rs.clone())),
             _ => None,
         }
     }
 
-    // Although compressing ruleset will reduce matching time, it can lead to confusing ruleset logging.
-    // So only compress rulesets if you do not care logging info.
-    pub fn build(mut self, will_compress: bool) -> Option<Vec<Rule>> {
-        let mut ret = Vec::new();
-        if will_compress {
-            // compress adjacent ruleset
-            let mut compressed: Option<(RuleSetBuilder, GeneralProxy)> = None;
-            for (prefix, content, target) in self.buffer {
-                if prefix == "RULE-SET" {
-                    let Some(ruleset) = self.rulesets.remove(&content) else {
-                        return None;
-                    };
-                    // determine if we can compress them
-                    compressed = match compressed {
-                        None => Some((ruleset, target)),
-                        Some((prev_ruleset, prev_target)) => {
-                            if prev_target == target {
-                                Some((prev_ruleset.merge(ruleset), prev_target))
-                            } else {
-                                // push old, leave new
-                                ret.push(Rule {
-                                    rule: RuleImpl::RuleSet(prev_ruleset.build()),
-                                    policy: prev_target,
-                                });
-                                Some((ruleset, target))
-                            }
-                        }
-                    };
-                } else {
-                    // not able to merge next, push
-                    if let Some((builder, dest)) = compressed.take() {
-                        ret.push(Rule {
-                            rule: RuleImpl::RuleSet(builder.build()),
-                            policy: dest,
-                        });
-                    }
-                    match Self::parse(prefix, content, target) {
-                        None => return None,
-                        Some(r) => ret.push(r),
-                    }
-                }
-            }
-            // push remaining
-            if let Some((builder, dest)) = compressed.take() {
-                ret.push(Rule {
-                    rule: RuleImpl::RuleSet(builder.build()),
-                    policy: dest,
-                });
-            }
-            Some(ret)
-        } else {
-            for (prefix, content, target) in self.buffer {
-                if prefix == "RULE-SET" {
-                    let Some(ruleset) = self.rulesets.remove(&content) else {
-                        return None;
-                    };
-                    ret.push(Rule {
-                        rule: RuleImpl::RuleSet(ruleset.build()),
-                        policy: target,
-                    });
-                } else {
-                    match Self::parse(prefix, content, target) {
-                        None => return None,
-                        Some(r) => ret.push(r),
-                    }
-                }
-            }
-            Some(ret)
-        }
+    pub fn build(self) -> Vec<Rule> {
+        self.buffer
+            .into_iter()
+            .map(|(r, e)| Rule::new(r, e))
+            .collect()
     }
 }
 
@@ -247,68 +284,7 @@ impl Rule {
     }
 
     pub fn matches(&self, info: &ConnInfo) -> Option<GeneralProxy> {
-        match &self.rule {
-            RuleImpl::Domain(d) => {
-                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
-                    if d == domain_name {
-                        return Some(self.policy.clone());
-                    }
-                }
-            }
-            RuleImpl::DomainSuffix(d) => {
-                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
-                    if domain_name.ends_with(d) {
-                        return Some(self.policy.clone());
-                    }
-                }
-            }
-            RuleImpl::DomainKeyword(kw) => {
-                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
-                    if domain_name.contains(kw) {
-                        return Some(self.policy.clone());
-                    }
-                }
-            }
-            RuleImpl::IpCidr(net) => {
-                if let NetworkAddr::Raw(addr) = &info.dst {
-                    if net.contains(&addr.ip()) {
-                        return Some(self.policy.clone());
-                    }
-                }
-            }
-            RuleImpl::Port(port) => {
-                if *port == info.dst.port() {
-                    return Some(self.policy.clone());
-                }
-            }
-            RuleImpl::ProcessName(proc) => {
-                if let Some(proc_info) = &info.process_info {
-                    if proc_info.name == *proc {
-                        return Some(self.policy.clone());
-                    }
-                }
-            }
-            RuleImpl::ProcessKeyword(proc) => {
-                if let Some(proc_info) = &info.process_info {
-                    if proc_info.name.contains(proc) {
-                        return Some(self.policy.clone());
-                    }
-                }
-            }
-            RuleImpl::ProcPathKeyword(proc) => {
-                if let Some(proc_info) = &info.process_info {
-                    if proc_info.path.contains(proc) {
-                        return Some(self.policy.clone());
-                    }
-                }
-            }
-            RuleImpl::RuleSet(rs) => {
-                if rs.matches(info) {
-                    return Some(self.policy.clone());
-                }
-            }
-        }
-        None
+        self.rule.matches(info).then(|| self.policy.clone())
     }
 
     pub fn get_impl(&self) -> &RuleImpl {
@@ -319,5 +295,12 @@ impl Rule {
 impl Debug for Rule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.rule.fmt(f)
+    }
+}
+
+fn retrive_string(val: &serde_yaml::Value) -> anyhow::Result<String> {
+    match val {
+        serde_yaml::Value::String(s) => Ok(s.clone()),
+        _ => Err(anyhow!("Not a valid string")),
     }
 }
