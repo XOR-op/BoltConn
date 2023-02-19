@@ -10,6 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct HttpInbound {
+    port: u16,
     server: TcpListener,
     auth: Option<String>,
     dispatcher: Arc<Dispatcher>,
@@ -24,6 +25,7 @@ impl HttpInbound {
         let server =
             TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)).await?;
         Ok(Self {
+            port,
             server,
             auth: auth.map(|(usr, pwd)| usr + ":" + pwd.as_str()),
             dispatcher,
@@ -31,6 +33,7 @@ impl HttpInbound {
     }
 
     pub async fn run(self) {
+        tracing::info!("[HTTP] Listen proxy at 127.0.0.1:{}, running...", self.port);
         while let Ok((socket, addr)) = self.server.accept().await {
             let disp = self.dispatcher.clone();
             let auth = self.auth.clone();

@@ -10,6 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 pub struct Socks5Inbound {
+    port: u16,
     server: TcpListener,
     auth: Option<(String, String)>,
     dispatcher: Arc<Dispatcher>,
@@ -24,6 +25,7 @@ impl Socks5Inbound {
         let server =
             TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)).await?;
         Ok(Self {
+            port,
             server,
             auth,
             dispatcher,
@@ -31,6 +33,10 @@ impl Socks5Inbound {
     }
 
     pub async fn run(self) {
+        tracing::info!(
+            "[Socks5] Listen proxy at 127.0.0.1:{}, running...",
+            self.port
+        );
         while let Ok((socket, src_addr)) = self.server.accept().await {
             let disp = self.dispatcher.clone();
             let auth = self.auth.clone();
