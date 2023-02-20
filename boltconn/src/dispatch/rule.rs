@@ -1,5 +1,6 @@
 use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
+use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
 use ipnet::IpNet;
@@ -7,6 +8,41 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub enum PortRule {
+    Tcp(u16),
+    Udp(u16),
+    All(u16),
+    AnyTcp,
+    AnyUdp,
+}
+
+impl FromStr for PortRule {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "tcp" => Ok(Self::AnyTcp),
+            "udp" => Ok(Self::AnyUdp),
+            s => {
+                if s.ends_with("/tcp") {
+                    s.split_once("/tcp")
+                        .and_then(|(p, _)| p.parse::<u16>().ok())
+                        .map(Self::Tcp)
+                        .ok_or(())
+                } else if s.ends_with("/udp") {
+                    s.split_once("/udp")
+                        .and_then(|(p, _)| p.parse::<u16>().ok())
+                        .map(Self::Udp)
+                        .ok_or(())
+                } else {
+                    s.parse::<u16>().map(Self::All).map_err(|_| ())
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum RuleImpl {
@@ -17,7 +53,7 @@ pub enum RuleImpl {
     DomainSuffix(String),
     DomainKeyword(String),
     IpCidr(IpNet),
-    Port(u16),
+    Port(PortRule),
     RuleSet(Arc<RuleSet>),
     And(Box<RuleImpl>, Box<RuleImpl>),
     Or(Box<RuleImpl>, Box<RuleImpl>),
@@ -29,80 +65,60 @@ impl RuleImpl {
         match &self {
             RuleImpl::Domain(d) => {
                 if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
-                    if d == domain_name {
-                        return true;
-                    }
+                    d == domain_name
+                } else {
+                    false
                 }
             }
             RuleImpl::DomainSuffix(d) => {
                 if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
-                    if domain_name.ends_with(d) {
-                        return true;
-                    }
+                    domain_name.ends_with(d)
+                } else {
+                    false
                 }
             }
             RuleImpl::DomainKeyword(kw) => {
                 if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
-                    if domain_name.contains(kw) {
-                        return true;
-                    }
+                    domain_name.contains(kw)
+                } else {
+                    false
                 }
             }
             RuleImpl::IpCidr(net) => {
                 if let NetworkAddr::Raw(addr) = &info.dst {
-                    if net.contains(&addr.ip()) {
-                        return true;
-                    }
+                    net.contains(&addr.ip())
+                } else {
+                    false
                 }
             }
-            RuleImpl::Port(port) => {
-                if *port == info.dst.port() {
-                    return true;
+            RuleImpl::Port(port) => match port {
+                PortRule::Tcp(p) => {
+                    info.connection_type == NetworkType::Tcp && info.dst.port() == *p
                 }
-            }
-            RuleImpl::ProcessName(proc) => {
-                if let Some(proc_info) = &info.process_info {
-                    if proc_info.name == *proc {
-                        return true;
-                    }
+                PortRule::Udp(p) => {
+                    info.connection_type == NetworkType::Udp && info.dst.port() == *p
                 }
-            }
-            RuleImpl::ProcessKeyword(proc) => {
-                if let Some(proc_info) = &info.process_info {
-                    if proc_info.name.contains(proc) {
-                        return true;
-                    }
-                }
-            }
-            RuleImpl::ProcPathKeyword(proc) => {
-                if let Some(proc_info) = &info.process_info {
-                    if proc_info.path.contains(proc) {
-                        return true;
-                    }
-                }
-            }
-            RuleImpl::RuleSet(rs) => {
-                if rs.matches(info) {
-                    return true;
-                }
-            }
-            RuleImpl::And(r1, r2) => {
-                if r1.matches(info) && r2.matches(info) {
-                    return true;
-                }
-            }
-            RuleImpl::Or(r1, r2) => {
-                if r1.matches(info) || r2.matches(info) {
-                    return true;
-                }
-            }
-            RuleImpl::Not(r) => {
-                if !r.matches(info) {
-                    return true;
-                }
-            }
+                PortRule::All(p) => info.dst.port() == *p,
+                PortRule::AnyTcp => info.connection_type == NetworkType::Tcp,
+                PortRule::AnyUdp => info.connection_type == NetworkType::Udp,
+            },
+            RuleImpl::ProcessName(proc) => info
+                .process_info
+                .as_ref()
+                .map_or_else(|| false, |proc_info| proc_info.name == *proc),
+            RuleImpl::ProcessKeyword(proc) => info
+                .process_info
+                .as_ref()
+                .map_or_else(|| false, |proc_info| proc_info.name.contains(proc)),
+            RuleImpl::ProcPathKeyword(proc) => info
+                .process_info
+                .as_ref()
+                .map_or_else(|| false, |proc_info| proc_info.path.contains(proc)),
+            RuleImpl::RuleSet(rs) => rs.matches(info),
+            RuleImpl::And(r1, r2) => r1.matches(info) && r2.matches(info),
+            RuleImpl::Or(r1, r2) => r1.matches(info) || r2.matches(info),
+            RuleImpl::Not(r) => !r.matches(info),
         }
-        false
     }
 }
 
@@ -257,7 +273,7 @@ impl RuleBuilder<'_> {
             "PROCESS-KEYWORD" => Some(RuleImpl::ProcessKeyword(content)),
             "PROCPATH-KEYWORD" => Some(RuleImpl::ProcPathKeyword(content)),
             "IP-CIDR" | "IP-CIDR6" => IpNet::from_str(content.as_str()).ok().map(RuleImpl::IpCidr),
-            "DST-PORT" => content.parse::<u16>().ok().map(RuleImpl::Port),
+            "DST-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::Port),
             "RULE-SET" => rulesets
                 .and_then(|table| table.get(&content))
                 .map(|rs| RuleImpl::RuleSet(rs.clone())),
