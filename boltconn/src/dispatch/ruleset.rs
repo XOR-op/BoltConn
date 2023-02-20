@@ -1,7 +1,8 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::RuleSchema;
-use crate::dispatch::rule::{RuleBuilder, RuleImpl};
+use crate::dispatch::rule::{PortRule, RuleBuilder, RuleImpl};
 use crate::dispatch::ConnInfo;
+use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
 use aho_corasick::AhoCorasick;
 use ip_network_table::IpNetworkTable;
@@ -14,7 +15,10 @@ pub struct RuleSet {
     name: String,
     domain: HostMatcher,
     ip: IpNetworkTable<()>,
-    port: HashSet<u16>,
+    tcp_port: HashSet<u16>,
+    udp_port: HashSet<u16>,
+    any_tcp: bool,
+    any_udp: bool,
     domain_keyword: AhoCorasick,
     process_name: HashSet<String>,
     process_keyword: AhoCorasick,
@@ -46,8 +50,17 @@ impl RuleSet {
                 *port
             }
         };
-        if self.port.contains(&port) {
-            return true;
+        match info.connection_type {
+            NetworkType::Tcp => {
+                if self.any_tcp || self.tcp_port.contains(&port) {
+                    return true;
+                }
+            }
+            NetworkType::Udp => {
+                if self.any_udp || self.udp_port.contains(&port) {
+                    return true;
+                }
+            }
         }
         if let Some(proc) = &info.process_info {
             if self.process_name.contains(&proc.name)
@@ -69,7 +82,10 @@ pub struct RuleSetBuilder {
     process_name: HashSet<String>,
     process_keyword: Vec<String>,
     procpath_keyword: Vec<String>,
-    port: HashSet<u16>,
+    tcp_port: HashSet<u16>,
+    udp_port: HashSet<u16>,
+    any_tcp: bool,
+    any_udp: bool,
 }
 
 impl RuleSetBuilder {
@@ -82,7 +98,10 @@ impl RuleSetBuilder {
             process_name: HashSet::new(),
             process_keyword: vec![],
             procpath_keyword: vec![],
-            port: HashSet::new(),
+            tcp_port: HashSet::new(),
+            udp_port: HashSet::new(),
+            any_tcp: false,
+            any_udp: false,
         };
         for str in &payload.payload {
             if let Some(rule) = RuleBuilder::parse_ruleset(str) {
@@ -100,9 +119,20 @@ impl RuleSetBuilder {
                             .unwrap();
                         retval.ip_cidr.insert(ip, ());
                     }
-                    RuleImpl::Port(p) => {
-                        retval.port.insert(p);
-                    }
+                    RuleImpl::Port(p) => match p {
+                        PortRule::Tcp(p) => {
+                            retval.tcp_port.insert(p);
+                        }
+                        PortRule::Udp(p) => {
+                            retval.udp_port.insert(p);
+                        }
+                        PortRule::All(p) => {
+                            retval.tcp_port.insert(p);
+                            retval.udp_port.insert(p);
+                        }
+                        PortRule::AnyTcp => retval.any_tcp = true,
+                        PortRule::AnyUdp => retval.any_udp = true,
+                    },
                     // Slow for ruleset; better to write as a standalone rule
                     RuleImpl::RuleSet(_)
                     | RuleImpl::And(..)
@@ -125,7 +155,10 @@ impl RuleSetBuilder {
         self.process_keyword.extend(rhs.process_keyword.into_iter());
         self.procpath_keyword
             .extend(rhs.procpath_keyword.into_iter());
-        self.port.extend(rhs.port.into_iter());
+        self.tcp_port.extend(rhs.tcp_port.into_iter());
+        self.udp_port.extend(rhs.udp_port.into_iter());
+        self.any_tcp |= rhs.any_tcp;
+        self.any_udp |= rhs.any_udp;
         self.domain_keyword.extend(rhs.domain_keyword.into_iter());
         self
     }
@@ -135,7 +168,10 @@ impl RuleSetBuilder {
             name: self.name,
             domain: self.domain.build(),
             ip: self.ip_cidr,
-            port: self.port,
+            tcp_port: self.tcp_port,
+            udp_port: self.udp_port,
+            any_tcp: self.any_tcp,
+            any_udp: self.any_udp,
             domain_keyword: AhoCorasick::new_auto_configured(self.domain_keyword.as_slice()),
             process_name: self.process_name,
             process_keyword: AhoCorasick::new_auto_configured(self.process_keyword.as_slice()),
@@ -156,7 +192,10 @@ impl RuleSetBuilder {
             process_name: HashSet::new(),
             process_keyword: vec![],
             procpath_keyword: vec![],
-            port: HashSet::new(),
+            tcp_port: HashSet::new(),
+            udp_port: HashSet::new(),
+            any_tcp: false,
+            any_udp: false,
         }
     }
 }
