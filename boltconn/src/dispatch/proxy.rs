@@ -48,6 +48,19 @@ impl ProxyImpl {
             _ => true,
         }
     }
+
+    pub fn simple_description(&self) -> String {
+        match self {
+            ProxyImpl::Direct => "direct",
+            ProxyImpl::Reject => "reject",
+            ProxyImpl::Http(_) => "http",
+            ProxyImpl::Socks5(_) => "socks5",
+            ProxyImpl::Shadowsocks(_) => "shadowsocks",
+            ProxyImpl::Trojan(_) => "trojan",
+            ProxyImpl::Wireguard(_) => "wireguard",
+        }
+        .to_string()
+    }
 }
 
 /// A group of proxies

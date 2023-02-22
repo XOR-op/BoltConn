@@ -13,7 +13,7 @@ impl Requester {
         for entry in result {
             println!("{}: {}", entry.name.bold().red(), entry.selected.blue());
             for i in entry.list {
-                println!("  - {}", i)
+                println!("  - {}", i.name)
             }
         }
         Ok(())
