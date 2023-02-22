@@ -5,7 +5,7 @@ use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, Ses
 use axum::extract::{Path, Query, State};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use boltapi::{GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, SetGroupReqSchema};
+use boltapi::{GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, ProxyData, SetGroupReqSchema};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -258,12 +258,8 @@ impl ApiServer {
         for g in list.iter() {
             let item = GetGroupRespSchema {
                 name: g.get_name(),
-                selected: pretty_proxy(g.get_selection()),
-                list: g
-                    .get_members()
-                    .iter()
-                    .map(|p| pretty_proxy(p.clone()))
-                    .collect(),
+                selected: pretty_proxy(&g.get_selection()).name,
+                list: g.get_members().iter().map(|p| pretty_proxy(p)).collect(),
             };
             result.push(item);
         }
@@ -299,10 +295,16 @@ impl ApiServer {
     }
 }
 
-fn pretty_proxy(g: GeneralProxy) -> String {
+fn pretty_proxy(g: &GeneralProxy) -> ProxyData {
     match g {
-        GeneralProxy::Single(p) => "(P)".to_string() + p.get_name().as_str(),
-        GeneralProxy::Group(g) => "(G)".to_string() + g.get_name().as_str(),
+        GeneralProxy::Single(p) => ProxyData {
+            name: p.get_name(),
+            proto: p.get_impl().simple_description(),
+        },
+        GeneralProxy::Group(g) => ProxyData {
+            name: g.get_name(),
+            proto: "group".to_string(),
+        },
     }
 }
 

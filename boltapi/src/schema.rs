@@ -35,10 +35,17 @@ pub struct HttpMitmSchema {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
+pub struct ProxyData {
+    pub name: String,
+    pub proto: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct GetGroupRespSchema {
     pub name: String,
     pub selected: String,
-    pub list: Vec<String>,
+    pub list: Vec<ProxyData>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
