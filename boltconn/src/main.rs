@@ -284,6 +284,7 @@ fn main() -> ExitCode {
     let api_port = config.api_port;
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
     let api_server = ApiServer::new(
+        config.api_key,
         manager.clone(),
         stat_center.clone(),
         Some(http_capturer.clone()),

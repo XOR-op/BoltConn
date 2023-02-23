@@ -3,6 +3,7 @@ use crate::dispatch::{Dispatching, GeneralProxy};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
 use axum::extract::{Path, Query, State};
+use axum::middleware::map_request;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use boltapi::{GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, ProxyData, SetGroupReqSchema};
@@ -18,6 +19,7 @@ pub type SharedDispatching = Arc<RwLock<Arc<Dispatching>>>;
 
 #[derive(Clone)]
 pub struct ApiServer {
+    secret: Option<String>,
     manager: Arc<SessionManager>,
     stat_center: Arc<AgentCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
@@ -28,6 +30,7 @@ pub struct ApiServer {
 
 impl ApiServer {
     pub fn new(
+        secret: Option<String>,
         manager: Arc<SessionManager>,
         stat_center: Arc<AgentCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
@@ -36,6 +39,7 @@ impl ApiServer {
         state: LinkedState,
     ) -> Self {
         Self {
+            secret,
             manager,
             stat_center,
             http_capturer,
@@ -46,6 +50,8 @@ impl ApiServer {
     }
 
     pub async fn run(self, port: u16) {
+        let secret = Arc::new(self.secret.clone());
+        let wrapper = move |r| Self::auth(secret.clone(), r);
         let app = Router::new()
             .route("/logs", get(Self::get_logs))
             .route(
@@ -62,6 +68,7 @@ impl ApiServer {
                 get(Self::get_group_list).put(Self::set_selection),
             )
             .route("/reload", post(Self::reload))
+            .route_layer(map_request(wrapper))
             .with_state(self);
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
         axum::Server::bind(&addr)
@@ -72,6 +79,24 @@ impl ApiServer {
 
     pub async fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
         *self.dispatching.write().await = dispatching;
+    }
+
+    async fn auth<B>(
+        auth: Arc<Option<String>>,
+        request: http::Request<B>,
+    ) -> Result<http::Request<B>, http::StatusCode> {
+        if let Some(auth) = auth.as_ref() {
+            let auth_header = request
+                .headers()
+                .get("api-key")
+                .and_then(|h| h.to_str().ok());
+            match auth_header {
+                Some(header_val) if header_val == auth => Ok(request),
+                _ => Err(http::StatusCode::UNAUTHORIZED),
+            }
+        } else {
+            Ok(request)
+        }
     }
 
     async fn get_logs(State(_server): State<Self>) -> Json<serde_json::Value> {
