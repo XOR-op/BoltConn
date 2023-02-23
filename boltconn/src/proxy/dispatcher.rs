@@ -5,7 +5,6 @@ use crate::adapter::{
 };
 use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::host_matcher::HostMatcher;
 use crate::dispatch::{ConnInfo, Dispatching, ProxyImpl};
 use crate::mitm::{HttpMitm, HttpsMitm, ModifierClosure};
 use crate::network::dns::Dns;
@@ -29,7 +28,7 @@ pub struct Dispatcher {
     dispatching: RwLock<Arc<Dispatching>>,
     ca_certificate: Certificate,
     modifier: RwLock<ModifierClosure>,
-    mitm_hosts: RwLock<HostMatcher>,
+    mitm_filter: RwLock<Arc<Dispatching>>,
     wireguard_mgr: WireguardManager,
 }
 
@@ -43,7 +42,7 @@ impl Dispatcher {
         dispatching: Arc<Dispatching>,
         ca_certificate: Certificate,
         modifier: ModifierClosure,
-        mitm_hosts: HostMatcher,
+        mitm_filter: Arc<Dispatching>,
     ) -> Self {
         let wg_mgr = WireguardManager::new(
             iface_name,
@@ -59,7 +58,7 @@ impl Dispatcher {
             dispatching: RwLock::new(dispatching),
             ca_certificate,
             modifier: RwLock::new(modifier),
-            mitm_hosts: RwLock::new(mitm_hosts),
+            mitm_filter: RwLock::new(mitm_filter),
             wireguard_mgr: wg_mgr,
         }
     }
@@ -68,8 +67,8 @@ impl Dispatcher {
         *self.dispatching.write().unwrap() = dispatching;
     }
 
-    pub fn replace_mitm_list(&self, mitm_hosts: HostMatcher) {
-        *self.mitm_hosts.write().unwrap() = mitm_hosts;
+    pub fn replace_mitm_list(&self, mitm_filter: Arc<Dispatching>) {
+        *self.mitm_filter.write().unwrap() = mitm_filter;
     }
 
     pub fn replace_modifier(&self, closure: ModifierClosure) {
@@ -204,7 +203,16 @@ impl Dispatcher {
 
         // mitm for 80/443
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
-            if self.mitm_hosts.read().unwrap().matches(&domain_name) {
+            if (port == 80 || port == 443)
+                && matches!(
+                    self.mitm_filter
+                        .read()
+                        .unwrap()
+                        .matches(&conn_info)
+                        .as_ref(),
+                    ProxyImpl::Direct
+                )
+            {
                 let modifier = (self.modifier.read().unwrap())(process_info);
                 match port {
                     80 => {

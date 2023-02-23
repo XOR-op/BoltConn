@@ -304,6 +304,20 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        let mitm_filter = match {
+            let builder = DispatchingBuilder::new();
+            if let Some(mitm_rules) = config.mitm_rule {
+                builder.build_filter(mitm_rules.as_slice(), &rule_schema)
+            } else {
+                builder.build_filter(vec![].as_slice(), &rule_schema)
+            }
+        } {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("Load mitm rules failed: {}", e);
+                return ExitCode::from(1);
+            }
+        };
         let (url_modifier, hdr_modifier) = if let Some(rewrite_cfg) = &config.rewrite {
             let (url_mod, hdr_mod) = match mapping_rewrite(rewrite_cfg.as_slice()) {
                 Ok((url_mod, hdr_mod)) => (url_mod, hdr_mod),
@@ -349,7 +363,7 @@ fn main() -> ExitCode {
                     pi,
                 ))
             }),
-            read_mitm_hosts(&config.mitm_host),
+            Arc::new(mitm_filter),
         ))
     };
     let tun_inbound = Arc::new(TunInbound::new(
@@ -424,7 +438,7 @@ async fn reload(
     dns: Arc<Dns>,
 ) -> anyhow::Result<(
     Arc<Dispatching>,
-    HostMatcher,
+    Arc<Dispatching>,
     Arc<UrlModManager>,
     Arc<HeaderModManager>,
 )> {
@@ -450,11 +464,14 @@ async fn reload(
         }
         Arc::new(builder.build(&config, &state, &rule_schema, &proxy_schema)?)
     };
+    let mitm_filter = {
+        let builder = DispatchingBuilder::new();
+        if let Some(mitm_rules) = config.mitm_rule {
+            Arc::new(builder.build_filter(mitm_rules.as_slice(), &rule_schema)?)
+        } else {
+            Arc::new(builder.build_filter(vec![].as_slice(), &rule_schema)?)
+        }
+    };
     dns.replace_resolvers(group).await?;
-    Ok((
-        dispatching,
-        read_mitm_hosts(&config.mitm_host),
-        url_mod,
-        hdr_mod,
-    ))
+    Ok((dispatching, mitm_filter, url_mod, hdr_mod))
 }
