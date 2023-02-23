@@ -9,6 +9,8 @@ pub struct RawRootCfg {
     pub interface: String,
     #[serde(alias = "api-port")]
     pub api_port: u16,
+    #[serde(alias = "api-key")]
+    pub api_key: Option<String>,
     #[serde(alias = "http-port")]
     pub http_port: Option<u16>,
     #[serde(alias = "socks5-port")]
