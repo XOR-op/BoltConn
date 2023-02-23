@@ -24,8 +24,8 @@ pub struct RawRootCfg {
     pub rule_local: Vec<String>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(alias = "mitm-host")]
-    pub mitm_host: Option<Vec<String>>,
+    #[serde(alias = "mitm-rule")]
+    pub mitm_rule: Option<Vec<String>>,
     #[serde(alias = "rewrite-rule")]
     pub rewrite: Option<Vec<String>>,
 }

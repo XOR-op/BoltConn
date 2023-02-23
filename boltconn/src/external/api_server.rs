@@ -259,7 +259,7 @@ impl ApiServer {
             let item = GetGroupRespSchema {
                 name: g.get_name(),
                 selected: pretty_proxy(&g.get_selection()).name,
-                list: g.get_members().iter().map(|p| pretty_proxy(p)).collect(),
+                list: g.get_members().iter().map(pretty_proxy).collect(),
             };
             result.push(item);
         }
