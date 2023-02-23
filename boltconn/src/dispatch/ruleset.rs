@@ -207,7 +207,7 @@ fn test_rule_provider() {
     let config_text = std::fs::read_to_string("../examples/Rules/Apple").unwrap();
     let deserialized: RuleSchema = serde_yaml::from_str(&config_text).unwrap();
     println!("{:?}", deserialized);
-    let builder = RuleSetBuilder::new("Test", deserialized);
+    let builder = RuleSetBuilder::new("Test", &deserialized);
     assert!(builder.is_some());
     let ruleset = builder.unwrap().build();
     // println!("kw:{}, domain:{}", ruleset.domain_keyword.pattern_count(), ruleset.domain.len());
