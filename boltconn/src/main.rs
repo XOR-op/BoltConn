@@ -269,7 +269,7 @@ fn main() -> ExitCode {
         if let Some(list) = dns_ips {
             builder.direct_prioritize("DNS-PRIO", list);
         }
-        let result = match builder.build(&config, &state, rule_schema, proxy_schema) {
+        let result = match builder.build(&config, &state, &rule_schema, &proxy_schema) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Parse routing rules failed: {}", e);
@@ -448,7 +448,7 @@ async fn reload(
         if config.dns.force_direct_dns {
             builder.direct_prioritize("DNS_PRIO", extract_address(&group));
         }
-        Arc::new(builder.build(&config, &state, rule_schema, proxy_schema)?)
+        Arc::new(builder.build(&config, &state, &rule_schema, &proxy_schema)?)
     };
     dns.replace_resolvers(group).await?;
     Ok((

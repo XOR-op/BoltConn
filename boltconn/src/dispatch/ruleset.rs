@@ -89,7 +89,7 @@ pub struct RuleSetBuilder {
 }
 
 impl RuleSetBuilder {
-    pub fn new(name: &str, payload: RuleSchema) -> Option<Self> {
+    pub fn new(name: &str, payload: &RuleSchema) -> Option<Self> {
         let mut retval = Self {
             name: name.to_string(),
             domain: HostMatcherBuilder::new(),

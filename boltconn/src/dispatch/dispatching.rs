@@ -111,8 +111,8 @@ impl DispatchingBuilder {
         mut self,
         cfg: &RawRootCfg,
         state: &RawState,
-        rule_schema: HashMap<String, RuleSchema>,
-        proxy_schema: HashMap<String, ProxySchema>,
+        rule_schema: &HashMap<String, RuleSchema>,
+        proxy_schema: &HashMap<String, ProxySchema>,
     ) -> anyhow::Result<Dispatching> {
         // read all proxies
         self.parse_proxies(cfg.proxy_local.iter())?;
@@ -128,18 +128,18 @@ impl DispatchingBuilder {
                 state,
                 group.iter(),
                 &cfg.proxy_group,
-                &proxy_schema,
+                proxy_schema,
                 &mut queued_groups,
                 false,
             )?;
         }
-        for (name, schema) in &proxy_schema {
+        for (name, schema) in proxy_schema {
             self.parse_group(
                 name,
                 state,
                 schema.proxies.iter().map(RawProxyProviderCfg::get_name),
                 &cfg.proxy_group,
-                &proxy_schema,
+                proxy_schema,
                 &mut queued_groups,
                 false,
             )?;
@@ -151,7 +151,7 @@ impl DispatchingBuilder {
             let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Failed to parse provider {}",name));
             };
-            ruleset.insert(name, Arc::new(builder.build()));
+            ruleset.insert(name.clone(), Arc::new(builder.build()));
         }
         let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
         for (idx, r) in cfg.rule_local.iter().enumerate() {
@@ -167,6 +167,36 @@ impl DispatchingBuilder {
             return Err(anyhow!("Bad rules: missing fallback"));
         }
         tracing::info!("Loaded config successfully");
+        Ok(Dispatching {
+            proxies: self.proxies,
+            groups: self.groups,
+            rules: self.rules,
+            fallback: self.fallback.unwrap(),
+        })
+    }
+
+    /// Build a filter dispatching: for all encountered rule, return DIRECT; otherwise REJECT
+    pub fn build_filter(
+        mut self,
+        rules: &[String],
+        rule_schema: &HashMap<String, RuleSchema>,
+    ) -> anyhow::Result<Dispatching> {
+        let mut ruleset = HashMap::new();
+        for (name, schema) in rule_schema {
+            let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
+                return Err(anyhow!("Filter: failed to parse provider {}",name));
+            };
+            ruleset.insert(name.clone(), Arc::new(builder.build()));
+        }
+        let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
+        for r in rules.iter() {
+            rule_builder.append_literal((r.clone() + ", DIRECT").as_str())?;
+        }
+        self.rules.extend(rule_builder.build());
+        self.fallback = Some(GeneralProxy::Single(Arc::new(Proxy::new(
+            "REJECT",
+            ProxyImpl::Reject,
+        ))));
         Ok(Dispatching {
             proxies: self.proxies,
             groups: self.groups,
