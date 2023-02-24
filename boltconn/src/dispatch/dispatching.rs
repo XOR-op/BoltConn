@@ -27,6 +27,7 @@ pub struct ConnInfo {
 }
 
 pub struct Dispatching {
+    verbose: bool,
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
     rules: Vec<Rule>,
@@ -42,10 +43,14 @@ impl Dispatching {
                     GeneralProxy::Group(g) => g.get_proxy().get_impl(),
                 };
                 if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-                    tracing::info!("[{:?}] {} => {} failed: UDP disabled", v, info.dst, proxy);
+                    if self.verbose {
+                        tracing::info!("[{:?}] {} => {} failed: UDP disabled", v, info.dst, proxy);
+                    }
                     return Arc::new(ProxyImpl::Reject);
                 }
-                tracing::info!("[{:?}] {} => {}", v, info.dst, proxy);
+                if self.verbose {
+                    tracing::info!("[{:?}] {} => {}", v, info.dst, proxy);
+                }
                 return proxy_impl;
             }
         }
@@ -56,11 +61,13 @@ impl Dispatching {
             GeneralProxy::Group(g) => g.get_proxy().get_impl(),
         };
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-            tracing::info!(
-                "[Fallback] {} => {} failed: UDP disabled",
-                info.dst,
-                self.fallback
-            );
+            if self.verbose {
+                tracing::info!(
+                    "[Fallback] {} => {} failed: UDP disabled",
+                    info.dst,
+                    self.fallback
+                );
+            }
             return Arc::new(ProxyImpl::Reject);
         }
         tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
@@ -82,6 +89,7 @@ impl Dispatching {
 }
 
 pub struct DispatchingBuilder {
+    verbose: bool,
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
     rules: Vec<Rule>,
@@ -89,8 +97,9 @@ pub struct DispatchingBuilder {
 }
 
 impl DispatchingBuilder {
-    pub fn new() -> Self {
+    pub fn new(verbose: bool) -> Self {
         let mut r = Self {
+            verbose,
             proxies: Default::default(),
             groups: Default::default(),
             rules: vec![],
@@ -156,7 +165,9 @@ impl DispatchingBuilder {
         let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
         for (idx, r) in cfg.rule_local.iter().enumerate() {
             if idx != cfg.rule_local.len() - 1 {
-                rule_builder.append_literal(r.as_str())?;
+                rule_builder
+                    .append_literal(r.as_str())
+                    .map_err(|e| anyhow!("{} ({:?})", r, e))?;
             } else {
                 // check Fallback
                 self.fallback = Some(rule_builder.parse_fallback(r.as_str())?);
@@ -168,6 +179,7 @@ impl DispatchingBuilder {
         }
         tracing::info!("Loaded config successfully");
         Ok(Dispatching {
+            verbose: self.verbose,
             proxies: self.proxies,
             groups: self.groups,
             rules: self.rules,
@@ -198,6 +210,7 @@ impl DispatchingBuilder {
             ProxyImpl::Reject,
         ))));
         Ok(Dispatching {
+            verbose: self.verbose,
             proxies: self.proxies,
             groups: self.groups,
             rules: self.rules,

@@ -265,7 +265,7 @@ fn main() -> ExitCode {
     );
 
     let dispatching = {
-        let mut builder = DispatchingBuilder::new();
+        let mut builder = DispatchingBuilder::new(true);
         if let Some(list) = dns_ips {
             builder.direct_prioritize("DNS-PRIO", list);
         }
@@ -306,7 +306,7 @@ fn main() -> ExitCode {
             }
         };
         let mitm_filter = match {
-            let builder = DispatchingBuilder::new();
+            let builder = DispatchingBuilder::new(false);
             if let Some(mitm_rules) = config.mitm_rule {
                 builder.build_filter(mitm_rules.as_slice(), &rule_schema)
             } else {
@@ -459,14 +459,14 @@ async fn reload(
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
-        let mut builder = DispatchingBuilder::new();
+        let mut builder = DispatchingBuilder::new(true);
         if config.dns.force_direct_dns {
             builder.direct_prioritize("DNS_PRIO", extract_address(&group));
         }
         Arc::new(builder.build(&config, &state, &rule_schema, &proxy_schema)?)
     };
     let mitm_filter = {
-        let builder = DispatchingBuilder::new();
+        let builder = DispatchingBuilder::new(false);
         if let Some(mitm_rules) = config.mitm_rule {
             Arc::new(builder.build_filter(mitm_rules.as_slice(), &rule_schema)?)
         } else {

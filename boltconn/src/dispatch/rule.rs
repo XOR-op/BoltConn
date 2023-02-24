@@ -55,8 +55,8 @@ pub enum RuleImpl {
     IpCidr(IpNet),
     Port(PortRule),
     RuleSet(Arc<RuleSet>),
-    And(Box<RuleImpl>, Box<RuleImpl>),
-    Or(Box<RuleImpl>, Box<RuleImpl>),
+    And(Vec<RuleImpl>),
+    Or(Vec<RuleImpl>),
     Not(Box<RuleImpl>),
 }
 
@@ -115,8 +115,22 @@ impl RuleImpl {
                 .as_ref()
                 .map_or_else(|| false, |proc_info| proc_info.path.contains(proc)),
             RuleImpl::RuleSet(rs) => rs.matches(info),
-            RuleImpl::And(r1, r2) => r1.matches(info) && r2.matches(info),
-            RuleImpl::Or(r1, r2) => r1.matches(info) || r2.matches(info),
+            RuleImpl::And(subs) => (|| {
+                for i in subs {
+                    if !i.matches(info) {
+                        return false;
+                    }
+                }
+                true
+            })(),
+            RuleImpl::Or(subs) => (|| {
+                for i in subs {
+                    if i.matches(info) {
+                        return true;
+                    }
+                }
+                false
+            })(),
             RuleImpl::Not(r) => !r.matches(info),
         }
     }
@@ -176,53 +190,60 @@ impl RuleBuilder<'_> {
 
     fn parse_sub_rule(&self, list: &[serde_yaml::Value]) -> anyhow::Result<RuleImpl> {
         let prefix = retrive_string(list.get(0).unwrap())?;
-        match list.len() {
-            2 => match prefix.as_str() {
-                "AND" | "OR" => Err(anyhow!("Invalid length")),
-                "NOT" => {
-                    let serde_yaml::Value::Sequence(seq) = list.get(1).unwrap() else {
+        match prefix.as_str() {
+            "AND" | "OR" => {
+                if list.len() <= 2 {
+                    return Err(anyhow!("Invalid length"));
+                }
+                let mut subs = vec![];
+                for val in list[1..].iter() {
+                    let serde_yaml::Value::Sequence(seq) = val else {
                         return Err(anyhow!("Invalid NOT rule"));
                     };
-                    Ok(RuleImpl::Not(Box::new(self.parse_sub_rule(seq)?)))
+                    subs.push(self.parse_sub_rule(seq)?);
                 }
-                _ => {
-                    let content = retrive_string(list.get(1).unwrap())?;
-                    Self::parse(prefix, content, Some(&self.rulesets))
-                        .ok_or_else(|| anyhow!("Failed to parse"))
-                }
-            },
-            3 => {
+
                 match prefix.as_str() {
-                    "IP-CIDR" | "IP-CIDR6" => {
-                        // ignore IP-CIDR,#ip#,no-resolve
-                        if *list.get(2).unwrap()
-                            != serde_yaml::Value::String("no-resolve".to_string())
-                        {
-                            return Err(anyhow!("Invalid length"));
+                    "AND" => Ok(RuleImpl::And(subs)),
+                    "OR" => Ok(RuleImpl::Or(subs)),
+                    _ => unreachable!(),
+                }
+            }
+            _ => {
+                match list.len() {
+                    2 => match prefix.as_str() {
+                        "NOT" => {
+                            let serde_yaml::Value::Sequence(seq) = list.get(1).unwrap() else {
+                                return Err(anyhow!("Invalid NOT rule"));
+                            };
+                            Ok(RuleImpl::Not(Box::new(self.parse_sub_rule(seq)?)))
                         }
-                        let content = retrive_string(list.get(1).unwrap())?;
-                        Self::parse(prefix, content, Some(&self.rulesets))
-                            .ok_or_else(|| anyhow!("Failed to parse"))
-                    }
-                    "AND" | "OR" => {
-                        let serde_yaml::Value::Sequence(seq1) = list.get(1).unwrap() else {
-                            return Err(anyhow!("Invalid NOT rule"));
-                        };
-                        let serde_yaml::Value::Sequence(seq2) = list.get(2).unwrap() else {
-                            return Err(anyhow!("Invalid NOT rule"));
-                        };
-                        let v1 = Box::new(self.parse_sub_rule(seq1)?);
-                        let v2 = Box::new(self.parse_sub_rule(seq2)?);
+                        _ => {
+                            // all other rules
+                            let content = retrive_string(list.get(1).unwrap())?;
+                            Self::parse(prefix, content, Some(&self.rulesets))
+                                .ok_or_else(|| anyhow!("Failed to parse"))
+                        }
+                    },
+                    3 => {
                         match prefix.as_str() {
-                            "AND" => Ok(RuleImpl::And(v1, v2)),
-                            "OR" => Ok(RuleImpl::Or(v1, v2)),
-                            _ => unreachable!(),
+                            "IP-CIDR" | "IP-CIDR6" => {
+                                // ignore IP-CIDR,#ip#,no-resolve
+                                if *list.get(2).unwrap()
+                                    != serde_yaml::Value::String("no-resolve".to_string())
+                                {
+                                    return Err(anyhow!("Invalid length"));
+                                }
+                                let content = retrive_string(list.get(1).unwrap())?;
+                                Self::parse(prefix, content, Some(&self.rulesets))
+                                    .ok_or_else(|| anyhow!("Failed to parse"))
+                            }
+                            _ => Err(anyhow!("Invalid length")),
                         }
                     }
                     _ => Err(anyhow!("Invalid length")),
                 }
             }
-            _ => Err(anyhow!("Invalid length")),
         }
     }
 
@@ -317,6 +338,7 @@ impl Debug for Rule {
 fn retrive_string(val: &serde_yaml::Value) -> anyhow::Result<String> {
     match val {
         serde_yaml::Value::String(s) => Ok(s.clone()),
+        serde_yaml::Value::Number(n) => Ok(n.to_string()),
         _ => Err(anyhow!("Not a valid string")),
     }
 }
