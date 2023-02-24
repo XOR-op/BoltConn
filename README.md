@@ -1,8 +1,22 @@
-# BoltConn
+<h1 align="center">
+  <img src="./assets/icon.png" alt="BoltConn" width="128">
+    <br/>
+    BoltConn
+    <br/>
+</h1>
 
-[![check.yml](https://img.shields.io/github/actions/workflow/status/XOR-op/BoltConn/check.yml)](https://github.com/XOR-op/BoltConn/actions)
-[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/XOR-op/BoltConn?color=00b4f0)](https://github.com/XOR-op/BoltConn/releases)
+
+<p align="center">
+<a href="https://github.com/XOR-op/BoltConn/actions">
+<img src="https://img.shields.io/github/actions/workflow/status/XOR-op/BoltConn/check.yml" alt="GitHub Actions">
+</a>
+<a href="./LICENSE">
+<img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License: GPLv3">
+</a>
+<a href="https://github.com/XOR-op/BoltConn/releases">
+<img src="https://img.shields.io/github/v/release/XOR-op/BoltConn?color=00b4f0" alt="Release">
+</a>
+</p>
 
 A transparent proxy supporting L4/L7 tunneling with MitM, designed for privacy and security.
 
