@@ -6,7 +6,7 @@ use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -171,7 +171,7 @@ impl ConnAbortHandle {
 // Info about one connection
 #[derive(Debug)]
 pub struct ConnAgent {
-    pub start_time: Instant,
+    pub start_time: SystemTime,
     pub dest: NetworkAddr,
     pub process_info: Option<ProcessInfo>,
     pub session_proto: SessionProtocol,
@@ -191,7 +191,7 @@ impl ConnAgent {
         abort_handle: ConnAbortHandle,
     ) -> Self {
         Self {
-            start_time: Instant::now(),
+            start_time: SystemTime::now(),
             dest: dst,
             process_info,
             session_proto: match network_type {

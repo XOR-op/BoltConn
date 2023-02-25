@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 pub type SharedDispatching = Arc<RwLock<Arc<Dispatching>>>;
@@ -108,15 +108,18 @@ impl ApiServer {
         let mut result = Vec::new();
         for entry in list {
             let info = entry.read().await;
-            let elapsed = info.start_time.elapsed().as_secs();
             let conn = boltapi::ConnectionSchema {
                 destination: info.dest.to_string(),
                 protocol: info.session_proto.to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
                 process: info.process_info.as_ref().map(|i| i.name.clone()),
-                upload: pretty_size(info.upload_traffic),
-                download: pretty_size(info.download_traffic),
-                time: pretty_time(elapsed),
+                upload: info.upload_traffic as u64,
+                download: info.download_traffic as u64,
+                start_time: info
+                    .start_time
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
                 active: !info.done,
             };
             result.push(conn);
@@ -205,7 +208,7 @@ impl ApiServer {
                 },
                 method: req.method.to_string(),
                 status: resp.status.as_u16(),
-                size: pretty_size(resp.body.len()),
+                size: resp.body.len() as u64,
                 time: pretty_latency(resp.time - req.time),
             };
             result.push(item);
@@ -330,16 +333,6 @@ fn pretty_proxy(g: &GeneralProxy) -> ProxyData {
             name: g.get_name(),
             proto: "group".to_string(),
         },
-    }
-}
-
-fn pretty_size(data: usize) -> String {
-    if data < 1024 {
-        format!("{} Bytes", data)
-    } else if data < 1024 * 1024 {
-        format!("{} KB", data / 1024)
-    } else {
-        format!("{} MB", data / 1024 / 1024)
     }
 }
 

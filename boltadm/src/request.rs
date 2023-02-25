@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
 use colored::Colorize;
+use std::ops::Add;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tabular::{Row, Table};
 
 pub struct Requester {
@@ -63,9 +65,12 @@ impl Requester {
                     Some(s) => format!("<{}>", s),
                     None => "".to_string(),
                 },
-                conn.upload,
-                conn.download,
-                conn.time,
+                pretty_size(conn.upload),
+                pretty_size(conn.download),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH.add(Duration::from_secs(conn.start_time)))
+                    .map(|t| pretty_time(t.as_secs()))
+                    .unwrap_or("N/A".to_string()),
                 if conn.active { "open" } else { "closed" }
             );
         }
@@ -142,7 +147,7 @@ impl Requester {
                     .with_cell(ele.uri)
                     .with_cell(ele.method)
                     .with_cell(format!("{}", ele.status))
-                    .with_cell(ele.size)
+                    .with_cell(pretty_size(ele.size))
                     .with_cell(ele.time),
             );
         }
@@ -190,5 +195,25 @@ impl Requester {
 
     fn route(&self, s: &str) -> String {
         format!("http://127.0.0.1:{}{}", self.port, s)
+    }
+}
+
+fn pretty_size(data: u64) -> String {
+    if data < 1024 {
+        format!("{} Bytes", data)
+    } else if data < 1024 * 1024 {
+        format!("{} KB", data / 1024)
+    } else {
+        format!("{} MB", data / 1024 / 1024)
+    }
+}
+
+fn pretty_time(elapsed: u64) -> String {
+    if elapsed < 60 {
+        format!("{} seconds ago", elapsed)
+    } else if elapsed < 60 * 60 {
+        format!("{} mins ago", elapsed / 60)
+    } else {
+        format!("{} hours ago", elapsed / 3600)
     }
 }

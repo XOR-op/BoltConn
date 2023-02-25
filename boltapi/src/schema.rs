@@ -8,9 +8,9 @@ pub struct ConnectionSchema {
     pub protocol: String,
     pub proxy: String,
     pub process: Option<String>,
-    pub upload: String,
-    pub download: String,
-    pub time: String,
+    pub upload: u64,
+    pub download: u64,
+    pub start_time: u64,
     pub active: bool,
 }
 
@@ -29,7 +29,7 @@ pub struct HttpMitmSchema {
     pub uri: String,
     pub method: String,
     pub status: u16,
-    pub size: String,
+    pub size: u64,
     pub time: String,
 }
 
