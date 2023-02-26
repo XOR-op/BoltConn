@@ -70,7 +70,9 @@ impl Dispatching {
             }
             return Arc::new(ProxyImpl::Reject);
         }
-        tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
+        if self.verbose {
+            tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
+        }
         proxy_impl
     }
 
