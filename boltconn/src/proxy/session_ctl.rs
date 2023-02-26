@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time;
 use std::time::Instant;
@@ -57,6 +57,10 @@ impl UdpSessionCtl {
 
     pub fn is_expired(&self, threshold: time::Duration) -> bool {
         Instant::now() - self.last_time > threshold
+    }
+
+    pub fn invalidate(&self) {
+        self.available.store(false, Ordering::Relaxed);
     }
 
     pub fn update_time(&mut self) {
