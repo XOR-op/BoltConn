@@ -6,9 +6,14 @@ use crate::proxy::{ConnAbortHandle, ConnAgent, SessionManager};
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::timeout;
+
+const UDP_ALIVE_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct TunUdpAdapter {
     info: Arc<RwLock<ConnAgent>>,
@@ -16,6 +21,7 @@ pub struct TunUdpAdapter {
     inbound_write: Arc<UdpSocket>,
     src: SocketAddr,
     dst: SocketAddr,
+    available: Arc<AtomicBool>,
     allocator: PktBufPool,
     connector: Connector,
     session_mgr: Arc<SessionManager>,
@@ -31,6 +37,7 @@ impl TunUdpAdapter {
         inbound_write: Arc<UdpSocket>,
         src: SocketAddr,
         dst: SocketAddr,
+        available: Arc<AtomicBool>,
         allocator: PktBufPool,
         connector: Connector,
         session_mgr: Arc<SessionManager>,
@@ -41,6 +48,7 @@ impl TunUdpAdapter {
             inbound_write,
             src,
             dst,
+            available,
             allocator,
             connector,
             session_mgr,
@@ -54,10 +62,17 @@ impl TunUdpAdapter {
         let mut inbound_read = self.inbound_read;
         let Connector { tx, mut rx } = self.connector;
         let abort_handle2 = abort_handle.clone();
+        let available2 = self.available.clone();
         // recv from inbound and send to outbound
         let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
-            loop {
-                match inbound_read.recv().await {
+            while available2.load(Ordering::Relaxed) {
+                let Ok(result_with_ddl) = timeout(
+                    UDP_ALIVE_PROBE_INTERVAL,
+                    inbound_read.recv(),
+                ).await else {
+                    continue;
+                };
+                match result_with_ddl {
                     None => {
                         break;
                     }
@@ -71,12 +86,14 @@ impl TunUdpAdapter {
                         if let Err(err) = tx.send(buf).await {
                             allocator.release(err.0);
                             tracing::warn!("NatAdapter tx send err");
+                            available2.store(false, Ordering::Relaxed);
                             abort_handle2.cancel().await;
                             break;
                         }
                     }
                 }
             }
+            outgoing_info_arc.write().await.mark_fin();
         }));
         duplex_guard.set_err_exit();
         // recv from outbound and send to inbound
@@ -99,6 +116,7 @@ impl TunUdpAdapter {
             }
             self.allocator.release(buf);
         }
+        self.info.write().await.mark_fin();
         Ok(())
     }
 }
@@ -107,6 +125,7 @@ pub struct StandardUdpAdapter {
     info: Arc<RwLock<ConnAgent>>,
     inbound: UdpSocket,
     src: SocketAddr,
+    available: Arc<AtomicBool>,
     allocator: PktBufPool,
     connector: Connector,
 }
@@ -116,6 +135,7 @@ impl StandardUdpAdapter {
         info: Arc<RwLock<ConnAgent>>,
         inbound: UdpSocket,
         src: SocketAddr,
+        available: Arc<AtomicBool>,
         allocator: PktBufPool,
         connector: Connector,
     ) -> Self {
@@ -123,6 +143,7 @@ impl StandardUdpAdapter {
             info,
             inbound,
             src,
+            available,
             allocator,
             connector,
         }
@@ -137,11 +158,21 @@ impl StandardUdpAdapter {
         let src_addr = self.src;
         let Connector { tx, mut rx } = self.connector;
         let abort_handle2 = abort_handle.clone();
+        let available2 = self.available.clone();
         // recv from inbound and send to outbound
         let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
-            loop {
+            while available2.load(Ordering::Relaxed) {
                 let mut buf = allocator.obtain().await;
-                if let Ok((len, pkt_src)) = inbound_read.recv_from(buf.as_uninited()).await {
+                let result_with_ddl = timeout(
+                    UDP_ALIVE_PROBE_INTERVAL,
+                    inbound_read.recv_from(buf.as_uninited()),
+                )
+                .await;
+                let Ok(result) = result_with_ddl else {
+                    allocator.release(buf);
+                    continue;
+                };
+                if let Ok((len, pkt_src)) = result {
                     if src_addr == pkt_src {
                         buf.len = len;
                         if first_packet {
@@ -151,14 +182,21 @@ impl StandardUdpAdapter {
                         outgoing_info_arc.write().await.more_upload(buf.len);
                         if let Err(err) = tx.send(buf).await {
                             allocator.release(err.0);
+                            available2.store(false, Ordering::Relaxed);
                             abort_handle2.cancel().await;
                             break;
                         }
                     } else {
                         // drop silently
+                        allocator.release(buf);
                     }
+                } else {
+                    // udp socket err
+                    allocator.release(buf);
+                    break;
                 }
             }
+            outgoing_info_arc.write().await.mark_fin();
         }));
         duplex_guard.set_err_exit();
 
@@ -173,6 +211,7 @@ impl StandardUdpAdapter {
             }
             self.allocator.release(buf);
         }
+        self.info.write().await.mark_fin();
         Ok(())
     }
 }

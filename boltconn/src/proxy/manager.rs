@@ -76,6 +76,7 @@ impl SessionManager {
             let Entry::Occupied(record) = self.udp_records.entry(*id)else { return false; };
             if record.get().is_expired(self.udp_stale_time) {
                 self.occupied_key.remove(id);
+                record.get().invalidate();
                 record.remove();
                 return false;
             }
