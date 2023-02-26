@@ -8,8 +8,12 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::timeout;
+
+const UDP_ALIVE_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct TunUdpAdapter {
     info: Arc<RwLock<ConnAgent>>,
@@ -62,7 +66,13 @@ impl TunUdpAdapter {
         // recv from inbound and send to outbound
         let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
             while available2.load(Ordering::Relaxed) {
-                match inbound_read.recv().await {
+                let Ok(result_with_ddl) = timeout(
+                    UDP_ALIVE_PROBE_INTERVAL,
+                    inbound_read.recv(),
+                ).await else {
+                    continue;
+                };
+                match result_with_ddl {
                     None => {
                         break;
                     }
@@ -153,7 +163,16 @@ impl StandardUdpAdapter {
         let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
             while available2.load(Ordering::Relaxed) {
                 let mut buf = allocator.obtain().await;
-                if let Ok((len, pkt_src)) = inbound_read.recv_from(buf.as_uninited()).await {
+                let result_with_ddl = timeout(
+                    UDP_ALIVE_PROBE_INTERVAL,
+                    inbound_read.recv_from(buf.as_uninited()),
+                )
+                .await;
+                let Ok(result) = result_with_ddl else {
+                    allocator.release(buf);
+                    continue;
+                };
+                if let Ok((len, pkt_src)) = result {
                     if src_addr == pkt_src {
                         buf.len = len;
                         if first_packet {
@@ -169,7 +188,12 @@ impl StandardUdpAdapter {
                         }
                     } else {
                         // drop silently
+                        allocator.release(buf);
                     }
+                } else {
+                    // udp socket err
+                    allocator.release(buf);
+                    break;
                 }
             }
             outgoing_info_arc.write().await.mark_fin();
