@@ -1,4 +1,6 @@
+use crate::config::proxy_group::RawProxyGroupCfg;
 use crate::config::{ProxyProvider, RuleProvider};
+use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -21,7 +23,7 @@ pub struct RawRootCfg {
     #[serde(alias = "proxy-provider", default = "default_proxy_provider")]
     pub proxy_provider: HashMap<String, ProxyProvider>,
     #[serde(alias = "proxy-group")]
-    pub proxy_group: HashMap<String, Vec<String>>,
+    pub proxy_group: LinkedHashMap<String, RawProxyGroupCfg>,
     #[serde(alias = "rule-local")]
     pub rule_local: Vec<String>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]

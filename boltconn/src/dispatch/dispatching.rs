@@ -13,6 +13,7 @@ use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
 use base64::Engine;
+use linked_hash_map::LinkedHashMap;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
@@ -421,7 +422,7 @@ impl DispatchingBuilder {
         name: &str,
         state: &RawState,
         proxies: I,
-        proxy_group: &HashMap<String, Vec<String>>,
+        proxy_group: &LinkedHashMap<String, Vec<String>>,
         proxy_schema: &HashMap<String, ProxySchema>,
         queued_groups: &mut HashSet<String>,
         dup_as_error: bool,

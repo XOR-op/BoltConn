@@ -1,5 +1,6 @@
 #[allow(clippy::module_inception)]
 mod config;
+mod proxy_group;
 mod proxy_provider;
 mod rule_provider;
 mod state;
