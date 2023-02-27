@@ -9,7 +9,7 @@ pub struct RawProxyGroupCfg {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, untagged)]
 pub enum RawProxyProviderOption {
     Name(String),
     Filter { name: String, filter: String },
