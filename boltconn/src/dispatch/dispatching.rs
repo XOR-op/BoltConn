@@ -1,7 +1,7 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
-    ProxySchema, RawProxyLocalCfg, RawProxyProviderCfg, RawRootCfg, RawServerAddr,
-    RawServerSockAddr, RawState, RuleSchema,
+    ProxySchema, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption, RawRootCfg,
+    RawServerAddr, RawServerSockAddr, RawState, RuleSchema,
 };
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
@@ -14,6 +14,7 @@ use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
 use base64::Engine;
 use linked_hash_map::LinkedHashMap;
+use regex::Regex;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
@@ -138,18 +139,7 @@ impl DispatchingBuilder {
             self.parse_group(
                 name,
                 state,
-                group.iter(),
-                &cfg.proxy_group,
-                proxy_schema,
-                &mut queued_groups,
-                false,
-            )?;
-        }
-        for (name, schema) in proxy_schema {
-            self.parse_group(
-                name,
-                state,
-                schema.proxies.iter().map(RawProxyProviderCfg::get_name),
+                group,
                 &cfg.proxy_group,
                 proxy_schema,
                 &mut queued_groups,
@@ -417,12 +407,12 @@ impl DispatchingBuilder {
 
     #[allow(clippy::too_many_arguments)]
     // recursion for topological order
-    fn parse_group<'a, I: Iterator<Item = &'a String>>(
+    fn parse_group(
         &mut self,
         name: &str,
         state: &RawState,
-        proxies: I,
-        proxy_group: &LinkedHashMap<String, Vec<String>>,
+        proxy_group: &RawProxyGroupCfg,
+        proxy_group_list: &LinkedHashMap<String, RawProxyGroupCfg>,
         proxy_schema: &HashMap<String, ProxySchema>,
         queued_groups: &mut HashSet<String>,
         dup_as_error: bool,
@@ -438,9 +428,13 @@ impl DispatchingBuilder {
                 Ok(())
             };
         }
+        if !proxy_group.roughly_validate() {
+            return Err(anyhow!("Invalid group {}", name));
+        }
         let mut arr = Vec::new();
         let mut selection = None;
-        for p in proxies {
+        // proxies
+        for p in proxy_group.proxies.as_ref().unwrap_or(&vec![]) {
             let content = if let Some(single) = self.proxies.get(p) {
                 GeneralProxy::Single(single.clone())
             } else if let Some(group) = self.groups.get(p) {
@@ -449,22 +443,12 @@ impl DispatchingBuilder {
                 // toposort
                 queued_groups.insert(name.to_string());
 
-                if let Some(sub) = proxy_group.get(p) {
+                if let Some(sub) = proxy_group_list.get(p) {
                     self.parse_group(
                         p,
                         state,
-                        sub.iter(),
-                        proxy_group,
-                        proxy_schema,
-                        queued_groups,
-                        true,
-                    )?;
-                } else if let Some(schema) = proxy_schema.get(p) {
-                    self.parse_group(
-                        p,
-                        state,
-                        schema.proxies.iter().map(RawProxyProviderCfg::get_name),
-                        proxy_group,
+                        sub,
+                        proxy_group_list,
                         proxy_schema,
                         queued_groups,
                         true,
@@ -482,6 +466,52 @@ impl DispatchingBuilder {
             }
             arr.push(content);
         }
+
+        // used providers
+        for p in proxy_group.providers.as_ref().unwrap_or(&vec![]) {
+            let valid_proxies: Vec<&str> = match p {
+                RawProxyProviderOption::Name(name) => proxy_schema
+                    .get(name)
+                    .ok_or_else(|| anyhow!("Provider {} not found", name))?
+                    .proxies
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect(),
+                RawProxyProviderOption::Filter { name, filter } => {
+                    let regex = Regex::new(filter)
+                        .map_err(|_| anyhow!("provider {} has bad filter: '{}'", name, filter))?;
+                    proxy_schema
+                        .get(name)
+                        .ok_or_else(|| anyhow!("Provider {} not found", name))?
+                        .proxies
+                        .iter()
+                        .filter_map(|entry| {
+                            if regex.is_match(entry.name.as_str()) {
+                                Some(entry.name.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                }
+            };
+            for p in valid_proxies {
+                let content = if let Some(single) = self.proxies.get(p) {
+                    GeneralProxy::Single(single.clone())
+                } else {
+                    return Err(anyhow!("No [{}] in group [{}]", p, name));
+                };
+                if p == state.group_selection.get(name).unwrap_or(&String::new()) {
+                    selection = Some(content.clone());
+                }
+                arr.push(content);
+            }
+        }
+        if arr.is_empty() {
+            // No available proxies, skip
+            return Ok(());
+        }
+
         let first = arr.first().unwrap().clone();
         // If there is no selection now, select the first.
         self.groups.insert(

@@ -6,6 +6,7 @@ mod rule_provider;
 mod state;
 
 pub use config::*;
+pub use proxy_group::*;
 pub use proxy_provider::*;
 pub use rule_provider::*;
 pub use state::*;
