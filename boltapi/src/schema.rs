@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionSchema {
+    pub conn_id: u64,
     pub destination: String,
     pub protocol: String,
     pub proxy: String,
@@ -25,6 +26,7 @@ pub struct SessionSchema {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct HttpMitmSchema {
+    pub mitm_id: u64,
     pub client: Option<String>,
     pub uri: String,
     pub method: String,

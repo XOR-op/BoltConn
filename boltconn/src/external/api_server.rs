@@ -106,9 +106,10 @@ impl ApiServer {
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
         let list = server.stat_center.get_copy().await;
         let mut result = Vec::new();
-        for entry in list {
+        for (idx, entry) in list.iter().enumerate() {
             let info = entry.read().await;
             let conn = boltapi::ConnectionSchema {
+                conn_id: idx as u64,
                 destination: info.dest.to_string(),
                 protocol: info.session_proto.to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
@@ -193,8 +194,9 @@ impl ApiServer {
         list: Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>,
     ) -> Json<serde_json::Value> {
         let mut result = Vec::new();
-        for (host, proc, req, resp) in list {
+        for (idx, (host, proc, req, resp)) in list.iter().enumerate() {
             let item = boltapi::HttpMitmSchema {
+                mitm_id: idx as u64,
                 client: proc.map(|proc| proc.name),
                 uri: {
                     let s = req.uri.to_string();
