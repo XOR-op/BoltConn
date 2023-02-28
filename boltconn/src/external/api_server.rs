@@ -194,7 +194,7 @@ impl ApiServer {
         list: Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>,
     ) -> Json<serde_json::Value> {
         let mut result = Vec::new();
-        for (idx, (host, proc, req, resp)) in list.iter().enumerate() {
+        for (idx, (host, proc, req, resp)) in list.into_iter().enumerate() {
             let item = boltapi::HttpMitmSchema {
                 mitm_id: idx as u64,
                 client: proc.map(|proc| proc.name),
