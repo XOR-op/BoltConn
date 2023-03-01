@@ -1,12 +1,10 @@
 use crate::common::io_err;
 use crate::platform;
 use crate::platform::get_iface_address;
-use libc::socket;
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::io::Result;
-use std::mem;
 use std::net::{IpAddr, SocketAddr};
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::AsRawFd;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
 pub struct Egress {
