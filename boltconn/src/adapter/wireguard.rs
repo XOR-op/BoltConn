@@ -217,7 +217,11 @@ impl WireguardManager {
                             socket.connect(server_addr).await?;
                             socket
                         }
-                        SocketAddr::V6(_) => unimplemented!(),
+                        SocketAddr::V6(_) => {
+                            let socket = Egress::new(&self.iface).udpv6_socket().await?;
+                            socket.connect(server_addr).await?;
+                            socket
+                        }
                     };
                     let ep = Endpoint::new(
                         outbound,
