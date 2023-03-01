@@ -30,6 +30,7 @@ A transparent proxy supporting L4/L7 tunneling with MitM, designed for privacy a
 - MitM based URL/header rewrite/redirect, for fine-grained traffic control and privacy preservation.
 - Hot-reload without disconnecting existent connections
 - RESTful API together with command-line tool to configure program.
+
 For the full features, see [features.md](./docs/features.md).
 
 ## Getting Started
