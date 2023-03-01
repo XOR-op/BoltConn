@@ -27,9 +27,10 @@ A transparent proxy supporting L4/L7 tunneling with MitM, designed for privacy a
 - Rule based flexible routing, including domain name, process name, and other rules.
 - Support for subscription to proxy lists (a.k.a. proxy provider).
 - Most-compatible ruleset configuration with mainstream software (e.g. Clash).
-- MitM based URL rewrite/redirect, for fine-grained traffic control and privacy preservation.
+- MitM based URL/header rewrite/redirect, for fine-grained traffic control and privacy preservation.
 - Hot-reload without disconnecting existent connections
 - RESTful API together with command-line tool to configure program.
+For the full features, see [features.md](./docs/features.md).
 
 ## Getting Started
 
@@ -57,17 +58,14 @@ For RESTful API, see [restful.md](./docs/restful.md).
 For comparison with other related projects, see [comparison.md](./docs/comparison.md).
 
 ## Future Plan
-- optional HTTP/SOCKS5 inbound support
 - outbound protocols support
   - local interfaces
   - proxy relay
 - more rules
   - Wi-Fi SSID
   - ASN
-  - logical rules
   - GEO-IP
 - more MitM configurations
-  - modify HTTP header
   - modify HTTP body
   - custom scripts
 - web portal

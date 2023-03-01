@@ -10,7 +10,7 @@ API for external controlling.
 | GET    | /logs                                 | Get all logs.                                    |
 | GET    | /mitm/all                             | Get all captured http packets.                   |
 | GET    | /mitm/range?start=*start*(&end=*end*) | Get captured http packets from *start* to *end*. |
-| GET    | /mitm/detail/:id                      | Get headers and bodies of the packet.            |
+| GET    | /mitm/payload/:id                     | Get headers and bodies of the packet.            |
 | GET    | /groups                               | Get all proxy groups.                            |
 | PUT    | /groups                               | Update selected proxy for the group.             |
 
