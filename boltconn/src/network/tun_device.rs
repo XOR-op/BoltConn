@@ -5,7 +5,7 @@ use crate::network;
 use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::platform;
 use crate::platform::route::setup_ipv4_routing_table;
-use crate::platform::{create_v4_raw_socket, errno_err, interface_up, set_address};
+use crate::platform::{errno_err, interface_up, set_address};
 use crate::proxy::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use byteorder::{ByteOrder, NetworkEndian};
@@ -16,6 +16,7 @@ use smoltcp::wire::IpProtocol;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::os::fd::IntoRawFd;
 use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
@@ -139,7 +140,12 @@ impl TunDevice {
     async fn send_outbound(&mut self, pkt: &IPPkt) -> io::Result<()> {
         match pkt {
             IPPkt::V4(_) => {
-                let fd = unsafe { create_v4_raw_socket()? };
+                let fd = socket2::Socket::new(
+                    socket2::Domain::IPV4,
+                    socket2::Type::DGRAM,
+                    Some(socket2::Protocol::from(libc::IPPROTO_RAW)),
+                )?
+                .into_raw_fd();
                 platform::bind_to_device(fd, self.gw_name.as_str()).map_err(|e| {
                     io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
                 })?;

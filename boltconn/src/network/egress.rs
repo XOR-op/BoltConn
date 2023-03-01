@@ -2,6 +2,7 @@ use crate::common::io_err;
 use crate::platform;
 use crate::platform::get_iface_address;
 use libc::socket;
+use socket2::{Domain, SockAddr, Socket, Type};
 use std::io::Result;
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
@@ -35,27 +36,23 @@ impl Egress {
         let IpAddr::V4(local_addr) = get_iface_address(self.iface_name.as_str())?else {
             return Err(io_err("not ipv4"));
         };
-        let std_udp_sock = unsafe {
-            let fd = socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
-            if fd < 0 {
-                return Err(io_err("create udp socket failed"));
-            }
-            platform::bind_to_device(fd, self.iface_name.as_str())?;
-
-            let sock = platform::get_sockaddr(local_addr);
-            if libc::bind(
-                fd,
-                &sock as *const _ as *const _,
-                mem::size_of_val(&sock) as libc::socklen_t,
-            ) != 0
-            {
-                return Err(io_err("bind udp socket failed"));
-            }
-            std::net::UdpSocket::from_raw_fd(fd)
-        };
+        let std_udp_sock = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
+        platform::bind_to_device(std_udp_sock.as_raw_fd(), self.iface_name.as_str())?;
+        std_udp_sock.bind(&SockAddr::from(SocketAddr::new(local_addr.into(), 0)))?;
         std_udp_sock.set_nonblocking(true)?;
-        // any port
-        let socket = UdpSocket::from_std(std_udp_sock)?;
+        let socket = UdpSocket::from_std(std_udp_sock.into())?;
+        Ok(socket)
+    }
+
+    pub async fn udpv6_socket(&self) -> Result<UdpSocket> {
+        let IpAddr::V6(local_addr) = get_iface_address(self.iface_name.as_str())?else {
+            return Err(io_err("not ipv4"));
+        };
+        let std_udp_sock = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
+        platform::bind_to_device(std_udp_sock.as_raw_fd(), self.iface_name.as_str())?;
+        std_udp_sock.bind(&SockAddr::from(SocketAddr::new(local_addr.into(), 0)))?;
+        std_udp_sock.set_nonblocking(true)?;
+        let socket = UdpSocket::from_std(std_udp_sock.into())?;
         Ok(socket)
     }
 }

@@ -1,8 +1,10 @@
 use ipnet::Ipv4Net;
 use libc::{c_char, c_int};
+use socket2::{Domain, Socket, Type};
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr};
+use std::os::fd::AsRawFd;
 use std::process::{Command, Stdio};
 use std::{io, mem, ptr};
 
@@ -111,14 +113,6 @@ unsafe fn set_dest(_fd: c_int, _name: &str, _addr: Ipv4Addr) -> io::Result<()> {
     Ok(())
 }
 
-pub unsafe fn create_v4_raw_socket() -> io::Result<c_int> {
-    let fd = libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW);
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(fd)
-}
-
 pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
     unsafe {
         let mut addr_req = create_req(name);
@@ -140,16 +134,10 @@ pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
 }
 
 pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
-    let ctl_fd = {
-        let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
-        if fd < 0 {
-            return Err(errno_err("Unable to open control fd"));
-        }
-        fd
-    };
+    let ctl_socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
     let mut req = unsafe { create_req(iface_name) };
     req.ifru.addr.sa_family = libc::AF_INET as libc::sa_family_t;
-    if unsafe { ffi::siocgifaddr(ctl_fd, &mut req) } < 0 {
+    if unsafe { ffi::siocgifaddr(ctl_socket.as_raw_fd(), &mut req) } < 0 {
         return Err(io::Error::last_os_error());
     }
     let addr = unsafe { req.ifru.addr };
