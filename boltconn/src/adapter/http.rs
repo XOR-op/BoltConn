@@ -62,18 +62,9 @@ impl HttpOutbound {
                 SocketAddr::new(resp, port)
             }
         };
-        let mut tcp_stream = match server_addr {
-            SocketAddr::V4(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv4_stream(server_addr)
-                    .await?
-            }
-            SocketAddr::V6(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv6_stream(server_addr)
-                    .await?
-            }
-        };
+        let mut tcp_stream = Egress::new(&self.iface_name)
+            .tcp_stream(server_addr)
+            .await?;
         // construct request
         let mut req = format!(
             "CONNECT {0} HTTP/1.1\r\n\

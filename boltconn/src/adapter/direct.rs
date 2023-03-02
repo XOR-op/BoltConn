@@ -51,10 +51,7 @@ impl DirectOutbound {
 
     async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let dst_addr = self.get_dst().await?;
-        let outbound = match dst_addr {
-            SocketAddr::V4(_) => Egress::new(&self.iface_name).tcpv4_stream(dst_addr).await?,
-            SocketAddr::V6(_) => Egress::new(&self.iface_name).tcpv6_stream(dst_addr).await?,
-        };
+        let outbound = Egress::new(&self.iface_name).tcp_stream(dst_addr).await?;
 
         established_tcp(inbound, outbound, self.allocator, abort_handle).await;
         Ok(())

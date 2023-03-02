@@ -138,18 +138,9 @@ impl TrojanOutbound {
             }
         };
         let server_name = ServerName::try_from(self.config.sni.as_str()).map_err(as_io_err)?;
-        let tcp_conn = match server_addr {
-            SocketAddr::V4(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv4_stream(server_addr)
-                    .await?
-            }
-            SocketAddr::V6(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv6_stream(server_addr)
-                    .await?
-            }
-        };
+        let tcp_conn = Egress::new(&self.iface_name)
+            .tcp_stream(server_addr)
+            .await?;
         let tls_conn = TlsConnector::from(make_tls_config(self.config.skip_cert_verify));
         let stream = tls_conn.connect(server_name, tcp_conn).await?;
         Ok(stream)

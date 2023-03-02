@@ -90,18 +90,9 @@ impl SSOutbound {
 
     async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
-        let tcp_conn = match server_addr {
-            SocketAddr::V4(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv4_stream(server_addr)
-                    .await?
-            }
-            SocketAddr::V6(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv6_stream(server_addr)
-                    .await?
-            }
-        };
+        let tcp_conn = Egress::new(&self.iface_name)
+            .tcp_stream(server_addr)
+            .await?;
         let ss_stream =
             ProxyClientStream::from_stream(context, tcp_conn, &resolved_config, target_addr);
         established_tcp(inbound, ss_stream, self.allocator, abort_handle).await;

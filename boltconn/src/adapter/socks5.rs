@@ -78,18 +78,9 @@ impl Socks5Outbound {
                 SocketAddr::new(resp, port)
             }
         };
-        let socks_conn = match server_addr {
-            SocketAddr::V4(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv4_stream(server_addr)
-                    .await?
-            }
-            SocketAddr::V6(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv6_stream(server_addr)
-                    .await?
-            }
-        };
+        let socks_conn = Egress::new(&self.iface_name)
+            .tcp_stream(server_addr)
+            .await?;
         let mut conn_cfg = fast_socks5::client::Config::default();
         conn_cfg.set_connect_timeout(8);
         Ok((
