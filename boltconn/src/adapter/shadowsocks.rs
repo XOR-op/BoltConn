@@ -17,6 +17,7 @@ use shadowsocks::{relay, ProxyClientStream, ProxySocket, ServerAddr, ServerConfi
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::JoinHandle;
 
 #[derive(Clone, Debug)]
@@ -61,7 +62,8 @@ impl SSOutbound {
 
     async fn create_internal(
         &self,
-    ) -> Result<(relay::Address, SharedContext, ServerConfig, SocketAddr)> {
+        server_addr: SocketAddr,
+    ) -> Result<(relay::Address, SharedContext, ServerConfig)> {
         let target_addr = match &self.dst {
             NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(*s),
             NetworkAddr::DomainName { domain_name, port } => {
@@ -70,6 +72,29 @@ impl SSOutbound {
         };
         // ss configs
         let context = shadowsocks::context::Context::new_shared(ServerType::Local);
+        let resolved_config =
+            ServerConfig::new(server_addr, self.config.password(), self.config.method());
+        Ok((target_addr, context, resolved_config))
+    }
+
+    async fn run_tcp<S>(
+        self,
+        inbound: Connector,
+        outbound: S,
+        server_addr: SocketAddr,
+        abort_handle: ConnAbortHandle,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
+        let ss_stream =
+            ProxyClientStream::from_stream(context, outbound, &resolved_config, target_addr);
+        established_tcp(inbound, ss_stream, self.allocator, abort_handle).await;
+        Ok(())
+    }
+
+    async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
         let server_addr = match self.config.addr() {
             ServerAddr::SocketAddr(addr) => *addr,
             ServerAddr::DomainName(addr, port) => {
@@ -80,27 +105,10 @@ impl SSOutbound {
                         port: *port,
                     },
                 )
-                .await?
+                    .await?
             }
         };
-        let resolved_config =
-            ServerConfig::new(server_addr, self.config.password(), self.config.method());
-        Ok((target_addr, context, resolved_config, server_addr))
-    }
-
-    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
-        let tcp_conn = Egress::new(&self.iface_name)
-            .tcp_stream(server_addr)
-            .await?;
-        let ss_stream =
-            ProxyClientStream::from_stream(context, tcp_conn, &resolved_config, target_addr);
-        established_tcp(inbound, ss_stream, self.allocator, abort_handle).await;
-        Ok(())
-    }
-
-    async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
+        let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
         let out_sock = {
             let socket = match server_addr {
                 SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
@@ -132,7 +140,30 @@ impl TcpOutBound for SSOutbound {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
+        tokio::spawn(async move {
+            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
+            let tcp_conn = Egress::new(&self.iface_name)
+                .tcp_stream(server_addr)
+                .await?;
+            self.clone()
+                .run_tcp(inbound, tcp_conn, server_addr, abort_handle)
+        })
+    }
+
+    fn spawn_tcp_with_outbound<S>(
+        &self,
+        inbound: Connector,
+        outbound: S,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<Result<()>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        tokio::spawn(async move {
+            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
+            self.clone()
+                .run_tcp(inbound, outbound, server_addr, abort_handle)
+        })
     }
 
     fn spawn_tcp_with_chan(
@@ -142,7 +173,7 @@ impl TcpOutBound for SSOutbound {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run_tcp(outer, abort_handle)),
+            self.spawn_tcp(outer, abort_handle),
         )
     }
 }

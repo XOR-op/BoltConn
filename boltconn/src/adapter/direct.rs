@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use io::Result;
 use std::io;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 
@@ -63,6 +64,19 @@ impl TcpOutBound for DirectOutbound {
         tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
     }
 
+    fn spawn_tcp_with_outbound<S>(
+        &self,
+        inbound: Connector,
+        _outbound: S,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<Result<()>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        tracing::warn!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
+        tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
+    }
+
     fn spawn_tcp_with_chan(
         &self,
         abort_handle: ConnAbortHandle,
@@ -91,7 +105,7 @@ impl UdpOutBound for DirectOutbound {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run_udp(outer, abort_handle)),
+            self.spawn_tcp(outer, abort_handle),
         )
     }
 }

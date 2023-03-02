@@ -85,6 +85,15 @@ pub trait TcpOutBound: Send + Sync {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
 
+    fn spawn_tcp_with_outbound<S>(
+        &self,
+        inbound: Connector,
+        outbound: S,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static;
+
     /// Run with tokio::spawn, returning handle and a duplex channel
     fn spawn_tcp_with_chan(
         &self,

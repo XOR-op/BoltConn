@@ -9,7 +9,7 @@ use base64::Engine;
 use httparse::Response;
 use std::io;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone)]
@@ -44,11 +44,15 @@ impl HttpOutbound {
         }
     }
 
-    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
-        let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-        let mut tcp_stream = Egress::new(&self.iface_name)
-            .tcp_stream(server_addr)
-            .await?;
+    async fn run_tcp<S>(
+        self,
+        inbound: Connector,
+        mut outbound: S,
+        abort_handle: ConnAbortHandle,
+    ) -> io::Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         // construct request
         let mut req = format!(
             "CONNECT {0} HTTP/1.1\r\n\
@@ -63,11 +67,11 @@ impl HttpOutbound {
         }
         req += "\r\n";
 
-        tcp_stream.write_all(req.as_bytes()).await?;
-        tcp_stream.flush().await?;
+        outbound.write_all(req.as_bytes()).await?;
+        outbound.flush().await?;
 
         // get response
-        let mut buf_reader = BufReader::new(tcp_stream);
+        let mut buf_reader = BufReader::new(outbound);
         let mut resp = String::new();
         while !resp.ends_with("\r\n\r\n") {
             if buf_reader.read_line(&mut resp).await? == 0 {
@@ -102,8 +106,30 @@ impl TcpOutBound for HttpOutbound {
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
+            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
+            let tcp_stream = Egress::new(&self.iface_name)
+                .tcp_stream(server_addr)
+                .await?;
             self_clone
-                .run_tcp(inbound, abort_handle)
+                .run_tcp(inbound, tcp_stream, abort_handle)
+                .await
+                .map_err(|e| io_err(e.to_string().as_str()))
+        })
+    }
+
+    fn spawn_tcp_with_outbound<S>(
+        &self,
+        inbound: Connector,
+        outbound: S,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone
+                .run_tcp(inbound, outbound, abort_handle)
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))
         })
@@ -114,15 +140,9 @@ impl TcpOutBound for HttpOutbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        let self_clone = self.clone();
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(async move {
-                self_clone
-                    .run_tcp(outer, abort_handle)
-                    .await
-                    .map_err(|e| io_err(e.to_string().as_str()))
-            }),
+            self.spawn_tcp(outer, abort_handle),
         )
     }
 }
