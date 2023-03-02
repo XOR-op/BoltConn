@@ -1,5 +1,5 @@
 use crate::adapter::{
-    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
@@ -33,24 +33,8 @@ impl DirectOutbound {
         }
     }
 
-    async fn get_dst(&self) -> Result<SocketAddr> {
-        Ok(match &self.dst {
-            NetworkAddr::DomainName { domain_name, port } => {
-                // translate fake ip
-                SocketAddr::new(
-                    self.dns
-                        .genuine_lookup(domain_name.as_str())
-                        .await
-                        .ok_or_else(|| io_err("DNS failed"))?,
-                    *port,
-                )
-            }
-            NetworkAddr::Raw(s) => *s,
-        })
-    }
-
     async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let dst_addr = self.get_dst().await?;
+        let dst_addr = lookup(self.dns.as_ref(), &self.dst).await?;
         let outbound = Egress::new(&self.iface_name).tcp_stream(dst_addr).await?;
 
         established_tcp(inbound, outbound, self.allocator, abort_handle).await;
@@ -58,7 +42,7 @@ impl DirectOutbound {
     }
 
     async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let dst_addr = self.get_dst().await?;
+        let dst_addr = lookup(self.dns.as_ref(), &self.dst).await?;
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         outbound.connect(dst_addr).await?;
         established_udp(

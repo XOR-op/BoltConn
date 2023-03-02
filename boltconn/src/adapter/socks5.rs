@@ -1,5 +1,5 @@
 use crate::adapter::{
-    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
@@ -64,20 +64,7 @@ impl Socks5Outbound {
     }
 
     async fn connect_proxy(&self) -> Result<(Socks5Stream<TcpStream>, SocketAddr)> {
-        let server_addr = match self.config.server_addr {
-            NetworkAddr::Raw(addr) => addr,
-            NetworkAddr::DomainName {
-                ref domain_name,
-                port,
-            } => {
-                let resp = self
-                    .dns
-                    .genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or_else(|| io_err("dns not found"))?;
-                SocketAddr::new(resp, port)
-            }
-        };
+        let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
         let socks_conn = Egress::new(&self.iface_name)
             .tcp_stream(server_addr)
             .await?;

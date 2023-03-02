@@ -1,4 +1,4 @@
-use crate::adapter::{established_tcp, Connector, TcpOutBound};
+use crate::adapter::{established_tcp, lookup, Connector, TcpOutBound};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::io_err;
@@ -46,22 +46,7 @@ impl HttpOutbound {
     }
 
     async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
-        let server_addr = match self.config.server_addr {
-            NetworkAddr::Raw(addr) => addr,
-            NetworkAddr::DomainName {
-                ref domain_name,
-                port,
-            } => {
-                let resp = self
-                    .dns
-                    .genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or(io_err(
-                        format!("Failed to resolve {}", domain_name).as_str(),
-                    ))?;
-                SocketAddr::new(resp, port)
-            }
-        };
+        let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
         let mut tcp_stream = Egress::new(&self.iface_name)
             .tcp_stream(server_addr)
             .await?;

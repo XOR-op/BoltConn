@@ -1,5 +1,5 @@
 use crate::adapter::{
-    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
@@ -70,21 +70,8 @@ impl SSOutbound {
         };
         // ss configs
         let context = shadowsocks::context::Context::new_shared(ServerType::Local);
-        let (resolved_config, server_addr) = match self.config.addr().clone() {
-            ServerAddr::SocketAddr(p) => (self.config.clone(), p),
-            ServerAddr::DomainName(domain_name, port) => {
-                let resp = self
-                    .dns
-                    .genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or_else(|| io_err("dns not found"))?;
-                let addr = SocketAddr::new(resp, port);
-                (
-                    ServerConfig::new(addr, self.config.password(), self.config.method()),
-                    addr,
-                )
-            }
-        };
+        let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
+        let resolved_config = ServerConfig::new(addr, self.config.password(), self.config.method());
         Ok((target_addr, context, resolved_config, server_addr))
     }
 

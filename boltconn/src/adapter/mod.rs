@@ -23,6 +23,8 @@ pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;
+use crate::common::io_err;
+use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 pub use direct::*;
 pub use socks5::*;
@@ -282,4 +284,20 @@ impl Drop for UdpDropGuard {
             self.0.abort();
         }
     }
+}
+
+async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
+    Ok(match addr {
+        NetworkAddr::Raw(addr) => addr,
+        NetworkAddr::DomainName {
+            ref domain_name,
+            port,
+        } => {
+            let resp = dns
+                .genuine_lookup(domain_name.as_str())
+                .await
+                .ok_or_else(|| io_err("dns not found"))?;
+            SocketAddr::new(resp, port)
+        }
+    })
 }
