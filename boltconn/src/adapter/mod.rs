@@ -288,7 +288,7 @@ impl Drop for UdpDropGuard {
 
 async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
     Ok(match addr {
-        NetworkAddr::Raw(addr) => addr,
+        NetworkAddr::Raw(addr) => *addr,
         NetworkAddr::DomainName {
             ref domain_name,
             port,
@@ -297,7 +297,7 @@ async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
                 .genuine_lookup(domain_name.as_str())
                 .await
                 .ok_or_else(|| io_err("dns not found"))?;
-            SocketAddr::new(resp, port)
+            SocketAddr::new(resp, *port)
         }
     })
 }

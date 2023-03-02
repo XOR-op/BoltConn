@@ -70,8 +70,21 @@ impl SSOutbound {
         };
         // ss configs
         let context = shadowsocks::context::Context::new_shared(ServerType::Local);
-        let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-        let resolved_config = ServerConfig::new(addr, self.config.password(), self.config.method());
+        let server_addr = match self.config.addr() {
+            ServerAddr::SocketAddr(addr) => *addr,
+            ServerAddr::DomainName(addr, port) => {
+                lookup(
+                    self.dns.as_ref(),
+                    &NetworkAddr::DomainName {
+                        domain_name: addr.clone(),
+                        port: *port,
+                    },
+                )
+                .await?
+            }
+        };
+        let resolved_config =
+            ServerConfig::new(server_addr, self.config.password(), self.config.method());
         Ok((target_addr, context, resolved_config, server_addr))
     }
 

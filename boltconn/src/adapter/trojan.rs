@@ -16,7 +16,6 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use http::{StatusCode, Uri};
 use std::io;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;

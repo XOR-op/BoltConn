@@ -8,7 +8,6 @@ use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use base64::Engine;
 use httparse::Response;
 use std::io;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::task::JoinHandle;

@@ -2,7 +2,6 @@ use crate::adapter::{
     established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::io_err;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -10,7 +9,6 @@ use crate::PktBufPool;
 use async_trait::async_trait;
 use io::Result;
 use std::io;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
