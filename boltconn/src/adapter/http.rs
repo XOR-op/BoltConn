@@ -1,7 +1,7 @@
 use crate::adapter::{established_tcp, lookup, Connector, TcpOutBound};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::io_err;
+use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -106,8 +106,9 @@ impl TcpOutBound for HttpOutbound {
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-            let tcp_stream = Egress::new(&self.iface_name)
+            let server_addr =
+                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let tcp_stream = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
             self_clone
@@ -117,15 +118,12 @@ impl TcpOutBound for HttpOutbound {
         })
     }
 
-    fn spawn_tcp_with_outbound<S>(
+    fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: S,
+        outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
+    ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             self_clone

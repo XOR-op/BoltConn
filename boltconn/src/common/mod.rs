@@ -1,4 +1,5 @@
 use std::error::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod async_raw_fd;
 pub mod async_socket;
@@ -18,3 +19,5 @@ where
 {
     std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
 }
+
+pub trait OutboundTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}

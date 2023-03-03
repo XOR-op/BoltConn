@@ -3,7 +3,7 @@ use crate::adapter::{
 };
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::{as_io_err, io_err};
+use crate::common::{as_io_err, io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -16,7 +16,7 @@ use std::io::Result;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone)]
@@ -64,22 +64,15 @@ impl Socks5Outbound {
         }
     }
 
-    async fn connect_proxy<S>(&self, outbound: S) -> Result<(Socks5Stream<TcpStream>, SocketAddr)>
+    async fn connect_proxy<S>(&self, outbound: S) -> Result<Socks5Stream<S>>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-        let socks_conn = Egress::new(&self.iface_name)
-            .tcp_stream(server_addr)
-            .await?;
         let mut conn_cfg = fast_socks5::client::Config::default();
         conn_cfg.set_connect_timeout(8);
-        Ok((
-            Socks5Stream::use_stream(outbound, Some(self.config.get_auth()), conn_cfg)
-                .await
-                .map_err(as_io_err)?,
-            server_addr,
-        ))
+        Socks5Stream::use_stream(outbound, Some(self.config.get_auth()), conn_cfg)
+            .await
+            .map_err(as_io_err)
     }
 
     async fn run_tcp<S>(
@@ -91,7 +84,7 @@ impl Socks5Outbound {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let (mut socks_stream, _) = self.connect_proxy(outbound).await?;
+        let mut socks_stream = self.connect_proxy(outbound).await?;
         let target = self.dst.into();
         let _bound_addr = socks_stream
             .request(Socks5Command::TCPConnect, target)
@@ -116,7 +109,8 @@ impl Socks5Outbound {
                 TargetAddr::Domain(domain_name.clone(), *port)
             }
         };
-        let (mut socks_stream, server_addr) = self.connect_proxy(outbound).await?;
+        let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
+        let mut socks_stream = self.connect_proxy(outbound).await?;
         let out_sock = Arc::new(match server_addr {
             SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
             SocketAddr::V6(_) => return Err(io_err("udp v6 not supported")),
@@ -146,24 +140,23 @@ impl TcpOutBound for Socks5Outbound {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
+        let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-            let socks_conn = Egress::new(&self.iface_name)
+            let server_addr =
+                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let socks_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self.clone().run_tcp(inbound, socks_conn, abort_handle)
+            self_clone.run_tcp(inbound, socks_conn, abort_handle).await
         })
     }
 
-    fn spawn_tcp_with_outbound<S>(
+    fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: S,
+        outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<Result<()>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
+    ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().run_tcp(inbound, outbound, abort_handle))
     }
 
@@ -185,12 +178,14 @@ impl UdpOutBound for Socks5Outbound {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
+        let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-            let socks_conn = Egress::new(&self.iface_name)
+            let server_addr =
+                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let socks_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self.clone().run_udp(inbound, socks_conn, abort_handle)
+            self_clone.run_udp(inbound, socks_conn, abort_handle).await
         })
     }
 

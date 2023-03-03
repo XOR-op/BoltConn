@@ -4,7 +4,7 @@ use crate::adapter::{
 use crate::common::async_ws_stream::AsyncWsStream;
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::{as_io_err, io_err};
+use crate::common::{as_io_err, io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -57,7 +57,7 @@ impl TrojanOutbound {
         abort_handle: ConnAbortHandle,
     ) -> io::Result<()>
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
         let mut stream = self.connect_proxy(outbound).await?;
         if let Some(ref uri) = self.config.websocket_path {
@@ -81,7 +81,7 @@ impl TrojanOutbound {
         abort_handle: ConnAbortHandle,
     ) -> io::Result<()>
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
         let mut stream = self.connect_proxy(outbound).await?;
         if let Some(ref uri) = self.config.websocket_path {
@@ -162,24 +162,23 @@ impl TcpOutBound for TrojanOutbound {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
+        let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-            let tcp_conn = Egress::new(&self.iface_name)
+            let server_addr =
+                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let tcp_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self.clone().run_tcp(inbound, tcp_conn, abort_handle)
+            self_clone.run_tcp(inbound, tcp_conn, abort_handle).await
         })
     }
 
-    fn spawn_tcp_with_outbound<S>(
+    fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: S,
+        outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
+    ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().run_tcp(inbound, outbound, abort_handle))
     }
 
@@ -201,12 +200,14 @@ impl UdpOutBound for TrojanOutbound {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
+        let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-            let tcp_conn = Egress::new(&self.iface_name)
+            let server_addr =
+                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let tcp_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self.clone().run_udp(inbound, tcp_conn, abort_handle)
+            self_clone.run_udp(inbound, tcp_conn, abort_handle).await
         })
     }
 

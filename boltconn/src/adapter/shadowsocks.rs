@@ -3,7 +3,7 @@ use crate::adapter::{
 };
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::io_err;
+use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -105,7 +105,7 @@ impl SSOutbound {
                         port: *port,
                     },
                 )
-                    .await?
+                .await?
             }
         };
         let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
@@ -140,29 +140,50 @@ impl TcpOutBound for SSOutbound {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
+        let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-            let tcp_conn = Egress::new(&self.iface_name)
+            let server_addr = lookup(
+                self_clone.dns.as_ref(),
+                &match &self_clone.config.addr() {
+                    ServerAddr::SocketAddr(s) => NetworkAddr::Raw(*s),
+                    ServerAddr::DomainName(domain_name, port) => NetworkAddr::DomainName {
+                        domain_name: domain_name.clone(),
+                        port: *port,
+                    },
+                },
+            )
+            .await?;
+            let tcp_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self.clone()
+            self_clone
                 .run_tcp(inbound, tcp_conn, server_addr, abort_handle)
+                .await
         })
     }
 
-    fn spawn_tcp_with_outbound<S>(
+    fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: S,
+        outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<Result<()>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
+    ) -> JoinHandle<io::Result<()>> {
+        let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
-            self.clone()
+            let server_addr = lookup(
+                self_clone.dns.as_ref(),
+                &match &self_clone.config.addr() {
+                    ServerAddr::SocketAddr(s) => NetworkAddr::Raw(*s),
+                    ServerAddr::DomainName(domain_name, port) => NetworkAddr::DomainName {
+                        domain_name: domain_name.clone(),
+                        port: *port,
+                    },
+                },
+            )
+            .await?;
+            self_clone
                 .run_tcp(inbound, outbound, server_addr, abort_handle)
+                .await
         })
     }
 

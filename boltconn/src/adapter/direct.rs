@@ -2,6 +2,7 @@ use crate::adapter::{
     established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::duplex_chan::DuplexChan;
+use crate::common::OutboundTrait;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -10,7 +11,6 @@ use async_trait::async_trait;
 use io::Result;
 use std::io;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 
@@ -64,15 +64,12 @@ impl TcpOutBound for DirectOutbound {
         tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
     }
 
-    fn spawn_tcp_with_outbound<S>(
+    fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        _outbound: S,
+        _outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<Result<()>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
+    ) -> JoinHandle<io::Result<()>> {
         tracing::warn!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
         tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
     }

@@ -23,7 +23,7 @@ pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::io_err;
+use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 pub use direct::*;
@@ -85,14 +85,12 @@ pub trait TcpOutBound: Send + Sync {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
 
-    fn spawn_tcp_with_outbound<S>(
+    fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: S,
+        outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static;
+    ) -> JoinHandle<io::Result<()>>;
 
     /// Run with tokio::spawn, returning handle and a duplex channel
     fn spawn_tcp_with_chan(
