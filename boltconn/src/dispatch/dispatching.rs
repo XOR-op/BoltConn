@@ -434,7 +434,7 @@ impl DispatchingBuilder {
         if let Some(chains) = &proxy_group.chains {
             // not proxy group, just chains
             let mut contents = vec![];
-            for p in chains {
+            for p in chains.iter().rev() {
                 contents.push(self.parse_one_proxy(
                     p,
                     name,
@@ -562,7 +562,11 @@ impl DispatchingBuilder {
             }
 
             queued_groups.remove(name);
-            GeneralProxy::Group(self.groups.get(p).unwrap().clone())
+            if let Some(group) = self.groups.get(p) {
+                GeneralProxy::Group(group.clone())
+            } else {
+                GeneralProxy::Single(self.proxies.get(p).unwrap().clone())
+            }
         })
     }
 }
