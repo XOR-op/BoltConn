@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
+mod chain;
 mod direct;
 mod http;
 mod shadowsocks;
@@ -26,6 +27,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
+pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
 pub use tcp_adapter::*;
@@ -71,10 +73,10 @@ pub enum OutboundType {
     Direct,
     Socks5,
     Http,
-    Wireguard,
-    Openvpn,
     Shadowsocks,
     Trojan,
+    Wireguard,
+    Chain,
 }
 
 pub trait TcpOutBound: Send + Sync {

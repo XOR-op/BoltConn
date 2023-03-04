@@ -37,6 +37,7 @@ pub enum ProxyImpl {
     Shadowsocks(ShadowSocksConfig),
     Trojan(TrojanConfig),
     Wireguard(WireguardConfig),
+    Chain(Vec<GeneralProxy>),
 }
 
 impl ProxyImpl {
@@ -46,6 +47,7 @@ impl ProxyImpl {
             ProxyImpl::Socks5(c) => c.udp,
             ProxyImpl::Shadowsocks(c) => c.udp,
             ProxyImpl::Trojan(c) => c.udp,
+            ProxyImpl::Chain(_) => false,
             _ => true,
         }
     }
@@ -59,6 +61,7 @@ impl ProxyImpl {
             ProxyImpl::Shadowsocks(_) => "shadowsocks",
             ProxyImpl::Trojan(_) => "trojan",
             ProxyImpl::Wireguard(_) => "wireguard",
+            ProxyImpl::Chain(_) => "chain",
         }
         .to_string()
     }
