@@ -187,7 +187,10 @@ impl Dispatcher {
                 };
                     res.push(outbounding);
                 }
-                (Box::new(ChainOutbound::new(res)), OutboundType::Chain)
+                (
+                    Box::new(ChainOutbound::new(self.allocator.clone(), res)),
+                    OutboundType::Chain,
+                )
             } else {
                 let Ok((outbounding, proxy_type)) = self.build_tcp_outbound(proxy_config.as_ref(), &src_addr, &dst_addr).await else {
                 indicator.store(0, Ordering::Relaxed);

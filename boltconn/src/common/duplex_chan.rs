@@ -1,6 +1,6 @@
 use crate::adapter::Connector;
 use crate::common::buf_pool::PktBufHandle;
-use crate::common::io_err;
+use crate::common::{io_err, OutboundTrait};
 use crate::PktBufPool;
 use std::io::Error;
 use std::pin::Pin;
@@ -121,3 +121,5 @@ impl AsyncRead for DuplexChan {
         }
     }
 }
+
+impl OutboundTrait for DuplexChan {}
