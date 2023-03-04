@@ -64,7 +64,10 @@ impl AsyncWrite for DuplexChan {
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
-            Err(TrySendError::Closed(_)) => Ready(Err(io_err("chan closed"))),
+            Err(TrySendError::Closed(b)) => {
+                self.allocator.release(b);
+                Ready(Err(io_err("DuplexChan: tx closed")))
+            }
         };
     }
 
@@ -115,7 +118,7 @@ impl AsyncRead for DuplexChan {
                         Ready(Ok(()))
                     }
                 }
-                Ready(None) => Ready(Err(io_err("done"))),
+                Ready(None) => Ready(Err(io_err("DuplexChan: rx done"))),
                 Poll::Pending => Poll::Pending,
             };
         }
