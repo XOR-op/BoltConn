@@ -118,7 +118,7 @@ impl AsyncRead for DuplexChan {
                         Ready(Ok(()))
                     }
                 }
-                Ready(None) => Ready(Err(io_err("DuplexChan: rx done"))),
+                Ready(None) => Ready(Ok(())),
                 Poll::Pending => Poll::Pending,
             };
         }

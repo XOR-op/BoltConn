@@ -176,16 +176,50 @@ impl Dispatcher {
         let proxy_config = self.dispatching.read().unwrap().matches(&conn_info).clone();
         let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
             if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
+                let impls: Vec<_> = vec
+                    .iter()
+                    .map(|n| match n {
+                        GeneralProxy::Single(p) => p.get_impl(),
+                        GeneralProxy::Group(g) => g.get_proxy().get_impl(),
+                    })
+                    .collect();
                 let mut res = vec![];
-                for i in vec {
-                    let Ok((outbounding, _)) = self.build_tcp_outbound(match i {
-                    GeneralProxy::Single(p) => p.get_impl(),
-                    GeneralProxy::Group(g) => g.get_proxy().get_impl(),
-                }.as_ref(),&src_addr,&dst_addr).await else {
-                    indicator.store(0, Ordering::Relaxed);
-                    return;
-                };
-                    res.push(outbounding);
+                let mut dst_addrs = vec![];
+
+                // extract destination
+                // if A->B->C, then vec is [C, B, A]
+                dst_addrs.push(dst_addr.clone());
+                for idx in 1..vec.len() {
+                    let proxy_impl = impls.get(idx - 1).unwrap().as_ref();
+                    if let Some(dst) = proxy_impl.server_addr() {
+                        dst_addrs.push(dst);
+                    } else {
+                        tracing::warn!("{:?} should not be a part of chain", proxy_impl);
+                        indicator.store(0, Ordering::Relaxed);
+                        return;
+                    }
+                }
+
+                for idx in 0..vec.len() {
+                    tracing::debug!(
+                        "Proxy {} [{}]: connect to {} ",
+                        impls.get(idx).unwrap().as_ref().simple_description(),
+                        impls.get(idx).unwrap().as_ref().server_addr().unwrap(),
+                        dst_addrs.get(idx).unwrap()
+                    );
+                    if let Ok((outbounding, _)) = self
+                        .build_tcp_outbound(
+                            impls.get(idx).unwrap().as_ref(),
+                            &src_addr,
+                            dst_addrs.get(idx).unwrap(),
+                        )
+                        .await
+                    {
+                        res.push(outbounding);
+                    } else {
+                        indicator.store(0, Ordering::Relaxed);
+                        return;
+                    }
                 }
                 (
                     Box::new(ChainOutbound::new(self.allocator.clone(), res)),
