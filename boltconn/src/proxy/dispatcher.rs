@@ -201,12 +201,6 @@ impl Dispatcher {
                 }
 
                 for idx in 0..vec.len() {
-                    tracing::debug!(
-                        "Proxy {} [{}]: connect to {} ",
-                        impls.get(idx).unwrap().as_ref().simple_description(),
-                        impls.get(idx).unwrap().as_ref().server_addr().unwrap(),
-                        dst_addrs.get(idx).unwrap()
-                    );
                     if let Ok((outbounding, _)) = self
                         .build_tcp_outbound(
                             impls.get(idx).unwrap().as_ref(),
