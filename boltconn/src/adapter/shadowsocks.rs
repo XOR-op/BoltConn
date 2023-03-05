@@ -1,9 +1,9 @@
 use crate::adapter::{
-    established_tcp, established_udp, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::io_err;
+use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -17,6 +17,7 @@ use shadowsocks::{relay, ProxyClientStream, ProxySocket, ServerAddr, ServerConfi
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::JoinHandle;
 
 #[derive(Clone, Debug)]
@@ -61,7 +62,8 @@ impl SSOutbound {
 
     async fn create_internal(
         &self,
-    ) -> Result<(relay::Address, SharedContext, ServerConfig, SocketAddr)> {
+        server_addr: SocketAddr,
+    ) -> Result<(relay::Address, SharedContext, ServerConfig)> {
         let target_addr = match &self.dst {
             NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(*s),
             NetworkAddr::DomainName { domain_name, port } => {
@@ -70,46 +72,43 @@ impl SSOutbound {
         };
         // ss configs
         let context = shadowsocks::context::Context::new_shared(ServerType::Local);
-        let (resolved_config, server_addr) = match self.config.addr().clone() {
-            ServerAddr::SocketAddr(p) => (self.config.clone(), p),
-            ServerAddr::DomainName(domain_name, port) => {
-                let resp = self
-                    .dns
-                    .genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or_else(|| io_err("dns not found"))?;
-                let addr = SocketAddr::new(resp, port);
-                (
-                    ServerConfig::new(addr, self.config.password(), self.config.method()),
-                    addr,
-                )
-            }
-        };
-        Ok((target_addr, context, resolved_config, server_addr))
+        let resolved_config =
+            ServerConfig::new(server_addr, self.config.password(), self.config.method());
+        Ok((target_addr, context, resolved_config))
     }
 
-    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
-        let tcp_conn = match server_addr {
-            SocketAddr::V4(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv4_stream(server_addr)
-                    .await?
-            }
-            SocketAddr::V6(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv6_stream(server_addr)
-                    .await?
-            }
-        };
+    async fn run_tcp<S>(
+        self,
+        inbound: Connector,
+        outbound: S,
+        server_addr: SocketAddr,
+        abort_handle: ConnAbortHandle,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
         let ss_stream =
-            ProxyClientStream::from_stream(context, tcp_conn, &resolved_config, target_addr);
+            ProxyClientStream::from_stream(context, outbound, &resolved_config, target_addr);
         established_tcp(inbound, ss_stream, self.allocator, abort_handle).await;
         Ok(())
     }
 
     async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let (target_addr, context, resolved_config, server_addr) = self.create_internal().await?;
+        let server_addr = match self.config.addr() {
+            ServerAddr::SocketAddr(addr) => *addr,
+            ServerAddr::DomainName(addr, port) => {
+                lookup(
+                    self.dns.as_ref(),
+                    &NetworkAddr::DomainName {
+                        domain_name: addr.clone(),
+                        port: *port,
+                    },
+                )
+                .await?
+            }
+        };
+        let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
         let out_sock = {
             let socket = match server_addr {
                 SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
@@ -141,7 +140,51 @@ impl TcpOutBound for SSOutbound {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            let server_addr = lookup(
+                self_clone.dns.as_ref(),
+                &match &self_clone.config.addr() {
+                    ServerAddr::SocketAddr(s) => NetworkAddr::Raw(*s),
+                    ServerAddr::DomainName(domain_name, port) => NetworkAddr::DomainName {
+                        domain_name: domain_name.clone(),
+                        port: *port,
+                    },
+                },
+            )
+            .await?;
+            let tcp_conn = Egress::new(&self_clone.iface_name)
+                .tcp_stream(server_addr)
+                .await?;
+            self_clone
+                .run_tcp(inbound, tcp_conn, server_addr, abort_handle)
+                .await
+        })
+    }
+
+    fn spawn_tcp_with_outbound(
+        &self,
+        inbound: Connector,
+        outbound: Box<dyn OutboundTrait>,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            let server_addr = lookup(
+                self_clone.dns.as_ref(),
+                &match &self_clone.config.addr() {
+                    ServerAddr::SocketAddr(s) => NetworkAddr::Raw(*s),
+                    ServerAddr::DomainName(domain_name, port) => NetworkAddr::DomainName {
+                        domain_name: domain_name.clone(),
+                        port: *port,
+                    },
+                },
+            )
+            .await?;
+            self_clone
+                .run_tcp(inbound, outbound, server_addr, abort_handle)
+                .await
+        })
     }
 
     fn spawn_tcp_with_chan(
@@ -151,7 +194,7 @@ impl TcpOutBound for SSOutbound {
         let (inner, outer) = Connector::new_pair(10);
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(self.clone().run_tcp(outer, abort_handle)),
+            self.spawn_tcp(outer, abort_handle),
         )
     }
 }

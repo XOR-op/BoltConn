@@ -1,16 +1,15 @@
-use crate::adapter::{established_tcp, Connector, TcpOutBound};
+use crate::adapter::{established_tcp, lookup, Connector, TcpOutBound};
 use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::io_err;
+use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use base64::Engine;
 use httparse::Response;
 use std::io;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone)]
@@ -45,35 +44,15 @@ impl HttpOutbound {
         }
     }
 
-    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
-        let server_addr = match self.config.server_addr {
-            NetworkAddr::Raw(addr) => addr,
-            NetworkAddr::DomainName {
-                ref domain_name,
-                port,
-            } => {
-                let resp = self
-                    .dns
-                    .genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or(io_err(
-                        format!("Failed to resolve {}", domain_name).as_str(),
-                    ))?;
-                SocketAddr::new(resp, port)
-            }
-        };
-        let mut tcp_stream = match server_addr {
-            SocketAddr::V4(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv4_stream(server_addr)
-                    .await?
-            }
-            SocketAddr::V6(_) => {
-                Egress::new(&self.iface_name)
-                    .tcpv6_stream(server_addr)
-                    .await?
-            }
-        };
+    async fn run_tcp<S>(
+        self,
+        inbound: Connector,
+        mut outbound: S,
+        abort_handle: ConnAbortHandle,
+    ) -> io::Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         // construct request
         let mut req = format!(
             "CONNECT {0} HTTP/1.1\r\n\
@@ -88,11 +67,11 @@ impl HttpOutbound {
         }
         req += "\r\n";
 
-        tcp_stream.write_all(req.as_bytes()).await?;
-        tcp_stream.flush().await?;
+        outbound.write_all(req.as_bytes()).await?;
+        outbound.flush().await?;
 
         // get response
-        let mut buf_reader = BufReader::new(tcp_stream);
+        let mut buf_reader = BufReader::new(outbound);
         let mut resp = String::new();
         while !resp.ends_with("\r\n\r\n") {
             if buf_reader.read_line(&mut resp).await? == 0 {
@@ -127,8 +106,28 @@ impl TcpOutBound for HttpOutbound {
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
+            let server_addr =
+                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let tcp_stream = Egress::new(&self_clone.iface_name)
+                .tcp_stream(server_addr)
+                .await?;
             self_clone
-                .run_tcp(inbound, abort_handle)
+                .run_tcp(inbound, tcp_stream, abort_handle)
+                .await
+                .map_err(|e| io_err(e.to_string().as_str()))
+        })
+    }
+
+    fn spawn_tcp_with_outbound(
+        &self,
+        inbound: Connector,
+        outbound: Box<dyn OutboundTrait>,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone
+                .run_tcp(inbound, outbound, abort_handle)
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))
         })
@@ -139,15 +138,9 @@ impl TcpOutBound for HttpOutbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        let self_clone = self.clone();
         (
             DuplexChan::new(self.allocator.clone(), inner),
-            tokio::spawn(async move {
-                self_clone
-                    .run_tcp(outer, abort_handle)
-                    .await
-                    .map_err(|e| io_err(e.to_string().as_str()))
-            }),
+            self.spawn_tcp(outer, abort_handle),
         )
     }
 }

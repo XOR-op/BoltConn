@@ -431,97 +431,142 @@ impl DispatchingBuilder {
         if !proxy_group.roughly_validate() {
             return Err(anyhow!("Invalid group {}", name));
         }
-        let mut arr = Vec::new();
-        let mut selection = None;
-        // proxies
-        for p in proxy_group.proxies.as_ref().unwrap_or(&vec![]) {
-            let content = if let Some(single) = self.proxies.get(p) {
-                GeneralProxy::Single(single.clone())
-            } else if let Some(group) = self.groups.get(p) {
-                GeneralProxy::Group(group.clone())
-            } else {
-                // toposort
-                queued_groups.insert(name.to_string());
-
-                if let Some(sub) = proxy_group_list.get(p) {
-                    self.parse_group(
-                        p,
-                        state,
-                        sub,
-                        proxy_group_list,
-                        proxy_schema,
-                        queued_groups,
-                        true,
-                    )?;
-                } else {
-                    return Err(anyhow!("No [{}] in group [{}]", p, name));
-                }
-
-                queued_groups.remove(name);
-                GeneralProxy::Group(self.groups.get(p).unwrap().clone())
-            };
-
-            if p == state.group_selection.get(name).unwrap_or(&String::new()) {
-                selection = Some(content.clone());
+        if let Some(chains) = &proxy_group.chains {
+            // not proxy group, just chains
+            let mut contents = vec![];
+            for p in chains.iter().rev() {
+                contents.push(self.parse_one_proxy(
+                    p,
+                    name,
+                    state,
+                    proxy_group_list,
+                    proxy_schema,
+                    queued_groups,
+                )?);
             }
-            arr.push(content);
-        }
-
-        // used providers
-        for p in proxy_group.providers.as_ref().unwrap_or(&vec![]) {
-            let valid_proxies: Vec<&str> = match p {
-                RawProxyProviderOption::Name(name) => proxy_schema
-                    .get(name)
-                    .ok_or_else(|| anyhow!("Provider {} not found", name))?
-                    .proxies
-                    .iter()
-                    .map(|entry| entry.name.as_str())
-                    .collect(),
-                RawProxyProviderOption::Filter { name, filter } => {
-                    let regex = Regex::new(filter)
-                        .map_err(|_| anyhow!("provider {} has bad filter: '{}'", name, filter))?;
-                    proxy_schema
-                        .get(name)
-                        .ok_or_else(|| anyhow!("Provider {} not found", name))?
-                        .proxies
-                        .iter()
-                        .filter_map(|entry| {
-                            if regex.is_match(entry.name.as_str()) {
-                                Some(entry.name.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                }
-            };
-            for p in valid_proxies {
-                let content = if let Some(single) = self.proxies.get(p) {
-                    GeneralProxy::Single(single.clone())
-                } else {
-                    return Err(anyhow!("No [{}] in group [{}]", p, name));
-                };
+            self.proxies.insert(
+                name.to_string(),
+                Arc::new(Proxy::new(name.to_string(), ProxyImpl::Chain(contents))),
+            );
+            Ok(())
+        } else {
+            // Genuine proxy group, including only proxies and providers
+            let mut arr = Vec::new();
+            let mut selection = None;
+            // proxies
+            for p in proxy_group.proxies.as_ref().unwrap_or(&vec![]) {
+                let content = self.parse_one_proxy(
+                    p,
+                    name,
+                    state,
+                    proxy_group_list,
+                    proxy_schema,
+                    queued_groups,
+                )?;
                 if p == state.group_selection.get(name).unwrap_or(&String::new()) {
                     selection = Some(content.clone());
                 }
                 arr.push(content);
             }
-        }
-        if arr.is_empty() {
-            // No available proxies, skip
-            return Ok(());
-        }
 
-        let first = arr.first().unwrap().clone();
-        // If there is no selection now, select the first.
-        self.groups.insert(
-            name.to_string(),
-            Arc::new(ProxyGroup::new(
+            // used providers
+            for p in proxy_group.providers.as_ref().unwrap_or(&vec![]) {
+                let valid_proxies: Vec<&str> = match p {
+                    RawProxyProviderOption::Name(name) => proxy_schema
+                        .get(name)
+                        .ok_or_else(|| anyhow!("Provider {} not found", name))?
+                        .proxies
+                        .iter()
+                        .map(|entry| entry.name.as_str())
+                        .collect(),
+                    RawProxyProviderOption::Filter { name, filter } => {
+                        let regex = Regex::new(filter).map_err(|_| {
+                            anyhow!("provider {} has bad filter: '{}'", name, filter)
+                        })?;
+                        proxy_schema
+                            .get(name)
+                            .ok_or_else(|| anyhow!("Provider {} not found", name))?
+                            .proxies
+                            .iter()
+                            .filter_map(|entry| {
+                                if regex.is_match(entry.name.as_str()) {
+                                    Some(entry.name.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    }
+                };
+                for p in valid_proxies {
+                    let content = if let Some(single) = self.proxies.get(p) {
+                        GeneralProxy::Single(single.clone())
+                    } else {
+                        return Err(anyhow!("No [{}] in group [{}]", p, name));
+                    };
+                    if p == state.group_selection.get(name).unwrap_or(&String::new()) {
+                        selection = Some(content.clone());
+                    }
+                    arr.push(content);
+                }
+            }
+            if arr.is_empty() {
+                // No available proxies, skip
+                return Ok(());
+            }
+
+            let first = arr.first().unwrap().clone();
+            // If there is no selection now, select the first.
+            self.groups.insert(
                 name.to_string(),
-                arr,
-                selection.unwrap_or(first),
-            )),
-        );
-        Ok(())
+                Arc::new(ProxyGroup::new(
+                    name.to_string(),
+                    arr,
+                    selection.unwrap_or(first),
+                )),
+            );
+            Ok(())
+        }
+    }
+
+    // Just to avoid code duplication
+    fn parse_one_proxy(
+        &mut self,
+        p: &str,
+        name: &str,
+        state: &RawState,
+        proxy_group_list: &LinkedHashMap<String, RawProxyGroupCfg>,
+        proxy_schema: &HashMap<String, ProxySchema>,
+        queued_groups: &mut HashSet<String>,
+    ) -> anyhow::Result<GeneralProxy> {
+        Ok(if let Some(single) = self.proxies.get(p) {
+            GeneralProxy::Single(single.clone())
+        } else if let Some(group) = self.groups.get(p) {
+            GeneralProxy::Group(group.clone())
+        } else {
+            // toposort
+            queued_groups.insert(name.to_string());
+
+            if let Some(sub) = proxy_group_list.get(p) {
+                self.parse_group(
+                    p,
+                    state,
+                    sub,
+                    proxy_group_list,
+                    proxy_schema,
+                    queued_groups,
+                    true,
+                )?;
+            } else {
+                return Err(anyhow!("No [{}] in group [{}]", p, name));
+            }
+
+            queued_groups.remove(name);
+            if let Some(group) = self.groups.get(p) {
+                GeneralProxy::Group(group.clone())
+            } else {
+                GeneralProxy::Single(self.proxies.get(p).unwrap().clone())
+            }
+        })
     }
 }

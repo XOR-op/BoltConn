@@ -1,7 +1,9 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
+use crate::proxy::NetworkAddr;
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
+use shadowsocks::ServerAddr;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, RwLock};
 
@@ -37,14 +39,17 @@ pub enum ProxyImpl {
     Shadowsocks(ShadowSocksConfig),
     Trojan(TrojanConfig),
     Wireguard(WireguardConfig),
+    Chain(Vec<GeneralProxy>),
 }
 
 impl ProxyImpl {
     pub fn support_udp(&self) -> bool {
         match self {
+            ProxyImpl::Http(_) => false,
             ProxyImpl::Socks5(c) => c.udp,
             ProxyImpl::Shadowsocks(c) => c.udp,
             ProxyImpl::Trojan(c) => c.udp,
+            ProxyImpl::Chain(_) => false,
             _ => true,
         }
     }
@@ -58,8 +63,25 @@ impl ProxyImpl {
             ProxyImpl::Shadowsocks(_) => "shadowsocks",
             ProxyImpl::Trojan(_) => "trojan",
             ProxyImpl::Wireguard(_) => "wireguard",
+            ProxyImpl::Chain(_) => "chain",
         }
         .to_string()
+    }
+
+    pub fn server_addr(&self) -> Option<NetworkAddr> {
+        match self {
+            ProxyImpl::Direct | ProxyImpl::Reject | ProxyImpl::Chain(_) => None,
+            ProxyImpl::Http(c) => Some(c.server_addr.clone()),
+            ProxyImpl::Socks5(c) => Some(c.server_addr.clone()),
+            ProxyImpl::Shadowsocks(c) => Some(match c.server_addr.clone() {
+                ServerAddr::SocketAddr(s) => NetworkAddr::Raw(s),
+                ServerAddr::DomainName(domain_name, port) => {
+                    NetworkAddr::DomainName { domain_name, port }
+                }
+            }),
+            ProxyImpl::Trojan(c) => Some(c.server_addr.clone()),
+            ProxyImpl::Wireguard(c) => Some(c.endpoint.clone()),
+        }
     }
 }
 

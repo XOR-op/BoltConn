@@ -1,6 +1,6 @@
 use crate::adapter::Connector;
 use crate::common::buf_pool::PktBufHandle;
-use crate::common::io_err;
+use crate::common::{io_err, OutboundTrait};
 use crate::PktBufPool;
 use std::io::Error;
 use std::pin::Pin;
@@ -64,7 +64,10 @@ impl AsyncWrite for DuplexChan {
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
-            Err(TrySendError::Closed(_)) => Ready(Err(io_err("chan closed"))),
+            Err(TrySendError::Closed(b)) => {
+                self.allocator.release(b);
+                Ready(Err(io_err("DuplexChan: tx closed")))
+            }
         };
     }
 
@@ -115,9 +118,11 @@ impl AsyncRead for DuplexChan {
                         Ready(Ok(()))
                     }
                 }
-                Ready(None) => Ready(Err(io_err("done"))),
+                Ready(None) => Ready(Ok(())),
                 Poll::Pending => Poll::Pending,
             };
         }
     }
 }
+
+impl OutboundTrait for DuplexChan {}

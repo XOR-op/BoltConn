@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct RawProxyGroupCfg {
     pub proxies: Option<Vec<String>>,
     pub providers: Option<Vec<RawProxyProviderOption>>,
+    pub chains: Option<Vec<String>>,
     pub interface: Option<String>,
 }
 
@@ -17,6 +18,7 @@ pub enum RawProxyProviderOption {
 
 impl RawProxyGroupCfg {
     pub fn roughly_validate(&self) -> bool {
-        !(self.proxies.is_none() && self.providers.is_none())
+        let valid_proxy_list = !(self.proxies.is_none() && self.providers.is_none());
+        valid_proxy_list ^ self.chains.is_some()
     }
 }

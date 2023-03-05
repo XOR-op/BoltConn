@@ -1,7 +1,7 @@
 use crate::adapter::{Connector, TcpOutBound, UdpOutBound};
 use crate::common::buf_pool::{PktBufPool, MAX_PKT_SIZE};
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::io_err;
+use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -295,6 +295,16 @@ impl TcpOutBound for WireguardHandle {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().attach_tcp(inbound, abort_handle))
+    }
+
+    fn spawn_tcp_with_outbound(
+        &self,
+        inbound: Connector,
+        _outbound: Box<dyn OutboundTrait>,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tracing::warn!("spawn_tcp_with_outbound() should not be called with Wireguard");
+        self.spawn_tcp(inbound, abort_handle)
     }
 
     fn spawn_tcp_with_chan(

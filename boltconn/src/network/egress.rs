@@ -18,6 +18,13 @@ impl Egress {
         }
     }
 
+    pub async fn tcp_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
+        match addr {
+            SocketAddr::V4(_) => self.tcpv4_stream(addr).await,
+            SocketAddr::V6(_) => self.tcpv6_stream(addr).await,
+        }
+    }
+
     pub async fn tcpv4_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v4()?;
         platform::bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;

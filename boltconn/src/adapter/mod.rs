@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
+mod chain;
 mod direct;
 mod http;
 mod shadowsocks;
@@ -23,7 +24,10 @@ pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool};
 use crate::common::duplex_chan::DuplexChan;
+use crate::common::{io_err, OutboundTrait};
+use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
+pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
 pub use tcp_adapter::*;
@@ -69,10 +73,10 @@ pub enum OutboundType {
     Direct,
     Socks5,
     Http,
-    Wireguard,
-    Openvpn,
     Shadowsocks,
     Trojan,
+    Wireguard,
+    Chain,
 }
 
 pub trait TcpOutBound: Send + Sync {
@@ -80,6 +84,13 @@ pub trait TcpOutBound: Send + Sync {
     fn spawn_tcp(
         &self,
         inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>>;
+
+    fn spawn_tcp_with_outbound(
+        &self,
+        inbound: Connector,
+        outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
 
@@ -282,4 +293,20 @@ impl Drop for UdpDropGuard {
             self.0.abort();
         }
     }
+}
+
+async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
+    Ok(match addr {
+        NetworkAddr::Raw(addr) => *addr,
+        NetworkAddr::DomainName {
+            ref domain_name,
+            port,
+        } => {
+            let resp = dns
+                .genuine_lookup(domain_name.as_str())
+                .await
+                .ok_or_else(|| io_err("dns not found"))?;
+            SocketAddr::new(resp, *port)
+        }
+    })
 }
