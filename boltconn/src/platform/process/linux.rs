@@ -1,8 +1,9 @@
 use crate::platform::process::{NetworkType, ProcessInfo};
+use netlink_packet_core::{constants::*, NetlinkHeader, NetlinkMessage, NetlinkPayload};
 use netlink_packet_sock_diag::{
     constants::*,
     inet::{ExtensionFlags, InetRequest, SocketId, StateFlags},
-    NetlinkHeader, NetlinkMessage, NetlinkPayload, SockDiagMessage,
+    SockDiagMessage,
 };
 use netlink_sys::protocols::NETLINK_SOCK_DIAG;
 use netlink_sys::Socket;
@@ -19,12 +20,11 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
     diag_sock.bind_auto()?;
     diag_sock.connect(&netlink_sys::SocketAddr::new(0, 0))?;
 
-    let mut packet = NetlinkMessage {
-        header: NetlinkHeader {
-            flags: NLM_F_REQUEST | NLM_F_DUMP,
-            ..Default::default()
-        },
-        payload: SockDiagMessage::InetRequest(InetRequest {
+    let mut header = NetlinkHeader::default();
+    header.flags = NLM_F_REQUEST | NLM_F_DUMP;
+    let mut packet = NetlinkMessage::new(
+        header,
+        SockDiagMessage::InetRequest(InetRequest {
             family: AF_INET,
             protocol: match net_type {
                 NetworkType::Tcp => IPPROTO_TCP,
@@ -42,7 +42,7 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
             },
         })
         .into(),
-    };
+    );
     packet.finalize();
     let mut buf = vec![0; packet.header.length as usize];
     packet.serialize(&mut buf[..]);
