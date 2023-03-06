@@ -1,0 +1,12 @@
+run-type: server
+local-addr: 127.0.0.1
+local-port: 8443
+remote-addr: 127.0.0.1
+remote-port: 9
+log-level: 2
+password:
+  - passwd
+disable-http-check: true
+transport-plugin:
+  enabled: true
+  type: plaintext
