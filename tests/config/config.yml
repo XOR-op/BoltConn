@@ -10,6 +10,10 @@ dns:
   nameserver:
     - udp, 127.0.0.1:8853
 proxy-local:
+  http_p:
+    proto: http
+    server: http.test
+    port: 9006
   socks_p:
     proto: socks5
     server: socks.test
@@ -37,6 +41,10 @@ proxy-local:
 proxy-group:
   Socks:
     - socks_p
+  Chain:
+    chains:
+      - http_p
+      - ss_p
 
 rule-provider:
   SOCKS:
@@ -52,7 +60,9 @@ rule-local:
   - DOMAIN-SUFFIX, trojan.test, trojan_p
   - DOMAIN, wireguard.test, wg_p
   - RULE-SET, SOCKS, Socks
+  - DOMAIN-KEYWORD, http, http_p
+  - DOMAIN-KEYWORD, chain, Chain
+  - FALLBACK, ss_p
 
-mitm-host:
-  - direct.test
-  - socks.test
+mitm-rule:
+  - DOMAIN-SUFFIX, trojan.test

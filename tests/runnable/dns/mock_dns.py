@@ -8,6 +8,7 @@ class MockResolver(dnslib.server.BaseResolver):
     def resolve(self, request, _handler):
         resp = {
             'direct.test.': '127.0.0.1',
+            'http.test.': '127.0.0.1',
             'socks.test.': '127.0.0.1',
             'shadowsocks.test.': '127.0.0.1',
             'trojan.test.': '127.0.0.1',

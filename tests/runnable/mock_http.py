@@ -6,6 +6,7 @@ class MockServer(hserver.SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         resp = {
             '/direct': 'direct=OK',
+            '/http': 'http=OK',
             '/socks': 'socks=OK',
             '/shadowsocks': 'shadowsocks=OK',
             '/trojan': 'trojan=OK',
