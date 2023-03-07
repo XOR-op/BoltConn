@@ -137,7 +137,8 @@ impl RuleSetBuilder {
                     RuleImpl::RuleSet(_)
                     | RuleImpl::And(..)
                     | RuleImpl::Or(..)
-                    | RuleImpl::Not(_) => return None,
+                    | RuleImpl::Not(_)
+                    | RuleImpl::ProcCmdRegex(_) => return None,
                 }
             } else {
                 return None;

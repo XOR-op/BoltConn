@@ -21,4 +21,5 @@ pub struct ProcessInfo {
     pub pid: i32,
     pub path: String,
     pub name: String,
+    pub cmdline: String,
 }
