@@ -4,6 +4,7 @@ use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
 use ipnet::IpNet;
+use regex::Regex;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
@@ -49,6 +50,7 @@ pub enum RuleImpl {
     ProcessName(String),
     ProcessKeyword(String),
     ProcPathKeyword(String),
+    ProcCmdRegex(Regex),
     Domain(String),
     DomainSuffix(String),
     DomainKeyword(String),
@@ -114,6 +116,10 @@ impl RuleImpl {
                 .process_info
                 .as_ref()
                 .map_or_else(|| false, |proc_info| proc_info.path.contains(proc)),
+            RuleImpl::ProcCmdRegex(regex) => info
+                .process_info
+                .as_ref()
+                .map_or_else(|| false, |proc_info| regex.is_match(&proc_info.cmdline)),
             RuleImpl::RuleSet(rs) => rs.matches(info),
             RuleImpl::And(subs) => (|| {
                 for i in subs {
@@ -292,7 +298,8 @@ impl RuleBuilder<'_> {
             "DOMAIN" => Some(RuleImpl::Domain(content)),
             "PROCESS-NAME" => Some(RuleImpl::ProcessName(content)),
             "PROCESS-KEYWORD" => Some(RuleImpl::ProcessKeyword(content)),
-            "PROCPATH-KEYWORD" => Some(RuleImpl::ProcPathKeyword(content)),
+            "PROC-PATH-KEYWORD" => Some(RuleImpl::ProcPathKeyword(content)),
+            "PROC-CMD-REGEX" => Some(RuleImpl::ProcCmdRegex(Regex::new(&content).ok()?)),
             "IP-CIDR" | "IP-CIDR6" => IpNet::from_str(content.as_str()).ok().map(RuleImpl::IpCidr),
             "DST-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::Port),
             "RULE-SET" => rulesets
