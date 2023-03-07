@@ -1,10 +1,9 @@
 use crate::platform::process::{NetworkType, ProcessInfo};
-use libc::{c_char, c_int};
-use std::ffi::{CStr, CString};
+use libc::c_int;
+use std::ffi::{c_void, CString, OsStr};
+use std::io;
 use std::io::{ErrorKind, Result};
-use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::{io, mem};
 
 const TCP_SYSCTL_NAME: &str = "net.inet.tcp.pcblist_n";
 const UDP_SYSCTL_NAME: &str = "net.inet.udp.pcblist_n";
@@ -117,45 +116,111 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
     ))
 }
 
+// from dalance/procs
+// maybe the source is https://gist.github.com/nonowarn/770696
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
-    let mut bsd_info: libc::proc_bsdinfo =
-        unsafe { MaybeUninit::<libc::proc_bsdinfo>::zeroed().assume_init() };
-    if unsafe {
-        libc::proc_pidinfo(
-            pid as c_int,
-            libc::PROC_PIDTBSDINFO,
+    let mut size = get_arg_max()?;
+    let mut proc_args = Vec::with_capacity(size);
+    let ptr: *mut u8 = proc_args.as_mut_slice().as_mut_ptr();
+
+    let mut mib: [c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as c_int];
+
+    unsafe {
+        if libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            ptr as *mut c_void,
+            &mut size,
+            ::std::ptr::null_mut(),
             0,
-            &mut bsd_info as *mut _ as *mut _,
-            mem::size_of_val(&bsd_info) as c_int,
-        )
-    } != mem::size_of_val(&bsd_info) as c_int
-    {
-        // partial read
+        ) == -1
+        {
+            return None;
+        }
+        let mut n_args: c_int = 0;
+        libc::memcpy(
+            (&mut n_args) as *mut c_int as *mut c_void,
+            ptr as *const c_void,
+            ::std::mem::size_of::<c_int>(),
+        );
+        let mut cp = ptr.add(::std::mem::size_of::<c_int>());
+        let mut start = cp;
+        if cp < ptr.add(size) {
+            // get process name
+            while cp < ptr.add(size) && *cp != 0 {
+                cp = cp.offset(1);
+            }
+            let path = get_unchecked_str(cp, start);
+            let exe = std::path::Path::new(path.as_str()).to_path_buf();
+            let name = exe
+                .file_name()
+                .unwrap_or_else(|| OsStr::new(""))
+                .to_str()
+                .unwrap_or("")
+                .to_owned();
+
+            // skip trailing zeros
+            while cp < ptr.add(size) && *cp == 0 {
+                cp = cp.offset(1);
+            }
+
+            start = cp;
+            let mut c = 0;
+            let mut cmd = Vec::new();
+            while c < n_args && cp < ptr.add(size) {
+                if *cp == 0 {
+                    c += 1;
+                    cmd.push(get_unchecked_str(cp, start));
+                    start = cp.offset(1);
+                }
+                cp = cp.offset(1);
+            }
+
+            tracing::debug!(
+                "Pid:{}, Path:{}, Name:{}, Cmdline:{}",
+                pid,
+                path,
+                name,
+                cmd.join(" ")
+            );
+
+            Some(ProcessInfo {
+                pid,
+                path,
+                name,
+                cmdline: cmd.join(" "),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+fn get_arg_max() -> Option<usize> {
+    let mut mib: [c_int; 2] = [libc::CTL_KERN, libc::KERN_ARGMAX];
+    let mut arg_max = 0i32;
+    let mut size = ::std::mem::size_of::<c_int>();
+
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            2,
+            (&mut arg_max) as *mut i32 as *mut c_void,
+            &mut size,
+            ::std::ptr::null_mut(),
+            0,
+        ) == -1
+    } {
         return None;
     }
-    let mut vpath_info: libc::proc_vnodepathinfo =
-        unsafe { MaybeUninit::<libc::proc_vnodepathinfo>::zeroed().assume_init() };
-    if unsafe {
-        libc::proc_pidinfo(
-            pid as c_int,
-            libc::PROC_PIDVNODEPATHINFO,
-            0,
-            &mut vpath_info as *mut _ as *mut _,
-            mem::size_of_val(&vpath_info) as c_int,
-        )
-    } != mem::size_of_val(&vpath_info) as c_int
-    {
-        return None;
-    }
-    Some(ProcessInfo {
-        pid,
-        path: unsafe { CStr::from_ptr(&vpath_info.pvi_cdir.vip_path as *const _ as *const c_char) }
-            .to_string_lossy()
-            .into_owned()
-            .replace('\n', ""),
-        name: unsafe { CStr::from_ptr(&bsd_info.pbi_name as *const c_char) }
-            .to_string_lossy()
-            .into_owned()
-            .replace('\n', ""),
-    })
+
+    Some(arg_max as usize)
+}
+
+unsafe fn get_unchecked_str(cp: *mut u8, start: *mut u8) -> String {
+    let len = cp as usize - start as usize;
+    let part = Vec::from_raw_parts(start, len, len);
+    let tmp = String::from_utf8_unchecked(part.clone());
+    ::std::mem::forget(part);
+    tmp
 }
