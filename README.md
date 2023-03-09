@@ -72,6 +72,9 @@ For comparison with other related projects, see [comparison.md](./docs/compariso
 - web portal
 - IPv6 support
 - Windows support with Wintun driver
+- refactor:
+  - UDP optimization
+  - better DNS handling
 
 ## License
 This software is released under the GPL-3.0 license.
