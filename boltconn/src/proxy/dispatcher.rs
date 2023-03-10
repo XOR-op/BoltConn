@@ -484,7 +484,6 @@ impl Dispatcher {
                     src_addr,
                     dst_fake_addr,
                     indicator,
-                    nat_allocator,
                     nat_conn,
                     session_mgr,
                 );
@@ -518,20 +517,13 @@ impl Dispatcher {
         let mut handles = Vec::new();
 
         let (adapter_conn, adapter_next) = Connector::new_pair(10);
-        let udp_allocator = self.allocator.clone();
 
         handles.push({
             let info = info.clone();
             let abort_handle = abort_handle.clone();
             tokio::spawn(async move {
-                let udp_adapter = StandardUdpAdapter::new(
-                    info,
-                    socket,
-                    src_addr,
-                    indicator,
-                    udp_allocator,
-                    adapter_conn,
-                );
+                let udp_adapter =
+                    StandardUdpAdapter::new(info, socket, src_addr, indicator, adapter_conn);
                 if let Err(err) = udp_adapter.run(abort_handle).await {
                     tracing::error!("[Dispatcher] run StandardUdpAdapter failed: {}", err)
                 }

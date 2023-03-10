@@ -1,6 +1,8 @@
 use crate::adapter::{Connector, DuplexCloseGuard, TcpIndicatorGuard, TcpStatus};
+use crate::common::buf_pool::{read_to_bytes_mut, MAX_PKT_SIZE};
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 use crate::PktBufPool;
+use bytes::BytesMut;
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
@@ -59,26 +61,23 @@ impl TcpAdapter {
                 info: outgoing_info_arc.clone(),
             };
             loop {
-                let mut buf = allocator.obtain().await;
-                match buf.read(&mut in_read).await {
+                let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+                match read_to_bytes_mut(&mut buf, &mut in_read).await {
                     Ok(0) => {
-                        allocator.release(buf);
                         break;
                     }
                     Ok(size) => {
                         if first_packet {
                             first_packet = false;
-                            outgoing_info_arc.write().await.update_proto(buf.as_ready());
+                            outgoing_info_arc.write().await.update_proto(buf.as_ref());
                         }
                         outgoing_info_arc.write().await.more_upload(size);
-                        if let Err(err) = tx.send(buf).await {
-                            allocator.release(err.0);
+                        if let Err(_) = tx.send(buf.freeze()).await {
                             tracing::warn!("TunAdapter tx send err");
                             break;
                         }
                     }
                     Err(err) => {
-                        allocator.release(buf);
                         tracing::warn!("TunAdapter encounter error: {}", err);
                         abort_handle.cancel().await;
                         break;
@@ -93,15 +92,13 @@ impl TcpAdapter {
             info: self.info.clone(),
         };
         while let Some(buf) = rx.recv().await {
-            self.info.write().await.more_download(buf.len);
-            if let Err(err) = in_write.write_all(buf.as_ready()).await {
+            self.info.write().await.more_download(buf.len());
+            if let Err(err) = in_write.write_all(buf.as_ref()).await {
                 tracing::warn!("TunAdapter write to inbound failed: {}", err);
                 self.abort_handle.cancel().await;
                 duplex_guard.set_err_exit();
-                self.allocator.release(buf);
                 break;
             }
-            self.allocator.release(buf);
         }
         // tracing::debug!("TUN incoming closed");
         Ok(())
