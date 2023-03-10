@@ -58,12 +58,4 @@ impl TcpOutBound for ChainOutbound {
         tracing::warn!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
         self.spawn_tcp(inbound, abort_handle)
     }
-
-    fn spawn_tcp_with_chan(
-        &self,
-        abort_handle: ConnAbortHandle,
-    ) -> (DuplexChan, JoinHandle<std::io::Result<()>>) {
-        let (inner, outer) = Connector::new_pair(10);
-        (DuplexChan::new(inner), self.spawn_tcp(outer, abort_handle))
-    }
 }

@@ -1,4 +1,4 @@
-use crate::adapter::TcpOutBound;
+use crate::adapter::{Connector, TcpOutBound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::mitm::modifier::Modifier;
@@ -62,8 +62,11 @@ impl HttpsMitm {
         if let Some(resp) = fake_resp {
             return Ok(resp);
         }
-        let (outbound, _handle) = creator.spawn_tcp_with_chan(abort_handle.clone());
-        let outbound = client_tls.connect(server_name, outbound).await?;
+        let (inbound, outbound) = Connector::new_pair(10);
+        let _handle = creator.spawn_tcp(inbound, abort_handle.clone());
+        let outbound = client_tls
+            .connect(server_name, DuplexChan::new(outbound))
+            .await?;
         let (mut sender, connection) = conn::Builder::new().handshake(outbound).await?;
         tokio::spawn(async move { connection.await });
         let resp = sender.send_request(req).await?;

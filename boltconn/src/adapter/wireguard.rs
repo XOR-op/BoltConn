@@ -1,6 +1,5 @@
 use crate::adapter::{Connector, TcpOutBound, UdpOutBound};
 
-use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
@@ -288,17 +287,6 @@ impl TcpOutBound for WireguardHandle {
         tracing::warn!("spawn_tcp_with_outbound() should not be called with Wireguard");
         self.spawn_tcp(inbound, abort_handle)
     }
-
-    fn spawn_tcp_with_chan(
-        &self,
-        abort_handle: ConnAbortHandle,
-    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
-        let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(inner),
-            tokio::spawn(self.clone().attach_tcp(outer, abort_handle)),
-        )
-    }
 }
 
 impl UdpOutBound for WireguardHandle {
@@ -308,17 +296,6 @@ impl UdpOutBound for WireguardHandle {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<std::io::Result<()>> {
         tokio::spawn(self.clone().attach_udp(inbound, abort_handle))
-    }
-
-    fn spawn_udp_with_chan(
-        &self,
-        abort_handle: ConnAbortHandle,
-    ) -> (DuplexChan, JoinHandle<std::io::Result<()>>) {
-        let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(inner),
-            tokio::spawn(self.clone().attach_udp(outer, abort_handle)),
-        )
     }
 }
 

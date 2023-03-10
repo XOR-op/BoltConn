@@ -1,6 +1,5 @@
 use crate::adapter::{established_tcp, lookup, Connector, TcpOutBound};
 
-use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
@@ -123,13 +122,5 @@ impl TcpOutBound for HttpOutbound {
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))
         })
-    }
-
-    fn spawn_tcp_with_chan(
-        &self,
-        abort_handle: ConnAbortHandle,
-    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
-        let (inner, outer) = Connector::new_pair(10);
-        (DuplexChan::new(inner), self.spawn_tcp(outer, abort_handle))
     }
 }

@@ -24,7 +24,6 @@ mod wireguard;
 pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
 
-use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, mut_buf, read_to_bytes_mut, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
@@ -94,12 +93,6 @@ pub trait TcpOutBound: Send + Sync {
         outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
-
-    /// Run with tokio::spawn, returning handle and a duplex channel
-    fn spawn_tcp_with_chan(
-        &self,
-        abort_handle: ConnAbortHandle,
-    ) -> (DuplexChan, JoinHandle<io::Result<()>>);
 }
 
 pub trait UdpOutBound: Send + Sync {
@@ -109,12 +102,6 @@ pub trait UdpOutBound: Send + Sync {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
-
-    /// Run with tokio::spawn, returning handle and a duplex channel
-    fn spawn_udp_with_chan(
-        &self,
-        abort_handle: ConnAbortHandle,
-    ) -> (DuplexChan, JoinHandle<io::Result<()>>);
 }
 
 async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)

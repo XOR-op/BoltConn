@@ -338,7 +338,7 @@ async fn test_trojan_packets() {
         cmd: TrojanCmd::Connect,
         addr: TrojanAddr::Domain(("google.com".to_string(), 443)),
     };
-    let mut payload = BytesMut::zeroed(10).freeze();
+    let payload = Bytes::from("OKokokokok");
     let packet = TrojanRequest {
         password: "test".to_string(),
         request: inner.clone(),

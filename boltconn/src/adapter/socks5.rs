@@ -2,7 +2,6 @@ use crate::adapter::{
     established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 
-use crate::common::duplex_chan::DuplexChan;
 use crate::common::{as_io_err, io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
@@ -145,14 +144,6 @@ impl TcpOutBound for Socks5Outbound {
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().run_tcp(inbound, outbound, abort_handle))
     }
-
-    fn spawn_tcp_with_chan(
-        &self,
-        abort_handle: ConnAbortHandle,
-    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
-        let (inner, outer) = Connector::new_pair(10);
-        (DuplexChan::new(inner), self.spawn_tcp(outer, abort_handle))
-    }
 }
 
 impl UdpOutBound for Socks5Outbound {
@@ -170,14 +161,6 @@ impl UdpOutBound for Socks5Outbound {
                 .await?;
             self_clone.run_udp(inbound, socks_conn, abort_handle).await
         })
-    }
-
-    fn spawn_udp_with_chan(
-        &self,
-        abort_handle: ConnAbortHandle,
-    ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
-        let (inner, outer) = Connector::new_pair(10);
-        (DuplexChan::new(inner), self.spawn_udp(outer, abort_handle))
     }
 }
 
