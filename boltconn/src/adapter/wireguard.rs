@@ -1,7 +1,7 @@
 use crate::adapter::{Connector, TcpOutBound, UdpOutBound};
-use crate::common::buf_pool::{PktBufPool, MAX_PKT_SIZE};
+use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::{io_err, OutboundTrait};
+use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};

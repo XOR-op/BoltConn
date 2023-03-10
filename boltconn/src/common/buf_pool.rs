@@ -1,3 +1,4 @@
+use crate::common::MAX_PKT_SIZE;
 use bytes::{BufMut, BytesMut};
 use std::future::Future;
 use std::mem::{transmute, MaybeUninit};
@@ -9,22 +10,6 @@ use std::time::Duration;
 use std::{io, thread};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadHalf};
 use tokio::sync::Notify;
-
-pub const MAX_PKT_SIZE: usize = 65576;
-
-pub async fn read_to_bytes_mut(
-    buf: &mut BytesMut,
-    read: &mut ReadHalf<impl AsyncRead>,
-) -> io::Result<usize> {
-    let raw_buffer = buf.spare_capacity_mut();
-    let len = read.read(unsafe { transmute(raw_buffer) }).await?;
-    unsafe { buf.advance_mut(len) };
-    Ok(len)
-}
-
-pub(crate) unsafe fn mut_buf(buf: &mut BytesMut) -> &mut [u8] {
-    unsafe { transmute(buf.spare_capacity_mut()) }
-}
 
 pub type PktBuffer = [u8; MAX_PKT_SIZE];
 

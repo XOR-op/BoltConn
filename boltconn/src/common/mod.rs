@@ -1,5 +1,8 @@
+use bytes::{BufMut, BytesMut};
 use std::error::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::intrinsics::transmute;
+use std::io;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadHalf};
 
 pub mod async_raw_fd;
 pub mod async_socket;
@@ -21,3 +24,19 @@ where
 }
 
 pub trait OutboundTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
+
+pub const MAX_PKT_SIZE: usize = 65576;
+
+pub async fn read_to_bytes_mut(
+    buf: &mut BytesMut,
+    read: &mut ReadHalf<impl AsyncRead>,
+) -> io::Result<usize> {
+    let raw_buffer = buf.spare_capacity_mut();
+    let len = read.read(unsafe { transmute(raw_buffer) }).await?;
+    unsafe { buf.advance_mut(len) };
+    Ok(len)
+}
+
+pub(crate) unsafe fn mut_buf(buf: &mut BytesMut) -> &mut [u8] {
+    unsafe { transmute(buf.spare_capacity_mut()) }
+}

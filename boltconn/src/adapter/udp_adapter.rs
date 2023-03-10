@@ -1,7 +1,7 @@
 // Adapter to NAT
 
 use crate::adapter::{Connector, DuplexCloseGuard};
-use crate::common::buf_pool::{mut_buf, MAX_PKT_SIZE};
+use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::proxy::{ConnAbortHandle, ConnAgent, SessionManager};
 use bytes::{BufMut, Bytes, BytesMut};
 use io::Result;

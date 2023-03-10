@@ -23,9 +23,9 @@ mod wireguard;
 
 pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
-use crate::common::buf_pool::{mut_buf, read_to_bytes_mut, PktBufPool, MAX_PKT_SIZE};
+use crate::common::buf_pool::PktBufPool;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::{io_err, OutboundTrait};
+use crate::common::{io_err, mut_buf, read_to_bytes_mut, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 pub use chain::*;

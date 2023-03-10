@@ -1,5 +1,5 @@
-use crate::common::buf_pool::MAX_PKT_SIZE;
 use crate::common::io_err;
+use crate::common::MAX_PKT_SIZE;
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
 use boringtun::noise::errors::WireGuardError;

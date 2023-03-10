@@ -1,4 +1,5 @@
-use crate::common::buf_pool::{mut_buf, PktBufPool, MAX_PKT_SIZE};
+use crate::common::buf_pool::PktBufPool;
+use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::proxy::manager::SessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use crate::Dns;

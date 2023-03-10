@@ -1,6 +1,6 @@
 use crate::common::async_raw_fd::AsyncRawFd;
 use crate::common::async_socket::AsyncRawSocket;
-use crate::common::buf_pool::MAX_PKT_SIZE;
+use crate::common::MAX_PKT_SIZE;
 use crate::network;
 use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::platform;

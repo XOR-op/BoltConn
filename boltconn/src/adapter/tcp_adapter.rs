@@ -1,5 +1,5 @@
 use crate::adapter::{Connector, DuplexCloseGuard, TcpIndicatorGuard, TcpStatus};
-use crate::common::buf_pool::{read_to_bytes_mut, MAX_PKT_SIZE};
+use crate::common::{read_to_bytes_mut, MAX_PKT_SIZE};
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 use crate::PktBufPool;
 use bytes::BytesMut;

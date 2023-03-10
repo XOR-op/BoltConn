@@ -1,5 +1,6 @@
 use crate::adapter::Connector;
-use crate::common::buf_pool::{mut_buf, PktBufPool, MAX_PKT_SIZE};
+use crate::common::buf_pool::PktBufPool;
+use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::proxy::ConnAbortHandle;
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
