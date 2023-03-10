@@ -1,4 +1,3 @@
-use crate::common::buf_pool::PktBufPool;
 use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::proxy::manager::SessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
@@ -31,7 +30,6 @@ pub struct TunInbound {
     session_mgr: Arc<SessionManager>,
     dispatcher: Arc<Dispatcher>,
     dns: Arc<Dns>,
-    pool: PktBufPool,
     udp_mgr: Arc<UdpOutboundManager>,
 }
 
@@ -41,7 +39,6 @@ impl TunInbound {
         session_mgr: Arc<SessionManager>,
         dispatcher: Arc<Dispatcher>,
         dns: Arc<Dns>,
-        pool: PktBufPool,
         udp_mgr: Arc<UdpOutboundManager>,
     ) -> Self {
         Self {
@@ -49,7 +46,6 @@ impl TunInbound {
             session_mgr,
             dispatcher,
             dns,
-            pool,
             udp_mgr,
         }
     }

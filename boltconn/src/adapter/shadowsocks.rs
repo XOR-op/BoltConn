@@ -1,7 +1,7 @@
 use crate::adapter::{
     established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
@@ -38,7 +38,6 @@ impl From<ShadowSocksConfig> for ServerConfig {
 pub struct SSOutbound {
     iface_name: String,
     dst: NetworkAddr,
-    allocator: PktBufPool,
     dns: Arc<Dns>,
     config: ServerConfig,
 }
@@ -47,14 +46,12 @@ impl SSOutbound {
     pub fn new(
         iface_name: &str,
         dst: NetworkAddr,
-        allocator: PktBufPool,
         dns: Arc<Dns>,
         config: ShadowSocksConfig,
     ) -> Self {
         Self {
             iface_name: iface_name.to_string(),
             dst,
-            allocator,
             dns,
             config: config.into(),
         }
@@ -90,7 +87,7 @@ impl SSOutbound {
         let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
         let ss_stream =
             ProxyClientStream::from_stream(context, outbound, &resolved_config, target_addr);
-        established_tcp(inbound, ss_stream, self.allocator, abort_handle).await;
+        established_tcp(inbound, ss_stream, abort_handle).await;
         Ok(())
     }
 
@@ -126,7 +123,6 @@ impl SSOutbound {
         established_udp(
             inbound,
             ShadowsocksUdpAdapter(proxy_socket, target_addr),
-            self.allocator,
             abort_handle,
         )
         .await;

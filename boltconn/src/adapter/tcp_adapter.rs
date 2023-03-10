@@ -1,7 +1,6 @@
 use crate::adapter::{Connector, DuplexCloseGuard, TcpIndicatorGuard, TcpStatus};
 use crate::common::{read_to_bytes_mut, MAX_PKT_SIZE};
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
-use crate::PktBufPool;
 use bytes::BytesMut;
 use io::Result;
 use std::io;
@@ -16,7 +15,6 @@ pub struct TcpAdapter {
     stat: TcpStatus,
     info: Arc<RwLock<ConnAgent>>,
     inbound: TcpStream,
-    allocator: PktBufPool,
     connector: Connector,
     abort_handle: ConnAbortHandle,
 }
@@ -31,7 +29,6 @@ impl TcpAdapter {
         info: Arc<RwLock<ConnAgent>>,
         inbound: TcpStream,
         available: Arc<AtomicU8>,
-        allocator: PktBufPool,
         connector: Connector,
         abort_handle: ConnAbortHandle,
     ) -> Self {
@@ -39,7 +36,6 @@ impl TcpAdapter {
             stat: TcpStatus::new(src_addr, dst_addr, available),
             info,
             inbound,
-            allocator,
             connector,
             abort_handle,
         }

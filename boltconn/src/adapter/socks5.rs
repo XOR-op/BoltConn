@@ -1,7 +1,7 @@
 use crate::adapter::{
     established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{as_io_err, io_err, OutboundTrait};
 use crate::network::dns::Dns;
@@ -42,23 +42,15 @@ impl Socks5Config {
 pub struct Socks5Outbound {
     iface_name: String,
     dst: NetworkAddr,
-    allocator: PktBufPool,
     dns: Arc<Dns>,
     config: Socks5Config,
 }
 
 impl Socks5Outbound {
-    pub fn new(
-        iface_name: &str,
-        dst: NetworkAddr,
-        allocator: PktBufPool,
-        dns: Arc<Dns>,
-        config: Socks5Config,
-    ) -> Self {
+    pub fn new(iface_name: &str, dst: NetworkAddr, dns: Arc<Dns>, config: Socks5Config) -> Self {
         Self {
             iface_name: iface_name.to_string(),
             dst,
-            allocator,
             dns,
             config,
         }
@@ -90,7 +82,7 @@ impl Socks5Outbound {
             .request(Socks5Command::TCPConnect, target)
             .await
             .map_err(as_io_err)?;
-        established_tcp(inbound, socks_stream, self.allocator, abort_handle).await;
+        established_tcp(inbound, socks_stream, abort_handle).await;
         Ok(())
     }
 
@@ -123,13 +115,7 @@ impl Socks5Outbound {
             .next()
             .unwrap();
         out_sock.connect(bound_addr).await?;
-        established_udp(
-            inbound,
-            Socks5UdpAdapter(out_sock, target),
-            self.allocator,
-            abort_handle,
-        )
-        .await;
+        established_udp(inbound, Socks5UdpAdapter(out_sock, target), abort_handle).await;
         Ok(())
     }
 }

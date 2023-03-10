@@ -1,5 +1,5 @@
 use crate::adapter::Connector;
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::proxy::ConnAbortHandle;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -28,7 +28,6 @@ struct TcpConnTask {
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     remain_to_send: Option<(Bytes, usize)>, // buffer, start_offset
-    allocator: PktBufPool,
 }
 
 impl TcpConnTask {
@@ -36,7 +35,6 @@ impl TcpConnTask {
         connector: Connector,
         handle: SocketHandle,
         abort_handle: ConnAbortHandle,
-        allocator: PktBufPool,
         notify: Arc<Notify>,
     ) -> Self {
         let Connector {
@@ -57,7 +55,6 @@ impl TcpConnTask {
             handle,
             abort_handle,
             remain_to_send: None,
-            allocator,
         }
     }
 
@@ -120,7 +117,6 @@ struct UdpConnTask {
     rx: flume::Receiver<Bytes>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
-    allocator: PktBufPool,
     dest: IpEndpoint,
     last_active: Instant,
 }
@@ -131,7 +127,6 @@ impl UdpConnTask {
         dest: IpEndpoint,
         handle: SocketHandle,
         abort_handle: ConnAbortHandle,
-        allocator: PktBufPool,
         notify: Arc<Notify>,
     ) -> Self {
         let Connector {
@@ -150,7 +145,6 @@ impl UdpConnTask {
             rx,
             handle,
             abort_handle,
-            allocator,
             dest,
             last_active: Instant::now(),
         }
@@ -201,7 +195,6 @@ impl UdpConnTask {
 pub struct SmolStack {
     tcp_conn: DashMap<u16, TcpConnTask>,
     udp_conn: DashMap<u16, UdpConnTask>,
-    allocator: PktBufPool,
     ip_addr: IpAddr,
     ip_device: VirtualIpDevice,
     iface: Interface,
@@ -210,12 +203,7 @@ pub struct SmolStack {
 }
 
 impl SmolStack {
-    pub fn new(
-        iface_ip: IpAddr,
-        mut ip_device: VirtualIpDevice,
-        allocator: PktBufPool,
-        udp_timeout: Duration,
-    ) -> Self {
+    pub fn new(iface_ip: IpAddr, mut ip_device: VirtualIpDevice, udp_timeout: Duration) -> Self {
         let config = smoltcp::iface::Config::default();
         let mut iface = Interface::new(config, &mut ip_device);
         iface.update_ip_addrs(|v| {
@@ -224,7 +212,6 @@ impl SmolStack {
         Self {
             tcp_conn: Default::default(),
             udp_conn: Default::default(),
-            allocator,
             ip_addr: iface_ip,
             ip_device,
             iface,
@@ -269,13 +256,7 @@ impl SmolStack {
                     .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
 
                 let handle = self.socket_set.add(client_socket);
-                e.insert(TcpConnTask::new(
-                    connector,
-                    handle,
-                    abort_handle,
-                    self.allocator.clone(),
-                    notify,
-                ));
+                e.insert(TcpConnTask::new(connector, handle, abort_handle, notify));
                 Ok(())
             }
         }
@@ -314,7 +295,6 @@ impl SmolStack {
                     remote_addr,
                     handle,
                     abort_handle,
-                    self.allocator.clone(),
                     notify,
                 ));
                 Ok(())

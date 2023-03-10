@@ -23,7 +23,7 @@ mod wireguard;
 
 pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, mut_buf, read_to_bytes_mut, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
@@ -117,12 +117,8 @@ pub trait UdpOutBound: Send + Sync {
     ) -> (DuplexChan, JoinHandle<io::Result<()>>);
 }
 
-async fn established_tcp<T>(
-    inbound: Connector,
-    outbound: T,
-    _allocator: PktBufPool,
-    abort_handle: ConnAbortHandle,
-) where
+async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)
+where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
@@ -175,7 +171,6 @@ trait UdpSocketAdapter: Clone + Send {
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     inbound: Connector,
     outbound: S,
-    _allocator: PktBufPool,
     abort_handle: ConnAbortHandle,
 ) {
     // establish udp

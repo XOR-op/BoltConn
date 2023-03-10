@@ -1,18 +1,17 @@
 use crate::adapter::{Connector, TcpOutBound};
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::OutboundTrait;
 use crate::proxy::ConnAbortHandle;
 use tokio::task::JoinHandle;
 
 pub struct ChainOutbound {
-    allocator: PktBufPool,
     chains: Vec<Box<dyn TcpOutBound>>,
 }
 
 impl ChainOutbound {
-    pub fn new(allocator: PktBufPool, chains: Vec<Box<dyn TcpOutBound>>) -> Self {
-        Self { allocator, chains }
+    pub fn new(chains: Vec<Box<dyn TcpOutBound>>) -> Self {
+        Self { chains }
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::adapter::{Connector, TcpOutBound, UdpOutBound};
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
@@ -32,7 +32,6 @@ impl Endpoint {
         outbound: UdpSocket,
         config: &WireguardConfig,
         dns: Arc<Dns>,
-        allocator: PktBufPool,
         timeout: Duration,
     ) -> anyhow::Result<Arc<Self>> {
         let notify = Arc::new(Notify::new());
@@ -46,7 +45,6 @@ impl Endpoint {
         let smol_stack = Arc::new(Mutex::new(SmolStack::new(
             config.ip_addr,
             device,
-            allocator,
             Duration::from_secs(120),
         )));
 
@@ -183,17 +181,15 @@ pub struct WireguardManager {
     iface: String,
     active_conn: DashMap<WireguardConfig, Arc<Endpoint>>,
     dns: Arc<Dns>,
-    allocator: PktBufPool,
     timeout: Duration,
 }
 
 impl WireguardManager {
-    pub fn new(iface: &str, dns: Arc<Dns>, allocator: PktBufPool, timeout: Duration) -> Self {
+    pub fn new(iface: &str, dns: Arc<Dns>, timeout: Duration) -> Self {
         Self {
             iface: iface.to_string(),
             active_conn: Default::default(),
             dns,
-            allocator,
             timeout,
         }
     }
@@ -223,14 +219,8 @@ impl WireguardManager {
                             socket
                         }
                     };
-                    let ep = Endpoint::new(
-                        outbound,
-                        config,
-                        self.dns.clone(),
-                        self.allocator.clone(),
-                        self.timeout,
-                    )
-                    .await?;
+                    let ep =
+                        Endpoint::new(outbound, config, self.dns.clone(), self.timeout).await?;
                     entry.insert(ep.clone());
                     Ok(ep)
                 }
@@ -245,23 +235,15 @@ pub struct WireguardHandle {
     dst: NetworkAddr,
     endpoint: Arc<Endpoint>,
     dns: Arc<Dns>,
-    allocator: PktBufPool,
 }
 
 impl WireguardHandle {
-    pub fn new(
-        src_port: u16,
-        dst: NetworkAddr,
-        endpoint: Arc<Endpoint>,
-        dns: Arc<Dns>,
-        allocator: PktBufPool,
-    ) -> Self {
+    pub fn new(src_port: u16, dst: NetworkAddr, endpoint: Arc<Endpoint>, dns: Arc<Dns>) -> Self {
         Self {
             src_port,
             dst,
             endpoint,
             dns,
-            allocator,
         }
     }
 
