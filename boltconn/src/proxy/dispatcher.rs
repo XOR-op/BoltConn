@@ -3,7 +3,6 @@ use crate::adapter::{
     Socks5Outbound, StandardUdpAdapter, TcpAdapter, TcpOutBound, TrojanOutbound, TunUdpAdapter,
     UdpOutBound, WireguardHandle, WireguardManager,
 };
-use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, ProxyImpl};
 use crate::mitm::{HttpMitm, HttpsMitm, ModifierClosure};
@@ -12,6 +11,7 @@ use crate::platform::process;
 use crate::platform::process::NetworkType;
 use crate::proxy::{AgentCenter, ConnAbortHandle, ConnAgent, NetworkAddr, SessionManager};
 use crate::PktBufPool;
+use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -281,12 +281,11 @@ impl Dispatcher {
                         // hijack
                         tracing::trace!("HTTP MitM for {}", domain_name);
                         handles.push({
-                            let allocator = self.allocator.clone();
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
                             tokio::spawn(async move {
                                 let mocker = HttpMitm::new(
-                                    DuplexChan::new(allocator, tun_next),
+                                    DuplexChan::new(tun_next),
                                     modifier,
                                     outbounding,
                                     info,
@@ -303,13 +302,12 @@ impl Dispatcher {
                     443 => {
                         tracing::trace!("HTTPS MitM for {}", domain_name);
                         handles.push({
-                            let allocator = self.allocator.clone();
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
                             let mocker = match HttpsMitm::new(
                                 &self.ca_certificate,
                                 domain_name,
-                                DuplexChan::new(allocator, tun_next),
+                                DuplexChan::new(tun_next),
                                 modifier,
                                 outbounding,
                                 info,
@@ -455,7 +453,7 @@ impl Dispatcher {
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         dst_fake_addr: SocketAddr,
-        receiver: mpsc::Receiver<PktBufHandle>,
+        receiver: mpsc::Receiver<Bytes>,
         indicator: Arc<AtomicBool>,
         socket: &Arc<UdpSocket>,
         session_mgr: &Arc<SessionManager>,
@@ -469,7 +467,6 @@ impl Dispatcher {
         let mut handles = Vec::new();
 
         let (nat_conn, nat_next) = Connector::new_pair(10);
-        let nat_allocator = self.allocator.clone();
 
         handles.push({
             let socket = socket.clone();

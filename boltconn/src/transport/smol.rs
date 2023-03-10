@@ -1,7 +1,7 @@
 use crate::adapter::Connector;
 use crate::common::buf_pool::{PktBufHandle, PktBufPool, MAX_PKT_SIZE};
 use crate::proxy::ConnAbortHandle;
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use flume::TryRecvError;
@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
 
 struct TcpConnTask {
-    back_tx: mpsc::Sender<PktBufHandle>,
-    rx: flume::Receiver<PktBufHandle>,
+    back_tx: mpsc::Sender<Bytes>,
+    rx: flume::Receiver<Bytes>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     remain_to_send: Option<(PktBufHandle, usize)>, // buffer, start_offset

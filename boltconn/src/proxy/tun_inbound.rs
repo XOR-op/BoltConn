@@ -1,7 +1,8 @@
-use crate::common::buf_pool::{PktBufHandle, PktBufPool};
+use crate::common::buf_pool::{mut_buf, PktBufPool, MAX_PKT_SIZE};
 use crate::proxy::manager::SessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use crate::Dns;
+use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::io::Result;
@@ -20,7 +21,7 @@ impl UdpOutboundManager {
 }
 
 struct SendSide {
-    sender: mpsc::Sender<PktBufHandle>,
+    sender: mpsc::Sender<Bytes>,
     indicator: Arc<AtomicBool>,
 }
 
@@ -83,13 +84,13 @@ impl TunInbound {
 
     async fn retryable_udp(
         &self,
-        pkt: PktBufHandle,
+        pkt: Bytes,
         src: SocketAddr,
         real_dst: &NetworkAddr,
         dst: SocketAddr,
         indicator: &Arc<AtomicBool>,
         udp_listener: &Arc<UdpSocket>,
-    ) -> Option<PktBufHandle> {
+    ) -> Option<Bytes> {
         match self.udp_mgr.0.entry((src, real_dst.clone())) {
             Entry::Occupied(val) => {
                 if let Err(pkt) = val.get().sender.send(pkt).await {
@@ -131,9 +132,11 @@ impl TunInbound {
             self.nat_addr
         );
         loop {
-            let mut buffer = self.pool.obtain().await;
-            let (len, src) = udp_listener.recv_from(buffer.as_uninited()).await?;
-            buffer.len = len;
+            let mut buffer = BytesMut::with_capacity(MAX_PKT_SIZE);
+            let (len, src) = udp_listener
+                .recv_from(unsafe { mut_buf(&mut buffer) })
+                .await?;
+            unsafe { buffer.advance_mut(len) };
             if let Ok((src, dst, indicator)) = self.session_mgr.lookup_udp_session(src.ip()) {
                 let real_dst = match self.dns.fake_ip_to_domain(dst.ip()) {
                     None => NetworkAddr::Raw(dst),
@@ -144,20 +147,23 @@ impl TunInbound {
                 };
 
                 if let Some(retry_pkt) = self
-                    .retryable_udp(buffer, src, &real_dst, dst, &indicator, &udp_listener)
+                    .retryable_udp(
+                        buffer.freeze(),
+                        src,
+                        &real_dst,
+                        dst,
+                        &indicator,
+                        &udp_listener,
+                    )
                     .await
                 {
                     // retry once
-                    if let Some(recycle) = self
+                    let _ = self
                         .retryable_udp(retry_pkt, src, &real_dst, dst, &indicator, &udp_listener)
-                        .await
-                    {
-                        self.pool.release(recycle);
-                    }
+                        .await;
                 }
             } else {
                 // no corresponding, drop
-                self.pool.release(buffer);
                 continue;
             }
         }

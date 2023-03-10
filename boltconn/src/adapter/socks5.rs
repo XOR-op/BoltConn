@@ -165,10 +165,7 @@ impl TcpOutBound for Socks5Outbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(self.allocator.clone(), inner),
-            self.spawn_tcp(outer, abort_handle),
-        )
+        (DuplexChan::new(inner), self.spawn_tcp(outer, abort_handle))
     }
 }
 
@@ -194,10 +191,7 @@ impl UdpOutBound for Socks5Outbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(self.allocator.clone(), inner),
-            self.spawn_udp(outer, abort_handle),
-        )
+        (DuplexChan::new(inner), self.spawn_udp(outer, abort_handle))
     }
 }
 

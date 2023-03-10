@@ -1,6 +1,7 @@
 use crate::common::buf_pool::PktBufHandle;
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
+use bytes::Bytes;
 use sha2::{Digest, Sha224};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
@@ -116,14 +117,14 @@ impl TrojanReqInner {
 pub(crate) struct TrojanRequest {
     pub(crate) password: String,
     pub(crate) request: TrojanReqInner,
-    pub(crate) payload: PktBufHandle,
+    pub(crate) payload: Bytes,
 }
 
 const CRLF: u16 = 0x0D0A;
 
 impl TrojanRequest {
     pub fn serialize(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(56 + 2 + self.request.len() + 2 + self.payload.len);
+        let mut data = Vec::with_capacity(56 + 2 + self.request.len() + 2 + self.payload.len());
         data.extend(
             Sha224::digest(self.password.as_bytes())
                 .iter()
@@ -135,7 +136,7 @@ impl TrojanRequest {
         data.extend(CRLF.to_ne_bytes());
         self.request.extend_data(&mut data);
         data.extend(CRLF.to_ne_bytes());
-        data.extend(self.payload.as_ready().iter());
+        data.extend(self.payload.as_ref().iter());
         data
     }
 }

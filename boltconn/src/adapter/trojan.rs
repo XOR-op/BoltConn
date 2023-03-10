@@ -123,7 +123,6 @@ impl TrojanOutbound {
             payload: first_packet,
         };
         let res = stream.write_all(trojan_req.serialize().as_slice()).await;
-        self.allocator.release(trojan_req.payload);
         res?;
         Ok(())
     }
@@ -187,10 +186,7 @@ impl TcpOutBound for TrojanOutbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(self.allocator.clone(), inner),
-            self.spawn_tcp(outer, abort_handle),
-        )
+        (DuplexChan::new(inner), self.spawn_tcp(outer, abort_handle))
     }
 }
 
@@ -216,10 +212,7 @@ impl UdpOutBound for TrojanOutbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(self.allocator.clone(), inner),
-            self.spawn_udp(outer, abort_handle),
-        )
+        (DuplexChan::new(inner), self.spawn_udp(outer, abort_handle))
     }
 }
 

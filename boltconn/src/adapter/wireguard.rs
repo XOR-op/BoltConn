@@ -313,7 +313,7 @@ impl TcpOutBound for WireguardHandle {
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
-            DuplexChan::new(self.allocator.clone(), inner),
+            DuplexChan::new(inner),
             tokio::spawn(self.clone().attach_tcp(outer, abort_handle)),
         )
     }
@@ -334,7 +334,7 @@ impl UdpOutBound for WireguardHandle {
     ) -> (DuplexChan, JoinHandle<std::io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
         (
-            DuplexChan::new(self.allocator.clone(), inner),
+            DuplexChan::new(inner),
             tokio::spawn(self.clone().attach_udp(outer, abort_handle)),
         )
     }
