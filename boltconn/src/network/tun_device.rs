@@ -1,6 +1,6 @@
 use crate::common::async_raw_fd::AsyncRawFd;
 use crate::common::async_socket::AsyncRawSocket;
-use crate::common::buf_pool::{PktBufHandle, PktBufPool};
+use crate::common::buf_pool::MAX_PKT_SIZE;
 use crate::network;
 use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::platform;
@@ -8,7 +8,7 @@ use crate::platform::route::setup_ipv4_routing_table;
 use crate::platform::{errno_err, interface_up, set_address};
 use crate::proxy::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
-use byteorder::{ByteOrder, NetworkEndian};
+use bytes::{BufMut, BytesMut};
 use ipnet::Ipv4Net;
 use network::dns::Dns;
 use network::packet::ip::IPPkt;
@@ -30,7 +30,6 @@ pub struct TunDevice {
     gw_name: String,
     // (addr, mask)
     addr: Option<Ipv4Net>,
-    pool: PktBufPool,
     session_mgr: Arc<SessionManager>,
     dns_resolver: Arc<Dns>,
     fake_dns_addr: Ipv4Addr,
@@ -39,7 +38,6 @@ pub struct TunDevice {
 impl TunDevice {
     pub fn open(
         session_mgr: Arc<SessionManager>,
-        pool: PktBufPool,
         outbound_iface: &str,
         dns_resolver: Arc<Dns>,
         fake_dns_addr: Ipv4Addr,
@@ -62,7 +60,6 @@ impl TunDevice {
             dev_name: name,
             gw_name: outbound_iface.parse().unwrap(),
             addr: None,
-            pool,
             session_mgr,
             dns_resolver,
             fake_dns_addr,
@@ -76,31 +73,24 @@ impl TunDevice {
     /// Read a full ip packet from tun device.
     async fn recv_ip(
         receiver: &mut ReadHalf<AsyncRawFd>,
-        mut handle: PktBufHandle,
+        mut handle: BytesMut,
     ) -> io::Result<IPPkt> {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
-        let raw_buffer = &mut handle.data;
-        let _ = receiver.read(raw_buffer.as_mut_slice()).await?;
+        let raw_buffer = handle.chunk_mut();
+        let len = receiver
+            .read(unsafe { core::mem::transmute(raw_buffer.as_uninit_slice_mut()) })
+            .await?;
+        unsafe { handle.advance_mut(len) };
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
         let start_offset = 4;
         #[cfg(target_os = "linux")]
         let start_offset = 0;
-        let buffer = &raw_buffer[start_offset..];
-        match buffer[0] >> 4 {
-            4 => {
-                handle.len =
-                    <NetworkEndian as ByteOrder>::read_u16(&buffer[2..4]) as usize + start_offset;
-                Ok(IPPkt::from_v4(handle, start_offset))
-            }
-            6 => {
-                handle.len = <NetworkEndian as ByteOrder>::read_u16(&buffer[4..6]) as usize
-                    + 40
-                    + start_offset;
-                Ok(IPPkt::from_v6(handle, start_offset))
-            }
+        match handle[start_offset] >> 4 {
+            4 => Ok(IPPkt::from_v4(handle, start_offset)),
+            6 => Ok(IPPkt::from_v6(handle, start_offset)),
             _ => panic!("Packet is not IPv4 or IPv6"),
         }
     }
@@ -178,7 +168,7 @@ impl TunDevice {
         loop {
             // read a ip packet from tun device
             // todo: do we really need a pool here?
-            let handle = self.pool.obtain().await;
+            let handle = BytesMut::with_capacity(MAX_PKT_SIZE);
             let pkt = Self::recv_ip(&mut fd_read, handle).await?;
             if pkt.src_addr().is_ipv6() {
                 // not supported now
@@ -192,8 +182,7 @@ impl TunDevice {
             // determine where the packet goes
             match pkt.protocol() {
                 IpProtocol::Tcp => {
-                    let pkt = TcpPkt::new(pkt);
-                    let mut pkt = scopeguard::guard(pkt, |p| self.pool.release(p.into_handle()));
+                    let mut pkt = TcpPkt::new(pkt);
                     if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                         // outbound->inbound
                         if let Ok((conn_src, conn_dst, _)) =
@@ -237,10 +226,6 @@ impl TunDevice {
                                 SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
                             );
                             let _ = Self::send_ip(&mut fd_write, new_pkt.ip_pkt()).await;
-                            self.pool.release(new_pkt.into_handle());
-                        } else {
-                            // tracing::warn!("Not valid DNS query");
-                            self.pool.release(pkt.into_handle());
                         }
                     } else {
                         // NAT with token
@@ -248,12 +233,10 @@ impl TunDevice {
                             // outbound -> inbound
                             let Ok((real_src, real_dst, _)) = self.session_mgr.lookup_udp_session(IpAddr::V4(dst))else {
                                 // drop unknown packet
-                                self.pool.release(pkt.into_handle());
                                 continue;
                             };
                             pkt.rewrite_addr(real_dst, real_src);
                             let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
-                            self.pool.release(pkt.into_handle());
                         } else {
                             // inbound -> outbound
                             let token_ip = self
@@ -268,7 +251,6 @@ impl TunDevice {
                                 nat_addr.into(),
                             );
                             let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
-                            self.pool.release(pkt.into_handle());
                         }
                     }
                 }
@@ -278,7 +260,6 @@ impl TunDevice {
                     let mut pkt = Icmpv4Pkt::new(pkt);
                     pkt.rewrite_addr(dst, src);
                     let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
-                    self.pool.release(pkt.into_handle());
                 }
                 _ => {
                     tracing::trace!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);

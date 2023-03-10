@@ -1,10 +1,10 @@
-use crate::common::buf_pool::PktBufHandle;
+use bytes::BytesMut;
 use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv6Packet};
 use std::fmt::{Display, Formatter};
 use std::net::IpAddr;
 
 pub struct IPPktContent {
-    pub handle: PktBufHandle,
+    pub handle: BytesMut,
     // 0 on linux and 4 on macOS: utun in macOS does not support IFF_NO_PI
     pub pkt_start_offset: usize,
 }
@@ -47,18 +47,32 @@ impl Display for IPPkt {
 }
 
 impl IPPkt {
-    pub fn from_v4(handle: PktBufHandle, start_offset: usize) -> Self {
+    pub fn from_v4(handle: BytesMut, start_offset: usize) -> Self {
         Self::V4(IPPktContent {
             handle,
             pkt_start_offset: start_offset,
         })
     }
 
-    pub fn from_v6(handle: PktBufHandle, start_offset: usize) -> Self {
+    pub fn from_v6(handle: BytesMut, start_offset: usize) -> Self {
         Self::V6(IPPktContent {
             handle,
             pkt_start_offset: start_offset,
         })
+    }
+
+    pub fn inner(&self) -> &IPPktContent {
+        match self {
+            IPPkt::V4(inner) => inner,
+            IPPkt::V6(inner) => inner,
+        }
+    }
+
+    pub fn inner_mut(&mut self) -> &mut IPPktContent {
+        match self {
+            IPPkt::V4(inner) => inner,
+            IPPkt::V6(inner) => inner,
+        }
     }
 
     pub(crate) fn set_len(&mut self, len: u16) {
@@ -119,69 +133,56 @@ impl IPPkt {
     }
 
     pub fn raw_start_offset(&self) -> usize {
-        match self {
-            IPPkt::V4(inner) => inner.pkt_start_offset,
-            IPPkt::V6(inner) => inner.pkt_start_offset,
-        }
+        self.inner().pkt_start_offset
     }
 
     pub fn raw_data(&self) -> &[u8] {
-        match self {
-            IPPkt::V4(inner) => &inner.handle.data[..inner.handle.len],
-            IPPkt::V6(inner) => &inner.handle.data[..inner.handle.len],
-        }
+        self.inner().handle.as_ref()
     }
 
     pub fn packet_data(&self) -> &[u8] {
-        match self {
-            IPPkt::V4(inner) => &inner.handle.data[inner.pkt_start_offset..inner.handle.len],
-            IPPkt::V6(inner) => &inner.handle.data[inner.pkt_start_offset..inner.handle.len],
-        }
+        let inner = self.inner();
+        &inner.handle.as_ref()[inner.pkt_start_offset..]
     }
     pub fn packet_data_mut(&mut self) -> &mut [u8] {
-        match self {
-            IPPkt::V4(inner) => &mut inner.handle.data[inner.pkt_start_offset..inner.handle.len],
-            IPPkt::V6(inner) => &mut inner.handle.data[inner.pkt_start_offset..inner.handle.len],
-        }
+        let inner = self.inner_mut();
+        &mut inner.handle.as_mut()[inner.pkt_start_offset..]
     }
 
     pub fn packet_payload(&self) -> &[u8] {
-        match self {
+        let (inner, payload_len) = match self {
             IPPkt::V4(inner) => {
                 let payload_len = Ipv4Packet::new_unchecked(self.packet_data())
                     .payload()
                     .len();
-                &inner.handle.data[inner.handle.len - payload_len..inner.handle.len]
+                (inner, payload_len)
             }
             IPPkt::V6(inner) => {
                 let payload_len = Ipv6Packet::new_unchecked(self.packet_data())
                     .payload()
                     .len();
-                &inner.handle.data[inner.handle.len - payload_len..inner.handle.len]
+                (inner, payload_len)
             }
-        }
+        };
+        &inner.handle.as_ref()[inner.handle.len() - payload_len..]
     }
 
     pub fn packet_payload_mut(&mut self) -> &mut [u8] {
-        match self {
-            IPPkt::V4(_) => {
-                let payload_len = Ipv4Packet::new_unchecked(self.packet_data())
-                    .payload()
-                    .len();
-                let data_len = self.packet_data().len();
-                &mut self.packet_data_mut()[data_len - payload_len..data_len]
-            }
-            IPPkt::V6(_) => {
-                let payload_len = Ipv4Packet::new_unchecked(self.packet_data())
-                    .payload()
-                    .len();
-                let data_len = self.packet_data().len();
-                &mut self.packet_data_mut()[data_len - payload_len..data_len]
-            }
-        }
+        let payload_len = match &self {
+            IPPkt::V4(_) => Ipv4Packet::new_unchecked(self.packet_data())
+                .payload()
+                .len(),
+
+            IPPkt::V6(_) => Ipv6Packet::new_unchecked(self.packet_data())
+                .payload()
+                .len(),
+        };
+        let inner = self.inner_mut();
+        let inner_len = inner.handle.len();
+        &mut inner.handle.as_mut()[inner_len - payload_len..]
     }
 
-    pub fn into_handle(self) -> PktBufHandle {
+    pub fn into_bytes_mut(self) -> BytesMut {
         match self {
             IPPkt::V4(inner) => inner.handle,
             IPPkt::V6(inner) => inner.handle,

@@ -243,10 +243,8 @@ fn main() -> ExitCode {
     };
 
     let tun = rt.block_on(async {
-        let pool = PktBufPool::new(512, 4096);
         let mut tun = TunDevice::open(
             manager.clone(),
-            pool,
             outbound_iface.as_str(),
             dns.clone(),
             fake_dns_server,
