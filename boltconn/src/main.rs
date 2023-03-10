@@ -10,7 +10,6 @@ use crate::mitm::{HeaderModManager, MitmModifier, UrlModManager};
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, UdpOutboundManager};
 use chrono::Timelike;
-use common::buf_pool::PktBufPool;
 use ipnet::Ipv4Net;
 use is_root::is_root;
 use network::tun_device::TunDevice;
@@ -202,7 +201,6 @@ fn main() -> ExitCode {
     let stat_center = Arc::new(AgentCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
     let hcap_copy = http_capturer.clone();
-    let proxy_allocator = PktBufPool::new(512, 4096);
     let udp_manager = Arc::new(UdpOutboundManager::new());
 
     // Read initial config
@@ -243,10 +241,8 @@ fn main() -> ExitCode {
     };
 
     let tun = rt.block_on(async {
-        let pool = PktBufPool::new(512, 4096);
         let mut tun = TunDevice::open(
             manager.clone(),
-            pool,
             outbound_iface.as_str(),
             dns.clone(),
             fake_dns_server,
@@ -351,7 +347,6 @@ fn main() -> ExitCode {
         };
         Arc::new(Dispatcher::new(
             outbound_iface.as_str(),
-            proxy_allocator.clone(),
             dns.clone(),
             stat_center,
             dispatching,
@@ -372,7 +367,6 @@ fn main() -> ExitCode {
         manager.clone(),
         dispatcher.clone(),
         dns.clone(),
-        proxy_allocator,
         udp_manager,
     ));
     let tun_inbound_tcp = tun_inbound.clone();

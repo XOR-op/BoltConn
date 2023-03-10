@@ -2,7 +2,7 @@ use crate::adapter::{
     established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{as_io_err, io_err, OutboundTrait};
 use crate::network::dns::Dns;
@@ -28,23 +28,15 @@ use tokio_tungstenite::client_async;
 pub struct TrojanOutbound {
     iface_name: String,
     dst: NetworkAddr,
-    allocator: PktBufPool,
     dns: Arc<Dns>,
     config: TrojanConfig,
 }
 
 impl TrojanOutbound {
-    pub fn new(
-        iface_name: &str,
-        dst: NetworkAddr,
-        allocator: PktBufPool,
-        dns: Arc<Dns>,
-        config: TrojanConfig,
-    ) -> Self {
+    pub fn new(iface_name: &str, dst: NetworkAddr, dns: Arc<Dns>, config: TrojanConfig) -> Self {
         Self {
             iface_name: iface_name.to_string(),
             dst,
-            allocator,
             dns,
             config,
         }
@@ -66,10 +58,10 @@ impl TrojanOutbound {
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))?;
             self.first_packet(&mut inbound, &mut stream).await?;
-            established_tcp(inbound, stream, self.allocator, abort_handle).await;
+            established_tcp(inbound, stream, abort_handle).await;
         } else {
             self.first_packet(&mut inbound, &mut stream).await?;
-            established_tcp(inbound, stream, self.allocator, abort_handle).await;
+            established_tcp(inbound, stream, abort_handle).await;
         }
         Ok(())
     }
@@ -95,7 +87,7 @@ impl TrojanOutbound {
                 socket: Arc::new(udp_socket),
                 dest: self.dst,
             };
-            established_udp(inbound, adapter, self.allocator, abort_handle).await;
+            established_udp(inbound, adapter, abort_handle).await;
         } else {
             self.first_packet(&mut inbound, &mut stream).await?;
             let udp_socket = TrojanUdpSocket::bind(stream);
@@ -103,7 +95,7 @@ impl TrojanOutbound {
                 socket: Arc::new(udp_socket),
                 dest: self.dst,
             };
-            established_udp(inbound, adapter, self.allocator, abort_handle).await;
+            established_udp(inbound, adapter, abort_handle).await;
         }
         Ok(())
     }
@@ -123,7 +115,6 @@ impl TrojanOutbound {
             payload: first_packet,
         };
         let res = stream.write_all(trojan_req.serialize().as_slice()).await;
-        self.allocator.release(trojan_req.payload);
         res?;
         Ok(())
     }
@@ -187,10 +178,7 @@ impl TcpOutBound for TrojanOutbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(self.allocator.clone(), inner),
-            self.spawn_tcp(outer, abort_handle),
-        )
+        (DuplexChan::new(inner), self.spawn_tcp(outer, abort_handle))
     }
 }
 
@@ -216,10 +204,7 @@ impl UdpOutBound for TrojanOutbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(self.allocator.clone(), inner),
-            self.spawn_udp(outer, abort_handle),
-        )
+        (DuplexChan::new(inner), self.spawn_udp(outer, abort_handle))
     }
 }
 

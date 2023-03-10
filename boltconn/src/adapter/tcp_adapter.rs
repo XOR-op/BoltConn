@@ -1,6 +1,7 @@
 use crate::adapter::{Connector, DuplexCloseGuard, TcpIndicatorGuard, TcpStatus};
+use crate::common::{read_to_bytes_mut, MAX_PKT_SIZE};
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
-use crate::PktBufPool;
+use bytes::BytesMut;
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
@@ -14,7 +15,6 @@ pub struct TcpAdapter {
     stat: TcpStatus,
     info: Arc<RwLock<ConnAgent>>,
     inbound: TcpStream,
-    allocator: PktBufPool,
     connector: Connector,
     abort_handle: ConnAbortHandle,
 }
@@ -29,7 +29,6 @@ impl TcpAdapter {
         info: Arc<RwLock<ConnAgent>>,
         inbound: TcpStream,
         available: Arc<AtomicU8>,
-        allocator: PktBufPool,
         connector: Connector,
         abort_handle: ConnAbortHandle,
     ) -> Self {
@@ -37,7 +36,6 @@ impl TcpAdapter {
             stat: TcpStatus::new(src_addr, dst_addr, available),
             info,
             inbound,
-            allocator,
             connector,
             abort_handle,
         }
@@ -49,7 +47,6 @@ impl TcpAdapter {
         let mut first_packet = true;
         let (mut in_read, mut in_write) = tokio::io::split(self.inbound);
         let outgoing_info_arc = self.info.clone();
-        let allocator = self.allocator.clone();
         let Connector { tx, mut rx } = self.connector;
         let abort_handle = self.abort_handle.clone();
         // recv from inbound and send to outbound
@@ -59,26 +56,23 @@ impl TcpAdapter {
                 info: outgoing_info_arc.clone(),
             };
             loop {
-                let mut buf = allocator.obtain().await;
-                match buf.read(&mut in_read).await {
+                let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+                match read_to_bytes_mut(&mut buf, &mut in_read).await {
                     Ok(0) => {
-                        allocator.release(buf);
                         break;
                     }
                     Ok(size) => {
                         if first_packet {
                             first_packet = false;
-                            outgoing_info_arc.write().await.update_proto(buf.as_ready());
+                            outgoing_info_arc.write().await.update_proto(buf.as_ref());
                         }
                         outgoing_info_arc.write().await.more_upload(size);
-                        if let Err(err) = tx.send(buf).await {
-                            allocator.release(err.0);
+                        if tx.send(buf.freeze()).await.is_err() {
                             tracing::warn!("TunAdapter tx send err");
                             break;
                         }
                     }
                     Err(err) => {
-                        allocator.release(buf);
                         tracing::warn!("TunAdapter encounter error: {}", err);
                         abort_handle.cancel().await;
                         break;
@@ -93,15 +87,13 @@ impl TcpAdapter {
             info: self.info.clone(),
         };
         while let Some(buf) = rx.recv().await {
-            self.info.write().await.more_download(buf.len);
-            if let Err(err) = in_write.write_all(buf.as_ready()).await {
+            self.info.write().await.more_download(buf.len());
+            if let Err(err) = in_write.write_all(buf.as_ref()).await {
                 tracing::warn!("TunAdapter write to inbound failed: {}", err);
                 self.abort_handle.cancel().await;
                 duplex_guard.set_err_exit();
-                self.allocator.release(buf);
                 break;
             }
-            self.allocator.release(buf);
         }
         // tracing::debug!("TUN incoming closed");
         Ok(())

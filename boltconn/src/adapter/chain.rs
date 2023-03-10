@@ -1,18 +1,17 @@
 use crate::adapter::{Connector, TcpOutBound};
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::OutboundTrait;
 use crate::proxy::ConnAbortHandle;
 use tokio::task::JoinHandle;
 
 pub struct ChainOutbound {
-    allocator: PktBufPool,
     chains: Vec<Box<dyn TcpOutBound>>,
 }
 
 impl ChainOutbound {
-    pub fn new(allocator: PktBufPool, chains: Vec<Box<dyn TcpOutBound>>) -> Self {
-        Self { allocator, chains }
+    pub fn new(chains: Vec<Box<dyn TcpOutBound>>) -> Self {
+        Self { chains }
     }
 }
 
@@ -30,7 +29,7 @@ impl TcpOutBound for ChainOutbound {
         for tunnel in first_part {
             let inbound = inbound_container.take().unwrap();
             let (inner, outer) = Connector::new_pair(10);
-            let chan = Box::new(DuplexChan::new(self.allocator.clone(), inner));
+            let chan = Box::new(DuplexChan::new(inner));
             let handle = tunnel.spawn_tcp_with_outbound(inbound, chan, abort_handle.clone());
             handles.push(handle);
             inbound_container = Some(outer)
@@ -65,9 +64,6 @@ impl TcpOutBound for ChainOutbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<std::io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(self.allocator.clone(), inner),
-            self.spawn_tcp(outer, abort_handle),
-        )
+        (DuplexChan::new(inner), self.spawn_tcp(outer, abort_handle))
     }
 }

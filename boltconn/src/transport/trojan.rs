@@ -1,6 +1,6 @@
-use crate::common::buf_pool::PktBufHandle;
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
+use bytes::Bytes;
 use sha2::{Digest, Sha224};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
@@ -116,14 +116,14 @@ impl TrojanReqInner {
 pub(crate) struct TrojanRequest {
     pub(crate) password: String,
     pub(crate) request: TrojanReqInner,
-    pub(crate) payload: PktBufHandle,
+    pub(crate) payload: Bytes,
 }
 
 const CRLF: u16 = 0x0D0A;
 
 impl TrojanRequest {
     pub fn serialize(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(56 + 2 + self.request.len() + 2 + self.payload.len);
+        let mut data = Vec::with_capacity(56 + 2 + self.request.len() + 2 + self.payload.len());
         data.extend(
             Sha224::digest(self.password.as_bytes())
                 .iter()
@@ -135,23 +135,23 @@ impl TrojanRequest {
         data.extend(CRLF.to_ne_bytes());
         self.request.extend_data(&mut data);
         data.extend(CRLF.to_ne_bytes());
-        data.extend(self.payload.as_ready().iter());
+        data.extend(self.payload.as_ref().iter());
         data
     }
 }
 
 pub(crate) struct TrojanUdpPacket {
     addr: TrojanAddr,
-    payload: PktBufHandle,
+    payload: Bytes,
 }
 
 impl TrojanUdpPacket {
     pub fn serialize(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(self.addr.len() + 2 + 2 + self.payload.len);
+        let mut data = Vec::with_capacity(self.addr.len() + 2 + 2 + self.payload.len());
         self.addr.extend_data(&mut data);
-        data.extend((self.payload.len as u16).to_be_bytes());
+        data.extend((self.payload.len() as u16).to_be_bytes());
         data.extend(CRLF.to_ne_bytes());
-        data.extend(self.payload.as_ready().iter());
+        data.extend(self.payload.as_ref().iter());
         data
     }
 }
@@ -334,14 +334,11 @@ pub(crate) fn make_tls_config(skip_cert_verify: bool) -> Arc<ClientConfig> {
 
 #[tokio::test]
 async fn test_trojan_packets() {
-    use crate::common::buf_pool::PktBufPool;
     let inner = TrojanReqInner {
         cmd: TrojanCmd::Connect,
         addr: TrojanAddr::Domain(("google.com".to_string(), 443)),
     };
-    let pool = PktBufPool::new(10, 20);
-    let mut payload = pool.obtain().await;
-    payload.len = 10;
+    let mut payload = BytesMut::zeroed(10).freeze();
     let packet = TrojanRequest {
         password: "test".to_string(),
         request: inner.clone(),

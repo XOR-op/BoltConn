@@ -3,7 +3,6 @@ use crate::adapter::{
     Socks5Outbound, StandardUdpAdapter, TcpAdapter, TcpOutBound, TrojanOutbound, TunUdpAdapter,
     UdpOutBound, WireguardHandle, WireguardManager,
 };
-use crate::common::buf_pool::PktBufHandle;
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, ProxyImpl};
 use crate::mitm::{HttpMitm, HttpsMitm, ModifierClosure};
@@ -11,7 +10,7 @@ use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::NetworkType;
 use crate::proxy::{AgentCenter, ConnAbortHandle, ConnAgent, NetworkAddr, SessionManager};
-use crate::PktBufPool;
+use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -22,7 +21,6 @@ use tokio::sync::mpsc;
 
 pub struct Dispatcher {
     iface_name: String,
-    allocator: PktBufPool,
     dns: Arc<Dns>,
     stat_center: Arc<AgentCenter>,
     dispatching: RwLock<Arc<Dispatching>>,
@@ -36,7 +34,6 @@ impl Dispatcher {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         iface_name: &str,
-        allocator: PktBufPool,
         dns: Arc<Dns>,
         stat_center: Arc<AgentCenter>,
         dispatching: Arc<Dispatching>,
@@ -44,15 +41,9 @@ impl Dispatcher {
         modifier: ModifierClosure,
         mitm_filter: Arc<Dispatching>,
     ) -> Self {
-        let wg_mgr = WireguardManager::new(
-            iface_name,
-            dns.clone(),
-            allocator.clone(),
-            Duration::from_secs(180),
-        );
+        let wg_mgr = WireguardManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         Self {
             iface_name: iface_name.into(),
-            allocator,
             dns,
             stat_center,
             dispatching: RwLock::new(dispatching),
@@ -86,7 +77,6 @@ impl Dispatcher {
                 Box::new(DirectOutbound::new(
                     &self.iface_name,
                     dst_addr.clone(),
-                    self.allocator.clone(),
                     self.dns.clone(),
                 )),
                 OutboundType::Direct,
@@ -98,7 +88,6 @@ impl Dispatcher {
                 Box::new(HttpOutbound::new(
                     &self.iface_name,
                     dst_addr.clone(),
-                    self.allocator.clone(),
                     self.dns.clone(),
                     cfg.clone(),
                 )),
@@ -108,7 +97,6 @@ impl Dispatcher {
                 Box::new(Socks5Outbound::new(
                     &self.iface_name,
                     dst_addr.clone(),
-                    self.allocator.clone(),
                     self.dns.clone(),
                     cfg.clone(),
                 )),
@@ -118,7 +106,6 @@ impl Dispatcher {
                 Box::new(SSOutbound::new(
                     &self.iface_name,
                     dst_addr.clone(),
-                    self.allocator.clone(),
                     self.dns.clone(),
                     cfg.clone(),
                 )),
@@ -128,7 +115,6 @@ impl Dispatcher {
                 Box::new(TrojanOutbound::new(
                     &self.iface_name,
                     dst_addr.clone(),
-                    self.allocator.clone(),
                     self.dns.clone(),
                     cfg.clone(),
                 )),
@@ -145,7 +131,6 @@ impl Dispatcher {
                         dst_addr.clone(),
                         outbound,
                         self.dns.clone(),
-                        self.allocator.clone(),
                     )),
                     OutboundType::Wireguard,
                 )
@@ -215,10 +200,7 @@ impl Dispatcher {
                         return;
                     }
                 }
-                (
-                    Box::new(ChainOutbound::new(self.allocator.clone(), res)),
-                    OutboundType::Chain,
-                )
+                (Box::new(ChainOutbound::new(res)), OutboundType::Chain)
             } else {
                 let Ok((outbounding, proxy_type)) = self.build_tcp_outbound(proxy_config.as_ref(), &src_addr, &dst_addr).await else {
                 indicator.store(0, Ordering::Relaxed);
@@ -243,7 +225,6 @@ impl Dispatcher {
         // tun adapter
         handles.push({
             let info = info.clone();
-            let allocator = self.allocator.clone();
             let dst_addr = dst_addr.clone();
             let abort_handle = abort_handle.clone();
             tokio::spawn(async move {
@@ -253,7 +234,6 @@ impl Dispatcher {
                     info,
                     stream,
                     indicator,
-                    allocator,
                     tun_conn,
                     abort_handle,
                 );
@@ -281,12 +261,11 @@ impl Dispatcher {
                         // hijack
                         tracing::trace!("HTTP MitM for {}", domain_name);
                         handles.push({
-                            let allocator = self.allocator.clone();
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
                             tokio::spawn(async move {
                                 let mocker = HttpMitm::new(
-                                    DuplexChan::new(allocator, tun_next),
+                                    DuplexChan::new(tun_next),
                                     modifier,
                                     outbounding,
                                     info,
@@ -303,13 +282,12 @@ impl Dispatcher {
                     443 => {
                         tracing::trace!("HTTPS MitM for {}", domain_name);
                         handles.push({
-                            let allocator = self.allocator.clone();
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
                             let mocker = match HttpsMitm::new(
                                 &self.ca_certificate,
                                 domain_name,
-                                DuplexChan::new(allocator, tun_next),
+                                DuplexChan::new(tun_next),
                                 modifier,
                                 outbounding,
                                 info,
@@ -376,7 +354,6 @@ impl Dispatcher {
                     Box::new(DirectOutbound::new(
                         &self.iface_name,
                         dst_addr.clone(),
-                        self.allocator.clone(),
                         self.dns.clone(),
                     )),
                     OutboundType::Direct,
@@ -392,7 +369,6 @@ impl Dispatcher {
                     Box::new(Socks5Outbound::new(
                         &self.iface_name,
                         dst_addr.clone(),
-                        self.allocator.clone(),
                         self.dns.clone(),
                         cfg.clone(),
                     )),
@@ -402,7 +378,6 @@ impl Dispatcher {
                     Box::new(SSOutbound::new(
                         &self.iface_name,
                         dst_addr.clone(),
-                        self.allocator.clone(),
                         self.dns.clone(),
                         cfg.clone(),
                     )),
@@ -412,7 +387,6 @@ impl Dispatcher {
                     Box::new(TrojanOutbound::new(
                         &self.iface_name,
                         dst_addr.clone(),
-                        self.allocator.clone(),
                         self.dns.clone(),
                         cfg.clone(),
                     )),
@@ -429,7 +403,6 @@ impl Dispatcher {
                             dst_addr.clone(),
                             outbound,
                             self.dns.clone(),
-                            self.allocator.clone(),
                         )),
                         OutboundType::Wireguard,
                     )
@@ -455,7 +428,7 @@ impl Dispatcher {
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         dst_fake_addr: SocketAddr,
-        receiver: mpsc::Receiver<PktBufHandle>,
+        receiver: mpsc::Receiver<Bytes>,
         indicator: Arc<AtomicBool>,
         socket: &Arc<UdpSocket>,
         session_mgr: &Arc<SessionManager>,
@@ -469,7 +442,6 @@ impl Dispatcher {
         let mut handles = Vec::new();
 
         let (nat_conn, nat_next) = Connector::new_pair(10);
-        let nat_allocator = self.allocator.clone();
 
         handles.push({
             let socket = socket.clone();
@@ -484,7 +456,6 @@ impl Dispatcher {
                     src_addr,
                     dst_fake_addr,
                     indicator,
-                    nat_allocator,
                     nat_conn,
                     session_mgr,
                 );
@@ -518,20 +489,13 @@ impl Dispatcher {
         let mut handles = Vec::new();
 
         let (adapter_conn, adapter_next) = Connector::new_pair(10);
-        let udp_allocator = self.allocator.clone();
 
         handles.push({
             let info = info.clone();
             let abort_handle = abort_handle.clone();
             tokio::spawn(async move {
-                let udp_adapter = StandardUdpAdapter::new(
-                    info,
-                    socket,
-                    src_addr,
-                    indicator,
-                    udp_allocator,
-                    adapter_conn,
-                );
+                let udp_adapter =
+                    StandardUdpAdapter::new(info, socket, src_addr, indicator, adapter_conn);
                 if let Err(err) = udp_adapter.run(abort_handle).await {
                     tracing::error!("[Dispatcher] run StandardUdpAdapter failed: {}", err)
                 }

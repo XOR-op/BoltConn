@@ -1,5 +1,5 @@
 use crate::adapter::{established_tcp, lookup, Connector, TcpOutBound};
-use crate::common::buf_pool::PktBufPool;
+
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
@@ -22,23 +22,15 @@ pub struct HttpConfig {
 pub struct HttpOutbound {
     iface_name: String,
     dst: NetworkAddr,
-    allocator: PktBufPool,
     dns: Arc<Dns>,
     config: HttpConfig,
 }
 
 impl HttpOutbound {
-    pub fn new(
-        iface_name: &str,
-        dst: NetworkAddr,
-        allocator: PktBufPool,
-        dns: Arc<Dns>,
-        config: HttpConfig,
-    ) -> Self {
+    pub fn new(iface_name: &str, dst: NetworkAddr, dns: Arc<Dns>, config: HttpConfig) -> Self {
         Self {
             iface_name: iface_name.to_string(),
             dst,
-            allocator,
             dns,
             config,
         }
@@ -88,7 +80,7 @@ impl HttpOutbound {
             .map_err(|_| io_err("Parse response failed"))?;
         if let Some(200) = resp_struct.code {
             let tcp_stream = buf_reader.into_inner();
-            established_tcp(inbound, tcp_stream, self.allocator, abort_handle).await;
+            established_tcp(inbound, tcp_stream, abort_handle).await;
             Ok(())
         } else {
             Err(io_err(
@@ -138,9 +130,6 @@ impl TcpOutBound for HttpOutbound {
         abort_handle: ConnAbortHandle,
     ) -> (DuplexChan, JoinHandle<io::Result<()>>) {
         let (inner, outer) = Connector::new_pair(10);
-        (
-            DuplexChan::new(self.allocator.clone(), inner),
-            self.spawn_tcp(outer, abort_handle),
-        )
+        (DuplexChan::new(inner), self.spawn_tcp(outer, abort_handle))
     }
 }

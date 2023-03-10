@@ -1,5 +1,5 @@
-use crate::common::buf_pool::PktBufHandle;
 use crate::network::packet::ip::IPPkt;
+use bytes::BytesMut;
 use smoltcp::wire::{Icmpv4Packet, IpProtocol, Ipv4Address, Ipv4Packet};
 use std::net::Ipv4Addr;
 
@@ -8,8 +8,8 @@ pub struct Icmpv4Pkt {
 }
 
 impl Icmpv4Pkt {
-    pub fn into_handle(self) -> PktBufHandle {
-        self.ip_pkt.into_handle()
+    pub fn into_bytes_mut(self) -> BytesMut {
+        self.ip_pkt.into_bytes_mut()
     }
 
     pub fn ip_pkt(&self) -> &IPPkt {

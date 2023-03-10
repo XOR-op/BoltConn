@@ -1,5 +1,5 @@
-use crate::common::buf_pool::PktBufHandle;
 use crate::network::packet::ip::IPPkt;
+use bytes::BytesMut;
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
 };
@@ -10,7 +10,7 @@ pub trait TransLayerPkt {
     fn src_port(&self) -> u16;
     fn dst_port(&self) -> u16;
     fn packet_payload(&self) -> &[u8];
-    fn into_handle(self) -> PktBufHandle;
+    fn into_bytes_mut(self) -> BytesMut;
     fn ip_pkt(&self) -> &IPPkt;
     fn rewrite_addr(&mut self, src_addr: SocketAddr, dst_addr: SocketAddr);
 }
@@ -33,8 +33,8 @@ impl TransLayerPkt for TcpPkt {
         &pkt[(TcpPacket::new_unchecked(pkt).header_len() as usize)..]
     }
 
-    fn into_handle(self) -> PktBufHandle {
-        self.ip_pkt.into_handle()
+    fn into_bytes_mut(self) -> BytesMut {
+        self.ip_pkt.into_bytes_mut()
     }
 
     fn ip_pkt(&self) -> &IPPkt {
@@ -120,8 +120,8 @@ impl TransLayerPkt for UdpPkt {
         &self.ip_pkt.packet_payload()[8..]
     }
 
-    fn into_handle(self) -> PktBufHandle {
-        self.ip_pkt.into_handle()
+    fn into_bytes_mut(self) -> BytesMut {
+        self.ip_pkt.into_bytes_mut()
     }
     fn ip_pkt(&self) -> &IPPkt {
         &self.ip_pkt
@@ -196,10 +196,11 @@ impl UdpPkt {
         self.ip_pkt
             .set_len((old_ip_total_len as i64 + delta) as u16);
 
-        let mut handle = self.ip_pkt.into_handle();
+        let mut handle = self.ip_pkt.into_bytes_mut();
         // copy data
-        handle.len = (handle.len as i64 + delta) as usize;
-        handle.data[handle.len - payload.len()..handle.len].copy_from_slice(payload);
+        handle.resize((handle.len() as i64 + delta) as usize, 0u8);
+        let handle_len = handle.len();
+        handle[handle_len - payload.len()..].copy_from_slice(payload);
 
         // set udp fields
         let mut ip_pkt = if is_v4 {

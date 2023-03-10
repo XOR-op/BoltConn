@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -22,9 +23,9 @@ mod wireguard;
 
 pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
-use crate::common::buf_pool::{PktBufHandle, PktBufPool};
+
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::{io_err, OutboundTrait};
+use crate::common::{io_err, mut_buf, read_to_bytes_mut, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 pub use chain::*;
@@ -52,12 +53,12 @@ impl TcpStatus {
 }
 
 pub struct Connector {
-    pub tx: mpsc::Sender<PktBufHandle>,
-    pub rx: mpsc::Receiver<PktBufHandle>,
+    pub tx: mpsc::Sender<Bytes>,
+    pub rx: mpsc::Receiver<Bytes>,
 }
 
 impl Connector {
-    pub fn new(tx: mpsc::Sender<PktBufHandle>, rx: mpsc::Receiver<PktBufHandle>) -> Self {
+    pub fn new(tx: mpsc::Sender<Bytes>, rx: mpsc::Receiver<Bytes>) -> Self {
         Self { tx, rx }
     }
 
@@ -116,22 +117,16 @@ pub trait UdpOutBound: Send + Sync {
     ) -> (DuplexChan, JoinHandle<io::Result<()>>);
 }
 
-async fn established_tcp<T>(
-    inbound: Connector,
-    outbound: T,
-    allocator: PktBufPool,
-    abort_handle: ConnAbortHandle,
-) where
+async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)
+where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
-    let allocator2 = allocator.clone();
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let _guard = DuplexCloseGuard::new(tokio::spawn(async move {
         while let Some(buf) = rx.recv().await {
-            let res = out_write.write_all(buf.as_ready()).await;
-            allocator2.release(buf);
+            let res = out_write.write_all(buf.as_ref()).await;
             if let Err(err) = res {
                 tracing::warn!("write to outbound failed: {}", err);
                 break;
@@ -141,22 +136,20 @@ async fn established_tcp<T>(
     }));
     // recv from outbound and send to inbound
     loop {
-        let mut buf = allocator.obtain().await;
+        let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+
         select! {
             _ = tx.closed() => break,
-            data = buf.read(&mut out_read) => match data {
+            data = read_to_bytes_mut(&mut buf, &mut out_read) => match data {
                 Ok(0) => {
-                    allocator.release(buf);
                     break;
                 }
                 Ok(_) => {
-                    if let Err(err) = tx.send(buf).await {
-                        allocator.release(err.0);
+                    if tx.send(buf.freeze()).await.is_err() {
                         break;
                     }
                 }
                 Err(err) => {
-                    allocator.release(buf);
                     tracing::warn!("outbound read error: {}", err);
                     abort_handle.cancel().await;
                     break;
@@ -178,18 +171,15 @@ trait UdpSocketAdapter: Clone + Send {
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     inbound: Connector,
     outbound: S,
-    allocator: PktBufPool,
     abort_handle: ConnAbortHandle,
 ) {
     // establish udp
-    let allocator2 = allocator.clone();
     let outbound2 = outbound.clone();
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let _guard = UdpDropGuard(tokio::spawn(async move {
         while let Some(buf) = rx.recv().await {
-            let res = outbound2.send(buf.as_ready()).await;
-            allocator2.release(buf);
+            let res = outbound2.send(buf.as_ref()).await;
             if let Err(err) = res {
                 tracing::warn!("write to outbound failed: {}", err);
                 break;
@@ -198,30 +188,26 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     }));
     // recv from outbound and send to inbound
     loop {
-        let mut buf = allocator.obtain().await;
-        let res = outbound.recv(buf.as_uninited()).await;
+        let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+        let res = outbound.recv(unsafe { mut_buf(&mut buf) }).await;
         match res {
             Ok((0, _)) => {
-                allocator.release(buf);
                 break;
             }
             Ok((n, match_addr)) => {
-                buf.len = n;
+                unsafe { buf.advance_mut(n) };
                 if !match_addr {
                     // we follow symmetric NAT here; drop unknown packets
                     tracing::trace!("Sym NAT drop unknown packet");
-                    allocator.release(buf);
                     continue;
                 }
-                if let Err(err) = tx.send(buf).await {
-                    allocator.release(err.0);
+                if tx.send(buf.freeze()).await.is_err() {
                     tracing::warn!("write to inbound failed");
                     abort_handle.cancel().await;
                     break;
                 }
             }
             Err(err) => {
-                allocator.release(buf);
                 tracing::warn!("outbound read error: {}", err);
                 abort_handle.cancel().await;
                 break;
