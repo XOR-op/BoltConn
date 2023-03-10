@@ -8,6 +8,7 @@ use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
 use crate::mitm::{HeaderModManager, MitmModifier, UrlModManager};
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
+use crate::network::global_setting::GlobalSetting;
 use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, UdpOutboundManager};
 use chrono::Timelike;
 use ipnet::Ipv4Net;
@@ -193,8 +194,6 @@ fn main() -> ExitCode {
     // guards
     let _guard = rt.enter();
     let fake_dns_server = "198.18.99.88".parse().unwrap();
-    let _dns_guard =
-        platform::SystemDnsHandle::new(fake_dns_server).expect("fail to replace /etc/resolv.conf");
 
     // config-independent components
     let manager = Arc::new(SessionManager::new());
@@ -255,6 +254,17 @@ fn main() -> ExitCode {
         tun.up().expect("TUN failed to up");
         tun
     });
+
+    let mut global_setting = Arc::new(std::sync::Mutex::new(GlobalSetting::new(
+        fake_dns_server,
+        tun.get_name(),
+    )));
+    global_setting
+        .lock()
+        .unwrap()
+        .enable()
+        .expect("Failed to enable global setting");
+
     let nat_addr = SocketAddr::new(
         platform::get_iface_address(tun.get_name()).expect("failed to get tun address"),
         9961,
@@ -285,6 +295,7 @@ fn main() -> ExitCode {
         stat_center.clone(),
         Some(http_capturer.clone()),
         api_dispatching_handler.clone(),
+        global_setting.clone(),
         sender,
         LinkedState {
             state_path: state_path(&config_path),
@@ -423,7 +434,7 @@ fn main() -> ExitCode {
         }
     });
     tracing::info!("Exiting...");
-    drop(_dns_guard);
+    global_setting.lock().unwrap().disable();
     rt.shutdown_background();
     ExitCode::from(0)
 }

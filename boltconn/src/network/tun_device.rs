@@ -118,7 +118,6 @@ impl TunDevice {
             ));
         }
         interface_up(self.ctl_fd, self.get_name())?;
-        setup_ipv4_routing_table(self.get_name())?;
         tracing::event!(
             tracing::Level::INFO,
             "TUN Device {} is up.",

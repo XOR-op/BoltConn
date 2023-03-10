@@ -1,5 +1,6 @@
 use crate::config::LinkedState;
 use crate::dispatch::{Dispatching, GeneralProxy};
+use crate::network::global_setting::GlobalSetting;
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
 use axum::extract::{Path, Query, State};
@@ -24,6 +25,7 @@ pub struct ApiServer {
     stat_center: Arc<AgentCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
     dispatching: SharedDispatching,
+    global_setting: Arc<Mutex<GlobalSetting>>,
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<Mutex<LinkedState>>,
 }
@@ -35,6 +37,7 @@ impl ApiServer {
         stat_center: Arc<AgentCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
         dispatching: SharedDispatching,
+        global_setting: Arc<Mutex<GlobalSetting>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
     ) -> Self {
@@ -43,6 +46,7 @@ impl ApiServer {
             manager,
             stat_center,
             http_capturer,
+            global_setting,
             dispatching,
             reload_sender: Arc::new(reload_sender),
             state: Arc::new(Mutex::new(state)),

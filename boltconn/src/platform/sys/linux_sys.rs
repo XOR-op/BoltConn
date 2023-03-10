@@ -53,7 +53,7 @@ pub fn add_route_entry_via_gateway(dst: IpAddr, gw: IpAddr, name: &str) -> io::R
     )
 }
 
-pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
+pub fn delete_route_entry(addr: IpNet) -> io::Result<()> {
     run_command("ip", ["route", "delete", &format!("{}", addr)])
 }
 

@@ -100,7 +100,7 @@ pub fn add_route_entry_via_gateway(dst: IpAddr, gw: IpAddr, _name: &str) -> io::
     )
 }
 
-pub fn delete_route_entry(addr: IpAddr) -> io::Result<()> {
+pub fn delete_route_entry(addr: IpNet) -> io::Result<()> {
     // todo: do not use external commands
     run_command("route", ["-n", "delete", &format!("{}", addr)])
 }
