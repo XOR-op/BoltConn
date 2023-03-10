@@ -1,4 +1,3 @@
-use crate::common::buf_pool::PktBufHandle;
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -143,16 +142,16 @@ impl TrojanRequest {
 
 pub(crate) struct TrojanUdpPacket {
     addr: TrojanAddr,
-    payload: PktBufHandle,
+    payload: Bytes,
 }
 
 impl TrojanUdpPacket {
     pub fn serialize(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(self.addr.len() + 2 + 2 + self.payload.len);
+        let mut data = Vec::with_capacity(self.addr.len() + 2 + 2 + self.payload.len());
         self.addr.extend_data(&mut data);
-        data.extend((self.payload.len as u16).to_be_bytes());
+        data.extend((self.payload.len() as u16).to_be_bytes());
         data.extend(CRLF.to_ne_bytes());
-        data.extend(self.payload.as_ready().iter());
+        data.extend(self.payload.as_ref().iter());
         data
     }
 }
@@ -340,9 +339,7 @@ async fn test_trojan_packets() {
         cmd: TrojanCmd::Connect,
         addr: TrojanAddr::Domain(("google.com".to_string(), 443)),
     };
-    let pool = PktBufPool::new(10, 20);
-    let mut payload = pool.obtain().await;
-    payload.len = 10;
+    let mut payload = BytesMut::zeroed(10).freeze();
     let packet = TrojanRequest {
         password: "test".to_string(),
         request: inner.clone(),

@@ -51,7 +51,6 @@ impl TcpAdapter {
         let mut first_packet = true;
         let (mut in_read, mut in_write) = tokio::io::split(self.inbound);
         let outgoing_info_arc = self.info.clone();
-        let allocator = self.allocator.clone();
         let Connector { tx, mut rx } = self.connector;
         let abort_handle = self.abort_handle.clone();
         // recv from inbound and send to outbound
@@ -72,7 +71,7 @@ impl TcpAdapter {
                             outgoing_info_arc.write().await.update_proto(buf.as_ref());
                         }
                         outgoing_info_arc.write().await.more_upload(size);
-                        if let Err(_) = tx.send(buf.freeze()).await {
+                        if tx.send(buf.freeze()).await.is_err() {
                             tracing::warn!("TunAdapter tx send err");
                             break;
                         }

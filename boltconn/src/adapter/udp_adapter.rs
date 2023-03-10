@@ -80,7 +80,7 @@ impl TunUdpAdapter {
                             outgoing_info_arc.write().await.update_proto(buf.as_ref());
                         }
                         outgoing_info_arc.write().await.more_upload(buf.len());
-                        if let Err(_) = tx.send(buf).await {
+                        if tx.send(buf).await.is_err() {
                             tracing::warn!("NatAdapter tx send err");
                             available2.store(false, Ordering::Relaxed);
                             abort_handle2.cancel().await;
@@ -169,7 +169,7 @@ impl StandardUdpAdapter {
                             outgoing_info_arc.write().await.update_proto(buf.as_ref());
                         }
                         outgoing_info_arc.write().await.more_upload(buf.len());
-                        if let Err(_) = tx.send(buf.freeze()).await {
+                        if tx.send(buf.freeze()).await.is_err() {
                             available2.store(false, Ordering::Relaxed);
                             abort_handle2.cancel().await;
                             break;

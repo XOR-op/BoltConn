@@ -63,7 +63,7 @@ impl AsyncRead for DuplexChan {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        if let Some((mut buffer, offset)) = self.pending_read.take() {
+        if let Some((buffer, offset)) = self.pending_read.take() {
             let remaining = buffer.len() - offset;
             if remaining <= buf.remaining() {
                 buf.initialize_unfilled()[..remaining].copy_from_slice(&buffer.as_ref()[offset..]);

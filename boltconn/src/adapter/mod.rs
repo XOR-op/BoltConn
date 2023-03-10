@@ -120,13 +120,12 @@ pub trait UdpOutBound: Send + Sync {
 async fn established_tcp<T>(
     inbound: Connector,
     outbound: T,
-    allocator: PktBufPool,
+    _allocator: PktBufPool,
     abort_handle: ConnAbortHandle,
 ) where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
-    let allocator2 = allocator.clone();
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let _guard = DuplexCloseGuard::new(tokio::spawn(async move {
@@ -150,7 +149,7 @@ async fn established_tcp<T>(
                     break;
                 }
                 Ok(_) => {
-                    if let Err(_) = tx.send(buf.freeze()).await {
+                    if tx.send(buf.freeze()).await.is_err() {
                         break;
                     }
                 }
@@ -176,7 +175,7 @@ trait UdpSocketAdapter: Clone + Send {
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     inbound: Connector,
     outbound: S,
-    allocator: PktBufPool,
+    _allocator: PktBufPool,
     abort_handle: ConnAbortHandle,
 ) {
     // establish udp
@@ -207,7 +206,7 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                     tracing::trace!("Sym NAT drop unknown packet");
                     continue;
                 }
-                if let Err(_) = tx.send(buf.freeze()).await {
+                if tx.send(buf.freeze()).await.is_err() {
                     tracing::warn!("write to inbound failed");
                     abort_handle.cancel().await;
                     break;

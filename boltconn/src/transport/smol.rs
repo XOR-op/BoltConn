@@ -1,7 +1,7 @@
 use crate::adapter::Connector;
-use crate::common::buf_pool::{PktBufHandle, PktBufPool, MAX_PKT_SIZE};
+use crate::common::buf_pool::{mut_buf, PktBufPool, MAX_PKT_SIZE};
 use crate::proxy::ConnAbortHandle;
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use flume::TryRecvError;
@@ -26,7 +26,7 @@ struct TcpConnTask {
     rx: flume::Receiver<Bytes>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
-    remain_to_send: Option<(PktBufHandle, usize)>, // buffer, start_offset
+    remain_to_send: Option<(Bytes, usize)>, // buffer, start_offset
     allocator: PktBufPool,
 }
 
@@ -65,13 +65,11 @@ impl TcpConnTask {
         // Send data
         if socket.can_send() {
             if let Some((buf, start)) = self.remain_to_send.take() {
-                if let Ok(sent) = socket.send_slice(&buf.as_ready()[start..]) {
+                if let Ok(sent) = socket.send_slice(&buf.as_ref()[start..]) {
                     // successfully sent
                     has_activity = true;
-                    if start + sent < buf.len {
+                    if start + sent < buf.len() {
                         self.remain_to_send = Some((buf, sent + start));
-                    } else {
-                        self.allocator.release(buf)
                     }
                 } else {
                     return Err(ErrorKind::ConnectionAborted.into());
@@ -80,13 +78,11 @@ impl TcpConnTask {
                 // fetch new data
                 match self.rx.try_recv() {
                     Ok(buf) => {
-                        if let Ok(sent) = socket.send_slice(buf.as_ready()) {
+                        if let Ok(sent) = socket.send_slice(buf.as_ref()) {
                             // successfully sent
                             has_activity = true;
-                            if sent < buf.len {
+                            if sent < buf.len() {
                                 self.remain_to_send = Some((buf, sent));
-                            } else {
-                                self.allocator.release(buf);
                             }
                         } else {
                             return Err(ErrorKind::ConnectionAborted.into());
@@ -106,11 +102,11 @@ impl TcpConnTask {
     pub async fn try_recv(&self, socket: &mut SmolTcpSocket<'_>) -> bool {
         // Receive data
         if socket.can_recv() && self.back_tx.capacity() > 0 {
-            let mut buf = self.allocator.obtain().await;
-            if let Ok(size) = socket.recv_slice(buf.as_uninited()) {
-                buf.len = size;
+            let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+            if let Ok(size) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
+                unsafe { buf.advance_mut(size) };
                 // must not fail because there is only 1 sender
-                let _ = self.back_tx.send(buf).await;
+                let _ = self.back_tx.send(buf.freeze()).await;
                 return true;
             }
         }
@@ -119,8 +115,8 @@ impl TcpConnTask {
 }
 
 struct UdpConnTask {
-    back_tx: mpsc::Sender<PktBufHandle>,
-    rx: flume::Receiver<PktBufHandle>,
+    back_tx: mpsc::Sender<Bytes>,
+    rx: flume::Receiver<Bytes>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     allocator: PktBufPool,
@@ -167,8 +163,7 @@ impl UdpConnTask {
             match self.rx.try_recv() {
                 Ok(buf) => {
                     has_activity = true;
-                    if socket.send_slice(buf.as_ready(), self.dest).is_ok() {
-                        self.allocator.release(buf);
+                    if socket.send_slice(buf.as_ref(), self.dest).is_ok() {
                         self.last_active = Instant::now();
                     } else {
                         return Err(ErrorKind::ConnectionAborted.into());
@@ -184,13 +179,13 @@ impl UdpConnTask {
     pub async fn try_recv(&mut self, socket: &mut SmolUdpSocket<'_>) -> bool {
         // Receive data
         if socket.can_recv() && self.back_tx.capacity() > 0 {
-            let mut buf = self.allocator.obtain().await;
-            if let Ok((size, ep)) = socket.recv_slice(buf.as_uninited()) {
+            let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+            if let Ok((size, ep)) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
                 if ep == self.dest {
-                    buf.len = size;
+                    unsafe { buf.advance_mut(size) };
                     self.last_active = Instant::now();
                     // must not fail because there is only 1 sender
-                    let _ = self.back_tx.send(buf).await;
+                    let _ = self.back_tx.send(buf.freeze()).await;
                     return true;
                 }
                 // discard mismatched packet
