@@ -5,14 +5,14 @@ use ipnet::IpNet;
 use std::io;
 use std::net::Ipv4Addr;
 
-pub struct GlobalSetting {
+pub struct TunConfigure {
     dns_addr: Ipv4Addr,
     device_name: String,
     dns_handle: Option<SystemDnsHandle>,
     routing_table_flag: bool,
 }
 
-impl GlobalSetting {
+impl TunConfigure {
     pub fn new(dns_addr: Ipv4Addr, device_name: &str) -> Self {
         Self {
             dns_addr,
@@ -24,12 +24,15 @@ impl GlobalSetting {
 
     pub fn enable(&mut self) -> io::Result<()> {
         self.enable_dns()?;
-        self.enable_routing_table()
+        self.enable_routing_table()?;
+        tracing::info!("Tun mode has been enabled");
+        Ok(())
     }
 
     pub fn disable(&mut self) {
         self.disable_routing_table();
-        self.disable_dns()
+        self.disable_dns();
+        tracing::info!("Tun mode has been disabled");
     }
 
     fn enable_dns(&mut self) -> io::Result<()> {
@@ -61,7 +64,7 @@ impl GlobalSetting {
     }
 }
 
-impl Drop for GlobalSetting {
+impl Drop for TunConfigure {
     fn drop(&mut self) {
         self.disable()
     }

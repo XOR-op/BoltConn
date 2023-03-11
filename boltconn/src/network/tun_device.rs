@@ -4,7 +4,6 @@ use crate::common::MAX_PKT_SIZE;
 use crate::network;
 use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::platform;
-use crate::platform::route::setup_ipv4_routing_table;
 use crate::platform::{errno_err, interface_up, set_address};
 use crate::proxy::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};

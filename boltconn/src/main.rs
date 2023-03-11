@@ -7,8 +7,8 @@ use crate::config::{LinkedState, ProxySchema, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::ApiServer;
 use crate::mitm::{HeaderModManager, MitmModifier, UrlModManager};
+use crate::network::configure::TunConfigure;
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
-use crate::network::global_setting::GlobalSetting;
 use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, UdpOutboundManager};
 use chrono::Timelike;
 use ipnet::Ipv4Net;
@@ -255,11 +255,11 @@ fn main() -> ExitCode {
         tun
     });
 
-    let mut global_setting = Arc::new(std::sync::Mutex::new(GlobalSetting::new(
+    let tun_configure = Arc::new(std::sync::Mutex::new(TunConfigure::new(
         fake_dns_server,
         tun.get_name(),
     )));
-    global_setting
+    tun_configure
         .lock()
         .unwrap()
         .enable()
@@ -295,7 +295,7 @@ fn main() -> ExitCode {
         stat_center.clone(),
         Some(http_capturer.clone()),
         api_dispatching_handler.clone(),
-        global_setting.clone(),
+        tun_configure.clone(),
         sender,
         LinkedState {
             state_path: state_path(&config_path),
@@ -434,7 +434,7 @@ fn main() -> ExitCode {
         }
     });
     tracing::info!("Exiting...");
-    global_setting.lock().unwrap().disable();
+    tun_configure.lock().unwrap().disable();
     rt.shutdown_background();
     ExitCode::from(0)
 }
