@@ -1,10 +1,11 @@
 use crate::config::LinkedState;
 use crate::dispatch::{Dispatching, GeneralProxy};
+use crate::network::configure::TunConfigure;
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
 use axum::extract::{Path, Query, State};
 use axum::middleware::map_request;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use boltapi::{GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, ProxyData, SetGroupReqSchema};
 use serde_json::json;
@@ -24,17 +25,20 @@ pub struct ApiServer {
     stat_center: Arc<AgentCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
     dispatching: SharedDispatching,
+    tun_configure: Arc<Mutex<TunConfigure>>,
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<Mutex<LinkedState>>,
 }
 
 impl ApiServer {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         secret: Option<String>,
         manager: Arc<SessionManager>,
         stat_center: Arc<AgentCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
         dispatching: SharedDispatching,
+        global_setting: Arc<Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
     ) -> Self {
@@ -43,6 +47,7 @@ impl ApiServer {
             manager,
             stat_center,
             http_capturer,
+            tun_configure: global_setting,
             dispatching,
             reload_sender: Arc::new(reload_sender),
             state: Arc::new(Mutex::new(state)),
@@ -54,6 +59,7 @@ impl ApiServer {
         let wrapper = move |r| Self::auth(secret.clone(), r);
         let app = Router::new()
             .route("/logs", get(Self::get_logs))
+            .route("/tun", put(Self::set_tun_configure))
             .route(
                 "/connections",
                 get(Self::get_all_conn).delete(Self::stop_all_conn),
@@ -97,6 +103,22 @@ impl ApiServer {
         } else {
             Ok(request)
         }
+    }
+
+    async fn set_tun_configure(
+        State(server): State<Self>,
+        Json(flag): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        Json(json!(if let Some(flag) = flag.as_bool() {
+            if flag {
+                server.tun_configure.lock().unwrap().enable().is_ok()
+            } else {
+                server.tun_configure.lock().unwrap().disable();
+                true
+            }
+        } else {
+            false
+        }))
     }
 
     async fn get_logs(State(_server): State<Self>) -> Json<serde_json::Value> {

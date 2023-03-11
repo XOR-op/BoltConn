@@ -1,3 +1,4 @@
+pub mod configure;
 pub mod dns;
 pub mod egress;
 pub mod packet;
