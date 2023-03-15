@@ -162,6 +162,10 @@ impl SessionManager {
         }
     }
 
+    pub fn get_udp_probe(&self, port: u16) -> Arc<AtomicBool> {
+        todo!()
+    }
+
     pub fn lookup_udp_session(
         &self,
         token: IpAddr,
