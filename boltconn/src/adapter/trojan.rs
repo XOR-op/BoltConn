@@ -1,5 +1,6 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
+    UdpSocketAdapter,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
@@ -13,6 +14,7 @@ use crate::transport::trojan::{
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use bytes::Bytes;
 use http::{StatusCode, Uri};
 use std::io;
 use std::sync::Arc;
@@ -51,23 +53,25 @@ impl TrojanOutbound {
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
         let mut stream = self.connect_proxy(outbound).await?;
+        let first_packet = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         if let Some(ref uri) = self.config.websocket_path {
             let mut stream = self
                 .with_websocket(stream, uri.as_str())
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))?;
-            self.first_packet(&mut inbound, &mut stream).await?;
+            self.first_packet(first_packet, &mut stream).await?;
             established_tcp(inbound, stream, abort_handle).await;
         } else {
-            self.first_packet(&mut inbound, &mut stream).await?;
+            self.first_packet(first_packet, &mut stream).await?;
             established_tcp(inbound, stream, abort_handle).await;
         }
         Ok(())
     }
 
+    // todo: buggy implementation: encapsulation was not enforced
     async fn run_udp<S>(
         self,
-        mut inbound: Connector,
+        mut inbound: AddrConnector,
         outbound: S,
         abort_handle: ConnAbortHandle,
     ) -> io::Result<()>
@@ -75,12 +79,13 @@ impl TrojanOutbound {
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
         let mut stream = self.connect_proxy(outbound).await?;
+        let (first_packet, dst) = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         if let Some(ref uri) = self.config.websocket_path {
             let mut stream = self
                 .with_websocket(stream, uri.as_str())
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))?;
-            self.first_packet(&mut inbound, &mut stream).await?;
+            self.first_packet(first_packet, &mut stream).await?;
             let udp_socket = TrojanUdpSocket::bind(stream);
             let adapter = TrojanUdpAdapter {
                 socket: Arc::new(udp_socket),
@@ -88,7 +93,7 @@ impl TrojanOutbound {
             };
             established_udp(inbound, adapter, abort_handle).await;
         } else {
-            self.first_packet(&mut inbound, &mut stream).await?;
+            self.first_packet(first_packet, &mut stream).await?;
             let udp_socket = TrojanUdpSocket::bind(stream);
             let adapter = TrojanUdpAdapter {
                 socket: Arc::new(udp_socket),
@@ -96,15 +101,15 @@ impl TrojanOutbound {
             };
             established_udp(inbound, adapter, abort_handle).await;
         }
+        todo!();
         Ok(())
     }
 
     async fn first_packet<S: AsyncWrite + Unpin>(
         &self,
-        inbound: &mut Connector,
+        first_packet: Bytes,
         stream: &mut S,
     ) -> io::Result<()> {
-        let first_packet = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         let trojan_req = TrojanRequest {
             password: self.config.password.clone(),
             request: TrojanReqInner {
@@ -176,7 +181,7 @@ impl TcpOutBound for TrojanOutbound {
 impl UdpOutBound for TrojanOutbound {
     fn spawn_udp(
         &self,
-        inbound: Connector,
+        inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
@@ -222,13 +227,13 @@ impl<S> UdpSocketAdapter for TrojanUdpAdapter<S>
 where
     S: AsyncRead + AsyncWrite + Send,
 {
-    async fn send(&self, data: &[u8]) -> Result<()> {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
         self.socket.send_to(data, self.dest.clone()).await?;
         Ok(())
     }
 
-    async fn recv(&self, data: &mut [u8]) -> Result<(usize, bool)> {
+    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
         let (size, addr) = self.socket.recv_from(data).await?;
-        Ok((size, addr == self.dest))
+        Ok((size, addr))
     }
 }

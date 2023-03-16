@@ -1,5 +1,6 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
+    UdpSocketAdapter,
 };
 
 use crate::common::{as_io_err, io_err, OutboundTrait};
@@ -87,7 +88,7 @@ impl Socks5Outbound {
 
     async fn run_udp<S>(
         self,
-        inbound: Connector,
+        inbound: AddrConnector,
         outbound: S,
         abort_handle: ConnAbortHandle,
     ) -> Result<()>
@@ -149,7 +150,7 @@ impl TcpOutBound for Socks5Outbound {
 impl UdpOutBound for Socks5Outbound {
     fn spawn_udp(
         &self,
-        inbound: Connector,
+        inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
@@ -169,7 +170,7 @@ struct Socks5UdpAdapter(Arc<UdpSocket>, TargetAddr);
 
 #[async_trait]
 impl UdpSocketAdapter for Socks5UdpAdapter {
-    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
         let mut buf = match &self.1 {
             TargetAddr::Ip(s) => fast_socks5::new_udp_header(*s)?,
             TargetAddr::Domain(s, p) => fast_socks5::new_udp_header((s.as_str(), *p))?,
@@ -179,7 +180,7 @@ impl UdpSocketAdapter for Socks5UdpAdapter {
         Ok(())
     }
 
-    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
+    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
         let mut buf = [0u8; 0x10000];
         let (size, _) = self.0.recv_from(&mut buf).await?;
         let (frag, target_addr, raw_data) = fast_socks5::parse_udp_request(&buf[..size]).await?;
@@ -187,13 +188,6 @@ impl UdpSocketAdapter for Socks5UdpAdapter {
             return Err(anyhow::anyhow!("Unsupported frag value."));
         }
         data[..raw_data.len()].copy_from_slice(raw_data);
-        Ok((
-            raw_data.len(),
-            match (&self.1, target_addr) {
-                (TargetAddr::Ip(a), TargetAddr::Ip(b)) => *a == b,
-                (TargetAddr::Domain(s1, p1), TargetAddr::Domain(s2, p2)) => *p1 == p2 && *s1 == s2,
-                _ => false,
-            },
-        ))
+        Ok((raw_data.len(), target_addr.into()))
     }
 }

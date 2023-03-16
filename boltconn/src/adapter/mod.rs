@@ -51,22 +51,28 @@ impl TcpStatus {
     }
 }
 
-pub struct Connector {
-    pub tx: mpsc::Sender<Bytes>,
-    pub rx: mpsc::Receiver<Bytes>,
+struct AdapterConnector<S> {
+    pub tx: mpsc::Sender<S>,
+    pub rx: mpsc::Receiver<S>,
 }
 
-impl Connector {
-    pub fn new(tx: mpsc::Sender<Bytes>, rx: mpsc::Receiver<Bytes>) -> Self {
+impl<S> AdapterConnector<S> {
+    pub fn new(tx: mpsc::Sender<S>, rx: mpsc::Receiver<S>) -> Self {
         Self { tx, rx }
     }
 
     pub fn new_pair(size: usize) -> (Self, Self) {
         let (utx, urx) = mpsc::channel(size);
         let (dtx, drx) = mpsc::channel(size);
-        (Connector::new(utx, drx), Connector::new(dtx, urx))
+        (
+            AdapterConnector::new(utx, drx),
+            AdapterConnector::new(dtx, urx),
+        )
     }
 }
+
+pub type Connector = AdapterConnector<Bytes>;
+pub type AddrConnector = AdapterConnector<(Bytes, NetworkAddr)>;
 
 #[derive(Debug, Clone)]
 pub enum OutboundType {
@@ -99,7 +105,7 @@ pub trait UdpOutBound: Send + Sync {
     /// Run with tokio::spawn.
     fn spawn_udp(
         &self,
-        inbound: Connector,
+        inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
 }
@@ -149,24 +155,24 @@ where
 
 #[async_trait]
 trait UdpSocketAdapter: Clone + Send {
-    async fn send(&self, data: &[u8]) -> anyhow::Result<()>;
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()>;
 
     // @return: <length>, <if addr matches target>
-    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)>;
+    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)>;
 }
 
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
-    inbound: Connector,
+    inbound: AddrConnector,
     outbound: S,
     abort_handle: ConnAbortHandle,
 ) {
     // establish udp
     let outbound2 = outbound.clone();
-    let Connector { tx, mut rx } = inbound;
+    let AddrConnector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let _guard = UdpDropGuard(tokio::spawn(async move {
-        while let Some(buf) = rx.recv().await {
-            let res = outbound2.send(buf.as_ref()).await;
+        while let Some((buf, addr)) = rx.recv().await {
+            let res = outbound2.send_to(buf.as_ref(), addr).await;
             if let Err(err) = res {
                 tracing::warn!("write to outbound failed: {}", err);
                 break;
@@ -176,19 +182,14 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     // recv from outbound and send to inbound
     loop {
         let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
-        let res = outbound.recv(unsafe { mut_buf(&mut buf) }).await;
+        let res = outbound.recv_from(unsafe { mut_buf(&mut buf) }).await;
         match res {
             Ok((0, _)) => {
                 break;
             }
-            Ok((n, match_addr)) => {
+            Ok((n, addr)) => {
                 unsafe { buf.advance_mut(n) };
-                if !match_addr {
-                    // we follow symmetric NAT here; drop unknown packets
-                    tracing::trace!("Sym NAT drop unknown packet");
-                    continue;
-                }
-                if tx.send(buf.freeze()).await.is_err() {
+                if tx.send((buf.freeze(), addr)).await.is_err() {
                     tracing::warn!("write to inbound failed");
                     abort_handle.cancel().await;
                     break;

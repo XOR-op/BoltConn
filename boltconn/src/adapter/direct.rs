@@ -1,5 +1,6 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
+    UdpSocketAdapter,
 };
 use crate::common::OutboundTrait;
 use crate::network::dns::Dns;
@@ -36,7 +37,7 @@ impl DirectOutbound {
         Ok(())
     }
 
-    async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
+    async fn run_udp(self, inbound: AddrConnector, abort_handle: ConnAbortHandle) -> Result<()> {
         let dst_addr = lookup(self.dns.as_ref(), &self.dst).await?;
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         outbound.connect(dst_addr).await?;
@@ -68,7 +69,7 @@ impl TcpOutBound for DirectOutbound {
 impl UdpOutBound for DirectOutbound {
     fn spawn_udp(
         &self,
-        inbound: Connector,
+        inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().run_udp(inbound, abort_handle))
@@ -80,14 +81,14 @@ struct DirectUdpAdapter(Arc<UdpSocket>);
 
 #[async_trait]
 impl UdpSocketAdapter for DirectUdpAdapter {
-    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
         self.0.send(data).await?;
         Ok(())
     }
 
-    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
-        let (len, _) = self.0.recv_from(data).await?;
+    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+        let (len, addr) = self.0.recv_from(data).await?;
         // s is established by connect
-        Ok((len, true))
+        Ok((len, NetworkAddr::Raw(addr)))
     }
 }
