@@ -2,6 +2,7 @@
 
 use crate::adapter::{AddrConnector, Connector, DuplexCloseGuard};
 use crate::common::{mut_buf, MAX_PKT_SIZE};
+use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 use bytes::{BufMut, Bytes, BytesMut};
 use io::Result;
@@ -21,6 +22,7 @@ pub struct TunUdpAdapter {
     send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
     recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
     next: AddrConnector,
+    dns: Arc<Dns>,
     available: Arc<AtomicBool>,
 }
 
@@ -32,6 +34,7 @@ impl TunUdpAdapter {
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
         next: AddrConnector,
+        dns: Arc<Dns>,
         available: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -39,6 +42,7 @@ impl TunUdpAdapter {
             send_rx,
             recv_tx,
             next,
+            dns,
             available,
         }
     }
@@ -47,7 +51,7 @@ impl TunUdpAdapter {
         let mut first_packet = true;
         let outgoing_info_arc = self.info.clone();
         let mut inbound_read = self.send_rx;
-        let AddrConnector { tx, mut rx } = self.connector;
+        let AddrConnector { tx, mut rx } = self.next;
         let abort_handle2 = abort_handle.clone();
         let available2 = self.available.clone();
         // recv from inbound and send to outbound
@@ -69,8 +73,6 @@ impl TunUdpAdapter {
                             outgoing_info_arc.write().await.update_proto(buf.as_ref());
                         }
                         outgoing_info_arc.write().await.more_upload(buf.len());
-                        // todo: real ip to fake ip
-                        todo!();
                         if tx.send((buf, addr)).await.is_err() {
                             tracing::warn!("TunUdpAdapter tx send err");
                             available2.store(false, Ordering::Relaxed);
@@ -86,7 +88,13 @@ impl TunUdpAdapter {
         // recv from outbound and send to inbound
         while let Some((data, addr)) = rx.recv().await {
             self.info.write().await.more_download(data.len());
-            if let Err(err) = self.recv_tx.send((data, addr)).await {
+            let src_addr = match addr {
+                NetworkAddr::Raw(s) => s,
+                NetworkAddr::DomainName { domain_name, port } => {
+                    SocketAddr::new(self.dns.domain_to_fake_ip(domain_name.as_str()), port)
+                }
+            };
+            if let Err(err) = self.recv_tx.send((data, src_addr)).await {
                 tracing::warn!("TunUdpAdapter write to inbound failed: {}", err);
                 abort_handle.cancel().await;
                 break;

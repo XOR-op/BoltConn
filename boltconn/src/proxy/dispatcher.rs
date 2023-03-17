@@ -465,8 +465,10 @@ impl Dispatcher {
         handles.push({
             let info = info.clone();
             let abort_handle = abort_handle.clone();
+            let dns = self.dns.clone();
             tokio::spawn(async move {
-                let tun_udp = TunUdpAdapter::new(info, send_rx, recv_tx, adapter_tun, indicator);
+                let tun_udp =
+                    TunUdpAdapter::new(info, send_rx, recv_tx, adapter_tun, dns, indicator);
                 if let Err(err) = tun_udp.run(abort_handle).await {
                     tracing::error!("[Dispatcher] run TunUdpAdapter failed: {}", err)
                 }

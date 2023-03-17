@@ -113,7 +113,7 @@ impl TcpConnTask {
 }
 
 struct UdpConnTask {
-    back_tx: mpsc::Sender<(Bytes, SocketAddr)>,
+    back_tx: mpsc::Sender<(Bytes, NetworkAddr)>,
     rx: flume::Receiver<(Bytes, NetworkAddr)>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
@@ -156,7 +156,8 @@ impl UdpConnTask {
         if socket.can_send() {
             // fetch new data
             match self.rx.try_recv() {
-                Ok(buf) => {
+                // todo: full-cone NAT
+                Ok((buf, _addr)) => {
                     has_activity = true;
                     if socket.send_slice(buf.as_ref(), self.dest).is_ok() {
                         self.last_active = Instant::now();
@@ -178,8 +179,9 @@ impl UdpConnTask {
             if let Ok((size, ep)) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
                 unsafe { buf.advance_mut(size) };
                 self.last_active = Instant::now();
+                let src_addr = NetworkAddr::Raw(SocketAddr::new(ep.addr.into(), ep.port));
                 // must not fail because there is only 1 sender
-                let _ = self.back_tx.send((buf.freeze(), ep.into())).await;
+                let _ = self.back_tx.send((buf.freeze(), src_addr)).await;
                 return true;
                 // discard mismatched packet
             }

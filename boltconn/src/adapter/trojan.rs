@@ -68,7 +68,6 @@ impl TrojanOutbound {
         Ok(())
     }
 
-    // todo: buggy implementation: encapsulation was not enforced
     async fn run_udp<S>(
         self,
         mut inbound: AddrConnector,
@@ -89,7 +88,6 @@ impl TrojanOutbound {
             let udp_socket = TrojanUdpSocket::bind(stream);
             let adapter = TrojanUdpAdapter {
                 socket: Arc::new(udp_socket),
-                dest: self.dst,
             };
             established_udp(inbound, adapter, abort_handle).await;
         } else {
@@ -97,11 +95,9 @@ impl TrojanOutbound {
             let udp_socket = TrojanUdpSocket::bind(stream);
             let adapter = TrojanUdpAdapter {
                 socket: Arc::new(udp_socket),
-                dest: self.dst,
             };
             established_udp(inbound, adapter, abort_handle).await;
         }
-        todo!();
         Ok(())
     }
 
@@ -198,7 +194,6 @@ impl UdpOutBound for TrojanOutbound {
 
 struct TrojanUdpAdapter<S: AsyncRead + AsyncWrite> {
     socket: Arc<TrojanUdpSocket<S>>,
-    dest: NetworkAddr,
 }
 
 impl<S> Clone for TrojanUdpAdapter<S>
@@ -208,17 +203,7 @@ where
     fn clone(&self) -> Self {
         Self {
             socket: self.socket.clone(),
-            dest: self.dest.clone(),
         }
-    }
-}
-
-impl<S> TrojanUdpAdapter<S>
-where
-    S: AsyncRead + AsyncWrite,
-{
-    fn test(&self) -> TrojanUdpAdapter<S> {
-        self.clone()
     }
 }
 
@@ -228,7 +213,7 @@ where
     S: AsyncRead + AsyncWrite + Send,
 {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
-        self.socket.send_to(data, self.dest.clone()).await?;
+        self.socket.send_to(data, addr).await?;
         Ok(())
     }
 
