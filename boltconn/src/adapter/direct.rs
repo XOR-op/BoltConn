@@ -9,6 +9,7 @@ use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use async_trait::async_trait;
 use io::Result;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
@@ -38,10 +39,13 @@ impl DirectOutbound {
     }
 
     async fn run_udp(self, inbound: AddrConnector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let dst_addr = lookup(self.dns.as_ref(), &self.dst).await?;
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
-        outbound.connect(dst_addr).await?;
-        established_udp(inbound, DirectUdpAdapter(outbound), abort_handle).await;
+        established_udp(
+            inbound,
+            DirectUdpAdapter(outbound, self.dns.clone()),
+            abort_handle,
+        )
+        .await;
         Ok(())
     }
 }
@@ -76,13 +80,23 @@ impl UdpOutBound for DirectOutbound {
     }
 }
 
-#[derive(Clone, Debug)]
-struct DirectUdpAdapter(Arc<UdpSocket>);
+#[derive(Clone)]
+struct DirectUdpAdapter(Arc<UdpSocket>, Arc<Dns>);
 
 #[async_trait]
 impl UdpSocketAdapter for DirectUdpAdapter {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
-        self.0.send(data).await?;
+        let addr = match addr {
+            NetworkAddr::Raw(s) => s,
+            NetworkAddr::DomainName { domain_name, port } => {
+                let Some(ip) = self.1.genuine_lookup(domain_name.as_str()).await else {
+                    // drop
+                    return Ok(())
+                };
+                SocketAddr::new(ip, port)
+            }
+        };
+        self.0.send_to(data, addr).await?;
         Ok(())
     }
 

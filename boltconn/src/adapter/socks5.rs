@@ -115,7 +115,7 @@ impl Socks5Outbound {
             .next()
             .unwrap();
         out_sock.connect(bound_addr).await?;
-        established_udp(inbound, Socks5UdpAdapter(out_sock, target), abort_handle).await;
+        established_udp(inbound, Socks5UdpAdapter(out_sock), abort_handle).await;
         Ok(())
     }
 }
@@ -166,14 +166,16 @@ impl UdpOutBound for Socks5Outbound {
 }
 
 #[derive(Clone, Debug)]
-struct Socks5UdpAdapter(Arc<UdpSocket>, TargetAddr);
+struct Socks5UdpAdapter(Arc<UdpSocket>);
 
 #[async_trait]
 impl UdpSocketAdapter for Socks5UdpAdapter {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
-        let mut buf = match &self.1 {
-            TargetAddr::Ip(s) => fast_socks5::new_udp_header(*s)?,
-            TargetAddr::Domain(s, p) => fast_socks5::new_udp_header((s.as_str(), *p))?,
+        let mut buf = match addr {
+            NetworkAddr::Raw(s) => fast_socks5::new_udp_header(s)?,
+            NetworkAddr::DomainName { domain_name, port } => {
+                fast_socks5::new_udp_header((domain_name.as_str(), port))?
+            }
         };
         buf.extend_from_slice(data);
         self.0.send(buf.as_slice()).await?;

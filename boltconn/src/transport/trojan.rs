@@ -156,6 +156,16 @@ impl TrojanUdpPacket {
     }
 }
 
+pub fn encapsule_udp_packet(data: &[u8], dest: NetworkAddr) -> Vec<u8> {
+    let dest = TrojanAddr::from(dest);
+    let mut buf = Vec::with_capacity(dest.len() + 4 + data.len());
+    dest.extend_data(buf.as_mut());
+    buf.extend((data.len() as u16).to_be_bytes().iter());
+    buf.extend(CRLF.to_ne_bytes());
+    buf.extend(data);
+    buf
+}
+
 pub(crate) struct TrojanUdpSocket<S>
 where
     S: AsyncRead + AsyncWrite + Sized,
@@ -177,13 +187,12 @@ where
     }
 
     pub async fn send_to(&self, data: &[u8], dest: NetworkAddr) -> anyhow::Result<()> {
-        let dest = TrojanAddr::from(dest);
-        let mut buf = Vec::with_capacity(dest.len() + 4 + data.len());
-        dest.extend_data(&mut buf);
-        buf.extend((data.len() as u16).to_be_bytes().iter());
-        buf.extend(CRLF.to_ne_bytes());
-        buf.extend(data);
-        self.write_half.lock().await.write_all(data).await?;
+        let data = encapsule_udp_packet(data, dest);
+        self.write_half
+            .lock()
+            .await
+            .write_all(data.as_ref())
+            .await?;
         Ok(())
     }
 

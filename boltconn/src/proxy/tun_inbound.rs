@@ -28,7 +28,7 @@ impl TunTcpInbound {
         }
     }
 
-    pub async fn run_tcp(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
         let tcp_listener = TcpListener::bind(self.nat_addr).await?;
         tracing::event!(
             tracing::Level::INFO,

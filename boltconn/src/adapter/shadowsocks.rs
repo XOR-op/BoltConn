@@ -122,7 +122,7 @@ impl SSOutbound {
         ));
         established_udp(
             inbound,
-            ShadowsocksUdpAdapter(proxy_socket, target_addr),
+            ShadowsocksUdpAdapter(proxy_socket, self.dns.clone(), target_addr),
             abort_handle,
         )
         .await;
@@ -195,12 +195,19 @@ impl UdpOutBound for SSOutbound {
 }
 
 #[derive(Clone)]
-struct ShadowsocksUdpAdapter(Arc<ProxySocket>, Address);
+struct ShadowsocksUdpAdapter(Arc<ProxySocket>, Arc<Dns>, Address);
 
 #[async_trait]
 impl UdpSocketAdapter for ShadowsocksUdpAdapter {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
-        self.0.send(&self.1, data).await?;
+        let addr = match addr {
+            NetworkAddr::Raw(s) => s,
+            NetworkAddr::DomainName { domain_name, port } => {
+                let Some(ip) = self.1.genuine_lookup(domain_name.as_str()).await else { return Ok(()) };
+                SocketAddr::new(ip, port)
+            }
+        };
+        self.0.send_to(&addr, &self.2, data).await?;
         Ok(())
     }
 

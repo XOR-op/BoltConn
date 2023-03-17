@@ -51,7 +51,7 @@ impl TcpStatus {
     }
 }
 
-struct AdapterConnector<S> {
+pub struct AdapterConnector<S> {
     pub tx: mpsc::Sender<S>,
     pub rx: mpsc::Receiver<S>,
 }

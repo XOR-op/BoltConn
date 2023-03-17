@@ -40,16 +40,14 @@ impl TcpSessionCtl {
 #[derive(Debug, Clone)]
 pub struct UdpSessionCtl {
     pub source_addr: SocketAddr,
-    pub dest_addr: SocketAddr,
     pub available: Arc<AtomicBool>,
     pub last_time: Instant,
 }
 
 impl UdpSessionCtl {
-    pub fn new(source_addr: SocketAddr, dest_addr: SocketAddr) -> Self {
+    pub fn new(source_addr: SocketAddr) -> Self {
         Self {
             source_addr,
-            dest_addr,
             available: Arc::new(AtomicBool::new(true)),
             last_time: Instant::now(),
         }

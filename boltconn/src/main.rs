@@ -200,6 +200,7 @@ fn main() -> ExitCode {
     let stat_center = Arc::new(AgentCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
     let hcap_copy = http_capturer.clone();
+    let (tun_udp_tx, tun_udp_rx) = flume::unbounded();
 
     // Read initial config
     let (config, state, rule_schema, proxy_schema) = match rt.block_on(load_config(&config_path)) {
@@ -244,6 +245,7 @@ fn main() -> ExitCode {
             outbound_iface.as_str(),
             dns.clone(),
             fake_dns_server,
+            tun_udp_tx,
         )
         .expect("fail to create TUN");
         // create tun device
@@ -372,19 +374,19 @@ fn main() -> ExitCode {
             Arc::new(mitm_filter),
         ))
     };
-    let tun_inbound = Arc::new(TunTcpInbound::new(
+    let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
         nat_addr,
         manager.clone(),
         dispatcher.clone(),
         dns.clone(),
     ));
-    let tun_inbound_tcp = tun_inbound.clone();
-    let tun_inbound_udp = TunUdpInbound::new(dispatcher.clone(), manager.clone(), dns.clone());
+    let tun_inbound_udp =
+        TunUdpInbound::new(tun_udp_rx, dispatcher.clone(), manager.clone(), dns.clone());
 
     // run
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
-    let _tun_inbound_tcp_handle = rt.spawn(async move { tun_inbound_tcp.run_tcp().await });
-    let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run_udp().await });
+    let _tun_inbound_tcp_handle = rt.spawn(async move { tun_inbound_tcp.run().await });
+    let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
     if let Some(http_port) = config.http_port {

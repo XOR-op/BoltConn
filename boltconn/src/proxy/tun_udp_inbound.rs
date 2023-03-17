@@ -145,7 +145,7 @@ impl TunUdpInbound {
                 let (recv_tx, recv_rx) = mpsc::channel(20);
                 let proc_info =
                     process::get_pid(src, NetworkType::Udp).map_or(None, process::get_process_info);
-                let probe = self.session_mgr.get_udp_probe(src.port());
+                let probe = self.session_mgr.get_udp_probe(src);
 
                 // create record for local port
                 let session = UdpSession {
