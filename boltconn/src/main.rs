@@ -9,7 +9,7 @@ use crate::external::ApiServer;
 use crate::mitm::{HeaderModManager, MitmModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
-use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, UdpOutboundManager};
+use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, TunUdpInbound};
 use chrono::Timelike;
 use ipnet::Ipv4Net;
 use is_root::is_root;
@@ -20,7 +20,7 @@ use network::{
 };
 use platform::get_default_route;
 use proxy::Dispatcher;
-use proxy::{SessionManager, TunInbound};
+use proxy::{SessionManager, TunTcpInbound};
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -200,7 +200,6 @@ fn main() -> ExitCode {
     let stat_center = Arc::new(AgentCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
     let hcap_copy = http_capturer.clone();
-    let udp_manager = Arc::new(UdpOutboundManager::new());
 
     // Read initial config
     let (config, state, rule_schema, proxy_schema) = match rt.block_on(load_config(&config_path)) {
@@ -373,15 +372,14 @@ fn main() -> ExitCode {
             Arc::new(mitm_filter),
         ))
     };
-    let tun_inbound = Arc::new(TunInbound::new(
+    let tun_inbound = Arc::new(TunTcpInbound::new(
         nat_addr,
         manager.clone(),
         dispatcher.clone(),
         dns.clone(),
-        udp_manager,
     ));
     let tun_inbound_tcp = tun_inbound.clone();
-    let tun_inbound_udp = tun_inbound;
+    let tun_inbound_udp = TunUdpInbound::new(dispatcher.clone(), manager.clone(), dns.clone());
 
     // run
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));

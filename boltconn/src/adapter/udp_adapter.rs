@@ -1,6 +1,6 @@
 // Adapter to NAT
 
-use crate::adapter::{AddrConnector, Connector, DuplexCloseGuard};
+use crate::adapter::{AddrConnector, DuplexCloseGuard};
 use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
@@ -47,7 +47,7 @@ impl TunUdpAdapter {
         }
     }
 
-    pub async fn run(mut self, abort_handle: ConnAbortHandle) -> Result<()> {
+    pub async fn run(self, abort_handle: ConnAbortHandle) -> Result<()> {
         let mut first_packet = true;
         let outgoing_info_arc = self.info.clone();
         let mut inbound_read = self.send_rx;
@@ -110,7 +110,7 @@ pub struct StandardUdpAdapter {
     inbound: UdpSocket,
     src: SocketAddr,
     available: Arc<AtomicBool>,
-    connector: Connector,
+    connector: AddrConnector,
 }
 
 impl StandardUdpAdapter {
@@ -119,7 +119,7 @@ impl StandardUdpAdapter {
         inbound: UdpSocket,
         src: SocketAddr,
         available: Arc<AtomicBool>,
-        connector: Connector,
+        connector: AddrConnector,
     ) -> Self {
         Self {
             info,
@@ -130,14 +130,13 @@ impl StandardUdpAdapter {
         }
     }
 
-    // todo: may be buggy, because of no SOCKS decapsulation is performed
     pub async fn run(self, abort_handle: ConnAbortHandle) -> Result<()> {
         let mut first_packet = true;
         let outgoing_info_arc = self.info.clone();
         let inbound_read = Arc::new(self.inbound);
         let inbound_write = inbound_read.clone();
         let src_addr = self.src;
-        let Connector { tx, mut rx } = self.connector;
+        let AddrConnector { tx, mut rx } = self.connector;
         let abort_handle2 = abort_handle.clone();
         let available2 = self.available.clone();
         // recv from inbound and send to outbound
@@ -156,12 +155,25 @@ impl StandardUdpAdapter {
                     // check if packet is from the valid socks client
                     if src_addr == pkt_src {
                         unsafe { buf.advance_mut(len) }
+                        let buf = buf.freeze();
+
+                        // decapsule udp header
+                        let Ok((frag, addr, payload)) = fast_socks5::parse_udp_request(buf.as_ref()).await else{ continue; };
+                        if frag != 0 {
+                            // cannot handle, drop
+                            continue;
+                        }
+
                         if first_packet {
                             first_packet = false;
-                            outgoing_info_arc.write().await.update_proto(buf.as_ref());
+                            outgoing_info_arc.write().await.update_proto(payload);
                         }
                         outgoing_info_arc.write().await.more_upload(buf.len());
-                        if tx.send(buf.freeze()).await.is_err() {
+                        if tx
+                            .send((buf.slice_ref(payload), addr.into()))
+                            .await
+                            .is_err()
+                        {
                             available2.store(false, Ordering::Relaxed);
                             abort_handle2.cancel().await;
                             break;
@@ -181,14 +193,19 @@ impl StandardUdpAdapter {
         // recv from outbound and send to inbound
         while let Some((buf, src)) = rx.recv().await {
             self.info.write().await.more_download(buf.len());
-            if let Err(err) = inbound_write.send_to(buf.as_ref(), self.src).await {
+            // encapsule
+            let Ok(data) = (match src {
+                NetworkAddr::Raw(s) => fast_socks5::new_udp_header(s),
+                NetworkAddr::DomainName { domain_name,port} => fast_socks5::new_udp_header((domain_name.as_str(),port))
+            }) else { continue };
+
+            if let Err(err) = inbound_write.send_to(data.as_slice(), self.src).await {
                 tracing::warn!("StandardUdpAdapter write to inbound failed: {}", err);
                 abort_handle.cancel().await;
                 break;
             }
         }
         self.info.write().await.mark_fin();
-        todo!();
         Ok(())
     }
 }

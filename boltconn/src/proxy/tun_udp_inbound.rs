@@ -32,6 +32,21 @@ pub struct TunUdpInbound {
 }
 
 impl TunUdpInbound {
+    pub fn new(
+        pkt_chan: flume::Receiver<Bytes>,
+        dispatcher: Arc<Dispatcher>,
+        session_mgr: Arc<SessionManager>,
+        dns: Arc<Dns>,
+    ) -> Self {
+        Self {
+            pkt_chan,
+            dispatcher,
+            mapping: Default::default(),
+            session_mgr,
+            dns,
+        }
+    }
+
     async fn back_prop(
         mut back_chan: mpsc::Receiver<(Bytes, SocketAddr)>,
         dst: SocketAddr,
