@@ -54,7 +54,6 @@ impl TunUdpInbound {
         dst: SocketAddr,
     ) -> anyhow::Result<()> {
         while let Some((data, src)) = back_chan.recv().await {
-            tracing::debug!("[Back prop] {} -> {}, {} bytes", src, dst, data.len());
             let raw_data = create_raw_udp_pkt(data.as_ref(), src, dst);
             if !tun_tx.is_full() {
                 tun_tx.send(raw_data.freeze())?;

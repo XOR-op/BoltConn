@@ -190,7 +190,6 @@ impl TunDevice {
     }
 
     async fn backwarding_udp_v4(packet: Bytes, fd_write: &mut WriteHalf<AsyncRawFd>) {
-        tracing::debug!("Backward {} bytes", packet.len());
         #[cfg(target_os = "linux")]
         let _ = fd_write.write_all(packet.as_ref()).await;
         #[cfg(target_os = "macos")]
@@ -256,13 +255,6 @@ impl TunDevice {
             }
             IpProtocol::Udp => {
                 let pkt = UdpPkt::new(pkt);
-                tracing::debug!(
-                    "[UDP Packet] {}:{} -> {}:{}",
-                    src,
-                    pkt.src_port(),
-                    dst,
-                    pkt.dst_port()
-                );
                 if pkt.dst_port() == 53 && dst == self.fake_dns_addr {
                     // fake ip
                     if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload()) {

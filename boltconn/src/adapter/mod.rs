@@ -125,7 +125,6 @@ where
                 break;
             }
         }
-        // tracing::debug!("Outbound outgoing closed");
     }));
     // recv from outbound and send to inbound
     loop {
@@ -150,7 +149,6 @@ where
             }
         }
     }
-    // tracing::debug!("Outbound incoming closed");
 }
 
 #[async_trait]
