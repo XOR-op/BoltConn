@@ -86,6 +86,7 @@ struct DirectUdpAdapter(Arc<UdpSocket>, Arc<Dns>);
 #[async_trait]
 impl UdpSocketAdapter for DirectUdpAdapter {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+        tracing::debug!("[Direct UDP] try to send to {}", addr);
         let addr = match addr {
             NetworkAddr::Raw(s) => s,
             NetworkAddr::DomainName { domain_name, port } => {
@@ -96,13 +97,14 @@ impl UdpSocketAdapter for DirectUdpAdapter {
                 SocketAddr::new(ip, port)
             }
         };
+        tracing::debug!("[Direct UDP] send {} bytes to {}", data.len(), addr);
         self.0.send_to(data, addr).await?;
         Ok(())
     }
 
     async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
         let (len, addr) = self.0.recv_from(data).await?;
-        // s is established by connect
+        tracing::debug!("[Direct UDP] recv {} bytes from {}", len, addr);
         Ok((len, NetworkAddr::Raw(addr)))
     }
 }

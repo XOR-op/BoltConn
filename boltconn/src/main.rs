@@ -201,6 +201,7 @@ fn main() -> ExitCode {
     let http_capturer = Arc::new(HttpCapturer::new());
     let hcap_copy = http_capturer.clone();
     let (tun_udp_tx, tun_udp_rx) = flume::unbounded();
+    let (udp_tun_tx, udp_tun_rx) = flume::unbounded();
 
     // Read initial config
     let (config, state, rule_schema, proxy_schema) = match rt.block_on(load_config(&config_path)) {
@@ -246,6 +247,7 @@ fn main() -> ExitCode {
             dns.clone(),
             fake_dns_server,
             tun_udp_tx,
+            udp_tun_rx,
         )
         .expect("fail to create TUN");
         // create tun device
@@ -272,7 +274,7 @@ fn main() -> ExitCode {
     );
 
     let dispatching = {
-        let mut builder = DispatchingBuilder::new(true);
+        let mut builder = DispatchingBuilder::new();
         if let Some(list) = dns_ips {
             builder.direct_prioritize("DNS-PRIO", list);
         }
@@ -314,7 +316,7 @@ fn main() -> ExitCode {
             }
         };
         let mitm_filter = match {
-            let builder = DispatchingBuilder::new(false);
+            let builder = DispatchingBuilder::new();
             if let Some(mitm_rules) = config.mitm_rule {
                 builder.build_filter(mitm_rules.as_slice(), &rule_schema)
             } else {
@@ -380,8 +382,13 @@ fn main() -> ExitCode {
         dispatcher.clone(),
         dns.clone(),
     ));
-    let tun_inbound_udp =
-        TunUdpInbound::new(tun_udp_rx, dispatcher.clone(), manager.clone(), dns.clone());
+    let tun_inbound_udp = TunUdpInbound::new(
+        tun_udp_rx,
+        udp_tun_tx,
+        dispatcher.clone(),
+        manager.clone(),
+        dns.clone(),
+    );
 
     // run
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
@@ -464,14 +471,14 @@ async fn reload(
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
-        let mut builder = DispatchingBuilder::new(true);
+        let mut builder = DispatchingBuilder::new();
         if config.dns.force_direct_dns {
             builder.direct_prioritize("DNS_PRIO", extract_address(&group));
         }
         Arc::new(builder.build(&config, &state, &rule_schema, &proxy_schema)?)
     };
     let mitm_filter = {
-        let builder = DispatchingBuilder::new(false);
+        let builder = DispatchingBuilder::new();
         if let Some(mitm_rules) = config.mitm_rule {
             Arc::new(builder.build_filter(mitm_rules.as_slice(), &rule_schema)?)
         } else {

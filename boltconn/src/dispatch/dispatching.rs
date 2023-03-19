@@ -29,7 +29,6 @@ pub struct ConnInfo {
 }
 
 pub struct Dispatching {
-    verbose: bool,
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
     rules: Vec<Rule>,
@@ -37,7 +36,7 @@ pub struct Dispatching {
 }
 
 impl Dispatching {
-    pub fn matches(&self, info: &ConnInfo) -> Arc<ProxyImpl> {
+    pub fn matches(&self, info: &ConnInfo, verbose: bool) -> Arc<ProxyImpl> {
         for v in &self.rules {
             if let Some(proxy) = v.matches(info) {
                 let proxy_impl = match &proxy {
@@ -45,12 +44,12 @@ impl Dispatching {
                     GeneralProxy::Group(g) => g.get_proxy().get_impl(),
                 };
                 if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-                    if self.verbose {
+                    if verbose {
                         tracing::info!("[{:?}] {} => {} failed: UDP disabled", v, info.dst, proxy);
                     }
                     return Arc::new(ProxyImpl::Reject);
                 }
-                if self.verbose {
+                if verbose {
                     tracing::info!("[{:?}] {} => {}", v, info.dst, proxy);
                 }
                 return proxy_impl;
@@ -63,7 +62,7 @@ impl Dispatching {
             GeneralProxy::Group(g) => g.get_proxy().get_impl(),
         };
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-            if self.verbose {
+            if verbose {
                 tracing::info!(
                     "[Fallback] {} => {} failed: UDP disabled",
                     info.dst,
@@ -72,7 +71,7 @@ impl Dispatching {
             }
             return Arc::new(ProxyImpl::Reject);
         }
-        if self.verbose {
+        if verbose {
             tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
         }
         proxy_impl
@@ -93,7 +92,6 @@ impl Dispatching {
 }
 
 pub struct DispatchingBuilder {
-    verbose: bool,
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
     rules: Vec<Rule>,
@@ -101,9 +99,8 @@ pub struct DispatchingBuilder {
 }
 
 impl DispatchingBuilder {
-    pub fn new(verbose: bool) -> Self {
+    pub fn new() -> Self {
         let mut r = Self {
-            verbose,
             proxies: Default::default(),
             groups: Default::default(),
             rules: vec![],
@@ -172,7 +169,6 @@ impl DispatchingBuilder {
         }
         tracing::info!("Loaded config successfully");
         Ok(Dispatching {
-            verbose: self.verbose,
             proxies: self.proxies,
             groups: self.groups,
             rules: self.rules,
@@ -203,7 +199,6 @@ impl DispatchingBuilder {
             ProxyImpl::Reject,
         ))));
         Ok(Dispatching {
-            verbose: self.verbose,
             proxies: self.proxies,
             groups: self.groups,
             rules: self.rules,

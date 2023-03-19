@@ -5,10 +5,8 @@ use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::{Dispatcher, NetworkAddr, SessionManager};
 use bytes::Bytes;
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, UdpPacket};
-use socket2::{Domain, Type};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::io;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -25,6 +23,7 @@ struct UdpSession {
 
 pub struct TunUdpInbound {
     pkt_chan: flume::Receiver<Bytes>,
+    tun_tx: flume::Sender<Bytes>,
     dispatcher: Arc<Dispatcher>,
     mapping: HashMap<SocketAddr, UdpSession>,
     session_mgr: Arc<SessionManager>,
@@ -34,12 +33,14 @@ pub struct TunUdpInbound {
 impl TunUdpInbound {
     pub fn new(
         pkt_chan: flume::Receiver<Bytes>,
+        tun_tx: flume::Sender<Bytes>,
         dispatcher: Arc<Dispatcher>,
         session_mgr: Arc<SessionManager>,
         dns: Arc<Dns>,
     ) -> Self {
         Self {
             pkt_chan,
+            tun_tx,
             dispatcher,
             mapping: Default::default(),
             session_mgr,
@@ -49,17 +50,15 @@ impl TunUdpInbound {
 
     async fn back_prop(
         mut back_chan: mpsc::Receiver<(Bytes, SocketAddr)>,
+        tun_tx: flume::Sender<Bytes>,
         dst: SocketAddr,
-    ) -> io::Result<()> {
-        let domain = if dst.is_ipv4() {
-            Domain::IPV4
-        } else {
-            Domain::IPV6
-        };
-        let raw_sock = socket2::Socket::new(domain, Type::RAW, None)?;
+    ) -> anyhow::Result<()> {
         while let Some((data, src)) = back_chan.recv().await {
+            tracing::debug!("[Back prop] {} -> {}, {} bytes", src, dst, data.len());
             let raw_data = create_raw_udp_pkt(data.as_ref(), src, dst);
-            raw_sock.send(raw_data.as_ref())?;
+            if !tun_tx.is_full() {
+                tun_tx.send(raw_data.freeze())?;
+            }
         }
         Ok(())
     }
@@ -147,6 +146,9 @@ impl TunUdpInbound {
                     process::get_pid(src, NetworkType::Udp).map_or(None, process::get_process_info);
                 let probe = self.session_mgr.get_udp_probe(src);
 
+                // push payload
+                let _ = send_tx.send((payload, dst_addr.clone())).await;
+
                 // create record for local port
                 let session = UdpSession {
                     local_addr: src,
@@ -157,7 +159,8 @@ impl TunUdpInbound {
                 };
                 entry.insert(session);
 
-                tokio::spawn(Self::back_prop(recv_rx, src));
+                let tun_tx = self.tun_tx.clone();
+                tokio::spawn(Self::back_prop(recv_rx, tun_tx, src));
 
                 self.dispatcher
                     .submit_tun_udp_session(src, dst_addr, proc_info, send_rx, recv_tx, probe)

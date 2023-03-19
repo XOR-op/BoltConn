@@ -158,7 +158,12 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let proxy_config = self.dispatching.read().unwrap().matches(&conn_info).clone();
+        let proxy_config = self
+            .dispatching
+            .read()
+            .unwrap()
+            .matches(&conn_info, true)
+            .clone();
         let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
             if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
                 let impls: Vec<_> = vec
@@ -250,7 +255,7 @@ impl Dispatcher {
                     self.mitm_filter
                         .read()
                         .unwrap()
-                        .matches(&conn_info)
+                        .matches(&conn_info, false)
                         .as_ref(),
                     ProxyImpl::Direct
                 )
@@ -340,7 +345,12 @@ impl Dispatcher {
         ),
         (),
     > {
-        let proxy_config = self.dispatching.read().unwrap().matches(&conn_info).clone();
+        let proxy_config = self
+            .dispatching
+            .read()
+            .unwrap()
+            .matches(&conn_info, true)
+            .clone();
         let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) =
             match proxy_config.as_ref() {
                 ProxyImpl::Direct => (
@@ -431,7 +441,7 @@ impl Dispatcher {
             self.dispatching
                 .read()
                 .unwrap()
-                .matches(&conn_info)
+                .matches(&conn_info, false)
                 .as_ref(),
             ProxyImpl::Reject
         )
