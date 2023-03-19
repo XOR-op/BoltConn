@@ -1,6 +1,7 @@
 use crate::adapter::{AddrConnector, Connector};
 
 use crate::common::{mut_buf, MAX_PKT_SIZE};
+use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
@@ -117,16 +118,16 @@ struct UdpConnTask {
     rx: flume::Receiver<(Bytes, NetworkAddr)>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
-    dest: IpEndpoint,
+    dns: Arc<Dns>,
     last_active: Instant,
 }
 
 impl UdpConnTask {
     pub fn new(
         connector: AddrConnector,
-        dest: IpEndpoint,
         handle: SocketHandle,
         abort_handle: ConnAbortHandle,
+        dns: Arc<Dns>,
         notify: Arc<Notify>,
     ) -> Self {
         let AddrConnector {
@@ -145,7 +146,7 @@ impl UdpConnTask {
             rx,
             handle,
             abort_handle,
-            dest,
+            dns,
             last_active: Instant::now(),
         }
     }
@@ -157,9 +158,20 @@ impl UdpConnTask {
             // fetch new data
             match self.rx.try_recv() {
                 // todo: full-cone NAT
-                Ok((buf, _addr)) => {
+                Ok((buf, addr)) => {
+                    let remote_addr = match addr {
+                        NetworkAddr::Raw(s) => IpEndpoint::from(s),
+                        NetworkAddr::DomainName { domain_name, port } => {
+                            let Some(ip) = self.dns.genuine_lookup(domain_name.as_str()).await else{
+                                // lookup failed, just drop
+                                return Ok(false);
+                            };
+                            IpEndpoint::from((ip, port))
+                        }
+                    };
+
                     has_activity = true;
-                    if socket.send_slice(buf.as_ref(), self.dest).is_ok() {
+                    if socket.send_slice(buf.as_ref(), remote_addr).is_ok() {
                         self.last_active = Instant::now();
                     } else {
                         return Err(ErrorKind::ConnectionAborted.into());
@@ -198,12 +210,18 @@ pub struct SmolStack {
     ip_addr: IpAddr,
     ip_device: VirtualIpDevice,
     iface: Interface,
+    dns: Arc<Dns>,
     socket_set: SocketSet<'static>,
     udp_timeout: Duration,
 }
 
 impl SmolStack {
-    pub fn new(iface_ip: IpAddr, mut ip_device: VirtualIpDevice, udp_timeout: Duration) -> Self {
+    pub fn new(
+        iface_ip: IpAddr,
+        mut ip_device: VirtualIpDevice,
+        dns: Arc<Dns>,
+        udp_timeout: Duration,
+    ) -> Self {
         let config = smoltcp::iface::Config::default();
         let mut iface = Interface::new(config, &mut ip_device);
         iface.update_ip_addrs(|v| {
@@ -215,6 +233,7 @@ impl SmolStack {
             ip_addr: iface_ip,
             ip_device,
             iface,
+            dns,
             socket_set: SocketSet::new(vec![]),
             udp_timeout,
         }
@@ -265,7 +284,6 @@ impl SmolStack {
     pub fn open_udp(
         &mut self,
         local_port: u16,
-        remote_addr: SocketAddr,
         connector: AddrConnector,
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
@@ -273,7 +291,6 @@ impl SmolStack {
         match self.udp_conn.entry(local_port) {
             Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
             Entry::Vacant(e) => {
-                let remote_addr = IpEndpoint::from(remote_addr);
                 // create socket resource
                 let tx_buf = UdpSocketBuffer::new(
                     vec![UdpPacketMetadata::EMPTY; 16],
@@ -286,15 +303,15 @@ impl SmolStack {
                 let mut client_socket = SmolUdpSocket::new(rx_buf, tx_buf);
 
                 client_socket
-                    .bind(remote_addr)
+                    .bind(IpEndpoint::new(self.ip_addr.into(), local_port))
                     .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
                 let handle = self.socket_set.add(client_socket);
 
                 e.insert(UdpConnTask::new(
                     connector,
-                    remote_addr,
                     handle,
                     abort_handle,
+                    self.dns.clone(),
                     notify,
                 ));
                 Ok(())

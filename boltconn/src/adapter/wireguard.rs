@@ -39,11 +39,13 @@ impl Endpoint {
 
         let (mut wg_smol_tx, wg_smol_rx) = flume::unbounded();
         let (smol_wg_tx, mut smol_wg_rx) = flume::unbounded();
-        let tunnel = Arc::new(WireguardTunnel::new(outbound, config, dns, notify.clone()).await?);
+        let tunnel =
+            Arc::new(WireguardTunnel::new(outbound, config, dns.clone(), notify.clone()).await?);
         let device = VirtualIpDevice::new(config.mtu, wg_smol_rx, smol_wg_tx);
         let smol_stack = Arc::new(Mutex::new(SmolStack::new(
             config.ip_addr,
             device,
+            dns,
             Duration::from_secs(120),
         )));
 
@@ -263,13 +265,12 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
     ) -> io::Result<()> {
         // todo: remote dns
-        let dst = get_dst(&self.dns, &self.dst).await?;
         let notify = self.endpoint.clone_notify();
         self.endpoint
             .stack
             .lock()
             .await
-            .open_udp(self.src_port, dst, inbound, abort_handle, notify)
+            .open_udp(self.src_port, inbound, abort_handle, notify)
     }
 }
 
