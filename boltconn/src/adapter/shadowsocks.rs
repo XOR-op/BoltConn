@@ -105,7 +105,7 @@ impl SSOutbound {
                 .await?
             }
         };
-        let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
+        let (_, context, resolved_config) = self.create_internal(server_addr).await?;
         let out_sock = {
             let socket = match server_addr {
                 SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
@@ -120,12 +120,7 @@ impl SSOutbound {
             &resolved_config,
             out_sock,
         ));
-        established_udp(
-            inbound,
-            ShadowsocksUdpAdapter(proxy_socket, self.dns.clone(), target_addr),
-            abort_handle,
-        )
-        .await;
+        established_udp(inbound, ShadowsocksUdpAdapter(proxy_socket), abort_handle).await;
         Ok(())
     }
 }
@@ -195,19 +190,18 @@ impl UdpOutBound for SSOutbound {
 }
 
 #[derive(Clone)]
-struct ShadowsocksUdpAdapter(Arc<ProxySocket>, Arc<Dns>, Address);
+struct ShadowsocksUdpAdapter(Arc<ProxySocket>);
 
 #[async_trait]
 impl UdpSocketAdapter for ShadowsocksUdpAdapter {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
         let addr = match addr {
-            NetworkAddr::Raw(s) => s,
+            NetworkAddr::Raw(s) => Address::SocketAddress(s),
             NetworkAddr::DomainName { domain_name, port } => {
-                let Some(ip) = self.1.genuine_lookup(domain_name.as_str()).await else { return Ok(()) };
-                SocketAddr::new(ip, port)
+                Address::DomainNameAddress(domain_name, port)
             }
         };
-        self.0.send_to(&addr, &self.2, data).await?;
+        self.0.send(&addr, data).await?;
         Ok(())
     }
 
