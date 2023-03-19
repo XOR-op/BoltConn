@@ -1,7 +1,7 @@
-use crate::adapter::Connector;
+use crate::adapter::{AddrConnector, Connector};
 
 use crate::common::{mut_buf, MAX_PKT_SIZE};
-use crate::proxy::ConnAbortHandle;
+use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -113,8 +113,8 @@ impl TcpConnTask {
 }
 
 struct UdpConnTask {
-    back_tx: mpsc::Sender<Bytes>,
-    rx: flume::Receiver<Bytes>,
+    back_tx: mpsc::Sender<(Bytes, NetworkAddr)>,
+    rx: flume::Receiver<(Bytes, NetworkAddr)>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     dest: IpEndpoint,
@@ -123,13 +123,13 @@ struct UdpConnTask {
 
 impl UdpConnTask {
     pub fn new(
-        connector: Connector,
+        connector: AddrConnector,
         dest: IpEndpoint,
         handle: SocketHandle,
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> Self {
-        let Connector {
+        let AddrConnector {
             tx: back_tx,
             rx: mut back_rx,
         } = connector;
@@ -156,7 +156,8 @@ impl UdpConnTask {
         if socket.can_send() {
             // fetch new data
             match self.rx.try_recv() {
-                Ok(buf) => {
+                // todo: full-cone NAT
+                Ok((buf, _addr)) => {
                     has_activity = true;
                     if socket.send_slice(buf.as_ref(), self.dest).is_ok() {
                         self.last_active = Instant::now();
@@ -176,13 +177,12 @@ impl UdpConnTask {
         if socket.can_recv() && self.back_tx.capacity() > 0 {
             let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
             if let Ok((size, ep)) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
-                if ep == self.dest {
-                    unsafe { buf.advance_mut(size) };
-                    self.last_active = Instant::now();
-                    // must not fail because there is only 1 sender
-                    let _ = self.back_tx.send(buf.freeze()).await;
-                    return true;
-                }
+                unsafe { buf.advance_mut(size) };
+                self.last_active = Instant::now();
+                let src_addr = NetworkAddr::Raw(SocketAddr::new(ep.addr.into(), ep.port));
+                // must not fail because there is only 1 sender
+                let _ = self.back_tx.send((buf.freeze(), src_addr)).await;
+                return true;
                 // discard mismatched packet
             }
         }
@@ -266,7 +266,7 @@ impl SmolStack {
         &mut self,
         local_port: u16,
         remote_addr: SocketAddr,
-        connector: Connector,
+        connector: AddrConnector,
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> io::Result<()> {

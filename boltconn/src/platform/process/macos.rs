@@ -176,14 +176,6 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
                 cp = cp.offset(1);
             }
 
-            tracing::debug!(
-                "Pid:{}, Path:{}, Name:{}, Cmdline:{}",
-                pid,
-                path,
-                name,
-                cmd.join(" ")
-            );
-
             Some(ProcessInfo {
                 pid,
                 path,

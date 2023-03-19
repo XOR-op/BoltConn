@@ -1,10 +1,12 @@
 use crate::network::packet::ip::IPPkt;
 use bytes::BytesMut;
+use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
-    IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv6Address, Ipv6Packet, TcpPacket, UdpPacket,
+    IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv4Repr, Ipv6Address, Ipv6Packet, Ipv6Repr,
+    TcpPacket, UdpPacket, UdpRepr,
 };
 use std::fmt::{Display, Formatter};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 pub trait TransLayerPkt {
     fn src_port(&self) -> u16;
@@ -219,4 +221,54 @@ impl UdpPkt {
         }
         UdpPkt { ip_pkt }
     }
+}
+
+pub fn create_raw_udp_pkt(data: &[u8], src: SocketAddr, dst: SocketAddr) -> BytesMut {
+    let is_v4 = src.is_ipv4();
+    let udp_hdr = 8;
+    let ip_hdr = if is_v4 { 20 } else { 40 };
+    let mut buf = BytesMut::zeroed(ip_hdr + udp_hdr + data.len());
+    let mut udp_pkt = UdpPacket::new_unchecked(&mut buf.as_mut()[ip_hdr..]);
+    UdpRepr {
+        src_port: src.port(),
+        dst_port: dst.port(),
+    }
+    .emit(
+        &mut udp_pkt,
+        &src.ip().into(),
+        &dst.ip().into(),
+        data.len(),
+        |b| b.copy_from_slice(data),
+        &ChecksumCapabilities::default(),
+    );
+    if is_v4 {
+        let mut ip_pkt = Ipv4Packet::new_unchecked(buf.as_mut());
+        let (src, dst) = match (src.ip(), dst.ip()) {
+            (IpAddr::V4(src), IpAddr::V4(dst)) => (src, dst),
+            _ => unreachable!(),
+        };
+        Ipv4Repr {
+            src_addr: src.into(),
+            dst_addr: dst.into(),
+            next_header: IpProtocol::Udp,
+            payload_len: data.len() + udp_hdr,
+            hop_limit: 31,
+        }
+        .emit(&mut ip_pkt, &ChecksumCapabilities::default());
+    } else {
+        let mut ip_pkt = Ipv6Packet::new_unchecked(buf.as_mut());
+        let (src, dst) = match (src.ip(), dst.ip()) {
+            (IpAddr::V6(src), IpAddr::V6(dst)) => (src, dst),
+            _ => unreachable!(),
+        };
+        Ipv6Repr {
+            src_addr: src.into(),
+            dst_addr: dst.into(),
+            next_header: IpProtocol::Udp,
+            payload_len: data.len() + udp_hdr,
+            hop_limit: 31,
+        }
+        .emit(&mut ip_pkt);
+    }
+    buf
 }

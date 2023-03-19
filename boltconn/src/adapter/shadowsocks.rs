@@ -1,5 +1,6 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
+    UdpSocketAdapter,
 };
 
 use crate::common::{io_err, OutboundTrait};
@@ -90,7 +91,7 @@ impl SSOutbound {
         Ok(())
     }
 
-    async fn run_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
+    async fn run_udp(self, inbound: AddrConnector, abort_handle: ConnAbortHandle) -> Result<()> {
         let server_addr = match self.config.addr() {
             ServerAddr::SocketAddr(addr) => *addr,
             ServerAddr::DomainName(addr, port) => {
@@ -104,7 +105,7 @@ impl SSOutbound {
                 .await?
             }
         };
-        let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
+        let (_, context, resolved_config) = self.create_internal(server_addr).await?;
         let out_sock = {
             let socket = match server_addr {
                 SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
@@ -119,12 +120,7 @@ impl SSOutbound {
             &resolved_config,
             out_sock,
         ));
-        established_udp(
-            inbound,
-            ShadowsocksUdpAdapter(proxy_socket, target_addr),
-            abort_handle,
-        )
-        .await;
+        established_udp(inbound, ShadowsocksUdpAdapter(proxy_socket), abort_handle).await;
         Ok(())
     }
 }
@@ -186,7 +182,7 @@ impl TcpOutBound for SSOutbound {
 impl UdpOutBound for SSOutbound {
     fn spawn_udp(
         &self,
-        inbound: Connector,
+        inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().run_udp(inbound, abort_handle))
@@ -194,17 +190,31 @@ impl UdpOutBound for SSOutbound {
 }
 
 #[derive(Clone)]
-struct ShadowsocksUdpAdapter(Arc<ProxySocket>, Address);
+struct ShadowsocksUdpAdapter(Arc<ProxySocket>);
 
 #[async_trait]
 impl UdpSocketAdapter for ShadowsocksUdpAdapter {
-    async fn send(&self, data: &[u8]) -> anyhow::Result<()> {
-        self.0.send(&self.1, data).await?;
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+        let addr = match addr {
+            NetworkAddr::Raw(s) => Address::SocketAddress(s),
+            NetworkAddr::DomainName { domain_name, port } => {
+                Address::DomainNameAddress(domain_name, port)
+            }
+        };
+        self.0.send(&addr, data).await?;
         Ok(())
     }
 
-    async fn recv(&self, data: &mut [u8]) -> anyhow::Result<(usize, bool)> {
+    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
         let (len, addr, _) = self.0.recv(data).await?;
-        Ok((len, addr == self.1))
+        Ok((
+            len,
+            match addr {
+                Address::SocketAddress(s) => NetworkAddr::Raw(s),
+                Address::DomainNameAddress(domain_name, port) => {
+                    NetworkAddr::DomainName { domain_name, port }
+                }
+            },
+        ))
     }
 }

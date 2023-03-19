@@ -9,7 +9,7 @@ use crate::external::ApiServer;
 use crate::mitm::{HeaderModManager, MitmModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
-use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, UdpOutboundManager};
+use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, TunUdpInbound};
 use chrono::Timelike;
 use ipnet::Ipv4Net;
 use is_root::is_root;
@@ -20,7 +20,7 @@ use network::{
 };
 use platform::get_default_route;
 use proxy::Dispatcher;
-use proxy::{SessionManager, TunInbound};
+use proxy::{SessionManager, TunTcpInbound};
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -200,7 +200,8 @@ fn main() -> ExitCode {
     let stat_center = Arc::new(AgentCenter::new());
     let http_capturer = Arc::new(HttpCapturer::new());
     let hcap_copy = http_capturer.clone();
-    let udp_manager = Arc::new(UdpOutboundManager::new());
+    let (tun_udp_tx, tun_udp_rx) = flume::unbounded();
+    let (udp_tun_tx, udp_tun_rx) = flume::unbounded();
 
     // Read initial config
     let (config, state, rule_schema, proxy_schema) = match rt.block_on(load_config(&config_path)) {
@@ -245,6 +246,8 @@ fn main() -> ExitCode {
             outbound_iface.as_str(),
             dns.clone(),
             fake_dns_server,
+            tun_udp_tx,
+            udp_tun_rx,
         )
         .expect("fail to create TUN");
         // create tun device
@@ -271,7 +274,7 @@ fn main() -> ExitCode {
     );
 
     let dispatching = {
-        let mut builder = DispatchingBuilder::new(true);
+        let mut builder = DispatchingBuilder::new();
         if let Some(list) = dns_ips {
             builder.direct_prioritize("DNS-PRIO", list);
         }
@@ -313,7 +316,7 @@ fn main() -> ExitCode {
             }
         };
         let mitm_filter = match {
-            let builder = DispatchingBuilder::new(false);
+            let builder = DispatchingBuilder::new();
             if let Some(mitm_rules) = config.mitm_rule {
                 builder.build_filter(mitm_rules.as_slice(), &rule_schema)
             } else {
@@ -373,20 +376,24 @@ fn main() -> ExitCode {
             Arc::new(mitm_filter),
         ))
     };
-    let tun_inbound = Arc::new(TunInbound::new(
+    let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
         nat_addr,
         manager.clone(),
         dispatcher.clone(),
         dns.clone(),
-        udp_manager,
     ));
-    let tun_inbound_tcp = tun_inbound.clone();
-    let tun_inbound_udp = tun_inbound;
+    let tun_inbound_udp = TunUdpInbound::new(
+        tun_udp_rx,
+        udp_tun_tx,
+        dispatcher.clone(),
+        manager.clone(),
+        dns.clone(),
+    );
 
     // run
     let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
-    let _tun_inbound_tcp_handle = rt.spawn(async move { tun_inbound_tcp.run_tcp().await });
-    let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run_udp().await });
+    let _tun_inbound_tcp_handle = rt.spawn(async move { tun_inbound_tcp.run().await });
+    let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
     if let Some(http_port) = config.http_port {
@@ -464,14 +471,14 @@ async fn reload(
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
-        let mut builder = DispatchingBuilder::new(true);
+        let mut builder = DispatchingBuilder::new();
         if config.dns.force_direct_dns {
             builder.direct_prioritize("DNS_PRIO", extract_address(&group));
         }
         Arc::new(builder.build(&config, &state, &rule_schema, &proxy_schema)?)
     };
     let mitm_filter = {
-        let builder = DispatchingBuilder::new(false);
+        let builder = DispatchingBuilder::new();
         if let Some(mitm_rules) = config.mitm_rule {
             Arc::new(builder.build_filter(mitm_rules.as_slice(), &rule_schema)?)
         } else {

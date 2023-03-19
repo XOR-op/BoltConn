@@ -79,7 +79,6 @@ impl TcpAdapter {
                     }
                 }
             }
-            // tracing::debug!("TUN outgoing closed");
         }));
         // recv from outbound and send to inbound
         let _guard = TcpIndicatorGuard {
@@ -95,7 +94,6 @@ impl TcpAdapter {
                 break;
             }
         }
-        // tracing::debug!("TUN incoming closed");
         Ok(())
     }
 }

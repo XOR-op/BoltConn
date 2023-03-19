@@ -1,5 +1,6 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
+    UdpSocketAdapter,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
@@ -8,11 +9,12 @@ use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::trojan::{
-    make_tls_config, TrojanAddr, TrojanCmd, TrojanConfig, TrojanReqInner, TrojanRequest,
-    TrojanUdpSocket,
+    encapsule_udp_packet, make_tls_config, TrojanAddr, TrojanCmd, TrojanConfig, TrojanReqInner,
+    TrojanRequest, TrojanUdpSocket,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use bytes::Bytes;
 use http::{StatusCode, Uri};
 use std::io;
 use std::sync::Arc;
@@ -51,15 +53,18 @@ impl TrojanOutbound {
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
         let mut stream = self.connect_proxy(outbound).await?;
+        let first_packet = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         if let Some(ref uri) = self.config.websocket_path {
             let mut stream = self
                 .with_websocket(stream, uri.as_str())
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))?;
-            self.first_packet(&mut inbound, &mut stream).await?;
+            self.first_packet(first_packet, TrojanCmd::Connect, &mut stream)
+                .await?;
             established_tcp(inbound, stream, abort_handle).await;
         } else {
-            self.first_packet(&mut inbound, &mut stream).await?;
+            self.first_packet(first_packet, TrojanCmd::Connect, &mut stream)
+                .await?;
             established_tcp(inbound, stream, abort_handle).await;
         }
         Ok(())
@@ -67,7 +72,7 @@ impl TrojanOutbound {
 
     async fn run_udp<S>(
         self,
-        mut inbound: Connector,
+        mut inbound: AddrConnector,
         outbound: S,
         abort_handle: ConnAbortHandle,
     ) -> io::Result<()>
@@ -75,24 +80,26 @@ impl TrojanOutbound {
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
         let mut stream = self.connect_proxy(outbound).await?;
+        let (data, dst) = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
+        let first_packet = Bytes::from(encapsule_udp_packet(data.as_ref(), dst));
         if let Some(ref uri) = self.config.websocket_path {
             let mut stream = self
                 .with_websocket(stream, uri.as_str())
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))?;
-            self.first_packet(&mut inbound, &mut stream).await?;
+            self.first_packet(first_packet, TrojanCmd::Associate, &mut stream)
+                .await?;
             let udp_socket = TrojanUdpSocket::bind(stream);
             let adapter = TrojanUdpAdapter {
                 socket: Arc::new(udp_socket),
-                dest: self.dst,
             };
             established_udp(inbound, adapter, abort_handle).await;
         } else {
-            self.first_packet(&mut inbound, &mut stream).await?;
+            self.first_packet(first_packet, TrojanCmd::Associate, &mut stream)
+                .await?;
             let udp_socket = TrojanUdpSocket::bind(stream);
             let adapter = TrojanUdpAdapter {
                 socket: Arc::new(udp_socket),
-                dest: self.dst,
             };
             established_udp(inbound, adapter, abort_handle).await;
         }
@@ -101,14 +108,14 @@ impl TrojanOutbound {
 
     async fn first_packet<S: AsyncWrite + Unpin>(
         &self,
-        inbound: &mut Connector,
+        first_packet: Bytes,
+        cmd: TrojanCmd,
         stream: &mut S,
     ) -> io::Result<()> {
-        let first_packet = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         let trojan_req = TrojanRequest {
             password: self.config.password.clone(),
             request: TrojanReqInner {
-                cmd: TrojanCmd::Connect,
+                cmd,
                 addr: TrojanAddr::from(self.dst.clone()),
             },
             payload: first_packet,
@@ -176,7 +183,7 @@ impl TcpOutBound for TrojanOutbound {
 impl UdpOutBound for TrojanOutbound {
     fn spawn_udp(
         &self,
-        inbound: Connector,
+        inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
@@ -193,7 +200,6 @@ impl UdpOutBound for TrojanOutbound {
 
 struct TrojanUdpAdapter<S: AsyncRead + AsyncWrite> {
     socket: Arc<TrojanUdpSocket<S>>,
-    dest: NetworkAddr,
 }
 
 impl<S> Clone for TrojanUdpAdapter<S>
@@ -203,17 +209,7 @@ where
     fn clone(&self) -> Self {
         Self {
             socket: self.socket.clone(),
-            dest: self.dest.clone(),
         }
-    }
-}
-
-impl<S> TrojanUdpAdapter<S>
-where
-    S: AsyncRead + AsyncWrite,
-{
-    fn test(&self) -> TrojanUdpAdapter<S> {
-        self.clone()
     }
 }
 
@@ -222,13 +218,13 @@ impl<S> UdpSocketAdapter for TrojanUdpAdapter<S>
 where
     S: AsyncRead + AsyncWrite + Send,
 {
-    async fn send(&self, data: &[u8]) -> Result<()> {
-        self.socket.send_to(data, self.dest.clone()).await?;
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+        self.socket.send_to(data, addr).await?;
         Ok(())
     }
 
-    async fn recv(&self, data: &mut [u8]) -> Result<(usize, bool)> {
+    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
         let (size, addr) = self.socket.recv_from(data).await?;
-        Ok((size, addr == self.dest))
+        Ok((size, addr))
     }
 }

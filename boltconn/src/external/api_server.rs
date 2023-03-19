@@ -198,12 +198,7 @@ impl ApiServer {
         for x in all_udp {
             let elapsed = x.last_time.elapsed().as_secs();
             let session = boltapi::SessionSchema {
-                pair: format!(
-                    "{}->{}:{}",
-                    x.source_addr.port(),
-                    x.dest_addr.ip(),
-                    x.dest_addr.port()
-                ),
+                pair: format!("{}:", x.source_addr.port(),),
                 time: pretty_time(elapsed),
                 tcp_open: None,
             };

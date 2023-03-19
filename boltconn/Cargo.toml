@@ -31,7 +31,7 @@ ip_network = "0.4.1"
 ip_network_table = "0.2.0"
 is-root = "0.1.2"
 libc = "0.2.137"
-linked-hash-map = {version = "0.5.6" ,features = ["serde_impl"]}
+linked-hash-map = { version = "0.5.6", features = ["serde_impl"] }
 radix_trie = "0.2.1"
 rcgen = { version = "0.10.0", features = ["pem", "x509-parser"] }
 regex = "1.7.0"
@@ -43,7 +43,7 @@ serde_json = "1.0.89"
 serde_yaml = "0.9.14"
 sha2 = "0.10.6"
 shadowsocks = "1.15.0"
-socket2 = "0.5.1"
+socket2 = { version = "0.5.1", features = ["all"] }
 smoltcp = "0.9.0"
 structopt = "0.3.26"
 thiserror = "1.0.37"

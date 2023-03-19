@@ -7,7 +7,7 @@ use crate::platform;
 use crate::platform::{errno_err, interface_up, set_address};
 use crate::proxy::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use ipnet::Ipv4Net;
 use network::dns::Dns;
 use network::packet::ip::IPPkt;
@@ -22,6 +22,9 @@ use std::sync::Arc;
 use tokio::io::split;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 
+const ETH_P_IP: u16 = 0x0800;
+const ETH_P_IPV6: u16 = 0x86DD;
+
 pub struct TunDevice {
     fd: Option<AsyncRawFd>,
     ctl_fd: RawFd,
@@ -32,6 +35,8 @@ pub struct TunDevice {
     session_mgr: Arc<SessionManager>,
     dns_resolver: Arc<Dns>,
     fake_dns_addr: Ipv4Addr,
+    udp_tx: flume::Sender<Bytes>,
+    udp_rx: flume::Receiver<Bytes>,
 }
 
 impl TunDevice {
@@ -40,6 +45,8 @@ impl TunDevice {
         outbound_iface: &str,
         dns_resolver: Arc<Dns>,
         fake_dns_addr: Ipv4Addr,
+        udp_tx: flume::Sender<Bytes>,
+        udp_rx: flume::Receiver<Bytes>,
     ) -> io::Result<TunDevice> {
         let mut name_buffer: Vec<c_char> = Vec::new();
         name_buffer.resize(36, 0);
@@ -62,6 +69,8 @@ impl TunDevice {
             session_mgr,
             dns_resolver,
             fake_dns_addr,
+            udp_tx,
+            udp_rx,
         })
     }
 
@@ -165,104 +174,118 @@ impl TunDevice {
         tracing::info!("[TUN] Running...");
         loop {
             // read a ip packet from tun device
-            // todo: do we really need a pool here?
             let handle = BytesMut::with_capacity(MAX_PKT_SIZE);
-            let pkt = Self::recv_ip(&mut fd_read, handle).await?;
-            if pkt.src_addr().is_ipv6() {
-                // not supported now
-                // tracing::trace!("[TUN] drop IPv6: {} -> {} ", pkt.src_addr(), pkt.dst_addr());
-                continue;
+            tokio::select! {
+                pkt = Self::recv_ip(&mut fd_read, handle) => {
+                    let pkt = pkt?;
+                    self.forwarding_packet(pkt, &nat_addr, &mut fd_write).await;
+                }
+                data = self.udp_rx.recv_async() => {
+                    if let Ok(data) = data{
+                        Self::backwarding_udp_v4(data, &mut fd_write).await;
+                    }
+                }
             }
-            let (src, dst) = match (pkt.src_addr(), pkt.dst_addr()) {
-                (IpAddr::V4(src), IpAddr::V4(dst)) => (src, dst),
-                (_, _) => unreachable!(),
-            };
-            // determine where the packet goes
-            match pkt.protocol() {
-                IpProtocol::Tcp => {
-                    let mut pkt = TcpPkt::new(pkt);
-                    if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
-                        // outbound->inbound
-                        if let Ok((conn_src, conn_dst, _)) =
-                            self.session_mgr.lookup_tcp_session(pkt.dst_port())
-                        {
-                            pkt.rewrite_addr(conn_dst, conn_src);
-                            if Self::send_ip(&mut fd_write, pkt.ip_pkt()).await.is_err() {
-                                tracing::warn!("Send to NAT failed");
-                                continue;
-                            }
-                        } else {
-                            tracing::warn!("No record found for {}", pkt.dst_port());
-                            continue;
-                        }
-                    } else {
-                        // inbound->outbound
-                        let inbound_port = self.session_mgr.register_tcp_session(
-                            SocketAddr::V4(SocketAddrV4::new(src, pkt.src_port())),
-                            SocketAddr::V4(SocketAddrV4::new(dst, pkt.dst_port())),
-                        );
-                        // (_, session_port, nat_ip, nat_port)
-                        pkt.rewrite_addr(
-                            SocketAddr::from(SocketAddrV4::new(dst, inbound_port)),
-                            SocketAddr::from(nat_addr),
-                        );
-                        if Self::send_ip(&mut fd_write, pkt.ip_pkt()).await.is_err() {
+        }
+    }
+
+    async fn backwarding_udp_v4(packet: Bytes, fd_write: &mut WriteHalf<AsyncRawFd>) {
+        #[cfg(target_os = "linux")]
+        let _ = fd_write.write_all(packet.as_ref()).await;
+        #[cfg(target_os = "macos")]
+        {
+            use std::io::IoSlice;
+            let arr = [
+                0u8,
+                0u8,
+                ETH_P_IP.to_ne_bytes()[0],
+                ETH_P_IP.to_ne_bytes()[1],
+            ];
+            let slices = &[IoSlice::new(&arr), IoSlice::new(packet.as_ref())];
+            let _ = fd_write.write_vectored(slices).await;
+        }
+    }
+
+    async fn forwarding_packet(
+        &self,
+        pkt: IPPkt,
+        nat_addr: &SocketAddrV4,
+        fd_write: &mut WriteHalf<AsyncRawFd>,
+    ) {
+        if pkt.src_addr().is_ipv6() {
+            // todo: not supported now
+            // tracing::trace!("[TUN] drop IPv6: {} -> {} ", pkt.src_addr(), pkt.dst_addr());
+            return;
+        }
+        let (src, dst) = match (pkt.src_addr(), pkt.dst_addr()) {
+            (IpAddr::V4(src), IpAddr::V4(dst)) => (src, dst),
+            (_, _) => unreachable!(),
+        };
+        // determine where the packet goes
+        match pkt.protocol() {
+            IpProtocol::Tcp => {
+                let mut pkt = TcpPkt::new(pkt);
+                if *nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
+                    // outbound->inbound
+                    if let Ok((conn_src, conn_dst, _)) =
+                        self.session_mgr.lookup_tcp_session(pkt.dst_port())
+                    {
+                        pkt.rewrite_addr(conn_dst, conn_src);
+                        if Self::send_ip(fd_write, pkt.ip_pkt()).await.is_err() {
                             tracing::warn!("Send to NAT failed");
-                            continue;
-                        }
-                    }
-                }
-                IpProtocol::Udp => {
-                    let mut pkt = UdpPkt::new(pkt);
-                    if pkt.dst_port() == 53 && dst == self.fake_dns_addr {
-                        // fake ip
-                        if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload())
-                        {
-                            let mut new_pkt = pkt.set_payload(answer.as_slice());
-                            new_pkt.rewrite_addr(
-                                SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
-                                SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
-                            );
-                            let _ = Self::send_ip(&mut fd_write, new_pkt.ip_pkt()).await;
                         }
                     } else {
-                        // NAT with token
-                        if nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
-                            // outbound -> inbound
-                            let Ok((real_src, real_dst, _)) = self.session_mgr.lookup_udp_session(IpAddr::V4(dst))else {
-                                // drop unknown packet
-                                continue;
-                            };
-                            pkt.rewrite_addr(real_dst, real_src);
-                            let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
-                        } else {
-                            // inbound -> outbound
-                            let token_ip = self
-                                .session_mgr
-                                .register_udp_session(
-                                    SocketAddr::new(IpAddr::V4(src), pkt.src_port()),
-                                    SocketAddr::new(IpAddr::V4(dst), pkt.dst_port()),
-                                )
-                                .await;
-                            pkt.rewrite_addr(
-                                SocketAddr::new(token_ip, pkt.src_port()),
-                                nat_addr.into(),
-                            );
-                            let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
-                        }
+                        tracing::warn!("No record found for {}", pkt.dst_port());
+                    }
+                } else {
+                    // inbound->outbound
+                    let inbound_port = self.session_mgr.register_tcp_session(
+                        SocketAddr::V4(SocketAddrV4::new(src, pkt.src_port())),
+                        SocketAddr::V4(SocketAddrV4::new(dst, pkt.dst_port())),
+                    );
+                    // (_, session_port, nat_ip, nat_port)
+                    pkt.rewrite_addr(
+                        SocketAddr::from(SocketAddrV4::new(dst, inbound_port)),
+                        SocketAddr::from(*nat_addr),
+                    );
+                    if Self::send_ip(fd_write, pkt.ip_pkt()).await.is_err() {
+                        tracing::warn!("Send to NAT failed");
                     }
                 }
-                IpProtocol::Icmp => {
-                    // just echo now
-                    tracing::trace!("ICMP packet: {} -> {}", src, dst);
-                    let mut pkt = Icmpv4Pkt::new(pkt);
-                    pkt.rewrite_addr(dst, src);
-                    let _ = Self::send_ip(&mut fd_write, pkt.ip_pkt()).await;
+            }
+            IpProtocol::Udp => {
+                let pkt = UdpPkt::new(pkt);
+                if pkt.dst_port() == 53 && dst == self.fake_dns_addr {
+                    // fake ip
+                    if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload()) {
+                        let mut new_pkt = pkt.set_payload(answer.as_slice());
+                        new_pkt.rewrite_addr(
+                            SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
+                            SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
+                        );
+                        let _ = Self::send_ip(fd_write, new_pkt.ip_pkt()).await;
+                    }
+                } else {
+                    let pkt = {
+                        #[cfg(target_os = "macos")]
+                        let start_offset = 4;
+                        #[cfg(target_os = "linux")]
+                        let start_offset = 0;
+                        pkt.into_bytes_mut().freeze().slice(start_offset..)
+                    };
+                    let _ = self.udp_tx.send(pkt);
                 }
-                _ => {
-                    tracing::trace!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);
-                    // discarded
-                }
+            }
+            IpProtocol::Icmp => {
+                // just echo now
+                tracing::trace!("ICMP packet: {} -> {}", src, dst);
+                let mut pkt = Icmpv4Pkt::new(pkt);
+                pkt.rewrite_addr(dst, src);
+                let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
+            }
+            _ => {
+                tracing::trace!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);
+                // discarded
             }
         }
     }

@@ -1,15 +1,15 @@
 use crate::adapter::{
-    ChainOutbound, Connector, DirectOutbound, HttpOutbound, OutboundType, SSOutbound,
-    Socks5Outbound, StandardUdpAdapter, TcpAdapter, TcpOutBound, TrojanOutbound, TunUdpAdapter,
-    UdpOutBound, WireguardHandle, WireguardManager,
+    AddrConnector, ChainOutbound, Connector, DirectOutbound, HttpOutbound, OutboundType,
+    SSOutbound, Socks5Outbound, StandardUdpAdapter, TcpAdapter, TcpOutBound, TrojanOutbound,
+    TunUdpAdapter, UdpOutBound, WireguardHandle, WireguardManager,
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, ProxyImpl};
 use crate::mitm::{HttpMitm, HttpsMitm, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process;
-use crate::platform::process::NetworkType;
-use crate::proxy::{AgentCenter, ConnAbortHandle, ConnAgent, NetworkAddr, SessionManager};
+use crate::platform::process::{NetworkType, ProcessInfo};
+use crate::proxy::{AgentCenter, ConnAbortHandle, ConnAgent, NetworkAddr};
 use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
@@ -158,7 +158,12 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let proxy_config = self.dispatching.read().unwrap().matches(&conn_info).clone();
+        let proxy_config = self
+            .dispatching
+            .read()
+            .unwrap()
+            .matches(&conn_info, true)
+            .clone();
         let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
             if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
                 let impls: Vec<_> = vec
@@ -250,7 +255,7 @@ impl Dispatcher {
                     self.mitm_filter
                         .read()
                         .unwrap()
-                        .matches(&conn_info)
+                        .matches(&conn_info, false)
                         .as_ref(),
                     ProxyImpl::Direct
                 )
@@ -331,6 +336,7 @@ impl Dispatcher {
         &self,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
+        conn_info: ConnInfo,
     ) -> Result<
         (
             Box<dyn UdpOutBound>,
@@ -339,15 +345,12 @@ impl Dispatcher {
         ),
         (),
     > {
-        let process_info =
-            process::get_pid(src_addr, NetworkType::Udp).map_or(None, process::get_process_info);
-        let conn_info = ConnInfo {
-            src: src_addr,
-            dst: dst_addr.clone(),
-            connection_type: NetworkType::Udp,
-            process_info: process_info.clone(),
-        };
-        let proxy_config = self.dispatching.read().unwrap().matches(&conn_info).clone();
+        let proxy_config = self
+            .dispatching
+            .read()
+            .unwrap()
+            .matches(&conn_info, true)
+            .clone();
         let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) =
             match proxy_config.as_ref() {
                 ProxyImpl::Direct => (
@@ -414,7 +417,7 @@ impl Dispatcher {
         let abort_handle = ConnAbortHandle::new();
         let info = Arc::new(tokio::sync::RwLock::new(ConnAgent::new(
             dst_addr.clone(),
-            process_info.clone(),
+            conn_info.process_info.clone(),
             proxy_type,
             NetworkType::Udp,
             abort_handle.clone(),
@@ -422,51 +425,68 @@ impl Dispatcher {
         Ok((outbounding, info, abort_handle))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn submit_tun_udp_pkt(
+    pub async fn allow_udp(
         &self,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
-        dst_fake_addr: SocketAddr,
-        receiver: mpsc::Receiver<Bytes>,
+        proc_info: Option<ProcessInfo>,
+    ) -> bool {
+        let conn_info = ConnInfo {
+            src: src_addr,
+            dst: dst_addr,
+            connection_type: NetworkType::Udp,
+            process_info: proc_info,
+        };
+        !matches!(
+            self.dispatching
+                .read()
+                .unwrap()
+                .matches(&conn_info, false)
+                .as_ref(),
+            ProxyImpl::Reject
+        )
+    }
+
+    pub async fn submit_tun_udp_session(
+        &self,
+        src_addr: SocketAddr,
+        dst_addr: NetworkAddr,
+        proc_info: Option<ProcessInfo>,
+        send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
+        recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
         indicator: Arc<AtomicBool>,
-        socket: &Arc<UdpSocket>,
-        session_mgr: &Arc<SessionManager>,
     ) {
+        let conn_info = ConnInfo {
+            src: src_addr,
+            dst: dst_addr.clone(),
+            connection_type: NetworkType::Udp,
+            process_info: proc_info,
+        };
         let Ok((outbounding,info, abort_handle)) =
-            self.route_udp(src_addr,dst_addr).await else {
+            self.route_udp(src_addr,dst_addr,conn_info).await else {
             indicator.store(false,Ordering::Relaxed);
             return;
         };
 
         let mut handles = Vec::new();
 
-        let (nat_conn, nat_next) = Connector::new_pair(10);
+        let (adapter_tun, adapter_next) = AddrConnector::new_pair(10);
 
         handles.push({
-            let socket = socket.clone();
-            let session_mgr = session_mgr.clone();
             let info = info.clone();
             let abort_handle = abort_handle.clone();
+            let dns = self.dns.clone();
             tokio::spawn(async move {
-                let nat_adp = TunUdpAdapter::new(
-                    info,
-                    receiver,
-                    socket,
-                    src_addr,
-                    dst_fake_addr,
-                    indicator,
-                    nat_conn,
-                    session_mgr,
-                );
-                if let Err(err) = nat_adp.run(abort_handle).await {
-                    tracing::error!("[Dispatcher] run NatAdapter failed: {}", err)
+                let tun_udp =
+                    TunUdpAdapter::new(info, send_rx, recv_tx, adapter_tun, dns, indicator);
+                if let Err(err) = tun_udp.run(abort_handle).await {
+                    tracing::error!("[Dispatcher] run TunUdpAdapter failed: {}", err)
                 }
             })
         });
         let abort_handle2 = abort_handle.clone();
         handles.push(tokio::spawn(async move {
-            if let Err(err) = outbounding.spawn_udp(nat_next, abort_handle2).await {
+            if let Err(err) = outbounding.spawn_udp(adapter_next, abort_handle2).await {
                 tracing::error!("[Dispatcher] create failed: {}", err)
             }
         }));
@@ -481,14 +501,22 @@ impl Dispatcher {
         indicator: Arc<AtomicBool>,
         socket: UdpSocket,
     ) {
+        let process_info =
+            process::get_pid(src_addr, NetworkType::Udp).map_or(None, process::get_process_info);
+        let conn_info = ConnInfo {
+            src: src_addr,
+            dst: dst_addr.clone(),
+            connection_type: NetworkType::Udp,
+            process_info: process_info.clone(),
+        };
         let Ok((outbounding,info, abort_handle)) =
-            self.route_udp(src_addr,dst_addr).await else {
+            self.route_udp(src_addr,dst_addr,conn_info).await else {
             indicator.store(false,Ordering::Relaxed);
             return;
         };
         let mut handles = Vec::new();
 
-        let (adapter_conn, adapter_next) = Connector::new_pair(10);
+        let (adapter_conn, adapter_next) = AddrConnector::new_pair(10);
 
         handles.push({
             let info = info.clone();

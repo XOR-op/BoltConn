@@ -1,4 +1,4 @@
-use crate::adapter::{Connector, TcpOutBound, UdpOutBound};
+use crate::adapter::{AddrConnector, Connector, TcpOutBound, UdpOutBound};
 
 use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
@@ -257,7 +257,11 @@ impl WireguardHandle {
             .open_tcp(self.src_port, dst, inbound, abort_handle, notify)
     }
 
-    async fn attach_udp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
+    async fn attach_udp(
+        self,
+        inbound: AddrConnector,
+        abort_handle: ConnAbortHandle,
+    ) -> io::Result<()> {
         // todo: remote dns
         let dst = get_dst(&self.dns, &self.dst).await?;
         let notify = self.endpoint.clone_notify();
@@ -292,9 +296,9 @@ impl TcpOutBound for WireguardHandle {
 impl UdpOutBound for WireguardHandle {
     fn spawn_udp(
         &self,
-        inbound: Connector,
+        inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<std::io::Result<()>> {
+    ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().attach_udp(inbound, abort_handle))
     }
 }

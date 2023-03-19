@@ -1,56 +1,34 @@
-use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::proxy::manager::SessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use crate::Dns;
-use bytes::{BufMut, Bytes, BytesMut};
-use dashmap::mapref::entry::Entry;
-use dashmap::DashMap;
 use std::io::Result;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::mpsc;
+use tokio::net::TcpListener;
 
-pub struct UdpOutboundManager(DashMap<(SocketAddr, NetworkAddr), SendSide>);
-
-impl UdpOutboundManager {
-    pub fn new() -> Self {
-        Self(DashMap::new())
-    }
-}
-
-struct SendSide {
-    sender: mpsc::Sender<Bytes>,
-    indicator: Arc<AtomicBool>,
-}
-
-pub struct TunInbound {
+pub struct TunTcpInbound {
     nat_addr: SocketAddr,
     session_mgr: Arc<SessionManager>,
     dispatcher: Arc<Dispatcher>,
     dns: Arc<Dns>,
-    udp_mgr: Arc<UdpOutboundManager>,
 }
 
-impl TunInbound {
+impl TunTcpInbound {
     pub fn new(
         addr: SocketAddr,
         session_mgr: Arc<SessionManager>,
         dispatcher: Arc<Dispatcher>,
         dns: Arc<Dns>,
-        udp_mgr: Arc<UdpOutboundManager>,
     ) -> Self {
         Self {
             nat_addr: addr,
             session_mgr,
             dispatcher,
             dns,
-            udp_mgr,
         }
     }
 
-    pub async fn run_tcp(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
         let tcp_listener = TcpListener::bind(self.nat_addr).await?;
         tracing::event!(
             tracing::Level::INFO,
@@ -75,93 +53,6 @@ impl TunInbound {
                     .await;
             } else {
                 tracing::warn!("Unexpected: no record found by port {}", addr.port())
-            }
-        }
-    }
-
-    async fn retryable_udp(
-        &self,
-        pkt: Bytes,
-        src: SocketAddr,
-        real_dst: &NetworkAddr,
-        dst: SocketAddr,
-        indicator: &Arc<AtomicBool>,
-        udp_listener: &Arc<UdpSocket>,
-    ) -> Option<Bytes> {
-        match self.udp_mgr.0.entry((src, real_dst.clone())) {
-            Entry::Occupied(val) => {
-                if let Err(pkt) = val.get().sender.send(pkt).await {
-                    val.remove();
-                    // let caller to retry
-                    return Some(pkt.0);
-                }
-            }
-            Entry::Vacant(entry) => {
-                let (sender, receiver) = mpsc::channel(128);
-                let send_side = SendSide {
-                    sender,
-                    indicator: indicator.clone(),
-                };
-                // push packet into channel
-                let _ = send_side.sender.send(pkt).await;
-                entry.insert(send_side);
-                self.dispatcher
-                    .submit_tun_udp_pkt(
-                        src,
-                        real_dst.clone(),
-                        dst,
-                        receiver,
-                        indicator.clone(),
-                        udp_listener,
-                        &self.session_mgr,
-                    )
-                    .await;
-            }
-        }
-        None
-    }
-
-    pub async fn run_udp(&self) -> Result<()> {
-        let udp_listener = Arc::new(UdpSocket::bind(self.nat_addr).await?);
-        tracing::event!(
-            tracing::Level::INFO,
-            "[NAT] Listen UDP at {}, running...",
-            self.nat_addr
-        );
-        loop {
-            let mut buffer = BytesMut::with_capacity(MAX_PKT_SIZE);
-            let (len, src) = udp_listener
-                .recv_from(unsafe { mut_buf(&mut buffer) })
-                .await?;
-            unsafe { buffer.advance_mut(len) };
-            if let Ok((src, dst, indicator)) = self.session_mgr.lookup_udp_session(src.ip()) {
-                let real_dst = match self.dns.fake_ip_to_domain(dst.ip()) {
-                    None => NetworkAddr::Raw(dst),
-                    Some(s) => NetworkAddr::DomainName {
-                        domain_name: s,
-                        port: dst.port(),
-                    },
-                };
-
-                if let Some(retry_pkt) = self
-                    .retryable_udp(
-                        buffer.freeze(),
-                        src,
-                        &real_dst,
-                        dst,
-                        &indicator,
-                        &udp_listener,
-                    )
-                    .await
-                {
-                    // retry once
-                    let _ = self
-                        .retryable_udp(retry_pkt, src, &real_dst, dst, &indicator, &udp_listener)
-                        .await;
-                }
-            } else {
-                // no corresponding, drop
-                continue;
             }
         }
     }

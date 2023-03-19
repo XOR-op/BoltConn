@@ -78,7 +78,7 @@ impl Dns {
                 .await
                 .unwrap_or(fake_ip)
         } else {
-            tracing::debug!("Failed to extract fake_ip: {}", fake_ip);
+            tracing::trace!("Failed to extract fake_ip: {}", fake_ip);
             fake_ip
         }
     }
@@ -110,7 +110,6 @@ impl Dns {
                     IpAddr::V4(addr) => addr,
                     IpAddr::V6(_) => return err,
                 };
-                // tracing::debug!("Respond to DNS query: {:?} with {:?} ", domain, fake_ip);
                 let mut ans = Record::new();
                 ans.set_name(domain.parse()?)
                     .set_rr_type(RecordType::A)
@@ -118,8 +117,6 @@ impl Dns {
                     .set_ttl(60)
                     .set_data(Some(RData::A(fake_ip)));
                 resp.add_answer(ans);
-                // println!("==============\n{:?}\n>>>>>>>>>>", req);
-                // println!("{:?}\n<<<<<<<<<<<<<", Message::from_vec(&resp.to_vec()?));
                 Ok(resp.to_vec()?)
             }
             RecordType::AAAA => Ok(resp.to_vec()?),
