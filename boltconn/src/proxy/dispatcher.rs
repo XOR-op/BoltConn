@@ -68,6 +68,7 @@ impl Dispatcher {
 
     async fn build_tcp_outbound(
         &self,
+        iface_name: &str,
         proxy_config: &ProxyImpl,
         src_addr: &SocketAddr,
         dst_addr: &NetworkAddr,
@@ -75,7 +76,7 @@ impl Dispatcher {
         Ok(match proxy_config {
             ProxyImpl::Direct => (
                 Box::new(DirectOutbound::new(
-                    &self.iface_name,
+                    iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
                 )),
@@ -86,7 +87,7 @@ impl Dispatcher {
             }
             ProxyImpl::Http(cfg) => (
                 Box::new(HttpOutbound::new(
-                    &self.iface_name,
+                    iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
                     cfg.clone(),
@@ -95,7 +96,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Socks5(cfg) => (
                 Box::new(Socks5Outbound::new(
-                    &self.iface_name,
+                    iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
                     cfg.clone(),
@@ -104,7 +105,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Shadowsocks(cfg) => (
                 Box::new(SSOutbound::new(
-                    &self.iface_name,
+                    iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
                     cfg.clone(),
@@ -113,7 +114,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Trojan(cfg) => (
                 Box::new(TrojanOutbound::new(
-                    &self.iface_name,
+                    iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
                     cfg.clone(),
@@ -142,7 +143,7 @@ impl Dispatcher {
         })
     }
 
-    pub async fn submit_tun_tcp(
+    pub async fn submit_tcp(
         &self,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
@@ -158,12 +159,10 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let proxy_config = self
-            .dispatching
-            .read()
-            .unwrap()
-            .matches(&conn_info, true)
-            .clone();
+        let (proxy_config, iface) = self.dispatching.read().unwrap().matches(&conn_info, true);
+        let iface_name = iface
+            .as_ref()
+            .map_or(self.iface_name.as_str(), |s| s.as_str());
         let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
             if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
                 let impls: Vec<_> = vec
@@ -193,6 +192,7 @@ impl Dispatcher {
                 for idx in 0..vec.len() {
                     if let Ok((outbounding, _)) = self
                         .build_tcp_outbound(
+                            iface_name,
                             impls.get(idx).unwrap().as_ref(),
                             &src_addr,
                             dst_addrs.get(idx).unwrap(),
@@ -207,7 +207,7 @@ impl Dispatcher {
                 }
                 (Box::new(ChainOutbound::new(res)), OutboundType::Chain)
             } else {
-                let Ok((outbounding, proxy_type)) = self.build_tcp_outbound(proxy_config.as_ref(), &src_addr, &dst_addr).await else {
+                let Ok((outbounding, proxy_type)) = self.build_tcp_outbound(iface_name,proxy_config.as_ref(), &src_addr, &dst_addr).await else {
                 indicator.store(0, Ordering::Relaxed);
                 return;
             };
@@ -256,6 +256,7 @@ impl Dispatcher {
                         .read()
                         .unwrap()
                         .matches(&conn_info, false)
+                        .0
                         .as_ref(),
                     ProxyImpl::Direct
                 )
@@ -345,17 +346,15 @@ impl Dispatcher {
         ),
         (),
     > {
-        let proxy_config = self
-            .dispatching
-            .read()
-            .unwrap()
-            .matches(&conn_info, true)
-            .clone();
+        let (proxy_config, iface) = self.dispatching.read().unwrap().matches(&conn_info, true);
+        let iface_name = iface
+            .as_ref()
+            .map_or(self.iface_name.as_str(), |s| s.as_str());
         let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) =
             match proxy_config.as_ref() {
                 ProxyImpl::Direct => (
                     Box::new(DirectOutbound::new(
-                        &self.iface_name,
+                        iface_name,
                         dst_addr.clone(),
                         self.dns.clone(),
                     )),
@@ -370,7 +369,7 @@ impl Dispatcher {
                 }
                 ProxyImpl::Socks5(cfg) => (
                     Box::new(Socks5Outbound::new(
-                        &self.iface_name,
+                        iface_name,
                         dst_addr.clone(),
                         self.dns.clone(),
                         cfg.clone(),
@@ -379,7 +378,7 @@ impl Dispatcher {
                 ),
                 ProxyImpl::Shadowsocks(cfg) => (
                     Box::new(SSOutbound::new(
-                        &self.iface_name,
+                        iface_name,
                         dst_addr.clone(),
                         self.dns.clone(),
                         cfg.clone(),
@@ -388,7 +387,7 @@ impl Dispatcher {
                 ),
                 ProxyImpl::Trojan(cfg) => (
                     Box::new(TrojanOutbound::new(
-                        &self.iface_name,
+                        iface_name,
                         dst_addr.clone(),
                         self.dns.clone(),
                         cfg.clone(),
@@ -442,6 +441,7 @@ impl Dispatcher {
                 .read()
                 .unwrap()
                 .matches(&conn_info, false)
+                .0
                 .as_ref(),
             ProxyImpl::Reject
         )

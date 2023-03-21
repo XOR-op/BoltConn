@@ -36,30 +36,36 @@ pub struct Dispatching {
 }
 
 impl Dispatching {
-    pub fn matches(&self, info: &ConnInfo, verbose: bool) -> Arc<ProxyImpl> {
+    pub fn matches(&self, info: &ConnInfo, verbose: bool) -> (Arc<ProxyImpl>, Option<String>) {
         for v in &self.rules {
             if let Some(proxy) = v.matches(info) {
-                let proxy_impl = match &proxy {
-                    GeneralProxy::Single(p) => p.get_impl(),
-                    GeneralProxy::Group(g) => g.get_proxy().get_impl(),
+                let (proxy_impl, iface) = match &proxy {
+                    GeneralProxy::Single(p) => (p.get_impl(), None),
+                    GeneralProxy::Group(g) => {
+                        let (p, iface) = g.get_proxy_and_interface();
+                        (p.get_impl(), iface)
+                    }
                 };
                 if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
                     if verbose {
                         tracing::info!("[{:?}] {} => {} failed: UDP disabled", v, info.dst, proxy);
                     }
-                    return Arc::new(ProxyImpl::Reject);
+                    return (Arc::new(ProxyImpl::Reject), None);
                 }
                 if verbose {
                     tracing::info!("[{:?}] {} => {}", v, info.dst, proxy);
                 }
-                return proxy_impl;
+                return (proxy_impl, iface);
             }
         }
 
         // fallback proxy
-        let proxy_impl = match &self.fallback {
-            GeneralProxy::Single(p) => p.get_impl(),
-            GeneralProxy::Group(g) => g.get_proxy().get_impl(),
+        let (proxy_impl, iface) = match &self.fallback {
+            GeneralProxy::Single(p) => (p.get_impl(), None),
+            GeneralProxy::Group(g) => {
+                let (p, iface) = g.get_proxy_and_interface();
+                (p.get_impl(), iface)
+            }
         };
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
             if verbose {
@@ -69,12 +75,12 @@ impl Dispatching {
                     self.fallback
                 );
             }
-            return Arc::new(ProxyImpl::Reject);
+            return (Arc::new(ProxyImpl::Reject), None);
         }
         if verbose {
             tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
         }
-        proxy_impl
+        (proxy_impl, iface)
     }
 
     pub fn set_group_selection(&self, group: &str, proxy: &str) -> anyhow::Result<()> {
@@ -518,6 +524,7 @@ impl DispatchingBuilder {
                     name.to_string(),
                     arr,
                     selection.unwrap_or(first),
+                    proxy_group.interface.clone(),
                 )),
             );
             Ok(())

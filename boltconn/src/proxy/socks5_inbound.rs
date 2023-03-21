@@ -69,7 +69,7 @@ impl Socks5Inbound {
                     ))
                     .await?;
                 dispatcher
-                    .submit_tun_tcp(
+                    .submit_tcp(
                         src_addr,
                         target_addr.into(),
                         Arc::new(AtomicU8::new(2)),

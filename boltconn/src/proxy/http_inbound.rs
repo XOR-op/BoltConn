@@ -102,7 +102,7 @@ impl HttpInbound {
                 }
                 socket.write_all(Self::response200().as_bytes()).await?;
                 dispatcher
-                    .submit_tun_tcp(addr, dest, Arc::new(AtomicU8::new(2)), socket)
+                    .submit_tcp(addr, dest, Arc::new(AtomicU8::new(2)), socket)
                     .await;
                 return Ok(());
             }

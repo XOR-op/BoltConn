@@ -91,6 +91,7 @@ pub struct ProxyGroup {
     name: String,
     proxies: Vec<GeneralProxy>,
     selection: RwLock<GeneralProxy>,
+    interface: Option<String>,
 }
 
 impl ProxyGroup {
@@ -98,11 +99,13 @@ impl ProxyGroup {
         name: S,
         proxies: Vec<GeneralProxy>,
         selection: GeneralProxy,
+        interface: Option<String>,
     ) -> Self {
         Self {
             name: name.into(),
             proxies,
             selection: RwLock::new(selection),
+            interface,
         }
     }
 
@@ -124,6 +127,18 @@ impl ProxyGroup {
 
     pub fn get_selection(&self) -> GeneralProxy {
         self.selection.read().unwrap().clone()
+    }
+
+    pub fn get_direct_interface(&self) -> Option<String> {
+        self.interface.clone()
+    }
+
+    pub fn get_proxy_and_interface(&self) -> (Arc<Proxy>, Option<String>) {
+        let selected = self.selection.read().unwrap();
+        match *selected {
+            GeneralProxy::Single(ref p) => (p.clone(), self.get_direct_interface()),
+            GeneralProxy::Group(ref g) => g.get_proxy_and_interface(),
+        }
     }
 
     pub fn set_selection(&self, name: &str) -> anyhow::Result<()> {
