@@ -1,9 +1,10 @@
 <h1 align="center">
-  <img src="./assets/icon.png" alt="BoltConn" width="128">
+  <img src="./assets/icon.svg" alt="BoltConn" width="192">
     <br/>
     BoltConn
     <br/>
 </h1>
+
 
 
 <p align="center">
