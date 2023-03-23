@@ -136,8 +136,8 @@ impl ApiServer {
                 protocol: info.session_proto.to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
                 process: info.process_info.as_ref().map(|i| i.name.clone()),
-                upload: info.upload_traffic as u64,
-                download: info.download_traffic as u64,
+                upload: info.upload_traffic,
+                download: info.download_traffic,
                 start_time: info
                     .start_time
                     .duration_since(UNIX_EPOCH)

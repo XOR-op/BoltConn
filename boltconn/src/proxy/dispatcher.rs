@@ -222,6 +222,8 @@ impl Dispatcher {
             proxy_type,
             NetworkType::Tcp,
             abort_handle.clone(),
+            self.stat_center.get_upload(),
+            self.stat_center.get_download(),
         )));
 
         let (tun_conn, tun_next) = Connector::new_pair(10);
@@ -420,6 +422,8 @@ impl Dispatcher {
             proxy_type,
             NetworkType::Udp,
             abort_handle.clone(),
+            self.stat_center.get_upload(),
+            self.stat_center.get_download(),
         )));
         Ok((outbounding, info, abort_handle))
     }
