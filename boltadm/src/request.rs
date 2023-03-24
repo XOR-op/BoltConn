@@ -10,7 +10,7 @@ pub struct Requester {
 
 impl Requester {
     pub async fn get_group_list(&self) -> Result<()> {
-        let data = reqwest::get(self.route("/groups")).await?.text().await?;
+        let data = reqwest::get(self.route("/proxies")).await?.text().await?;
         let result: Vec<boltapi::GetGroupRespSchema> = serde_json::from_str(data.as_str())?;
         for entry in result {
             println!("{}: {}", entry.name.bold().red(), entry.selected.blue());
@@ -22,12 +22,9 @@ impl Requester {
     }
 
     pub async fn set_group_proxy(&self, group: String, proxy: String) -> Result<()> {
-        let req = boltapi::SetGroupReqSchema {
-            group,
-            selected: proxy,
-        };
+        let req = boltapi::SetGroupReqSchema { selected: proxy };
         let result = reqwest::Client::new()
-            .put(self.route("/groups"))
+            .put(self.route(format!("/proxies/{}", group).as_str()))
             .json(&req)
             .send()
             .await?

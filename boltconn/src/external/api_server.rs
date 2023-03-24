@@ -69,9 +69,10 @@ impl ApiServer {
             .route("/mitm/all", get(Self::get_mitm))
             .route("/mitm/range", get(Self::get_mitm_range))
             .route("/mitm/payload/:id", get(Self::get_mitm_payload))
+            .route("/proxies", get(Self::get_all_proxies))
             .route(
-                "/groups",
-                get(Self::get_group_list).put(Self::set_selection),
+                "/proxies/:group",
+                get(Self::get_proxy_group).put(Self::set_selection),
             )
             .route("/reload", post(Self::reload))
             .route_layer(map_request(wrapper))
@@ -299,7 +300,7 @@ impl ApiServer {
         Json(serde_json::Value::Null)
     }
 
-    async fn get_group_list(State(server): State<Self>) -> Json<serde_json::Value> {
+    async fn get_all_proxies(State(server): State<Self>) -> Json<serde_json::Value> {
         let list = server.dispatching.read().await.get_group_list();
         let mut result = Vec::new();
         for g in list.iter() {
@@ -313,19 +314,48 @@ impl ApiServer {
         Json(json!(result))
     }
 
+    async fn get_proxy_group(
+        State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        let group = {
+            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            group.clone()
+        };
+        let list = server.dispatching.read().await.get_group_list();
+        let mut result = Vec::new();
+        for g in list.iter() {
+            if g.get_name() == group {
+                let item = GetGroupRespSchema {
+                    name: group,
+                    selected: pretty_proxy(&g.get_selection()).name,
+                    list: g.get_members().iter().map(pretty_proxy).collect(),
+                };
+                result.push(item);
+                break;
+            }
+        }
+        Json(json!(result))
+    }
+
     async fn set_selection(
         State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
         Json(args): Json<SetGroupReqSchema>,
     ) -> Json<serde_json::Value> {
+        let group = {
+            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            group.clone()
+        };
         let r = server
             .dispatching
             .read()
             .await
-            .set_group_selection(args.group.as_str(), args.selected.as_str())
+            .set_group_selection(group.as_str(), args.selected.as_str())
             .is_ok();
         if r {
             let mut state = server.state.lock().unwrap();
-            if let Some(val) = state.state.group_selection.get_mut(&args.group) {
+            if let Some(val) = state.state.group_selection.get_mut(&group) {
                 *val = args.selected;
                 if let Ok(content) = serde_yaml::to_string(&state.state) {
                     let content = "# This file is managed by BoltConn. Do not edit unless you know what you are doing.\n".to_string() + content.as_str();

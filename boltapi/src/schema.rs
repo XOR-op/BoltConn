@@ -53,7 +53,6 @@ pub struct GetGroupRespSchema {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct SetGroupReqSchema {
-    pub group: String,
     pub selected: String,
 }
 
