@@ -79,3 +79,10 @@ pub struct GetMitmDataResp {
     #[serde(with = "base64ext")]
     pub resp_body: Vec<u8>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct TrafficResp {
+    pub upload: u64,
+    pub download: u64,
+}

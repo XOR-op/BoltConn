@@ -5,9 +5,11 @@ use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
 use axum::extract::{Path, Query, State};
 use axum::middleware::map_request;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use boltapi::{GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, ProxyData, SetGroupReqSchema};
+use boltapi::{
+    GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, ProxyData, SetGroupReqSchema, TrafficResp,
+};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -59,7 +61,11 @@ impl ApiServer {
         let wrapper = move |r| Self::auth(secret.clone(), r);
         let app = Router::new()
             .route("/logs", get(Self::get_logs))
-            .route("/tun", put(Self::set_tun_configure))
+            .route(
+                "/tun",
+                get(Self::get_tun_configure).put(Self::set_tun_configure),
+            )
+            .route("/traffic", get(Self::get_traffic))
             .route(
                 "/connections",
                 get(Self::get_all_conn).delete(Self::stop_all_conn),
@@ -106,6 +112,10 @@ impl ApiServer {
         }
     }
 
+    async fn get_tun_configure(State(server): State<Self>) -> Json<serde_json::Value> {
+        Json(json!(server.tun_configure.lock().unwrap().get_status()))
+    }
+
     async fn set_tun_configure(
         State(server): State<Self>,
         Json(flag): Json<serde_json::Value>,
@@ -124,6 +134,13 @@ impl ApiServer {
 
     async fn get_logs(State(_server): State<Self>) -> Json<serde_json::Value> {
         Json(serde_json::Value::Null)
+    }
+
+    async fn get_traffic(State(server): State<Self>) -> Json<serde_json::Value> {
+        Json(json!(TrafficResp {
+            upload: server.stat_center.get_upload().load(Ordering::Relaxed),
+            download: server.stat_center.get_download().load(Ordering::Relaxed),
+        }))
     }
 
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
