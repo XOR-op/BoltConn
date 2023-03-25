@@ -119,14 +119,16 @@ impl Requester {
         Ok(())
     }
 
-    pub async fn get_mitm(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
+    pub async fn eavesdrop(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
         let uri = match range {
-            None => self.route("/mitm/all"),
-            Some((s, Some(e))) => self.route(format!("/mitm/range?start={}&end={}", s, e).as_str()),
-            Some((s, None)) => self.route(format!("/mitm/range?start={}", s).as_str()),
+            None => self.route("/eavesdrop/all"),
+            Some((s, Some(e))) => {
+                self.route(format!("/eavesdrop/range?start={}&end={}", s, e).as_str())
+            }
+            Some((s, None)) => self.route(format!("/eavesdrop/range?start={}", s).as_str()),
         };
         let data = reqwest::get(uri).await?.text().await?;
-        let result: Vec<boltapi::HttpMitmSchema> = serde_json::from_str(data.as_str())?;
+        let result: Vec<boltapi::HttpEavesdropSchema> = serde_json::from_str(data.as_str())?;
         let mut table = Table::new("{:<} {:<} {:<} {:<} {:<} {:<}");
         table.add_row(
             Row::new()
@@ -152,12 +154,12 @@ impl Requester {
         Ok(())
     }
 
-    pub async fn get_mitm_payload(&self, id: u32) -> Result<()> {
-        let data = reqwest::get(self.route(format!("/mitm/payload/{}", id).as_str()))
+    pub async fn get_eavesdrop_payload(&self, id: u32) -> Result<()> {
+        let data = reqwest::get(self.route(format!("/eavesdrop/payload/{}", id).as_str()))
             .await?
             .text()
             .await?;
-        let result: boltapi::GetMitmDataResp = serde_json::from_str(data.as_str())?;
+        let result: boltapi::GetEavesdropDataResp = serde_json::from_str(data.as_str())?;
         println!("==================  Request  ===================");
         println!("Header:");
         result.req_header.iter().for_each(|l| println!("{}", l));

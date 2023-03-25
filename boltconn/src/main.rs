@@ -2,11 +2,10 @@
 
 extern crate core;
 
-use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{LinkedState, ProxySchema, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
+use crate::eavesdrop::{EavesdropModifier, HeaderModManager, UrlModManager};
 use crate::external::ApiServer;
-use crate::mitm::{HeaderModManager, MitmModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, TunUdpInbound};
@@ -40,8 +39,8 @@ mod adapter;
 mod common;
 mod config;
 mod dispatch;
+mod eavesdrop;
 mod external;
-mod mitm;
 mod network;
 mod platform;
 mod proxy;
@@ -147,21 +146,6 @@ fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)
         }
     }
     Ok((url_list, header_list))
-}
-
-fn read_mitm_hosts(arr: &Option<Vec<String>>) -> HostMatcher {
-    let mut builder = HostMatcherBuilder::new();
-    if let Some(arr) = arr.as_ref() {
-        for s in arr {
-            if s.starts_with('*') {
-                let st: String = s.chars().skip(1).collect();
-                builder.add_suffix(st.as_str());
-            } else {
-                builder.add_exact(s.as_str())
-            }
-        }
-    }
-    builder.build()
 }
 
 fn init_tracing() {
@@ -315,17 +299,17 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let mitm_filter = match {
+        let eavesdrop_filter = match {
             let builder = DispatchingBuilder::new();
-            if let Some(mitm_rules) = config.mitm_rule {
-                builder.build_filter(mitm_rules.as_slice(), &rule_schema)
+            if let Some(eavesdrop_rules) = config.eavesdrop_rule {
+                builder.build_filter(eavesdrop_rules.as_slice(), &rule_schema)
             } else {
                 builder.build_filter(vec![].as_slice(), &rule_schema)
             }
         } {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("Load mitm rules failed: {}", e);
+                eprintln!("Load eavesdrop rules failed: {}", e);
                 return ExitCode::from(1);
             }
         };
@@ -366,14 +350,14 @@ fn main() -> ExitCode {
             dispatching,
             cert,
             Box::new(move |pi| {
-                Arc::new(MitmModifier::new(
+                Arc::new(EavesdropModifier::new(
                     hcap_copy.clone(),
                     url_modifier.clone(),
                     hdr_modifier.clone(),
                     pi,
                 ))
             }),
-            Arc::new(mitm_filter),
+            Arc::new(eavesdrop_filter),
         ))
     };
     let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
@@ -421,12 +405,12 @@ fn main() -> ExitCode {
                     if restart.is_some(){
                         // try restarting components
                         match reload(&config_path,dns.clone()).await{
-                            Ok((dispatching, mitm_hosts,url_rewriter,header_rewriter)) => {
+                            Ok((dispatching, eavesdrop_filter,url_rewriter,header_rewriter)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
                                 let hcap2 = http_capturer.clone();
                                 dispatcher.replace_dispatching(dispatching);
-                                dispatcher.replace_mitm_list(mitm_hosts);
-                                dispatcher.replace_modifier(Box::new(move |pi| Arc::new(MitmModifier::new(hcap2.clone(),url_rewriter.clone(),header_rewriter.clone(),pi))));
+                                dispatcher.replace_eavesdrop_filter(eavesdrop_filter);
+                                dispatcher.replace_modifier(Box::new(move |pi| Arc::new(EavesdropModifier::new(hcap2.clone(),url_rewriter.clone(),header_rewriter.clone(),pi))));
                                 tracing::info!("Reloaded config successfully");
                             }
                             Err(err)=>{
@@ -477,14 +461,14 @@ async fn reload(
         }
         Arc::new(builder.build(&config, &state, &rule_schema, &proxy_schema)?)
     };
-    let mitm_filter = {
+    let eavesdrop_filter = {
         let builder = DispatchingBuilder::new();
-        if let Some(mitm_rules) = config.mitm_rule {
-            Arc::new(builder.build_filter(mitm_rules.as_slice(), &rule_schema)?)
+        if let Some(eavesdrop_rule) = config.eavesdrop_rule {
+            Arc::new(builder.build_filter(eavesdrop_rule.as_slice(), &rule_schema)?)
         } else {
             Arc::new(builder.build_filter(vec![].as_slice(), &rule_schema)?)
         }
     };
     dns.replace_resolvers(group).await?;
-    Ok((dispatching, mitm_filter, url_mod, hdr_mod))
+    Ok((dispatching, eavesdrop_filter, url_mod, hdr_mod))
 }

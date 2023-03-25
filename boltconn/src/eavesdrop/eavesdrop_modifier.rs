@@ -1,5 +1,5 @@
-use crate::mitm::url_rewrite::{UrlModManager, UrlModType};
-use crate::mitm::{HeaderModManager, Modifier, ModifierContext};
+use crate::eavesdrop::url_rewrite::{UrlModManager, UrlModType};
+use crate::eavesdrop::{HeaderModManager, Modifier, ModifierContext};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
 use anyhow::anyhow;
@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub struct MitmModifier {
+pub struct EavesdropModifier {
     client: Option<ProcessInfo>,
     contents: Arc<HttpCapturer>,
     url_rewriter: Arc<UrlModManager>,
@@ -19,7 +19,7 @@ pub struct MitmModifier {
     pending: DashMap<u64, DumpedRequest>,
 }
 
-impl MitmModifier {
+impl EavesdropModifier {
     pub fn new(
         contents: Arc<HttpCapturer>,
         url_rewriter: Arc<UrlModManager>,
@@ -37,7 +37,7 @@ impl MitmModifier {
 }
 
 #[async_trait]
-impl Modifier for MitmModifier {
+impl Modifier for EavesdropModifier {
     async fn modify_request(
         &self,
         req: Request<Body>,

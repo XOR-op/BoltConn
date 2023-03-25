@@ -25,8 +25,8 @@ pub struct SessionSchema {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct HttpMitmSchema {
-    pub mitm_id: u64,
+pub struct HttpEavesdropSchema {
+    pub eavesdrop_id: u64,
     pub client: Option<String>,
     pub uri: String,
     pub method: String,
@@ -58,20 +58,20 @@ pub struct SetGroupReqSchema {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct GetMitmRangeReq {
+pub struct GetEavesdropRangeReq {
     pub start: u32,
     pub end: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct GetMitmDataReq {
+pub struct GetEavesdropDataReq {
     pub id: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct GetMitmDataResp {
+pub struct GetEavesdropDataResp {
     pub req_header: Vec<String>,
     #[serde(with = "base64ext")]
     pub req_body: Vec<u8>,
