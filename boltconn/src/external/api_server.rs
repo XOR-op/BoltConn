@@ -3,8 +3,10 @@ use crate::dispatch::{Dispatching, GeneralProxy};
 use crate::network::configure::TunConfigure;
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
-use axum::extract::{Path, Query, State};
+use axum::extract::ws::{Message, WebSocket};
+use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
 use axum::middleware::map_request;
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use boltapi::{
@@ -61,6 +63,7 @@ impl ApiServer {
         let wrapper = move |r| Self::auth(secret.clone(), r);
         let app = Router::new()
             .route("/logs", get(Self::get_logs))
+            .route("/ws/traffic", get(Self::ws_get_traffic))
             .route(
                 "/tun",
                 get(Self::get_tun_configure).put(Self::set_tun_configure),
@@ -141,6 +144,25 @@ impl ApiServer {
             upload: server.stat_center.get_upload().load(Ordering::Relaxed),
             download: server.stat_center.get_download().load(Ordering::Relaxed),
         }))
+    }
+
+    async fn ws_get_traffic(State(server): State<Self>, ws: WebSocketUpgrade) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| Self::ws_get_traffic_inner(server, socket))
+    }
+
+    async fn ws_get_traffic_inner(server: Self, mut socket: WebSocket) {
+        loop {
+            // send traffic with 1 second interval
+            let data = json!(TrafficResp {
+                upload: server.stat_center.get_upload().load(Ordering::Relaxed),
+                download: server.stat_center.get_download().load(Ordering::Relaxed),
+            })
+            .to_string();
+            if socket.send(Message::Text(data)).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
     }
 
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
