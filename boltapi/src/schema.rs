@@ -88,3 +88,9 @@ pub struct TrafficResp {
     pub upload_speed: Option<u64>,
     pub download_speed: Option<u64>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct TunStatusSchema {
+    pub enabled: bool,
+}

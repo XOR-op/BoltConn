@@ -11,7 +11,7 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use boltapi::{
     GetEavesdropDataResp, GetEavesdropRangeReq, GetGroupRespSchema, ProxyData, SetGroupReqSchema,
-    TrafficResp,
+    TrafficResp, TunStatusSchema,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -117,22 +117,20 @@ impl ApiServer {
     }
 
     async fn get_tun_configure(State(server): State<Self>) -> Json<serde_json::Value> {
-        Json(json!(server.tun_configure.lock().unwrap().get_status()))
+        Json(json!(TunStatusSchema {
+            enabled: server.tun_configure.lock().unwrap().get_status()
+        }))
     }
 
     async fn set_tun_configure(
         State(server): State<Self>,
-        Json(flag): Json<serde_json::Value>,
+        Json(status): Json<TunStatusSchema>,
     ) -> Json<serde_json::Value> {
-        Json(json!(if let Some(flag) = flag.as_bool() {
-            if flag {
-                server.tun_configure.lock().unwrap().enable().is_ok()
-            } else {
-                server.tun_configure.lock().unwrap().disable();
-                true
-            }
+        Json(json!(if status.enabled {
+            server.tun_configure.lock().unwrap().enable().is_ok()
         } else {
-            false
+            server.tun_configure.lock().unwrap().disable();
+            true
         }))
     }
 
