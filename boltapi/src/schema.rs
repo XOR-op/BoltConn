@@ -85,4 +85,6 @@ pub struct GetEavesdropDataResp {
 pub struct TrafficResp {
     pub upload: u64,
     pub download: u64,
+    pub upload_speed: Option<u64>,
+    pub download_speed: Option<u64>,
 }

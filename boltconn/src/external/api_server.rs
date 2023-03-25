@@ -144,6 +144,8 @@ impl ApiServer {
         Json(json!(TrafficResp {
             upload: server.stat_center.get_upload().load(Ordering::Relaxed),
             download: server.stat_center.get_download().load(Ordering::Relaxed),
+            upload_speed: None,
+            download_speed: None,
         }))
     }
 
@@ -152,13 +154,21 @@ impl ApiServer {
     }
 
     async fn ws_get_traffic_inner(server: Self, mut socket: WebSocket) {
+        let mut last_upload = server.stat_center.get_upload().load(Ordering::Relaxed);
+        let mut last_download = server.stat_center.get_download().load(Ordering::Relaxed);
         loop {
             // send traffic with 1 second interval
+            let upload = server.stat_center.get_upload().load(Ordering::Relaxed);
+            let download = server.stat_center.get_download().load(Ordering::Relaxed);
             let data = json!(TrafficResp {
-                upload: server.stat_center.get_upload().load(Ordering::Relaxed),
-                download: server.stat_center.get_download().load(Ordering::Relaxed),
+                upload,
+                download,
+                upload_speed: Some(upload - last_upload),
+                download_speed: Some(download - last_download)
             })
             .to_string();
+            last_upload = upload;
+            last_download = download;
             if socket.send(Message::Text(data)).await.is_err() {
                 return;
             }
