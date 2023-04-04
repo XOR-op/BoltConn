@@ -8,6 +8,8 @@
 - Shadowsocks TCP & UDP.
 - Trojan TCP & UDP (support websocket and skipping certificate verification).
 - Wireguard TCP & UDP (single endpoint only).
+- Outbound chaining
+- Local interface binding
 ### DNS
 - DoT, DoH with domain name (DoT/DoH with raw ip addresses are not supported now).
 - Preconfigured DoT/DoH configuration (inherit from trust-dns).
@@ -19,12 +21,18 @@
 - DST-PORT
 - PROCESS-PATH
 - PROCESS-KEYWORD
-- PROCPATH-KEYWORD (keyword matching for the path of process)
+- PROC-PATH-KEYWORD (keyword matching for the path of process)
+- PROC-CMD-REGEX (matching for the command, e.g. '/usr/bin/python3 /tmp/example.py')
 - AND
 - OR
 - NOT
 ### RuleSet
 Almost the same as what in Clash.
+Example: 
+```yaml
+payload:
+  - DOMAIN-SUFFIX, google.com
+```
 ### MitM
 - Rewrite URL
 - Use 302/404 etc. to redirect/block specific URL
