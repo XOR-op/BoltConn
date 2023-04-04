@@ -5,6 +5,7 @@ use fast_socks5::util::target_addr::TargetAddr;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
@@ -176,9 +177,11 @@ pub struct ConnAgent {
     pub process_info: Option<ProcessInfo>,
     pub session_proto: SessionProtocol,
     pub rule: OutboundType,
-    pub upload_traffic: usize,
-    pub download_traffic: usize,
+    pub upload_traffic: u64,
+    pub download_traffic: u64,
     pub done: bool,
+    global_upload: Arc<AtomicU64>,
+    global_download: Arc<AtomicU64>,
     abort_handle: ConnAbortHandle,
 }
 
@@ -189,6 +192,8 @@ impl ConnAgent {
         rule: OutboundType,
         network_type: NetworkType,
         abort_handle: ConnAbortHandle,
+        global_upload: Arc<AtomicU64>,
+        global_download: Arc<AtomicU64>,
     ) -> Self {
         Self {
             start_time: SystemTime::now(),
@@ -202,6 +207,8 @@ impl ConnAgent {
             upload_traffic: 0,
             download_traffic: 0,
             done: false,
+            global_upload,
+            global_download,
             abort_handle,
         }
     }
@@ -213,18 +220,20 @@ impl ConnAgent {
     }
 
     pub fn more_upload(&mut self, size: usize) {
-        self.upload_traffic += size
+        self.upload_traffic += size as u64;
+        self.global_upload.fetch_add(size as u64, Ordering::Relaxed);
     }
 
     pub fn more_download(&mut self, size: usize) {
-        self.download_traffic += size
+        self.download_traffic += size as u64;
+        self.global_download
+            .fetch_add(size as u64, Ordering::Relaxed);
     }
 
     pub fn mark_fin(&mut self) {
         self.done = true;
     }
 
-    // todo: abort udp may not work properly
     pub async fn abort(&mut self) {
         self.abort_handle.cancel().await;
         self.mark_fin();
@@ -258,13 +267,25 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
 
 pub struct AgentCenter {
     content: RwLock<Vec<Arc<RwLock<ConnAgent>>>>,
+    global_upload: Arc<AtomicU64>,
+    global_download: Arc<AtomicU64>,
 }
 
 impl AgentCenter {
     pub fn new() -> Self {
         Self {
             content: RwLock::new(Vec::new()),
+            global_upload: Arc::new(Default::default()),
+            global_download: Arc::new(Default::default()),
         }
+    }
+
+    pub fn get_upload(&self) -> Arc<AtomicU64> {
+        self.global_upload.clone()
+    }
+
+    pub fn get_download(&self) -> Arc<AtomicU64> {
+        self.global_download.clone()
     }
 
     pub async fn push(&self, info: Arc<RwLock<ConnAgent>>) {

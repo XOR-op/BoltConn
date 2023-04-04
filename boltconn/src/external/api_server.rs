@@ -1,13 +1,19 @@
 use crate::config::LinkedState;
 use crate::dispatch::{Dispatching, GeneralProxy};
+use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
-use axum::extract::{Path, Query, State};
+use axum::extract::ws::{Message, WebSocket};
+use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
 use axum::middleware::map_request;
-use axum::routing::{delete, get, post, put};
+use axum::response::IntoResponse;
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use boltapi::{GetGroupRespSchema, GetMitmDataResp, GetMitmRangeReq, ProxyData, SetGroupReqSchema};
+use boltapi::{
+    GetEavesdropDataResp, GetEavesdropRangeReq, GetGroupRespSchema, ProxyData, SetGroupReqSchema,
+    TrafficResp, TunStatusSchema,
+};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -28,6 +34,7 @@ pub struct ApiServer {
     tun_configure: Arc<Mutex<TunConfigure>>,
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<Mutex<LinkedState>>,
+    stream_logger: StreamLoggerHandle,
 }
 
 impl ApiServer {
@@ -41,6 +48,7 @@ impl ApiServer {
         global_setting: Arc<Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
+        stream_logger: StreamLoggerHandle,
     ) -> Self {
         Self {
             secret,
@@ -51,6 +59,7 @@ impl ApiServer {
             dispatching,
             reload_sender: Arc::new(reload_sender),
             state: Arc::new(Mutex::new(state)),
+            stream_logger,
         }
     }
 
@@ -58,20 +67,26 @@ impl ApiServer {
         let secret = Arc::new(self.secret.clone());
         let wrapper = move |r| Self::auth(secret.clone(), r);
         let app = Router::new()
-            .route("/logs", get(Self::get_logs))
-            .route("/tun", put(Self::set_tun_configure))
+            .route("/ws/traffic", get(Self::ws_get_traffic))
+            .route("/ws/logs", get(Self::ws_get_logs))
+            .route(
+                "/tun",
+                get(Self::get_tun_configure).put(Self::set_tun_configure),
+            )
+            .route("/traffic", get(Self::get_traffic))
             .route(
                 "/connections",
                 get(Self::get_all_conn).delete(Self::stop_all_conn),
             )
             .route("/connections/:id", delete(Self::stop_conn))
             .route("/sessions", get(Self::get_sessions))
-            .route("/mitm/all", get(Self::get_mitm))
-            .route("/mitm/range", get(Self::get_mitm_range))
-            .route("/mitm/payload/:id", get(Self::get_mitm_payload))
+            .route("/eavesdrop/all", get(Self::get_eavesdrop))
+            .route("/eavesdrop/range", get(Self::get_eavesdrop_range))
+            .route("/eavesdrop/payload/:id", get(Self::get_eavesdrop_payload))
+            .route("/proxies", get(Self::get_all_proxies))
             .route(
-                "/groups",
-                get(Self::get_group_list).put(Self::set_selection),
+                "/proxies/:group",
+                get(Self::get_proxy_group).put(Self::set_selection),
             )
             .route("/reload", post(Self::reload))
             .route_layer(map_request(wrapper))
@@ -105,24 +120,72 @@ impl ApiServer {
         }
     }
 
-    async fn set_tun_configure(
-        State(server): State<Self>,
-        Json(flag): Json<serde_json::Value>,
-    ) -> Json<serde_json::Value> {
-        Json(json!(if let Some(flag) = flag.as_bool() {
-            if flag {
-                server.tun_configure.lock().unwrap().enable().is_ok()
-            } else {
-                server.tun_configure.lock().unwrap().disable();
-                true
-            }
-        } else {
-            false
+    async fn get_tun_configure(State(server): State<Self>) -> Json<serde_json::Value> {
+        Json(json!(TunStatusSchema {
+            enabled: server.tun_configure.lock().unwrap().get_status()
         }))
     }
 
-    async fn get_logs(State(_server): State<Self>) -> Json<serde_json::Value> {
-        Json(serde_json::Value::Null)
+    async fn set_tun_configure(
+        State(server): State<Self>,
+        Json(status): Json<TunStatusSchema>,
+    ) -> Json<serde_json::Value> {
+        Json(json!(if status.enabled {
+            server.tun_configure.lock().unwrap().enable().is_ok()
+        } else {
+            server.tun_configure.lock().unwrap().disable();
+            true
+        }))
+    }
+
+    async fn ws_get_logs(State(server): State<Self>, ws: WebSocketUpgrade) -> impl IntoResponse {
+        let recv = server.stream_logger.subscribe();
+        ws.on_upgrade(move |socket| Self::ws_get_logs_inner(recv, socket))
+    }
+
+    async fn ws_get_logs_inner(mut recv: StreamLoggerRecv, mut socket: WebSocket) {
+        while let Ok(log) = recv.recv().await {
+            println!("Log is {:?}", log.as_bytes());
+            if socket.send(Message::Text(log)).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    async fn get_traffic(State(server): State<Self>) -> Json<serde_json::Value> {
+        Json(json!(TrafficResp {
+            upload: server.stat_center.get_upload().load(Ordering::Relaxed),
+            download: server.stat_center.get_download().load(Ordering::Relaxed),
+            upload_speed: None,
+            download_speed: None,
+        }))
+    }
+
+    async fn ws_get_traffic(State(server): State<Self>, ws: WebSocketUpgrade) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| Self::ws_get_traffic_inner(server, socket))
+    }
+
+    async fn ws_get_traffic_inner(server: Self, mut socket: WebSocket) {
+        let mut last_upload = server.stat_center.get_upload().load(Ordering::Relaxed);
+        let mut last_download = server.stat_center.get_download().load(Ordering::Relaxed);
+        loop {
+            // send traffic with 1 second interval
+            let upload = server.stat_center.get_upload().load(Ordering::Relaxed);
+            let download = server.stat_center.get_download().load(Ordering::Relaxed);
+            let data = json!(TrafficResp {
+                upload,
+                download,
+                upload_speed: Some(upload - last_upload),
+                download_speed: Some(download - last_download)
+            })
+            .to_string();
+            last_upload = upload;
+            last_download = download;
+            if socket.send(Message::Text(data)).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
     }
 
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
@@ -136,8 +199,8 @@ impl ApiServer {
                 protocol: info.session_proto.to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
                 process: info.process_info.as_ref().map(|i| i.name.clone()),
-                upload: info.upload_traffic as u64,
-                download: info.download_traffic as u64,
+                upload: info.upload_traffic,
+                download: info.download_traffic,
                 start_time: info
                     .start_time
                     .duration_since(UNIX_EPOCH)
@@ -212,8 +275,8 @@ impl ApiServer {
     ) -> Json<serde_json::Value> {
         let mut result = Vec::new();
         for (idx, (host, proc, req, resp)) in list.into_iter().enumerate() {
-            let item = boltapi::HttpMitmSchema {
-                mitm_id: idx as u64,
+            let item = boltapi::HttpEavesdropSchema {
+                eavesdrop_id: idx as u64,
                 client: proc.map(|proc| proc.name),
                 uri: {
                     let s = req.uri.to_string();
@@ -235,7 +298,7 @@ impl ApiServer {
         Json(json!(result))
     }
 
-    async fn get_mitm(State(server): State<Self>) -> Json<serde_json::Value> {
+    async fn get_eavesdrop(State(server): State<Self>) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
             let list = capturer.get_copy();
             Self::collect_captured(list)
@@ -244,9 +307,9 @@ impl ApiServer {
         }
     }
 
-    async fn get_mitm_range(
+    async fn get_eavesdrop_range(
         State(server): State<Self>,
-        Query(params): Query<GetMitmRangeReq>,
+        Query(params): Query<GetEavesdropRangeReq>,
     ) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
             if let Some(list) =
@@ -258,7 +321,7 @@ impl ApiServer {
         Json(serde_json::Value::Null)
     }
 
-    async fn get_mitm_payload(
+    async fn get_eavesdrop_payload(
         State(server): State<Self>,
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
@@ -274,7 +337,7 @@ impl ApiServer {
             if let Some(list) = capturer.get_range_copy(id, Some(id + 1)) {
                 if list.len() == 1 {
                     let (_, _, req, resp) = list.get(0).unwrap();
-                    let result = GetMitmDataResp {
+                    let result = GetEavesdropDataResp {
                         req_header: req
                             .headers
                             .iter()
@@ -299,7 +362,7 @@ impl ApiServer {
         Json(serde_json::Value::Null)
     }
 
-    async fn get_group_list(State(server): State<Self>) -> Json<serde_json::Value> {
+    async fn get_all_proxies(State(server): State<Self>) -> Json<serde_json::Value> {
         let list = server.dispatching.read().await.get_group_list();
         let mut result = Vec::new();
         for g in list.iter() {
@@ -313,19 +376,48 @@ impl ApiServer {
         Json(json!(result))
     }
 
+    async fn get_proxy_group(
+        State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        let group = {
+            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            group.clone()
+        };
+        let list = server.dispatching.read().await.get_group_list();
+        let mut result = Vec::new();
+        for g in list.iter() {
+            if g.get_name() == group {
+                let item = GetGroupRespSchema {
+                    name: group,
+                    selected: pretty_proxy(&g.get_selection()).name,
+                    list: g.get_members().iter().map(pretty_proxy).collect(),
+                };
+                result.push(item);
+                break;
+            }
+        }
+        Json(json!(result))
+    }
+
     async fn set_selection(
         State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
         Json(args): Json<SetGroupReqSchema>,
     ) -> Json<serde_json::Value> {
+        let group = {
+            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            group.clone()
+        };
         let r = server
             .dispatching
             .read()
             .await
-            .set_group_selection(args.group.as_str(), args.selected.as_str())
+            .set_group_selection(group.as_str(), args.selected.as_str())
             .is_ok();
         if r {
             let mut state = server.state.lock().unwrap();
-            if let Some(val) = state.state.group_selection.get_mut(&args.group) {
+            if let Some(val) = state.state.group_selection.get_mut(&group) {
                 *val = args.selected;
                 if let Ok(content) = serde_yaml::to_string(&state.state) {
                     let content = "# This file is managed by BoltConn. Do not edit unless you know what you are doing.\n".to_string() + content.as_str();

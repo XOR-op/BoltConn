@@ -55,7 +55,7 @@ struct CertOptions {
 }
 
 #[derive(Debug, StructOpt)]
-enum MitmOptions {
+enum EavesdropOptions {
     /// List all captured data
     List,
     /// List data ranged from *start* to *end*
@@ -77,7 +77,7 @@ enum SubCommand {
     /// Generate Certificates
     Cert(CertOptions),
     /// Captured HTTP data
-    Mitm(MitmOptions),
+    Eavesdrop(EavesdropOptions),
     /// Clean unexpected shutdown
     Clean,
     /// Reload Configuration
@@ -128,10 +128,10 @@ async fn main() {
                 Err(e) => Err(e),
             }
         }
-        SubCommand::Mitm(opt) => match opt {
-            MitmOptions::List => requestor.get_mitm(None).await,
-            MitmOptions::Range { start, end } => requestor.get_mitm(Some((start, end))).await,
-            MitmOptions::Get { id } => requestor.get_mitm_payload(id).await,
+        SubCommand::Eavesdrop(opt) => match opt {
+            EavesdropOptions::List => requestor.eavesdrop(None).await,
+            EavesdropOptions::Range { start, end } => requestor.eavesdrop(Some((start, end))).await,
+            EavesdropOptions::Get { id } => requestor.get_eavesdrop_payload(id).await,
         },
         SubCommand::Clean => {
             if !is_root() {

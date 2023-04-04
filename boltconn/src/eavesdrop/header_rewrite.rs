@@ -1,4 +1,4 @@
-use crate::mitm::Replacement;
+use crate::eavesdrop::Replacement;
 use http::header::HeaderName;
 use http::{HeaderMap, HeaderValue};
 use regex::{Regex, RegexSet};

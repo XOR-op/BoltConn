@@ -1,8 +1,8 @@
 use crate::adapter::{Connector, TcpOutBound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
-use crate::mitm::modifier::Modifier;
-use crate::mitm::{sign_site_cert, ModifierContext};
+use crate::eavesdrop::modifier::Modifier;
+use crate::eavesdrop::{sign_site_cert, ModifierContext};
 use crate::proxy::{ConnAbortHandle, ConnAgent};
 use hyper::client::conn;
 use hyper::server::conn::Http;
@@ -18,7 +18,7 @@ use tokio_rustls::rustls::{
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
-pub struct HttpsMitm {
+pub struct HttpsEavesdrop {
     cert: Vec<Certificate>,
     priv_key: PrivateKey,
     server_name: String,
@@ -28,7 +28,7 @@ pub struct HttpsMitm {
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
-impl HttpsMitm {
+impl HttpsEavesdrop {
     pub fn new(
         ca_cert: &CaCertificate,
         server_name: String,

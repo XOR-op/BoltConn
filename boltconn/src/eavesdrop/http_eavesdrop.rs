@@ -1,8 +1,8 @@
 use crate::adapter::{Connector, TcpOutBound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
-use crate::mitm::modifier::Modifier;
-use crate::mitm::ModifierContext;
+use crate::eavesdrop::modifier::Modifier;
+use crate::eavesdrop::ModifierContext;
 use crate::proxy::{ConnAbortHandle, ConnAgent};
 use hyper::client::conn;
 use hyper::server::conn::Http;
@@ -12,14 +12,14 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub struct HttpMitm {
+pub struct HttpEavesdrop {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Arc<dyn TcpOutBound>,
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
-impl HttpMitm {
+impl HttpEavesdrop {
     pub fn new(
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,

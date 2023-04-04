@@ -5,7 +5,7 @@ use crate::adapter::{
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, ProxyImpl};
-use crate::mitm::{HttpMitm, HttpsMitm, ModifierClosure};
+use crate::eavesdrop::{HttpEavesdrop, HttpsEavesdrop, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -26,7 +26,7 @@ pub struct Dispatcher {
     dispatching: RwLock<Arc<Dispatching>>,
     ca_certificate: Certificate,
     modifier: RwLock<ModifierClosure>,
-    mitm_filter: RwLock<Arc<Dispatching>>,
+    eavesdrop_filter: RwLock<Arc<Dispatching>>,
     wireguard_mgr: WireguardManager,
 }
 
@@ -39,7 +39,7 @@ impl Dispatcher {
         dispatching: Arc<Dispatching>,
         ca_certificate: Certificate,
         modifier: ModifierClosure,
-        mitm_filter: Arc<Dispatching>,
+        eavesdrop_filter: Arc<Dispatching>,
     ) -> Self {
         let wg_mgr = WireguardManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         Self {
@@ -49,7 +49,7 @@ impl Dispatcher {
             dispatching: RwLock::new(dispatching),
             ca_certificate,
             modifier: RwLock::new(modifier),
-            mitm_filter: RwLock::new(mitm_filter),
+            eavesdrop_filter: RwLock::new(eavesdrop_filter),
             wireguard_mgr: wg_mgr,
         }
     }
@@ -58,8 +58,8 @@ impl Dispatcher {
         *self.dispatching.write().unwrap() = dispatching;
     }
 
-    pub fn replace_mitm_list(&self, mitm_filter: Arc<Dispatching>) {
-        *self.mitm_filter.write().unwrap() = mitm_filter;
+    pub fn replace_eavesdrop_filter(&self, eavesdrop_filter: Arc<Dispatching>) {
+        *self.eavesdrop_filter.write().unwrap() = eavesdrop_filter;
     }
 
     pub fn replace_modifier(&self, closure: ModifierClosure) {
@@ -222,6 +222,8 @@ impl Dispatcher {
             proxy_type,
             NetworkType::Tcp,
             abort_handle.clone(),
+            self.stat_center.get_upload(),
+            self.stat_center.get_download(),
         )));
 
         let (tun_conn, tun_next) = Connector::new_pair(10);
@@ -252,7 +254,7 @@ impl Dispatcher {
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
             if (port == 80 || port == 443)
                 && matches!(
-                    self.mitm_filter
+                    self.eavesdrop_filter
                         .read()
                         .unwrap()
                         .matches(&conn_info, false)
@@ -265,12 +267,12 @@ impl Dispatcher {
                 match port {
                     80 => {
                         // hijack
-                        tracing::trace!("HTTP MitM for {}", domain_name);
+                        tracing::trace!("HTTP eavesdropping for {}", domain_name);
                         handles.push({
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
                             tokio::spawn(async move {
-                                let mocker = HttpMitm::new(
+                                let mocker = HttpEavesdrop::new(
                                     DuplexChan::new(tun_next),
                                     modifier,
                                     outbounding,
@@ -286,11 +288,11 @@ impl Dispatcher {
                         return;
                     }
                     443 => {
-                        tracing::trace!("HTTPS MitM for {}", domain_name);
+                        tracing::trace!("HTTPS eavesdropping for {}", domain_name);
                         handles.push({
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
-                            let mocker = match HttpsMitm::new(
+                            let mocker = match HttpsEavesdrop::new(
                                 &self.ca_certificate,
                                 domain_name,
                                 DuplexChan::new(tun_next),
@@ -420,6 +422,8 @@ impl Dispatcher {
             proxy_type,
             NetworkType::Udp,
             abort_handle.clone(),
+            self.stat_center.get_upload(),
+            self.stat_center.get_download(),
         )));
         Ok((outbounding, info, abort_handle))
     }
