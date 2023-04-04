@@ -19,30 +19,28 @@
 </a>
 </p>
 
-A transparent proxy supporting L4/L7 tunneling with MitM, designed for privacy and security.
+A go-to solution for transparent application proxy & firewall with tunneling and MitM, designed with privacy and security in mind.
 
 ## Features
-- Transparent proxy supported by Tun device, with route table managed automatically.
-- HTTP, SOCKS5, Shadowsocks, Trojan, Wireguard outbound support.
-- Fake-ip DNS server to prevent DNS query leak. Support DoH/DoT upstream.
-- Rule based flexible routing, including domain name, process name, and other rules.
-- Support for subscription to proxy lists (a.k.a. proxy provider).
-- Most-compatible ruleset configuration with mainstream software (e.g. Clash).
-- MitM based URL/header rewrite/redirect, for fine-grained traffic control and privacy preservation.
-- Hot-reload without disconnecting existent connections
-- RESTful API together with command-line tool to configure program.
+- **Transparent Proxy with Automatic Route Table Management:** The Tun device supports BoltConn's transparent proxy, and its route table is managed automatically.
+- **Multiple Outbound Protocols Support:** BoltConn supports HTTP, SOCKS5, Shadowsocks, Trojan, and Wireguard outbounds. It is also possible to chain all these outbounds.
+- **Fake-IP DNS Server for Leak Prevention:** BoltConn's Fake-IP DNS server prevents DNS query leaks and supports DoH/DoT upstream.
+- **Flexible Rule-Based Routing:** With domain name, process name, and other rules, BoltConn allows for flexible routing.
+- **Proxy/Rule List Subscription:** BoltConn supports proxy/rule list subscription; compatible with Clash.
+- **MitM Functionality for Fine-Grained Traffic Control and Privacy Preservation:** BoltConn supports MitM-based URL/header rewrite/redirect.
+- **Hot-Reload Capability for Seamless Upgrades:** BoltConn supports hot-reload without disconnecting existing connections.
+- **RESTful API and Command-Line Tool for Easy Configuration:** BoltConn provides a RESTful API and command-line tool to configure the program.
 
 For the full features, see [features.md](./docs/features.md).
 
 ## Getting Started
 
-Download pre-built binaries from [release](https://github.com/XOR-op/BoltConn/releases) or build yourself, then add the path to `$PATH`.
 
-To run BoltConn:
+To get started with BoltConn, follow these simple steps:
 
-```bash
-boltconn
-```
+1. Download pre-built binaries from [release](https://github.com/XOR-op/BoltConn/releases) or build yourself.
+2. Add the path of the binary to `$PATH`.
+3. Run BoltConn by typing `boltconn` in your terminal.
 
 To generate CA certificate:
 
@@ -50,19 +48,17 @@ To generate CA certificate:
 boltadm cert -p <your_desired_path>
 ```
 
-To control a running BoltConn service, use `boltadm`. And you can use `boltadm --help` to see more details.
+To control a running BoltConn service, use `boltadm`.  For more information, use `boltadm --help`.
 
 ## Documentations
-For architecture, see [design.md](./docs/design.md).
+Learn more about BoltConn's architecture, RESTful API, and how it compares to other related projects:
 
-For RESTful API, see [restful.md](./docs/restful.md).
-
-For comparison with other related projects, see [comparison.md](./docs/comparison.md).
+- [design.md](./docs/design.md) explains BoltConn's architecture.
+- [restful.md](./docs/restful.md) covers BoltConn's RESTful API.
+- [comparison.md](./docs/comparison.md) compares BoltConn with other related projects.
+- [features.md](./docs/features.md) lists full features of BoltConn.
 
 ## Future Plan
-- outbound protocols support
-  - local interfaces
-  - proxy relay
 - more rules
   - Wi-Fi SSID
   - ASN
@@ -74,7 +70,6 @@ For comparison with other related projects, see [comparison.md](./docs/compariso
 - IPv6 support
 - Windows support with Wintun driver
 - refactor:
-  - UDP optimization
   - better DNS handling
 
 ## License
