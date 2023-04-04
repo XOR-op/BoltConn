@@ -1,6 +1,9 @@
 # Unable to reload
 interface: auto
 api-port: 18086
+#api-key: 123
+http-port: 1080
+socks5-port: 8080
 
 # Able to reload
 dns:
@@ -51,13 +54,17 @@ proxy-provider:
     path: ./Remote/US.yaml
 
 proxy-group:
+  US:
+    providers:
+      - US
   Relay:
-    - lan_http
-    - lan_socks
-    - ss_01
-    - trojan_02
-    - wg_proxy
-    - US
+    proxies:
+      - lan_http
+      - lan_socks
+      - ss_01
+      - trojan_02
+      - wg_proxy
+      - US
 
 rule-provider:
   APPLE:
@@ -71,17 +78,17 @@ rule-local:
   - DOMAIN-SUFFIX, wikipedia.org, DIRECT
   - DOMAIN-SUFFIX, google.com, Relay
   - DOMAIN-SUFFIX, twitter.com, REJECT
-  - RULE-SET, Apple, US
+  - RULE-SET, APPLE, US
   - RULE-SET, TELEGRAM, lan_socks
   - FALLBACK, wg_proxy
 
-mitm-host:
-  - twitter.com
-  - '*.twitter.com'
-  - google.com
-  - '*.google.com'
-  - '*.google.co.uk'
+eavesdrop-rule:
+  - DOMAIN-SUFFIX, twitter.com
+  - AND, [DOMAIN-SUFFIX, wikipedia.org], [PROCESS-NAME, curl]
+  - DOMAIN-SUFFIX, google.com
+  - DOMAIN-SUFFIX, google.co.uk
 
 rewrite:
   - url, ^https://www.google.co.uk(.*), 302, https://www.google.com
   - url, ^https://mail.google.com, 404
+  - header-resp, ^https://mail.google.com, set, Set-Cookie, 123455678
