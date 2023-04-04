@@ -1,5 +1,6 @@
 use crate::config::LinkedState;
 use crate::dispatch::{Dispatching, GeneralProxy};
+use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
@@ -33,6 +34,7 @@ pub struct ApiServer {
     tun_configure: Arc<Mutex<TunConfigure>>,
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<Mutex<LinkedState>>,
+    stream_logger: StreamLoggerHandle,
 }
 
 impl ApiServer {
@@ -46,6 +48,7 @@ impl ApiServer {
         global_setting: Arc<Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
+        stream_logger: StreamLoggerHandle,
     ) -> Self {
         Self {
             secret,
@@ -56,6 +59,7 @@ impl ApiServer {
             dispatching,
             reload_sender: Arc::new(reload_sender),
             state: Arc::new(Mutex::new(state)),
+            stream_logger,
         }
     }
 
@@ -63,8 +67,8 @@ impl ApiServer {
         let secret = Arc::new(self.secret.clone());
         let wrapper = move |r| Self::auth(secret.clone(), r);
         let app = Router::new()
-            .route("/logs", get(Self::get_logs))
             .route("/ws/traffic", get(Self::ws_get_traffic))
+            .route("/ws/logs", get(Self::ws_get_logs))
             .route(
                 "/tun",
                 get(Self::get_tun_configure).put(Self::set_tun_configure),
@@ -134,8 +138,18 @@ impl ApiServer {
         }))
     }
 
-    async fn get_logs(State(_server): State<Self>) -> Json<serde_json::Value> {
-        Json(serde_json::Value::Null)
+    async fn ws_get_logs(State(server): State<Self>, ws: WebSocketUpgrade) -> impl IntoResponse {
+        let recv = server.stream_logger.subscribe();
+        ws.on_upgrade(move |socket| Self::ws_get_logs_inner(recv, socket))
+    }
+
+    async fn ws_get_logs_inner(mut recv: StreamLoggerRecv, mut socket: WebSocket) {
+        while let Ok(log) = recv.recv().await {
+            println!("Log is {:?}", log.as_bytes());
+            if socket.send(Message::Text(log)).await.is_err() {
+                return;
+            }
+        }
     }
 
     async fn get_traffic(State(server): State<Self>) -> Json<serde_json::Value> {

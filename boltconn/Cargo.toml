@@ -51,7 +51,7 @@ tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread", "net", "sync"
 tokio-rustls = { version = "0.23.4", features = ["dangerous_configuration"] }
 tokio-tungstenite = "0.18.0"
 tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std", "fmt"] }
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std", "fmt", "json"] }
 trust-dns-proto = "0.22.0"
 trust-dns-resolver = { version = "0.22.0", features = ['dns-over-rustls', 'dns-over-https-rustls', 'dns-over-https', 'dns-over-tls'] }
 webpki-roots = "0.22.5"

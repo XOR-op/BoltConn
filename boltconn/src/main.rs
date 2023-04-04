@@ -5,11 +5,10 @@ extern crate core;
 use crate::config::{LinkedState, ProxySchema, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::eavesdrop::{EavesdropModifier, HeaderModManager, UrlModManager};
-use crate::external::ApiServer;
+use crate::external::{ApiServer, StreamLoggerHandle};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, TunUdpInbound};
-use chrono::Timelike;
 use ipnet::Ipv4Net;
 use is_root::is_root;
 use network::tun_device::TunDevice;
@@ -31,9 +30,6 @@ use std::{fs, io};
 use structopt::StructOpt;
 use tokio::select;
 use tracing::{event, Level};
-use tracing_subscriber::fmt::format::Writer;
-use tracing_subscriber::fmt::time::FormatTime;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod adapter;
 mod common;
@@ -45,23 +41,6 @@ mod network;
 mod platform;
 mod proxy;
 mod transport;
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
-pub struct SystemTime;
-
-impl FormatTime for SystemTime {
-    fn format_time(&self, w: &mut Writer<'_>) -> core::fmt::Result {
-        let time = chrono::prelude::Local::now();
-        write!(
-            w,
-            "{:02}:{:02}:{:02}.{:03}",
-            (time.hour() + 8) % 24,
-            time.minute(),
-            time.second(),
-            time.timestamp_subsec_millis()
-        )
-    }
-}
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "boltconn", about = "BoltConn core binary")]
@@ -148,17 +127,6 @@ fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)
     Ok((url_list, header_list))
 }
 
-fn init_tracing() {
-    let formatting_layer = fmt::layer()
-        .compact()
-        .with_writer(std::io::stdout)
-        .with_timer(SystemTime::default());
-    tracing_subscriber::registry()
-        .with(formatting_layer)
-        .with(EnvFilter::new("boltconn=trace"))
-        .init();
-}
-
 fn main() -> ExitCode {
     if !is_root() {
         eprintln!("BoltConn must be run with root privilege.");
@@ -170,7 +138,9 @@ fn main() -> ExitCode {
 
     // tokio and tracing
     let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
-    init_tracing();
+
+    let stream_logger = StreamLoggerHandle::new();
+    external::init_tracing(&stream_logger);
 
     // interface
     let (_, real_iface_name) = get_default_route().expect("failed to get default route");
@@ -288,6 +258,7 @@ fn main() -> ExitCode {
             state_path: state_path(&config_path),
             state,
         },
+        stream_logger,
     );
 
     let dispatcher = {
