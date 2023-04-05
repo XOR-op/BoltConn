@@ -1,8 +1,8 @@
 use crate::adapter::{Connector, TcpOutBound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
-use crate::eavesdrop::modifier::Modifier;
-use crate::eavesdrop::ModifierContext;
+use crate::intercept::modifier::Modifier;
+use crate::intercept::ModifierContext;
 use crate::proxy::{ConnAbortHandle, ConnAgent};
 use hyper::client::conn;
 use hyper::server::conn::Http;
@@ -12,14 +12,14 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub struct HttpEavesdrop {
+pub struct HttpIntercept {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Arc<dyn TcpOutBound>,
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
-impl HttpEavesdrop {
+impl HttpIntercept {
     pub fn new(
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,

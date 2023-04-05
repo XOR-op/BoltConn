@@ -1,4 +1,4 @@
-use crate::eavesdrop::ReplacedChunk;
+use crate::intercept::ReplacedChunk;
 use regex::{Regex, RegexSet};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

@@ -55,7 +55,7 @@ struct CertOptions {
 }
 
 #[derive(Debug, StructOpt)]
-enum EavesdropOptions {
+enum InterceptOptions {
     /// List all captured data
     List,
     /// List data ranged from *start* to *end*
@@ -77,7 +77,7 @@ enum SubCommand {
     /// Generate Certificates
     Cert(CertOptions),
     /// Captured HTTP data
-    Eavesdrop(EavesdropOptions),
+    Intercept(InterceptOptions),
     /// Clean unexpected shutdown
     Clean,
     /// Reload Configuration
@@ -128,10 +128,10 @@ async fn main() {
                 Err(e) => Err(e),
             }
         }
-        SubCommand::Eavesdrop(opt) => match opt {
-            EavesdropOptions::List => requestor.eavesdrop(None).await,
-            EavesdropOptions::Range { start, end } => requestor.eavesdrop(Some((start, end))).await,
-            EavesdropOptions::Get { id } => requestor.get_eavesdrop_payload(id).await,
+        SubCommand::Intercept(opt) => match opt {
+            InterceptOptions::List => requestor.intercept(None).await,
+            InterceptOptions::Range { start, end } => requestor.intercept(Some((start, end))).await,
+            InterceptOptions::Get { id } => requestor.get_intercept_payload(id).await,
         },
         SubCommand::Clean => {
             if !is_root() {

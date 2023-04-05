@@ -4,7 +4,7 @@ extern crate core;
 
 use crate::config::{LinkedState, ProxySchema, RawRootCfg, RawState, RuleSchema};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
-use crate::eavesdrop::{EavesdropModifier, HeaderModManager, UrlModManager};
+use crate::intercept::{InterceptModifier, HeaderModManager, UrlModManager};
 use crate::external::{ApiServer, StreamLoggerHandle};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
@@ -35,7 +35,7 @@ mod adapter;
 mod common;
 mod config;
 mod dispatch;
-mod eavesdrop;
+mod intercept;
 mod external;
 mod network;
 mod platform;
@@ -270,17 +270,17 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let eavesdrop_filter = match {
+        let intercept_filter = match {
             let builder = DispatchingBuilder::new();
-            if let Some(eavesdrop_rules) = config.eavesdrop_rule {
-                builder.build_filter(eavesdrop_rules.as_slice(), &rule_schema)
+            if let Some(intercept_rules) = config.intercept_rule {
+                builder.build_filter(intercept_rules.as_slice(), &rule_schema)
             } else {
                 builder.build_filter(vec![].as_slice(), &rule_schema)
             }
         } {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("Load eavesdrop rules failed: {}", e);
+                eprintln!("Load intercept rules failed: {}", e);
                 return ExitCode::from(1);
             }
         };
@@ -321,14 +321,14 @@ fn main() -> ExitCode {
             dispatching,
             cert,
             Box::new(move |pi| {
-                Arc::new(EavesdropModifier::new(
+                Arc::new(InterceptModifier::new(
                     hcap_copy.clone(),
                     url_modifier.clone(),
                     hdr_modifier.clone(),
                     pi,
                 ))
             }),
-            Arc::new(eavesdrop_filter),
+            Arc::new(intercept_filter),
         ))
     };
     let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
@@ -376,12 +376,12 @@ fn main() -> ExitCode {
                     if restart.is_some(){
                         // try restarting components
                         match reload(&config_path,dns.clone()).await{
-                            Ok((dispatching, eavesdrop_filter,url_rewriter,header_rewriter)) => {
+                            Ok((dispatching, intercept_filter,url_rewriter,header_rewriter)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
                                 let hcap2 = http_capturer.clone();
                                 dispatcher.replace_dispatching(dispatching);
-                                dispatcher.replace_eavesdrop_filter(eavesdrop_filter);
-                                dispatcher.replace_modifier(Box::new(move |pi| Arc::new(EavesdropModifier::new(hcap2.clone(),url_rewriter.clone(),header_rewriter.clone(),pi))));
+                                dispatcher.replace_intercept_filter(intercept_filter);
+                                dispatcher.replace_modifier(Box::new(move |pi| Arc::new(InterceptModifier::new(hcap2.clone(),url_rewriter.clone(),header_rewriter.clone(),pi))));
                                 tracing::info!("Reloaded config successfully");
                             }
                             Err(err)=>{
@@ -432,14 +432,14 @@ async fn reload(
         }
         Arc::new(builder.build(&config, &state, &rule_schema, &proxy_schema)?)
     };
-    let eavesdrop_filter = {
+    let intercept_filter = {
         let builder = DispatchingBuilder::new();
-        if let Some(eavesdrop_rule) = config.eavesdrop_rule {
-            Arc::new(builder.build_filter(eavesdrop_rule.as_slice(), &rule_schema)?)
+        if let Some(intercept_rule) = config.intercept_rule {
+            Arc::new(builder.build_filter(intercept_rule.as_slice(), &rule_schema)?)
         } else {
             Arc::new(builder.build_filter(vec![].as_slice(), &rule_schema)?)
         }
     };
     dns.replace_resolvers(group).await?;
-    Ok((dispatching, eavesdrop_filter, url_mod, hdr_mod))
+    Ok((dispatching, intercept_filter, url_mod, hdr_mod))
 }

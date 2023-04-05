@@ -119,16 +119,16 @@ impl Requester {
         Ok(())
     }
 
-    pub async fn eavesdrop(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
+    pub async fn intercept(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
         let uri = match range {
-            None => self.route("/eavesdrop/all"),
+            None => self.route("/intercept/all"),
             Some((s, Some(e))) => {
-                self.route(format!("/eavesdrop/range?start={}&end={}", s, e).as_str())
+                self.route(format!("/intercept/range?start={}&end={}", s, e).as_str())
             }
-            Some((s, None)) => self.route(format!("/eavesdrop/range?start={}", s).as_str()),
+            Some((s, None)) => self.route(format!("/intercept/range?start={}", s).as_str()),
         };
         let data = reqwest::get(uri).await?.text().await?;
-        let result: Vec<boltapi::HttpEavesdropSchema> = serde_json::from_str(data.as_str())?;
+        let result: Vec<boltapi::HttpInterceptSchema> = serde_json::from_str(data.as_str())?;
         let mut table = Table::new("{:<} {:<} {:<} {:<} {:<} {:<}");
         table.add_row(
             Row::new()
@@ -154,12 +154,12 @@ impl Requester {
         Ok(())
     }
 
-    pub async fn get_eavesdrop_payload(&self, id: u32) -> Result<()> {
-        let data = reqwest::get(self.route(format!("/eavesdrop/payload/{}", id).as_str()))
+    pub async fn get_intercept_payload(&self, id: u32) -> Result<()> {
+        let data = reqwest::get(self.route(format!("/intercept/payload/{}", id).as_str()))
             .await?
             .text()
             .await?;
-        let result: boltapi::GetEavesdropDataResp = serde_json::from_str(data.as_str())?;
+        let result: boltapi::GetInterceptDataResp = serde_json::from_str(data.as_str())?;
         println!("==================  Request  ===================");
         println!("Header:");
         result.req_header.iter().for_each(|l| println!("{}", l));

@@ -5,7 +5,7 @@ use crate::adapter::{
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, ProxyImpl};
-use crate::eavesdrop::{HttpEavesdrop, HttpsEavesdrop, ModifierClosure};
+use crate::intercept::{HttpIntercept, HttpsIntercept, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -26,7 +26,7 @@ pub struct Dispatcher {
     dispatching: RwLock<Arc<Dispatching>>,
     ca_certificate: Certificate,
     modifier: RwLock<ModifierClosure>,
-    eavesdrop_filter: RwLock<Arc<Dispatching>>,
+    intercept_filter: RwLock<Arc<Dispatching>>,
     wireguard_mgr: WireguardManager,
 }
 
@@ -39,7 +39,7 @@ impl Dispatcher {
         dispatching: Arc<Dispatching>,
         ca_certificate: Certificate,
         modifier: ModifierClosure,
-        eavesdrop_filter: Arc<Dispatching>,
+        intercept_filter: Arc<Dispatching>,
     ) -> Self {
         let wg_mgr = WireguardManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         Self {
@@ -49,7 +49,7 @@ impl Dispatcher {
             dispatching: RwLock::new(dispatching),
             ca_certificate,
             modifier: RwLock::new(modifier),
-            eavesdrop_filter: RwLock::new(eavesdrop_filter),
+            intercept_filter: RwLock::new(intercept_filter),
             wireguard_mgr: wg_mgr,
         }
     }
@@ -58,8 +58,8 @@ impl Dispatcher {
         *self.dispatching.write().unwrap() = dispatching;
     }
 
-    pub fn replace_eavesdrop_filter(&self, eavesdrop_filter: Arc<Dispatching>) {
-        *self.eavesdrop_filter.write().unwrap() = eavesdrop_filter;
+    pub fn replace_intercept_filter(&self, intercept_filter: Arc<Dispatching>) {
+        *self.intercept_filter.write().unwrap() = intercept_filter;
     }
 
     pub fn replace_modifier(&self, closure: ModifierClosure) {
@@ -254,7 +254,7 @@ impl Dispatcher {
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
             if (port == 80 || port == 443)
                 && matches!(
-                    self.eavesdrop_filter
+                    self.intercept_filter
                         .read()
                         .unwrap()
                         .matches(&conn_info, false)
@@ -267,12 +267,12 @@ impl Dispatcher {
                 match port {
                     80 => {
                         // hijack
-                        tracing::trace!("HTTP eavesdropping for {}", domain_name);
+                        tracing::trace!("HTTP intercept for {}", domain_name);
                         handles.push({
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
                             tokio::spawn(async move {
-                                let mocker = HttpEavesdrop::new(
+                                let mocker = HttpIntercept::new(
                                     DuplexChan::new(tun_next),
                                     modifier,
                                     outbounding,
@@ -288,11 +288,11 @@ impl Dispatcher {
                         return;
                     }
                     443 => {
-                        tracing::trace!("HTTPS eavesdropping for {}", domain_name);
+                        tracing::trace!("HTTPS intercept for {}", domain_name);
                         handles.push({
                             let info = info.clone();
                             let abort_handle = abort_handle.clone();
-                            let mocker = match HttpsEavesdrop::new(
+                            let mocker = match HttpsIntercept::new(
                                 &self.ca_certificate,
                                 domain_name,
                                 DuplexChan::new(tun_next),

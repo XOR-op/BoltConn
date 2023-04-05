@@ -1,14 +1,14 @@
-mod eavesdrop_modifier;
+mod intercept_modifier;
 mod header_rewrite;
-mod http_eavesdrop;
-mod https_eavesdrop;
+mod http_intercept;
+mod https_intercept;
 mod modifier;
 mod url_rewrite;
 
-pub use eavesdrop_modifier::*;
+pub use intercept_modifier::*;
 pub use header_rewrite::*;
-pub use http_eavesdrop::HttpEavesdrop;
-pub use https_eavesdrop::HttpsEavesdrop;
+pub use http_intercept::HttpIntercept;
+pub use https_intercept::HttpsIntercept;
 pub use modifier::*;
 use rcgen::{
     date_time_ymd, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose,

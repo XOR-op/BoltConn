@@ -11,7 +11,7 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use boltapi::{
-    GetEavesdropDataResp, GetEavesdropRangeReq, GetGroupRespSchema, ProxyData, SetGroupReqSchema,
+    GetInterceptDataResp, GetInterceptRangeReq, GetGroupRespSchema, ProxyData, SetGroupReqSchema,
     TrafficResp, TunStatusSchema,
 };
 use serde_json::json;
@@ -80,9 +80,9 @@ impl ApiServer {
             )
             .route("/connections/:id", delete(Self::stop_conn))
             .route("/sessions", get(Self::get_sessions))
-            .route("/eavesdrop/all", get(Self::get_eavesdrop))
-            .route("/eavesdrop/range", get(Self::get_eavesdrop_range))
-            .route("/eavesdrop/payload/:id", get(Self::get_eavesdrop_payload))
+            .route("/intercept/all", get(Self::get_intercept))
+            .route("/intercept/range", get(Self::get_intercept_range))
+            .route("/intercept/payload/:id", get(Self::get_intercept_payload))
             .route("/proxies", get(Self::get_all_proxies))
             .route(
                 "/proxies/:group",
@@ -275,8 +275,8 @@ impl ApiServer {
     ) -> Json<serde_json::Value> {
         let mut result = Vec::new();
         for (idx, (host, proc, req, resp)) in list.into_iter().enumerate() {
-            let item = boltapi::HttpEavesdropSchema {
-                eavesdrop_id: idx as u64,
+            let item = boltapi::HttpInterceptSchema {
+                intercept_id: idx as u64,
                 client: proc.map(|proc| proc.name),
                 uri: {
                     let s = req.uri.to_string();
@@ -298,7 +298,7 @@ impl ApiServer {
         Json(json!(result))
     }
 
-    async fn get_eavesdrop(State(server): State<Self>) -> Json<serde_json::Value> {
+    async fn get_intercept(State(server): State<Self>) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
             let list = capturer.get_copy();
             Self::collect_captured(list)
@@ -307,9 +307,9 @@ impl ApiServer {
         }
     }
 
-    async fn get_eavesdrop_range(
+    async fn get_intercept_range(
         State(server): State<Self>,
-        Query(params): Query<GetEavesdropRangeReq>,
+        Query(params): Query<GetInterceptRangeReq>,
     ) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
             if let Some(list) =
@@ -321,7 +321,7 @@ impl ApiServer {
         Json(serde_json::Value::Null)
     }
 
-    async fn get_eavesdrop_payload(
+    async fn get_intercept_payload(
         State(server): State<Self>,
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
@@ -337,7 +337,7 @@ impl ApiServer {
             if let Some(list) = capturer.get_range_copy(id, Some(id + 1)) {
                 if list.len() == 1 {
                     let (_, _, req, resp) = list.get(0).unwrap();
-                    let result = GetEavesdropDataResp {
+                    let result = GetInterceptDataResp {
                         req_header: req
                             .headers
                             .iter()

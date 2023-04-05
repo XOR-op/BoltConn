@@ -28,8 +28,8 @@ pub struct RawRootCfg {
     pub rule_local: Vec<String>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(alias = "eavesdrop-rule")]
-    pub eavesdrop_rule: Option<Vec<String>>,
+    #[serde(alias = "intercept-rule")]
+    pub intercept_rule: Option<Vec<String>>,
     #[serde(alias = "rewrite-rule")]
     pub rewrite: Option<Vec<String>>,
 }

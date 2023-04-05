@@ -127,7 +127,6 @@ pub fn get_default_route() -> io::Result<(IpAddr, String)> {
     let kv: HashMap<String, String> = get_command_output("route", ["-n", "get", "1.1.1.1"])?
         .split('\n')
         .map(|s| s.to_string())
-        .into_iter()
         .filter_map(|l| {
             let vec: Vec<&str> = l.split(": ").collect();
             if vec.len() == 2 {
