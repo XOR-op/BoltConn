@@ -145,7 +145,6 @@ impl ApiServer {
 
     async fn ws_get_logs_inner(mut recv: StreamLoggerRecv, mut socket: WebSocket) {
         while let Ok(log) = recv.recv().await {
-            println!("Log is {:?}", log.as_bytes());
             if socket.send(Message::Text(log)).await.is_err() {
                 return;
             }
