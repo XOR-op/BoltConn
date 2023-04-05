@@ -82,7 +82,7 @@ rule-local:
   - RULE-SET, TELEGRAM, lan_socks
   - FALLBACK, wg_proxy
 
-eavesdrop-rule:
+intercept-rule:
   - DOMAIN-SUFFIX, twitter.com
   - AND, [DOMAIN-SUFFIX, wikipedia.org], [PROCESS-NAME, curl]
   - DOMAIN-SUFFIX, google.com
