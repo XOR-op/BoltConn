@@ -1,4 +1,7 @@
-use crate::config::{config::default_rule_provider, safe_join_path, RuleProvider};
+use crate::config::{
+    config::{default_rule_provider, default_str_vec},
+    safe_join_path, RuleProvider,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -12,14 +15,14 @@ pub struct ModuleSchema {
     pub rule_local: Vec<String>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(alias = "intercept-rule")]
-    pub intercept_rule: Option<Vec<String>>,
-    #[serde(alias = "rewrite-rule")]
-    pub rewrite: Option<Vec<String>>,
+    #[serde(alias = "intercept-rule", default = "default_str_vec")]
+    pub intercept_rule: Vec<String>,
+    #[serde(alias = "rewrite-rule", default = "default_str_vec")]
+    pub rewrite: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(tag = "type")]
 pub enum ModuleLocation {
     #[serde(alias = "file")]
     File { path: String },
@@ -32,7 +35,6 @@ pub enum ModuleLocation {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
 pub struct ModuleConfig {
     pub name: String,
     #[serde(flatten)]

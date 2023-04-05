@@ -65,12 +65,34 @@ impl LoadedConfig {
         .0?;
         let module_schema =
             tokio::join!(read_module_schema(config_path, &raw_config.module, false)).0?;
-        Ok(Self {
+        let mut ret = Self {
             config: raw_config,
             state: raw_state,
             rule_schema,
             proxy_schema,
             module_schema,
-        })
+        };
+        ret.apply_module();
+        Ok(ret)
+    }
+
+    pub fn apply_module(&mut self) {
+        let mut rule_local = vec![];
+        let mut intercept_rule = vec![];
+        let mut rewrite = vec![];
+        for i in self.module_schema.drain(..) {
+            rule_local.extend(i.rule_local.into_iter());
+            self.config
+                .rule_provider
+                .extend(i.rule_provider.into_iter());
+            intercept_rule.extend(i.intercept_rule.into_iter());
+            rewrite.extend(i.rewrite.into_iter());
+        }
+        rule_local.extend(self.config.rule_local.drain(..));
+        intercept_rule.extend(self.config.intercept_rule.drain(..));
+        rewrite.extend(self.config.rewrite.drain(..));
+        self.config.rule_local = rule_local;
+        self.config.intercept_rule = intercept_rule;
+        self.config.rewrite = rewrite;
     }
 }

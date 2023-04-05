@@ -28,10 +28,10 @@ pub struct RawRootCfg {
     pub rule_local: Vec<String>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(alias = "intercept-rule")]
-    pub intercept_rule: Option<Vec<String>>,
-    #[serde(alias = "rewrite-rule")]
-    pub rewrite: Option<Vec<String>>,
+    #[serde(alias = "intercept-rule", default = "default_str_vec")]
+    pub intercept_rule: Vec<String>,
+    #[serde(alias = "rewrite-rule", default = "default_str_vec")]
+    pub rewrite: Vec<String>,
     #[serde(default = "default_module")]
     pub module: Vec<ModuleConfig>,
 }
@@ -131,7 +131,12 @@ fn default_proxy_provider() -> HashMap<String, ProxyProvider> {
 pub(super) fn default_rule_provider() -> HashMap<String, RuleProvider> {
     Default::default()
 }
+
 fn default_module() -> Vec<ModuleConfig> {
+    Default::default()
+}
+
+pub(super) fn default_str_vec() -> Vec<String> {
     Default::default()
 }
 

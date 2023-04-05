@@ -129,7 +129,7 @@ impl DispatchingBuilder {
             state,
             proxy_schema,
             rule_schema,
-            module_schema,
+            ..
         } = loaded_config;
         // read all proxies
         self.parse_proxies(config.proxy_local.iter())?;

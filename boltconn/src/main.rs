@@ -245,11 +245,7 @@ fn main() -> ExitCode {
         let rule_schema = &loaded_config.rule_schema;
         let intercept_filter = match {
             let builder = DispatchingBuilder::new();
-            if let Some(intercept_rules) = &config.intercept_rule {
-                builder.build_filter(intercept_rules.as_slice(), rule_schema)
-            } else {
-                builder.build_filter(vec![].as_slice(), rule_schema)
-            }
+            builder.build_filter(config.intercept_rule.as_slice(), rule_schema)
         } {
             Ok(m) => m,
             Err(e) => {
@@ -257,8 +253,8 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let (url_modifier, hdr_modifier) = if let Some(rewrite_cfg) = &config.rewrite {
-            let (url_mod, hdr_mod) = match mapping_rewrite(rewrite_cfg.as_slice()) {
+        let (url_modifier, hdr_modifier) = {
+            let (url_mod, hdr_mod) = match mapping_rewrite(config.rewrite.as_slice()) {
                 Ok((url_mod, hdr_mod)) => (url_mod, hdr_mod),
                 Err(e) => {
                     eprintln!("Parse url modifier rules, syntax failed: {}", e);
@@ -280,11 +276,6 @@ fn main() -> ExitCode {
                         return ExitCode::from(1);
                     }
                 }),
-            )
-        } else {
-            (
-                Arc::new(UrlModManager::empty()),
-                Arc::new(HeaderModManager::empty()),
             )
         };
         Arc::new(Dispatcher::new(
@@ -385,16 +376,11 @@ async fn reload(
 )> {
     let loaded_config = LoadedConfig::load_config(config_path).await?;
     let config = &loaded_config.config;
-    let (url_mod, hdr_mod) = if let Some(rewrite) = &config.rewrite {
-        let (url, hdr) = mapping_rewrite(rewrite.as_slice())?;
+    let (url_mod, hdr_mod) = {
+        let (url, hdr) = mapping_rewrite(config.rewrite.as_slice())?;
         (
             Arc::new(UrlModManager::new(url.as_slice())?),
             Arc::new(HeaderModManager::new(hdr.as_slice())?),
-        )
-    } else {
-        (
-            Arc::new(UrlModManager::empty()),
-            Arc::new(HeaderModManager::empty()),
         )
     };
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
@@ -409,11 +395,7 @@ async fn reload(
     let intercept_filter = {
         let builder = DispatchingBuilder::new();
         let rule_schema = &loaded_config.rule_schema;
-        if let Some(intercept_rule) = &config.intercept_rule {
-            Arc::new(builder.build_filter(intercept_rule.as_slice(), rule_schema)?)
-        } else {
-            Arc::new(builder.build_filter(vec![].as_slice(), rule_schema)?)
-        }
+        Arc::new(builder.build_filter(config.intercept_rule.as_slice(), rule_schema)?)
     };
     dns.replace_resolvers(group).await?;
     Ok((dispatching, intercept_filter, url_mod, hdr_mod))
