@@ -11,7 +11,7 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use boltapi::{
-    GetInterceptDataResp, GetInterceptRangeReq, GetGroupRespSchema, ProxyData, SetGroupReqSchema,
+    GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq, ProxyData, SetGroupReqSchema,
     TrafficResp, TunStatusSchema,
 };
 use serde_json::json;

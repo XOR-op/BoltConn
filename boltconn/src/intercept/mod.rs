@@ -1,14 +1,14 @@
-mod intercept_modifier;
 mod header_rewrite;
 mod http_intercept;
 mod https_intercept;
+mod intercept_modifier;
 mod modifier;
 mod url_rewrite;
 
-pub use intercept_modifier::*;
 pub use header_rewrite::*;
 pub use http_intercept::HttpIntercept;
 pub use https_intercept::HttpsIntercept;
+pub use intercept_modifier::*;
 pub use modifier::*;
 use rcgen::{
     date_time_ymd, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose,
