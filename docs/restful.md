@@ -10,9 +10,9 @@ API for external controlling.
 | GET     | /connections                               | Get all active connections.                          |
 | DELETE  | /connections                               | Stop all active connections.                         |
 | DELETE  | /connections/:id                           | Stop the specific connection.                        |
-| GET     | /eavesdrop/all                             | Get all captured http packets.                       |
-| GET     | /eavesdrop/range?start=*start*(&end=*end*) | Get captured http packets from *start* to *end*.     |
-| GET     | /eavesdrop/payload/:id                     | Get headers and bodies of the packet.                |
+| GET     | /intercept/all                             | Get all captured http packets.                       |
+| GET     | /intercept/range?start=*start*(&end=*end*) | Get captured http packets from *start* to *end*.     |
+| GET     | /intercept/payload/:id                     | Get headers and bodies of the packet.                |
 | GET     | /proxies                                   | Get all proxy groups.                                |
 | GET     | /proxies/:group                            | Get info for specific group.                         |
 | PUT     | /proxies/:group                            | Set proxy for specific group.                        |
