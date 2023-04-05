@@ -1,5 +1,5 @@
 use crate::config::proxy_group::RawProxyGroupCfg;
-use crate::config::{ProxyProvider, RuleProvider};
+use crate::config::{ModuleConfig, ProxyProvider, RuleProvider};
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -32,6 +32,8 @@ pub struct RawRootCfg {
     pub intercept_rule: Option<Vec<String>>,
     #[serde(alias = "rewrite-rule")]
     pub rewrite: Option<Vec<String>>,
+    #[serde(default = "default_module")]
+    pub module: Vec<ModuleConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -126,7 +128,10 @@ fn default_proxy_provider() -> HashMap<String, ProxyProvider> {
     Default::default()
 }
 
-fn default_rule_provider() -> HashMap<String, RuleProvider> {
+pub(super) fn default_rule_provider() -> HashMap<String, RuleProvider> {
+    Default::default()
+}
+fn default_module() -> Vec<ModuleConfig> {
     Default::default()
 }
 

@@ -1,6 +1,6 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
-    ProxySchema, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption, RawRootCfg,
+    LoadedConfig, ProxySchema, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption,
     RawServerAddr, RawServerSockAddr, RawState, RuleSchema,
 };
 use crate::dispatch::proxy::ProxyImpl;
@@ -123,27 +123,28 @@ impl DispatchingBuilder {
         r
     }
 
-    pub fn build(
-        mut self,
-        cfg: &RawRootCfg,
-        state: &RawState,
-        rule_schema: &HashMap<String, RuleSchema>,
-        proxy_schema: &HashMap<String, ProxySchema>,
-    ) -> anyhow::Result<Dispatching> {
+    pub fn build(mut self, loaded_config: &LoadedConfig) -> anyhow::Result<Dispatching> {
+        let LoadedConfig {
+            config,
+            state,
+            proxy_schema,
+            rule_schema,
+            module_schema,
+        } = loaded_config;
         // read all proxies
-        self.parse_proxies(cfg.proxy_local.iter())?;
+        self.parse_proxies(config.proxy_local.iter())?;
         for proxies in proxy_schema.values() {
             self.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
         }
 
         // read proxy groups
         let mut queued_groups = HashSet::new();
-        for (name, group) in &cfg.proxy_group {
+        for (name, group) in &config.proxy_group {
             self.parse_group(
                 name,
                 state,
                 group,
-                &cfg.proxy_group,
+                &config.proxy_group,
                 proxy_schema,
                 &mut queued_groups,
                 false,
@@ -159,8 +160,8 @@ impl DispatchingBuilder {
             ruleset.insert(name.clone(), Arc::new(builder.build()));
         }
         let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
-        for (idx, r) in cfg.rule_local.iter().enumerate() {
-            if idx != cfg.rule_local.len() - 1 {
+        for (idx, r) in config.rule_local.iter().enumerate() {
+            if idx != config.rule_local.len() - 1 {
                 rule_builder
                     .append_literal(r.as_str())
                     .map_err(|e| anyhow!("{} ({:?})", r, e))?;
