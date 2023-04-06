@@ -88,9 +88,9 @@ impl LoadedConfig {
             intercept_rule.extend(i.intercept_rule.into_iter());
             rewrite.extend(i.rewrite.into_iter());
         }
-        rule_local.extend(self.config.rule_local.drain(..));
-        intercept_rule.extend(self.config.intercept_rule.drain(..));
-        rewrite.extend(self.config.rewrite.drain(..));
+        rule_local.append(&mut self.config.rule_local);
+        intercept_rule.append(&mut self.config.intercept_rule);
+        rewrite.append(&mut self.config.rewrite);
         self.config.rule_local = rule_local;
         self.config.intercept_rule = intercept_rule;
         self.config.rewrite = rewrite;
