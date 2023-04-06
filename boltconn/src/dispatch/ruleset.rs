@@ -1,14 +1,17 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
-use crate::config::RuleSchema;
+use crate::config::{ProviderBehavior, RuleSchema};
 use crate::dispatch::rule::{PortRule, RuleBuilder, RuleImpl};
 use crate::dispatch::ConnInfo;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
 use aho_corasick::AhoCorasick;
 use ip_network_table::IpNetworkTable;
+use ipnet::IpNet;
+use regex::Regex;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
+use std::str::FromStr;
 
 /// Matcher for rules in the same group
 pub struct RuleSet {
@@ -103,48 +106,72 @@ impl RuleSetBuilder {
             any_tcp: false,
             any_udp: false,
         };
-        for str in &payload.payload {
-            if let Some(rule) = RuleBuilder::parse_ruleset(str) {
-                match rule {
-                    RuleImpl::ProcessName(pn) => {
-                        retval.process_name.insert(pn.clone());
+        match payload.behavior {
+            ProviderBehavior::Domain => {
+                let prefix_reg = Regex::new(r"[*+]\.").unwrap();
+                for str in &payload.payload {
+                    // here we treat all */+ as DomainSuffix
+                    if prefix_reg.find(str).is_some() {
+                        let r = prefix_reg.replace_all(str, "");
+                        retval.domain.add_suffix(&r);
+                    } else {
+                        retval.domain.add_exact(str);
                     }
-                    RuleImpl::ProcessKeyword(kw) => retval.process_keyword.push(kw.clone()),
-                    RuleImpl::ProcPathKeyword(kw) => retval.procpath_keyword.push(kw.clone()),
-                    RuleImpl::Domain(dn) => retval.domain.add_exact(dn.as_str()),
-                    RuleImpl::DomainSuffix(sfx) => retval.domain.add_suffix(sfx.as_str()),
-                    RuleImpl::DomainKeyword(kw) => retval.domain_keyword.push(kw.clone()),
-                    RuleImpl::IpCidr(ip) => {
-                        let ip = ip_network::IpNetwork::new_truncate(ip.addr(), ip.prefix_len())
-                            .unwrap();
-                        retval.ip_cidr.insert(ip, ());
-                    }
-                    RuleImpl::Port(p) => match p {
-                        PortRule::Tcp(p) => {
-                            retval.tcp_port.insert(p);
-                        }
-                        PortRule::Udp(p) => {
-                            retval.udp_port.insert(p);
-                        }
-                        PortRule::All(p) => {
-                            retval.tcp_port.insert(p);
-                            retval.udp_port.insert(p);
-                        }
-                        PortRule::AnyTcp => retval.any_tcp = true,
-                        PortRule::AnyUdp => retval.any_udp = true,
-                    },
-                    // Slow for ruleset; better to write as a standalone rule
-                    RuleImpl::RuleSet(_)
-                    | RuleImpl::And(..)
-                    | RuleImpl::Or(..)
-                    | RuleImpl::Not(_)
-                    | RuleImpl::ProcCmdRegex(_) => return None,
                 }
-            } else {
-                return None;
+                Some(retval)
+            }
+            ProviderBehavior::IpCidr => {
+                for str in &payload.payload {
+                    let ip = IpNet::from_str(str).ok()?;
+                    let ip =
+                        ip_network::IpNetwork::new_truncate(ip.addr(), ip.prefix_len()).unwrap();
+                    retval.ip_cidr.insert(ip, ());
+                }
+                Some(retval)
+            }
+            ProviderBehavior::Classical => {
+                for str in &payload.payload {
+                    let rule = RuleBuilder::parse_ruleset(str)?;
+                    match rule {
+                        RuleImpl::ProcessName(pn) => {
+                            retval.process_name.insert(pn.clone());
+                        }
+                        RuleImpl::ProcessKeyword(kw) => retval.process_keyword.push(kw.clone()),
+                        RuleImpl::ProcPathKeyword(kw) => retval.procpath_keyword.push(kw.clone()),
+                        RuleImpl::Domain(dn) => retval.domain.add_exact(dn.as_str()),
+                        RuleImpl::DomainSuffix(sfx) => retval.domain.add_suffix(sfx.as_str()),
+                        RuleImpl::DomainKeyword(kw) => retval.domain_keyword.push(kw.clone()),
+                        RuleImpl::IpCidr(ip) => {
+                            let ip =
+                                ip_network::IpNetwork::new_truncate(ip.addr(), ip.prefix_len())
+                                    .unwrap();
+                            retval.ip_cidr.insert(ip, ());
+                        }
+                        RuleImpl::Port(p) => match p {
+                            PortRule::Tcp(p) => {
+                                retval.tcp_port.insert(p);
+                            }
+                            PortRule::Udp(p) => {
+                                retval.udp_port.insert(p);
+                            }
+                            PortRule::All(p) => {
+                                retval.tcp_port.insert(p);
+                                retval.udp_port.insert(p);
+                            }
+                            PortRule::AnyTcp => retval.any_tcp = true,
+                            PortRule::AnyUdp => retval.any_udp = true,
+                        },
+                        // Slow for ruleset; better to write as a standalone rule
+                        RuleImpl::RuleSet(_)
+                        | RuleImpl::And(..)
+                        | RuleImpl::Or(..)
+                        | RuleImpl::Not(_)
+                        | RuleImpl::ProcCmdRegex(_) => return None,
+                    }
+                }
+                Some(retval)
             }
         }
-        Some(retval)
     }
 
     pub fn merge(mut self, rhs: Self) -> Self {
