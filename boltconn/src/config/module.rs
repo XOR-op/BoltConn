@@ -79,8 +79,17 @@ pub async fn read_module_schema(
             })
         })
         .collect();
-    for task in tasks {
-        let content = task.await??;
+    for (idx, task) in tasks.into_iter().enumerate() {
+        let content = match task.await? {
+            Ok(c) => c,
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "In file {}: {}",
+                    modules.get(idx).unwrap().name,
+                    e
+                ))
+            }
+        };
         list.push(content);
     }
     Ok(list)

@@ -61,55 +61,57 @@ pub async fn read_rule_schema(
 ) -> anyhow::Result<HashMap<String, RuleSchema>> {
     let mut table = HashMap::new();
     // concurrently download rules
-    let tasks: Vec<JoinHandle<anyhow::Result<(String, RuleSchema)>>> = providers
+    let tasks: HashMap<String, JoinHandle<anyhow::Result<RuleSchema>>> = providers
         .clone()
         .into_iter()
         .map(|(name, item)| {
             let root_path = config_path.to_path_buf();
-            tokio::spawn(async move {
-                match item.location {
-                    RuleLocation::File { path } => {
-                        let content: RawRuleSchema = serde_yaml::from_str(
-                            fs::read_to_string(config::safe_join_path(&root_path, &path)?)?
-                                .as_str(),
-                        )?;
-                        Ok((
-                            name.clone(),
-                            RuleSchema {
+            (
+                name,
+                tokio::spawn(async move {
+                    match item.location {
+                        RuleLocation::File { path } => {
+                            let content: RawRuleSchema = serde_yaml::from_str(
+                                fs::read_to_string(config::safe_join_path(&root_path, &path)?)?
+                                    .as_str(),
+                            )?;
+                            Ok(RuleSchema {
                                 behavior: item.behavior,
                                 payload: content.payload,
-                            },
-                        ))
-                    }
-                    RuleLocation::Http { url, path, .. } => {
-                        let full_path = config::safe_join_path(&root_path, &path)?;
-                        let content: RawRuleSchema = if !force_update
-                            && full_path.as_path().exists()
-                        {
-                            serde_yaml::from_str(fs::read_to_string(full_path.as_path())?.as_str())?
-                        } else {
-                            let resp = reqwest::get(url).await?;
-                            let text = resp.text().await?;
-                            let content: RawRuleSchema = serde_yaml::from_str(text.as_str())?;
-                            // security: `full_path` should be (layers of) subdir of `root_path`,
-                            //           so arbitrary write should not happen
-                            fs::write(full_path.as_path(), text)?;
-                            content
-                        };
-                        Ok((
-                            name.clone(),
-                            RuleSchema {
+                            })
+                        }
+                        RuleLocation::Http { url, path, .. } => {
+                            let full_path = config::safe_join_path(&root_path, &path)?;
+                            let content: RawRuleSchema = if !force_update
+                                && full_path.as_path().exists()
+                            {
+                                serde_yaml::from_str(
+                                    fs::read_to_string(full_path.as_path())?.as_str(),
+                                )?
+                            } else {
+                                let resp = reqwest::get(url).await?;
+                                let text = resp.text().await?;
+                                let content: RawRuleSchema = serde_yaml::from_str(text.as_str())?;
+                                // security: `full_path` should be (layers of) subdir of `root_path`,
+                                //           so arbitrary write should not happen
+                                fs::write(full_path.as_path(), text)?;
+                                content
+                            };
+                            Ok(RuleSchema {
                                 behavior: item.behavior,
                                 payload: content.payload,
-                            },
-                        ))
+                            })
+                        }
                     }
-                }
-            })
+                }),
+            )
         })
         .collect();
-    for task in tasks {
-        let (name, content) = task.await??;
+    for (name, task) in tasks {
+        let content = match task.await? {
+            Ok(c) => c,
+            Err(e) => return Err(anyhow::anyhow!("In rule provider {}: {}", name, e)),
+        };
         table.insert(name, content);
     }
     Ok(table)

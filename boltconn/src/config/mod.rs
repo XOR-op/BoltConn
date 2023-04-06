@@ -47,9 +47,18 @@ pub struct LoadedConfig {
 impl LoadedConfig {
     pub async fn load_config(config_path: &Path) -> anyhow::Result<Self> {
         let config_text = fs::read_to_string(config_path.join("config.yml"))?;
-        let raw_config: RawRootCfg = serde_yaml::from_str(&config_text)?;
+        let mut raw_config: RawRootCfg = serde_yaml::from_str(&config_text)?;
         let state_text = fs::read_to_string(state_path(config_path))?;
         let raw_state: RawState = serde_yaml::from_str(&state_text)?;
+
+        let module_schema =
+            tokio::join!(read_module_schema(config_path, &raw_config.module, false)).0?;
+
+        for i in module_schema.iter() {
+            for (k, v) in i.rule_provider.iter() {
+                raw_config.rule_provider.insert(k.clone(), v.clone());
+            }
+        }
 
         let rule_schema = tokio::join!(read_rule_schema(
             config_path,
@@ -63,8 +72,6 @@ impl LoadedConfig {
             false
         ))
         .0?;
-        let module_schema =
-            tokio::join!(read_module_schema(config_path, &raw_config.module, false)).0?;
         let mut ret = Self {
             config: raw_config,
             state: raw_state,
@@ -82,9 +89,6 @@ impl LoadedConfig {
         let mut rewrite = vec![];
         for i in self.module_schema.drain(..) {
             rule_local.extend(i.rule_local.into_iter());
-            self.config
-                .rule_provider
-                .extend(i.rule_provider.into_iter());
             intercept_rule.extend(i.intercept_rule.into_iter());
             rewrite.extend(i.rewrite.into_iter());
         }
