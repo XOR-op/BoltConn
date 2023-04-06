@@ -2,7 +2,7 @@
 
 extern crate core;
 
-use crate::config::{LinkedState, ProxySchema, RawRootCfg, RawState, RuleSchema};
+use crate::config::{LinkedState, LoadedConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::{ApiServer, StreamLoggerHandle};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
@@ -20,7 +20,6 @@ use platform::get_default_route;
 use proxy::Dispatcher;
 use proxy::{SessionManager, TunTcpInbound};
 use rcgen::{Certificate, CertificateParams, KeyPair};
-use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -84,34 +83,6 @@ fn state_path(config_path: &Path) -> PathBuf {
     config_path.join("state.yml")
 }
 
-async fn load_config(
-    config_path: &Path,
-) -> anyhow::Result<(
-    RawRootCfg,
-    RawState,
-    HashMap<String, RuleSchema>,
-    HashMap<String, ProxySchema>,
-)> {
-    let config_text = fs::read_to_string(config_path.join("config.yml"))?;
-    let raw_config: RawRootCfg = serde_yaml::from_str(&config_text)?;
-    let state_text = fs::read_to_string(state_path(config_path))?;
-    let raw_state: RawState = serde_yaml::from_str(&state_text)?;
-
-    let rule_schema = tokio::join!(config::read_rule_schema(
-        config_path,
-        &raw_config.rule_provider,
-        false
-    ))
-    .0?;
-    let proxy_schema = tokio::join!(config::read_proxy_schema(
-        config_path,
-        &raw_config.proxy_provider,
-        false
-    ))
-    .0?;
-    Ok((raw_config, raw_state, rule_schema, proxy_schema))
-}
-
 fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)> {
     let mut url_list = vec![];
     let mut header_list = vec![];
@@ -158,13 +129,14 @@ fn main() -> ExitCode {
     let (udp_tun_tx, udp_tun_rx) = flume::unbounded();
 
     // Read initial config
-    let (config, state, rule_schema, proxy_schema) = match rt.block_on(load_config(&config_path)) {
-        Ok((config, state, rs, ps)) => (config, state, rs, ps),
+    let loaded_config = match rt.block_on(LoadedConfig::load_config(&config_path)) {
+        Ok(c) => c,
         Err(e) => {
             eprintln!("Load config from {:?} failed: {}", &config_path, e);
             return ExitCode::from(1);
         }
     };
+    let config = &loaded_config.config;
 
     // initialize resources
     let (dns, dns_ips) = {
@@ -232,7 +204,7 @@ fn main() -> ExitCode {
         if let Some(list) = dns_ips {
             builder.direct_prioritize("DNS-PRIO", list);
         }
-        let result = match builder.build(&config, &state, &rule_schema, &proxy_schema) {
+        let result = match builder.build(&loaded_config) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Parse routing rules failed: {}", e);
@@ -247,7 +219,7 @@ fn main() -> ExitCode {
     let api_port = config.api_port;
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
     let api_server = ApiServer::new(
-        config.api_key,
+        config.api_key.clone(),
         manager.clone(),
         stat_center.clone(),
         Some(http_capturer.clone()),
@@ -256,7 +228,7 @@ fn main() -> ExitCode {
         sender,
         LinkedState {
             state_path: state_path(&config_path),
-            state,
+            state: loaded_config.state,
         },
         stream_logger,
     );
@@ -270,13 +242,10 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        let rule_schema = &loaded_config.rule_schema;
         let intercept_filter = match {
             let builder = DispatchingBuilder::new();
-            if let Some(intercept_rules) = config.intercept_rule {
-                builder.build_filter(intercept_rules.as_slice(), &rule_schema)
-            } else {
-                builder.build_filter(vec![].as_slice(), &rule_schema)
-            }
+            builder.build_filter(config.intercept_rule.as_slice(), rule_schema)
         } {
             Ok(m) => m,
             Err(e) => {
@@ -284,8 +253,8 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let (url_modifier, hdr_modifier) = if let Some(rewrite_cfg) = &config.rewrite {
-            let (url_mod, hdr_mod) = match mapping_rewrite(rewrite_cfg.as_slice()) {
+        let (url_modifier, hdr_modifier) = {
+            let (url_mod, hdr_mod) = match mapping_rewrite(config.rewrite.as_slice()) {
                 Ok((url_mod, hdr_mod)) => (url_mod, hdr_mod),
                 Err(e) => {
                     eprintln!("Parse url modifier rules, syntax failed: {}", e);
@@ -307,11 +276,6 @@ fn main() -> ExitCode {
                         return ExitCode::from(1);
                     }
                 }),
-            )
-        } else {
-            (
-                Arc::new(UrlModManager::empty()),
-                Arc::new(HeaderModManager::empty()),
             )
         };
         Arc::new(Dispatcher::new(
@@ -410,17 +374,13 @@ async fn reload(
     Arc<UrlModManager>,
     Arc<HeaderModManager>,
 )> {
-    let (config, state, rule_schema, proxy_schema) = load_config(config_path).await?;
-    let (url_mod, hdr_mod) = if let Some(rewrite) = &config.rewrite {
-        let (url, hdr) = mapping_rewrite(rewrite.as_slice())?;
+    let loaded_config = LoadedConfig::load_config(config_path).await?;
+    let config = &loaded_config.config;
+    let (url_mod, hdr_mod) = {
+        let (url, hdr) = mapping_rewrite(config.rewrite.as_slice())?;
         (
             Arc::new(UrlModManager::new(url.as_slice())?),
             Arc::new(HeaderModManager::new(hdr.as_slice())?),
-        )
-    } else {
-        (
-            Arc::new(UrlModManager::empty()),
-            Arc::new(HeaderModManager::empty()),
         )
     };
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
@@ -430,15 +390,12 @@ async fn reload(
         if config.dns.force_direct_dns {
             builder.direct_prioritize("DNS_PRIO", extract_address(&group));
         }
-        Arc::new(builder.build(&config, &state, &rule_schema, &proxy_schema)?)
+        Arc::new(builder.build(&loaded_config)?)
     };
     let intercept_filter = {
         let builder = DispatchingBuilder::new();
-        if let Some(intercept_rule) = config.intercept_rule {
-            Arc::new(builder.build_filter(intercept_rule.as_slice(), &rule_schema)?)
-        } else {
-            Arc::new(builder.build_filter(vec![].as_slice(), &rule_schema)?)
-        }
+        let rule_schema = &loaded_config.rule_schema;
+        Arc::new(builder.build_filter(config.intercept_rule.as_slice(), rule_schema)?)
     };
     dns.replace_resolvers(group).await?;
     Ok((dispatching, intercept_filter, url_mod, hdr_mod))
