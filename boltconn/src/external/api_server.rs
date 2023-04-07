@@ -16,6 +16,7 @@ use boltapi::{
 };
 use serde_json::json;
 use std::collections::HashMap;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -416,11 +417,25 @@ impl ApiServer {
             .is_ok();
         if r {
             let mut state = server.state.lock().unwrap();
+            tracing::debug!("State!");
             if let Some(val) = state.state.group_selection.get_mut(&group) {
                 *val = args.selected;
-                if let Ok(content) = serde_yaml::to_string(&state.state) {
-                    let content = "# This file is managed by BoltConn. Do not edit unless you know what you are doing.\n".to_string() + content.as_str();
-                    let _ = std::fs::write(&state.state_path, content);
+            } else {
+                state.state.group_selection.insert(group, args.selected);
+            }
+            if let Ok(content) = serde_yaml::to_string(&state.state) {
+                let content = "# This file is managed by BoltConn. Do not edit unless you know what you are doing.\n".to_string() + content.as_str();
+                fn inner(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+                    let mut file = std::fs::File::create(path)?;
+                    file.write_all(contents)?;
+                    file.flush()
+                }
+                if let Err(e) = inner(&state.state_path, content.as_bytes()) {
+                    tracing::error!(
+                        "Write state to {} failed: {}",
+                        state.state_path.to_string_lossy(),
+                        e
+                    );
                 }
             }
         }
