@@ -57,3 +57,17 @@ impl HostMatcherBuilder {
         self.0.extend(rhs.0.into_iter());
     }
 }
+
+#[test]
+fn test_matcher() {
+    let mut builder = HostMatcherBuilder::new();
+    builder.add_suffix("telemetry.google.com");
+    builder.add_suffix("analytics.google.com");
+    builder.add_exact("test.google.com");
+    let matcher = builder.build();
+    assert!(!matcher.matches("google.com"));
+    assert!(matcher.matches("telemetry.google.com"));
+    assert!(matcher.matches("t-01.telemetry.google.com"));
+    assert!(matcher.matches("test.google.com"));
+    assert!(!matcher.matches("t-02.test.google.com"));
+}

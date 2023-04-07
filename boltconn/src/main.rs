@@ -349,7 +349,7 @@ fn main() -> ExitCode {
                                 tracing::info!("Reloaded config successfully");
                             }
                             Err(err)=>{
-                                tracing::warn!("Reloading config failed: {}",err);
+                                tracing::error!("Reloading config failed: {}",err);
                             }
                         }
                     } else {
