@@ -35,7 +35,7 @@ linked-hash-map = { version = "0.5.6", features = ["serde_impl"] }
 radix_trie = "0.2.1"
 rcgen = { version = "0.10.0", features = ["pem", "x509-parser"] }
 regex = "1.7.0"
-reqwest = "0.11.14"
+reqwest = { version = "0.11.14", default-features = false, features = ["rustls-tls-native-roots"] }
 rustls-pemfile = "1.0.1"
 scopeguard = "1.1.0"
 serde = { version = "1.0.147", features = ["derive"] }

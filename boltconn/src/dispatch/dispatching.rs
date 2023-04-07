@@ -30,7 +30,7 @@ pub struct ConnInfo {
 
 pub struct Dispatching {
     proxies: HashMap<String, Arc<Proxy>>,
-    groups: HashMap<String, Arc<ProxyGroup>>,
+    groups: LinkedHashMap<String, Arc<ProxyGroup>>,
     rules: Vec<Rule>,
     fallback: GeneralProxy,
 }
@@ -139,6 +139,7 @@ impl DispatchingBuilder {
 
         // read proxy groups
         let mut queued_groups = HashSet::new();
+        let group_order: Vec<String> = loaded_config.config.proxy_group.keys().cloned().collect();
         for (name, group) in &config.proxy_group {
             self.parse_group(
                 name,
@@ -174,10 +175,19 @@ impl DispatchingBuilder {
         if self.fallback.is_none() {
             return Err(anyhow!("Bad rules: missing fallback"));
         }
-        tracing::info!("Loaded config successfully");
+        let group = {
+            let mut g = LinkedHashMap::new();
+            for name in group_order {
+                // Chain will not be included
+                if let Some(val) = self.groups.get(&name) {
+                    g.insert(name, val.clone());
+                }
+            }
+            g
+        };
         Ok(Dispatching {
             proxies: self.proxies,
-            groups: self.groups,
+            groups: group,
             rules: self.rules,
             fallback: self.fallback.unwrap(),
         })
@@ -205,9 +215,10 @@ impl DispatchingBuilder {
             "REJECT",
             ProxyImpl::Reject,
         ))));
+
         Ok(Dispatching {
             proxies: self.proxies,
-            groups: self.groups,
+            groups: self.groups.into_iter().collect(),
             rules: self.rules,
             fallback: self.fallback.unwrap(),
         })
