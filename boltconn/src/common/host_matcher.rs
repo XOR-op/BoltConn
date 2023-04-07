@@ -13,15 +13,19 @@ impl HostMatcher {
         let rev_dn: String = host.chars().rev().collect();
         if let Some(result) = self.0.get_ancestor(rev_dn.as_str()) {
             if let Some(val) = result.value() {
+                let key = result.key().unwrap();
                 match val {
                     HostType::Exact => {
-                        if result.key().unwrap().len() == rev_dn.len() {
+                        if key.len() == rev_dn.len() {
                             // DOMAIN rule
                             return true;
                         }
                     }
                     HostType::Suffix => {
-                        if result.key().unwrap().len() <= rev_dn.len() {
+                        if key.len() == rev_dn.len()
+                            || (key.len() < rev_dn.len()
+                                && rev_dn.chars().nth(key.len()).unwrap() == '.')
+                        {
                             // DOMAIN-SUFFIX rule
                             return true;
                         }
@@ -69,5 +73,14 @@ fn test_matcher() {
     assert!(matcher.matches("telemetry.google.com"));
     assert!(matcher.matches("t-01.telemetry.google.com"));
     assert!(matcher.matches("test.google.com"));
+    assert!(!matcher.matches("notgoogle.com"));
+    assert!(!matcher.matches("me.notgoogle.com"));
+    assert!(!matcher.matches("ogle.com"));
     assert!(!matcher.matches("t-02.test.google.com"));
+    let mut builder = HostMatcherBuilder::new();
+    builder.add_suffix("ogle.com");
+    let matcher = builder.build();
+    assert!(matcher.matches("hi.ogle.com"));
+    assert!(!matcher.matches("google.com"));
+    assert!(!matcher.matches("hi.google.com"));
 }
