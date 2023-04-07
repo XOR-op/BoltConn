@@ -5,15 +5,18 @@ mod intercept_modifier;
 mod modifier;
 mod url_rewrite;
 
+use chrono::Datelike;
 pub use header_rewrite::*;
 pub use http_intercept::HttpIntercept;
 pub use https_intercept::HttpsIntercept;
 pub use intercept_modifier::*;
 pub use modifier::*;
 use rcgen::{
-    date_time_ymd, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose,
+    date_time_ymd, Certificate, CertificateParams, DistinguishedName, DnType, IsCa,
+    KeyUsagePurpose, SanType,
 };
 use regex::Regex;
+use std::ops::{Add, Sub};
 use std::str::FromStr;
 use tokio_rustls::rustls::{Certificate as RustlsCertificate, PrivateKey as RustlsPrivateKey};
 pub use url_rewrite::*;
@@ -31,8 +34,13 @@ fn sign_site_cert(
     params.distinguished_name = distinguished_name;
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.is_ca = IsCa::NoCa;
-    params.not_before = date_time_ymd(2022, 1, 1);
-    params.not_after = date_time_ymd(2037, 12, 31);
+    let date = chrono::offset::Utc::now().date_naive();
+    let start = date.sub(chrono::Months::new(5));
+    let end = date.add(chrono::Months::new(6));
+
+    params.not_before = date_time_ymd(start.year(), start.month() as u8, start.day() as u8);
+    params.not_after = date_time_ymd(end.year(), end.month() as u8, end.day() as u8);
+    params.subject_alt_names = vec![SanType::DnsName(common_name.to_string())];
 
     // sign with CA and transform to rustls format
     let cert = Certificate::from_params(params)?;
