@@ -161,9 +161,21 @@ impl TunUdpInbound {
                 let tun_tx = self.tun_tx.clone();
                 tokio::spawn(Self::back_prop(recv_rx, tun_tx, src));
 
-                self.dispatcher
-                    .submit_tun_udp_session(src, dst_addr, proc_info, send_rx, recv_tx, probe)
-                    .await;
+                if self
+                    .dispatcher
+                    .submit_tun_udp_session(
+                        src,
+                        dst_addr,
+                        proc_info,
+                        send_rx,
+                        recv_tx,
+                        probe.clone(),
+                    )
+                    .await
+                    .is_err()
+                {
+                    probe.store(false, Ordering::Relaxed)
+                };
                 true
             }
         }

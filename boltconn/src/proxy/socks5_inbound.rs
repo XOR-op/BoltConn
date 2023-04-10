@@ -68,7 +68,7 @@ impl Socks5Inbound {
                         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0),
                     ))
                     .await?;
-                dispatcher
+                let _ = dispatcher
                     .submit_tcp(
                         src_addr,
                         target_addr.into(),
@@ -98,9 +98,18 @@ impl Socks5Inbound {
                     }
                     id2.store(false, Ordering::Relaxed);
                 });
-                dispatcher
-                    .submit_socks_udp_pkt(src_addr, target_addr.into(), indicator, peer_sock)
-                    .await;
+                if dispatcher
+                    .submit_socks_udp_pkt(
+                        src_addr,
+                        target_addr.into(),
+                        indicator.clone(),
+                        peer_sock,
+                    )
+                    .await
+                    .is_err()
+                {
+                    indicator.store(false, Ordering::Relaxed)
+                };
             }
             _ => Err(ReplyError::CommandNotSupported)?,
         };

@@ -3,6 +3,7 @@ use crate::proxy::{Dispatcher, NetworkAddr};
 use crate::Dns;
 use std::io::Result;
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
@@ -48,9 +49,14 @@ impl TunTcpInbound {
                         port: dst_addr.port(),
                     },
                 };
-                self.dispatcher
-                    .submit_tcp(src_addr, dst_addr, indicator, socket)
-                    .await;
+                if self
+                    .dispatcher
+                    .submit_tcp(src_addr, dst_addr, indicator.clone(), socket)
+                    .await
+                    .is_err()
+                {
+                    indicator.store(0, Ordering::Relaxed)
+                };
             } else {
                 tracing::warn!("Unexpected: no record found by port {}", addr.port())
             }

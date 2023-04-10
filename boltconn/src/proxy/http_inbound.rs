@@ -101,7 +101,7 @@ impl HttpInbound {
                     return Err(anyhow!("Invalid CONNECT request"));
                 }
                 socket.write_all(Self::response200().as_bytes()).await?;
-                dispatcher
+                let _ = dispatcher
                     .submit_tcp(addr, dest, Arc::new(AtomicU8::new(2)), socket)
                     .await;
                 return Ok(());
