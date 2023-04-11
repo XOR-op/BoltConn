@@ -1,4 +1,6 @@
-use crate::adapter::{AddrConnector, Connector, TcpOutBound, UdpOutBound};
+use crate::adapter::{
+    AddrConnector, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter, UdpTransferType,
+};
 
 use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
@@ -295,12 +297,25 @@ impl TcpOutBound for WireguardHandle {
 }
 
 impl UdpOutBound for WireguardHandle {
+    fn transfer_type(&self) -> UdpTransferType {
+        UdpTransferType::Udp
+    }
+
     fn spawn_udp(
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().attach_udp(inbound, abort_handle))
+    }
+
+    fn spawn_udp_with_outbound(
+        &self,
+        inbound: AddrConnector,
+        outbound: Box<dyn UdpSocketAdapter>,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        todo!()
     }
 }
 

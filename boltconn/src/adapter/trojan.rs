@@ -1,6 +1,6 @@
 use crate::adapter::{
     established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
-    UdpSocketAdapter,
+    UdpSocketAdapter, UdpTransferType,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
@@ -181,6 +181,10 @@ impl TcpOutBound for TrojanOutbound {
 }
 
 impl UdpOutBound for TrojanOutbound {
+    fn transfer_type(&self) -> UdpTransferType {
+        UdpTransferType::UdpOverTcp
+    }
+
     fn spawn_udp(
         &self,
         inbound: AddrConnector,

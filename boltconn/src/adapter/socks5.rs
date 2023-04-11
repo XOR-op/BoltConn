@@ -1,6 +1,6 @@
 use crate::adapter::{
     established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
-    UdpSocketAdapter,
+    UdpSocketAdapter, UdpTransferType,
 };
 
 use crate::common::{as_io_err, io_err, OutboundTrait};
@@ -148,6 +148,10 @@ impl TcpOutBound for Socks5Outbound {
 }
 
 impl UdpOutBound for Socks5Outbound {
+    fn transfer_type(&self) -> UdpTransferType {
+        UdpTransferType::Udp
+    }
+
     fn spawn_udp(
         &self,
         inbound: AddrConnector,
@@ -162,6 +166,15 @@ impl UdpOutBound for Socks5Outbound {
                 .await?;
             self_clone.run_udp(inbound, socks_conn, abort_handle).await
         })
+    }
+
+    fn spawn_udp_with_outbound(
+        &self,
+        inbound: AddrConnector,
+        outbound: Box<dyn UdpSocketAdapter>,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<Result<()>> {
+        todo!()
     }
 }
 

@@ -101,14 +101,31 @@ pub trait TcpOutBound: Send + Sync {
     ) -> JoinHandle<io::Result<()>>;
 }
 
+pub enum UdpTransferType {
+    Udp,
+    UdpOverTcp,
+    NotApplicable,
+}
+
 pub trait UdpOutBound: Send + Sync {
+    fn transfer_type(&self) -> UdpTransferType;
+
     /// Run with tokio::spawn.
     fn spawn_udp(
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
+
+    fn spawn_udp_with_outbound(
+        &self,
+        inbound: AddrConnector,
+        outbound: Box<dyn UdpSocketAdapter>,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>>;
 }
+
+pub trait BothOutBound: TcpOutBound + UdpOutBound {}
 
 async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)
 where
@@ -152,7 +169,7 @@ where
 }
 
 #[async_trait]
-trait UdpSocketAdapter: Clone + Send {
+pub trait UdpSocketAdapter: Clone + Send {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()>;
 
     // @return: <length>, <if addr matches target>
@@ -198,6 +215,24 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                 abort_handle.cancel().await;
                 break;
             }
+        }
+    }
+}
+
+#[async_trait]
+impl UdpSocketAdapter for AddrConnector {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+        self.tx.send((Bytes::from(data), addr)).await.map_err(())
+    }
+
+    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+        let (buf, addr) = self.rx.recv().await?;
+        if data.len() < buf.len() {
+            data.copy_from_slice(&buf[..data.len()]);
+            Ok((data.len(), addr))
+        } else {
+            data.copy_from_slice(&buf[..buf.len()]);
+            Ok((buf.len(), addr))
         }
     }
 }
