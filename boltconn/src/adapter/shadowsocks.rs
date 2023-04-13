@@ -1,6 +1,6 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
-    UdpSocketAdapter, UdpTransferType,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType, TcpOutBound,
+    UdpOutBound, UdpSocketAdapter, UdpTransferType,
 };
 
 use crate::common::{io_err, OutboundTrait};
@@ -180,8 +180,8 @@ impl TcpOutBound for SSOutbound {
 }
 
 impl UdpOutBound for SSOutbound {
-    fn transfer_type(&self) -> UdpTransferType {
-        UdpTransferType::Udp
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Shadowsocks
     }
 
     fn spawn_udp(

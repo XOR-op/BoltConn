@@ -1,5 +1,6 @@
 use crate::adapter::{
-    AddrConnector, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter, UdpTransferType,
+    AddrConnector, Connector, OutboundType, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    UdpTransferType,
 };
 
 use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};
@@ -297,8 +298,8 @@ impl TcpOutBound for WireguardHandle {
 }
 
 impl UdpOutBound for WireguardHandle {
-    fn transfer_type(&self) -> UdpTransferType {
-        UdpTransferType::Udp
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Wireguard
     }
 
     fn spawn_udp(
@@ -312,7 +313,8 @@ impl UdpOutBound for WireguardHandle {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        outbound: Box<dyn UdpSocketAdapter>,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         todo!()

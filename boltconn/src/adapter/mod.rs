@@ -74,7 +74,7 @@ impl<S> AdapterConnector<S> {
 pub type Connector = AdapterConnector<Bytes>;
 pub type AddrConnector = AdapterConnector<(Bytes, NetworkAddr)>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum OutboundType {
     Direct,
     Socks5,
@@ -83,6 +83,45 @@ pub enum OutboundType {
     Trojan,
     Wireguard,
     Chain,
+}
+
+pub enum UdpTransferType {
+    Udp,
+    UdpOverTcp,
+    NotApplicable,
+}
+
+pub enum UdpEstablishType {
+    Udp,
+    Tcp,
+    Both,
+    NotApplicable,
+}
+
+impl OutboundType {
+    pub fn udp_transfer_type(&self) -> UdpTransferType {
+        match self {
+            OutboundType::Direct => UdpTransferType::NotApplicable,
+            OutboundType::Socks5 => UdpTransferType::Udp,
+            OutboundType::Http => UdpTransferType::NotApplicable,
+            OutboundType::Shadowsocks => UdpTransferType::Udp,
+            OutboundType::Trojan => UdpTransferType::UdpOverTcp,
+            OutboundType::Wireguard => UdpTransferType::Udp,
+            OutboundType::Chain => UdpTransferType::NotApplicable,
+        }
+    }
+
+    pub fn udp_establish_type(&self) -> UdpEstablishType {
+        match self {
+            OutboundType::Direct => UdpEstablishType::NotApplicable,
+            OutboundType::Socks5 => UdpEstablishType::Both,
+            OutboundType::Http => UdpEstablishType::NotApplicable,
+            OutboundType::Shadowsocks => UdpEstablishType::Both,
+            OutboundType::Trojan => UdpEstablishType::Tcp,
+            OutboundType::Wireguard => UdpEstablishType::Udp,
+            OutboundType::Chain => UdpEstablishType::NotApplicable,
+        }
+    }
 }
 
 pub trait TcpOutBound: Send + Sync {
@@ -101,14 +140,8 @@ pub trait TcpOutBound: Send + Sync {
     ) -> JoinHandle<io::Result<()>>;
 }
 
-pub enum UdpTransferType {
-    Udp,
-    UdpOverTcp,
-    NotApplicable,
-}
-
 pub trait UdpOutBound: Send + Sync {
-    fn transfer_type(&self) -> UdpTransferType;
+    fn outbound_type(&self) -> OutboundType;
 
     /// Run with tokio::spawn.
     fn spawn_udp(
@@ -120,7 +153,8 @@ pub trait UdpOutBound: Send + Sync {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        outbound: Box<dyn UdpSocketAdapter>,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
 }

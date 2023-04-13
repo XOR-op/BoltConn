@@ -1,7 +1,8 @@
 use crate::adapter::{
-    AddrConnector, BothOutBound, Connector, TcpOutBound, UdpOutBound, UdpSocketAdapter,
-    UdpTransferType,
+    AddrConnector, BothOutBound, Connector, OutboundType, TcpOutBound, UdpEstablishType,
+    UdpOutBound, UdpSocketAdapter, UdpTransferType,
 };
+use std::io;
 
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::OutboundTrait;
@@ -73,8 +74,14 @@ impl ChainUdpOutbound {
     }
 }
 
+enum ConnVal {
+    Tcp(Connector, Box<DuplexChan>),
+    UoT(AddrConnector, Box<DuplexChan>),
+    Udp(AddrConnector, AddrConnector),
+}
+
 impl UdpOutBound for ChainUdpOutbound {
-    fn transfer_type(&self) -> UdpTransferType {
+    fn outbound_type(&self) -> OutboundType {
         UdpTransferType::NotApplicable
     }
 
@@ -87,7 +94,8 @@ impl UdpOutBound for ChainUdpOutbound {
         let mut handles = vec![];
         let mut inbound_container = Some(inbound);
         let mut inbound_tcp_container = None;
-        let (first_part, last_one) = self.chains.split_at(self.chains.len() - 1);
+        let (mut first_part, last_one) = self.chains.split_at(self.chains.len() - 1);
+        let mut storage = vec![];
 
         // connect proxies
         for tunnel in first_part {
@@ -95,26 +103,26 @@ impl UdpOutBound for ChainUdpOutbound {
                 let inbound = inbound_tcp_container.take().unwrap();
                 let (inner, outer) = Connector::new_pair(10);
                 let chan = Box::new(DuplexChan::new(inner));
-                let handle = tunnel.spawn_tcp_with_outbound(inbound, chan, abort_handle.clone());
-                handles.push(handle);
+                storage.push(ConnVal::Tcp(inbound, chan));
                 inbound_tcp_container = Some(outer)
             } else {
                 let inbound = inbound_container.take().unwrap();
                 let (inner, outer) = AddrConnector::new_pair(10);
-                let handle = if tunnel.transfer_type() == UdpTransferType::UdpOverTcp {
+                if tunnel.outbound_type() == UdpTransferType::UdpOverTcp {
                     // UoT, then next jump will use TCP
                     use_tcp = true;
                     let (inner, outer) = Connector::new_pair(10);
                     let chan = Box::new(DuplexChan::new(inner));
                     inbound_tcp_container = Some(outer);
-                    tunnel.spawn_udp_with_outbound(inbound, chan, abort_handle.clone())
+                    storage.push(ConnVal::UoT(inbound, chan));
                 } else {
                     inbound_container = Some(outer);
-                    tunnel.spawn_udp_with_outbound(inbound, inner, abort_handle.clone())
+                    storage.push(ConnVal::Udp(inbound, inner));
                 };
-                handles.push(handle);
             }
         }
+        storage.reverse();
+        first_part.reverse();
 
         // connect last one
         if use_tcp {
@@ -123,6 +131,39 @@ impl UdpOutBound for ChainUdpOutbound {
         } else {
             let inbound = inbound_container.unwrap();
             handles.push(last_one[0].spawn_udp(inbound, abort_handle));
+        }
+
+        // connect one by one
+        for (idx, val) in storage.into_iter().enumerate() {
+            let handle =
+                match val {
+                    ConnVal::Tcp(upper, lower) => first_part
+                        .get(idx)
+                        .unwrap()
+                        .spawn_tcp_with_outbound(upper, lower, abort_handle.clone()),
+                    ConnVal::UoT(upper, lower) => first_part
+                        .get(idx)
+                        .unwrap()
+                        .spawn_udp_with_outbound(upper, Some(lower), None, abort_handle.clone()),
+                    ConnVal::Udp(upper, lower) => {
+                        let tunnel = first_part.get(idx).unwrap();
+                        let tcp_outbound = match tunnel.outbound_type().udp_establish_type() {
+                            UdpEstablishType::Udp => None,
+                            UdpEstablishType::Both => {
+                                // todo: create proxy from last_one to idx-1
+                                Some()
+                            }
+                            _ => unreachable!(),
+                        };
+                        tunnel.spawn_udp_with_outbound(
+                            upper,
+                            tcp_outbound,
+                            Some(Box::new(lower)),
+                            abort_handle.clone(),
+                        )
+                    }
+                };
+            handles.push(handle);
         }
 
         tokio::spawn(async move {
@@ -138,9 +179,10 @@ impl UdpOutBound for ChainUdpOutbound {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        _outbound: Box<dyn UdpSocketAdapter>,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<std::io::Result<()>> {
+    ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_udp_with_outbound() should not be called with ChainUdpOutbound");
         self.spawn_udp(inbound, abort_handle)
     }
