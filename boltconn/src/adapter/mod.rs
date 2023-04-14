@@ -91,13 +91,6 @@ pub enum UdpTransferType {
     NotApplicable,
 }
 
-pub enum UdpEstablishType {
-    Udp,
-    Tcp,
-    Both,
-    NotApplicable,
-}
-
 impl OutboundType {
     pub fn udp_transfer_type(&self) -> UdpTransferType {
         match self {
@@ -108,18 +101,6 @@ impl OutboundType {
             OutboundType::Trojan => UdpTransferType::UdpOverTcp,
             OutboundType::Wireguard => UdpTransferType::Udp,
             OutboundType::Chain => UdpTransferType::NotApplicable,
-        }
-    }
-
-    pub fn udp_establish_type(&self) -> UdpEstablishType {
-        match self {
-            OutboundType::Direct => UdpEstablishType::NotApplicable,
-            OutboundType::Socks5 => UdpEstablishType::Both,
-            OutboundType::Http => UdpEstablishType::NotApplicable,
-            OutboundType::Shadowsocks => UdpEstablishType::Both,
-            OutboundType::Trojan => UdpEstablishType::Tcp,
-            OutboundType::Wireguard => UdpEstablishType::Udp,
-            OutboundType::Chain => UdpEstablishType::NotApplicable,
         }
     }
 }

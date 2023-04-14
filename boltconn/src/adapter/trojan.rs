@@ -200,6 +200,21 @@ impl UdpOutBound for TrojanOutbound {
             self_clone.run_udp(inbound, tcp_conn, abort_handle).await
         })
     }
+
+    fn spawn_udp_with_outbound(
+        &self,
+        inbound: AddrConnector,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        if tcp_outbound.is_none() || udp_outbound.is_some() {
+            tracing::error!("Invalid Trojan UDP outbound ancestor");
+            return self.spawn_udp(inbound, abort_handle);
+        }
+        let tcp_outbound = tcp_outbound.unwrap();
+        todo!()
+    }
 }
 
 struct TrojanUdpAdapter<S: AsyncRead + AsyncWrite> {

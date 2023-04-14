@@ -191,6 +191,21 @@ impl UdpOutBound for SSOutbound {
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().run_udp(inbound, abort_handle))
     }
+
+    fn spawn_udp_with_outbound(
+        &self,
+        inbound: AddrConnector,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<Result<()>> {
+        if tcp_outbound.is_some() || udp_outbound.is_none() {
+            tracing::error!("Invalid Shadowsocks UDP outbound ancestor");
+            return self.spawn_udp(inbound, abort_handle);
+        }
+        let udp_outbound = udp_outbound.unwrap();
+        todo!()
+    }
 }
 
 #[derive(Clone)]

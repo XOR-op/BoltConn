@@ -171,11 +171,12 @@ impl UdpOutBound for Socks5Outbound {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
-        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        todo!()
+        tracing::error!("Socks5 does not support UDP chain");
+        self.spawn_udp(inbound, abort_handle)
     }
 }
 

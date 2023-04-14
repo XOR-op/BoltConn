@@ -147,17 +147,9 @@ impl UdpOutBound for ChainUdpOutbound {
                         .spawn_udp_with_outbound(upper, Some(lower), None, abort_handle.clone()),
                     ConnVal::Udp(upper, lower) => {
                         let tunnel = first_part.get(idx).unwrap();
-                        let tcp_outbound = match tunnel.outbound_type().udp_establish_type() {
-                            UdpEstablishType::Udp => None,
-                            UdpEstablishType::Both => {
-                                // todo: create proxy from last_one to idx-1
-                                Some()
-                            }
-                            _ => unreachable!(),
-                        };
                         tunnel.spawn_udp_with_outbound(
                             upper,
-                            tcp_outbound,
+                            None,
                             Some(Box::new(lower)),
                             abort_handle.clone(),
                         )
@@ -179,8 +171,8 @@ impl UdpOutBound for ChainUdpOutbound {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
-        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_udp_with_outbound() should not be called with ChainUdpOutbound");
