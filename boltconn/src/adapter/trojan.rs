@@ -1,6 +1,6 @@
 use crate::adapter::{
     established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType, TcpOutBound,
-    UdpOutBound, UdpSocketAdapter, UdpTransferType,
+    UdpOutBound, UdpSocketAdapter,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
@@ -213,7 +213,12 @@ impl UdpOutBound for TrojanOutbound {
             return self.spawn_udp(inbound, abort_handle);
         }
         let tcp_outbound = tcp_outbound.unwrap();
-        self.run_udp(inbound, tcp_outbound, abort_handle)
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone
+                .run_udp(inbound, tcp_outbound, abort_handle)
+                .await
+        })
     }
 }
 

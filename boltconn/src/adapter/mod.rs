@@ -3,12 +3,12 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::select;
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 mod chain;
@@ -100,6 +100,7 @@ pub enum OutboundType {
     Chain,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum UdpTransferType {
     Udp,
     UdpOverTcp,
@@ -199,7 +200,7 @@ where
 }
 
 #[async_trait]
-pub trait UdpSocketAdapter: Clone + Send {
+pub trait UdpSocketAdapter: Send + Sync {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()>;
 
     // @return: <length>, <if addr matches target>
@@ -212,6 +213,7 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     abort_handle: ConnAbortHandle,
 ) {
     // establish udp
+    let outbound = Arc::new(outbound);
     let outbound2 = outbound.clone();
     let AddrConnector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
@@ -252,11 +254,20 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
 #[async_trait]
 impl UdpSocketAdapter for AddrConnectorWrapper {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
-        self.tx.send((Bytes::from(data), addr)).await.map_err(())
+        self.tx
+            .send((Bytes::copy_from_slice(data), addr))
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to send"))
     }
 
     async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
-        let (buf, addr) = self.rx.lock().unwrap().recv().await?;
+        let (buf, addr) = self
+            .rx
+            .lock()
+            .await
+            .recv()
+            .await
+            .ok_or(anyhow::anyhow!("Nothing received"))?;
         if data.len() < buf.len() {
             data.copy_from_slice(&buf[..data.len()]);
             Ok((data.len(), addr))

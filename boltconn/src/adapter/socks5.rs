@@ -1,6 +1,6 @@
 use crate::adapter::{
     established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType, TcpOutBound,
-    UdpOutBound, UdpSocketAdapter, UdpTransferType,
+    UdpOutBound, UdpSocketAdapter,
 };
 
 use crate::common::{as_io_err, io_err, OutboundTrait};

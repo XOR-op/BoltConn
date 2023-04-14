@@ -1,6 +1,5 @@
 use crate::adapter::{
     AddrConnector, Connector, OutboundType, TcpOutBound, UdpOutBound, UdpSocketAdapter,
-    UdpTransferType,
 };
 
 use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};

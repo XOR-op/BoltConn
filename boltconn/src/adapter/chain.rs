@@ -1,6 +1,6 @@
 use crate::adapter::{
     AddrConnector, AddrConnectorWrapper, BothOutBound, Connector, OutboundType, TcpOutBound,
-    UdpEstablishType, UdpOutBound, UdpSocketAdapter, UdpTransferType,
+    UdpOutBound, UdpSocketAdapter, UdpTransferType,
 };
 use std::io;
 
@@ -94,8 +94,7 @@ impl UdpOutBound for ChainUdpOutbound {
         let mut handles = vec![];
         let mut inbound_container = Some(inbound);
         let mut inbound_tcp_container = None;
-        let (mut first_part, last_one) = self.chains.split_at(self.chains.len() - 1);
-        let mut storage = vec![];
+        let (first_part, last_one) = self.chains.split_at(self.chains.len() - 1);
 
         // connect proxies
         for tunnel in first_part {
@@ -103,26 +102,34 @@ impl UdpOutBound for ChainUdpOutbound {
                 let inbound = inbound_tcp_container.take().unwrap();
                 let (inner, outer) = Connector::new_pair(10);
                 let chan = Box::new(DuplexChan::new(inner));
-                storage.push(ConnVal::Tcp(inbound, chan));
-                inbound_tcp_container = Some(outer)
+                inbound_tcp_container = Some(outer);
+                handles.push(tunnel.spawn_tcp_with_outbound(inbound, chan, abort_handle.clone()));
             } else {
                 let inbound = inbound_container.take().unwrap();
-                if tunnel.outbound_type() == UdpTransferType::UdpOverTcp {
+                if tunnel.outbound_type().udp_transfer_type() == UdpTransferType::UdpOverTcp {
                     // UoT, then next jump will use TCP
                     use_tcp = true;
                     let (inner, outer) = Connector::new_pair(10);
                     let chan = Box::new(DuplexChan::new(inner));
                     inbound_tcp_container = Some(outer);
-                    storage.push(ConnVal::UoT(inbound, chan));
+                    handles.push(tunnel.spawn_udp_with_outbound(
+                        inbound,
+                        Some(chan),
+                        None,
+                        abort_handle.clone(),
+                    ));
                 } else {
                     let (inner, outer) = AddrConnector::new_pair(10);
                     inbound_container = Some(outer);
-                    storage.push(ConnVal::Udp(inbound, AddrConnectorWrapper::from(inner)));
+                    handles.push(tunnel.spawn_udp_with_outbound(
+                        inbound,
+                        None,
+                        Some(Box::new(AddrConnectorWrapper::from(inner))),
+                        abort_handle.clone(),
+                    ));
                 };
             }
         }
-        storage.reverse();
-        first_part.reverse();
 
         // connect last one
         if use_tcp {
@@ -131,31 +138,6 @@ impl UdpOutBound for ChainUdpOutbound {
         } else {
             let inbound = inbound_container.unwrap();
             handles.push(last_one[0].spawn_udp(inbound, abort_handle));
-        }
-
-        // connect one by one
-        for (idx, val) in storage.into_iter().enumerate() {
-            let handle =
-                match val {
-                    ConnVal::Tcp(upper, lower) => first_part
-                        .get(idx)
-                        .unwrap()
-                        .spawn_tcp_with_outbound(upper, lower, abort_handle.clone()),
-                    ConnVal::UoT(upper, lower) => first_part
-                        .get(idx)
-                        .unwrap()
-                        .spawn_udp_with_outbound(upper, Some(lower), None, abort_handle.clone()),
-                    ConnVal::Udp(upper, lower) => {
-                        let tunnel = first_part.get(idx).unwrap();
-                        tunnel.spawn_udp_with_outbound(
-                            upper,
-                            None,
-                            Some(Box::new(lower)),
-                            abort_handle.clone(),
-                        )
-                    }
-                };
-            handles.push(handle);
         }
 
         tokio::spawn(async move {
