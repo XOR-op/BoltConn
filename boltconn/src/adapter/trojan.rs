@@ -213,7 +213,7 @@ impl UdpOutBound for TrojanOutbound {
             return self.spawn_udp(inbound, abort_handle);
         }
         let tcp_outbound = tcp_outbound.unwrap();
-        todo!()
+        self.run_udp(inbound, tcp_outbound, abort_handle)
     }
 }
 

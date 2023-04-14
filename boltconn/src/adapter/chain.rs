@@ -1,6 +1,6 @@
 use crate::adapter::{
-    AddrConnector, BothOutBound, Connector, OutboundType, TcpOutBound, UdpEstablishType,
-    UdpOutBound, UdpSocketAdapter, UdpTransferType,
+    AddrConnector, AddrConnectorWrapper, BothOutBound, Connector, OutboundType, TcpOutBound,
+    UdpEstablishType, UdpOutBound, UdpSocketAdapter, UdpTransferType,
 };
 use std::io;
 
@@ -77,12 +77,12 @@ impl ChainUdpOutbound {
 enum ConnVal {
     Tcp(Connector, Box<DuplexChan>),
     UoT(AddrConnector, Box<DuplexChan>),
-    Udp(AddrConnector, AddrConnector),
+    Udp(AddrConnector, AddrConnectorWrapper),
 }
 
 impl UdpOutBound for ChainUdpOutbound {
     fn outbound_type(&self) -> OutboundType {
-        UdpTransferType::NotApplicable
+        OutboundType::Chain
     }
 
     fn spawn_udp(
@@ -107,7 +107,6 @@ impl UdpOutBound for ChainUdpOutbound {
                 inbound_tcp_container = Some(outer)
             } else {
                 let inbound = inbound_container.take().unwrap();
-                let (inner, outer) = AddrConnector::new_pair(10);
                 if tunnel.outbound_type() == UdpTransferType::UdpOverTcp {
                     // UoT, then next jump will use TCP
                     use_tcp = true;
@@ -116,8 +115,9 @@ impl UdpOutBound for ChainUdpOutbound {
                     inbound_tcp_container = Some(outer);
                     storage.push(ConnVal::UoT(inbound, chan));
                 } else {
+                    let (inner, outer) = AddrConnector::new_pair(10);
                     inbound_container = Some(outer);
-                    storage.push(ConnVal::Udp(inbound, inner));
+                    storage.push(ConnVal::Udp(inbound, AddrConnectorWrapper::from(inner)));
                 };
             }
         }

@@ -292,7 +292,7 @@ impl TcpOutBound for WireguardHandle {
         _outbound: Box<dyn OutboundTrait>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tracing::warn!("spawn_tcp_with_outbound() should not be called with Wireguard");
+        tracing::error!("spawn_tcp_with_outbound() should not be called with Wireguard");
         self.spawn_tcp(inbound, abort_handle)
     }
 }
@@ -317,7 +317,9 @@ impl UdpOutBound for WireguardHandle {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        todo!()
+        tracing::warn!("TODO: spawn_udp_with_outbound() has not been implemented");
+        todo!();
+        tokio::spawn(self.clone().attach_udp(inbound, abort_handle))
     }
 }
 

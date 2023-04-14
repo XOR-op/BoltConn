@@ -3,7 +3,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::select;
@@ -73,6 +73,21 @@ impl<S> AdapterConnector<S> {
 
 pub type Connector = AdapterConnector<Bytes>;
 pub type AddrConnector = AdapterConnector<(Bytes, NetworkAddr)>;
+
+#[derive(Debug, Clone)]
+struct AddrConnectorWrapper {
+    pub tx: mpsc::Sender<(Bytes, NetworkAddr)>,
+    pub rx: Arc<Mutex<mpsc::Receiver<(Bytes, NetworkAddr)>>>,
+}
+
+impl From<AddrConnector> for AddrConnectorWrapper {
+    fn from(value: AddrConnector) -> Self {
+        Self {
+            tx: value.tx,
+            rx: Arc::new(Mutex::new(value.rx)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum OutboundType {
@@ -235,13 +250,13 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
 }
 
 #[async_trait]
-impl UdpSocketAdapter for AddrConnector {
+impl UdpSocketAdapter for AddrConnectorWrapper {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
         self.tx.send((Bytes::from(data), addr)).await.map_err(())
     }
 
     async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
-        let (buf, addr) = self.rx.recv().await?;
+        let (buf, addr) = self.rx.lock().unwrap().recv().await?;
         if data.len() < buf.len() {
             data.copy_from_slice(&buf[..data.len()]);
             Ok((data.len(), addr))
