@@ -1,9 +1,9 @@
 use crate::adapter::{
-    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType,
-    TcpOutBound, UdpOutBound,
+    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
+    OutboundType,
 };
 
-use crate::common::{io_err, OutboundTrait};
+use crate::common::{io_err, StreamOutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -124,7 +124,11 @@ impl SSOutbound {
     }
 }
 
-impl TcpOutBound for SSOutbound {
+impl Outbound for SSOutbound {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Shadowsocks
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -145,7 +149,7 @@ impl TcpOutBound for SSOutbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
@@ -160,12 +164,6 @@ impl TcpOutBound for SSOutbound {
                 .run_tcp(inbound, tcp_outbound.unwrap(), server_addr, abort_handle)
                 .await
         })
-    }
-}
-
-impl UdpOutBound for SSOutbound {
-    fn outbound_type(&self) -> OutboundType {
-        OutboundType::Shadowsocks
     }
 
     fn spawn_udp(
@@ -198,7 +196,7 @@ impl UdpOutBound for SSOutbound {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<Result<()>> {

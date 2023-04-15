@@ -1,8 +1,6 @@
-use crate::adapter::{
-    empty_handle, AddrConnector, Connector, OutboundType, TcpOutBound, UdpOutBound,
-};
+use crate::adapter::{empty_handle, AddrConnector, Connector, Outbound, OutboundType};
 
-use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};
+use crate::common::{io_err, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -298,7 +296,11 @@ impl WireguardHandle {
     }
 }
 
-impl TcpOutBound for WireguardHandle {
+impl Outbound for WireguardHandle {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Wireguard
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -310,18 +312,12 @@ impl TcpOutBound for WireguardHandle {
     fn spawn_tcp_with_outbound(
         &self,
         _inbound: Connector,
-        _tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with Wireguard");
         empty_handle()
-    }
-}
-
-impl UdpOutBound for WireguardHandle {
-    fn outbound_type(&self) -> OutboundType {
-        OutboundType::Wireguard
     }
 
     fn spawn_udp(
@@ -335,7 +331,7 @@ impl UdpOutBound for WireguardHandle {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {

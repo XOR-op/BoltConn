@@ -1,7 +1,7 @@
 use crate::adapter::{
-    AddrConnector, ChainOutbound, Connector, DirectOutbound, HttpOutbound, OutboundType,
-    SSOutbound, Socks5Outbound, StandardUdpAdapter, TcpAdapter, TcpOutBound, TrojanOutbound,
-    TunUdpAdapter, UdpOutBound, WireguardHandle, WireguardManager,
+    AddrConnector, ChainOutbound, Connector, DirectOutbound, HttpOutbound, Outbound, OutboundType,
+    SSOutbound, Socks5Outbound, StandardUdpAdapter, TcpAdapter, TrojanOutbound, TunUdpAdapter,
+    WireguardHandle, WireguardManager,
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, ProxyImpl};
@@ -72,7 +72,7 @@ impl Dispatcher {
         proxy_config: &ProxyImpl,
         src_addr: &SocketAddr,
         dst_addr: &NetworkAddr,
-    ) -> Result<(Box<dyn TcpOutBound>, OutboundType), ()> {
+    ) -> Result<(Box<dyn Outbound>, OutboundType), ()> {
         Ok(match proxy_config {
             ProxyImpl::Direct => (
                 Box::new(DirectOutbound::new(
@@ -200,7 +200,7 @@ impl Dispatcher {
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
-        let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
+        let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
             if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
                 (
                     Box::new(self.create_chain(vec, src_addr, &dst_addr, iface_name)?),
@@ -340,7 +340,7 @@ impl Dispatcher {
         conn_info: ConnInfo,
     ) -> Result<
         (
-            Box<dyn UdpOutBound>,
+            Box<dyn Outbound>,
             Arc<tokio::sync::RwLock<ConnAgent>>,
             ConnAbortHandle,
         ),
@@ -350,7 +350,7 @@ impl Dispatcher {
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
-        let (outbounding, proxy_type): (Box<dyn UdpOutBound>, OutboundType) =
+        let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
             match proxy_config.as_ref() {
                 ProxyImpl::Direct => (
                     Box::new(DirectOutbound::new(

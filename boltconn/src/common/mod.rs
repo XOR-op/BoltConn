@@ -22,7 +22,7 @@ where
     std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
 }
 
-pub trait OutboundTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
+pub trait StreamOutboundTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 
 pub const MAX_PKT_SIZE: usize = 65576;
 

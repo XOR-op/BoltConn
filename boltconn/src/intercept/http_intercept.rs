@@ -1,4 +1,4 @@
-use crate::adapter::{Connector, TcpOutBound};
+use crate::adapter::{Connector, Outbound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 pub struct HttpIntercept {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
-    creator: Arc<dyn TcpOutBound>,
+    creator: Arc<dyn Outbound>,
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
@@ -23,7 +23,7 @@ impl HttpIntercept {
     pub fn new(
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
-        creator: Box<dyn TcpOutBound>,
+        creator: Box<dyn Outbound>,
         conn_info: Arc<RwLock<ConnAgent>>,
     ) -> Self {
         Self {
@@ -35,7 +35,7 @@ impl HttpIntercept {
     }
 
     async fn proxy(
-        creator: Arc<dyn TcpOutBound>,
+        creator: Arc<dyn Outbound>,
         abort_handle: ConnAbortHandle,
         modifier: Arc<dyn Modifier>,
         req: Request<Body>,

@@ -24,7 +24,7 @@ mod wireguard;
 pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
 
-use crate::common::{io_err, mut_buf, read_to_bytes_mut, OutboundTrait, MAX_PKT_SIZE};
+use crate::common::{io_err, mut_buf, read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
@@ -102,6 +102,13 @@ pub enum OutboundType {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TcpTransferType {
+    Tcp,
+    TcpOverUdp,
+    NotApplicable,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum UdpTransferType {
     Udp,
     UdpOverTcp,
@@ -109,6 +116,18 @@ pub enum UdpTransferType {
 }
 
 impl OutboundType {
+    pub fn tcp_transfer_type(&self) -> TcpTransferType {
+        match self {
+            OutboundType::Direct
+            | OutboundType::Socks5
+            | OutboundType::Http
+            | OutboundType::Shadowsocks
+            | OutboundType::Trojan => TcpTransferType::Tcp,
+            OutboundType::Wireguard => TcpTransferType::TcpOverUdp,
+            OutboundType::Chain => TcpTransferType::NotApplicable,
+        }
+    }
+
     pub fn udp_transfer_type(&self) -> UdpTransferType {
         match self {
             OutboundType::Direct => UdpTransferType::NotApplicable,
@@ -122,7 +141,9 @@ impl OutboundType {
     }
 }
 
-pub trait TcpOutBound: Send + Sync {
+pub trait Outbound: Send + Sync {
+    fn outbound_type(&self) -> OutboundType;
+
     /// Run with tokio::spawn.
     fn spawn_tcp(
         &self,
@@ -133,14 +154,10 @@ pub trait TcpOutBound: Send + Sync {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
-}
-
-pub trait UdpOutBound: Send + Sync {
-    fn outbound_type(&self) -> OutboundType;
 
     /// Run with tokio::spawn.
     fn spawn_udp(
@@ -152,13 +169,11 @@ pub trait UdpOutBound: Send + Sync {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
 }
-
-pub trait BothOutBound: TcpOutBound + UdpOutBound {}
 
 fn empty_handle() -> JoinHandle<io::Result<()>> {
     tokio::spawn(async move { Err(io_err("Invalid spawn")) })

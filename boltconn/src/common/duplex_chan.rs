@@ -1,5 +1,5 @@
 use crate::adapter::Connector;
-use crate::common::{io_err, OutboundTrait};
+use crate::common::{io_err, StreamOutboundTrait};
 use bytes::{Bytes, BytesMut};
 use std::io::Error;
 use std::pin::Pin;
@@ -101,4 +101,4 @@ impl AsyncRead for DuplexChan {
     }
 }
 
-impl OutboundTrait for DuplexChan {}
+impl StreamOutboundTrait for DuplexChan {}

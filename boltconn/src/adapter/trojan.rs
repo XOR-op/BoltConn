@@ -1,10 +1,10 @@
 use crate::adapter::{
-    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType,
-    TcpOutBound, UdpOutBound,
+    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
+    OutboundType,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
-use crate::common::{as_io_err, io_err, OutboundTrait};
+use crate::common::{as_io_err, io_err, StreamOutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -154,7 +154,11 @@ impl TrojanOutbound {
     }
 }
 
-impl TcpOutBound for TrojanOutbound {
+impl Outbound for TrojanOutbound {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Trojan
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -174,7 +178,7 @@ impl TcpOutBound for TrojanOutbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
@@ -186,12 +190,6 @@ impl TcpOutBound for TrojanOutbound {
             self.clone()
                 .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle),
         )
-    }
-}
-
-impl UdpOutBound for TrojanOutbound {
-    fn outbound_type(&self) -> OutboundType {
-        OutboundType::Trojan
     }
 
     fn spawn_udp(
@@ -213,7 +211,7 @@ impl UdpOutBound for TrojanOutbound {
     fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {

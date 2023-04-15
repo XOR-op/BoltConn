@@ -1,6 +1,8 @@
-use crate::adapter::{empty_handle, established_tcp, lookup, Connector, TcpOutBound};
+use crate::adapter::{
+    empty_handle, established_tcp, lookup, AddrConnector, Connector, Outbound, OutboundType,
+};
 
-use crate::common::{io_err, OutboundTrait};
+use crate::common::{io_err, StreamOutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -90,7 +92,11 @@ impl HttpOutbound {
     }
 }
 
-impl TcpOutBound for HttpOutbound {
+impl Outbound for HttpOutbound {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Http
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -113,7 +119,7 @@ impl TcpOutBound for HttpOutbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
@@ -128,5 +134,25 @@ impl TcpOutBound for HttpOutbound {
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))
         })
+    }
+
+    fn spawn_udp(
+        &self,
+        _inbound: AddrConnector,
+        _abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tracing::error!("spawn_udp() should not be called with HttpOutbound");
+        empty_handle()
+    }
+
+    fn spawn_udp_with_outbound(
+        &self,
+        _inbound: AddrConnector,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
+        tracing::error!("spawn_udp_with_outbound() should not be called with HttpOutbound");
+        empty_handle()
     }
 }

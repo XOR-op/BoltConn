@@ -1,9 +1,9 @@
 use crate::adapter::{
-    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType,
-    TcpOutBound, UdpOutBound,
+    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
+    OutboundType,
 };
 
-use crate::common::{as_io_err, io_err, OutboundTrait};
+use crate::common::{as_io_err, io_err, StreamOutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -121,7 +121,11 @@ impl Socks5Outbound {
     }
 }
 
-impl TcpOutBound for Socks5Outbound {
+impl Outbound for Socks5Outbound {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Socks5
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -141,7 +145,7 @@ impl TcpOutBound for Socks5Outbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
@@ -153,12 +157,6 @@ impl TcpOutBound for Socks5Outbound {
             self.clone()
                 .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle),
         )
-    }
-}
-
-impl UdpOutBound for Socks5Outbound {
-    fn outbound_type(&self) -> OutboundType {
-        OutboundType::Socks5
     }
 
     fn spawn_udp(
@@ -180,7 +178,7 @@ impl UdpOutBound for Socks5Outbound {
     fn spawn_udp_with_outbound(
         &self,
         _inbound: AddrConnector,
-        _tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {

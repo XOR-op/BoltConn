@@ -1,8 +1,8 @@
 use crate::adapter::{
-    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType,
-    TcpOutBound, UdpOutBound,
+    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
+    OutboundType,
 };
-use crate::common::OutboundTrait;
+use crate::common::StreamOutboundTrait;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -51,7 +51,11 @@ impl DirectOutbound {
     }
 }
 
-impl TcpOutBound for DirectOutbound {
+impl Outbound for DirectOutbound {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Direct
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -63,18 +67,12 @@ impl TcpOutBound for DirectOutbound {
     fn spawn_tcp_with_outbound(
         &self,
         _inbound: Connector,
-        _tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
         empty_handle()
-    }
-}
-
-impl UdpOutBound for DirectOutbound {
-    fn outbound_type(&self) -> OutboundType {
-        OutboundType::Direct
     }
 
     fn spawn_udp(
@@ -88,7 +86,7 @@ impl UdpOutBound for DirectOutbound {
     fn spawn_udp_with_outbound(
         &self,
         _inbound: AddrConnector,
-        _tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
     ) -> JoinHandle<Result<()>> {
