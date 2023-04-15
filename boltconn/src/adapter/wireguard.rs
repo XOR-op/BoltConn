@@ -1,5 +1,5 @@
 use crate::adapter::{
-    AddrConnector, Connector, OutboundType, TcpOutBound, UdpOutBound, UdpSocketAdapter,
+    empty_handle, AddrConnector, Connector, OutboundType, TcpOutBound, UdpOutBound,
 };
 
 use crate::common::{io_err, OutboundTrait, MAX_PKT_SIZE};
@@ -8,6 +8,7 @@ use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
+use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::io;
@@ -15,7 +16,6 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinHandle;
 
@@ -30,7 +30,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub async fn new(
-        outbound: UdpSocket,
+        outbound: AdapterOrSocket,
         config: &WireguardConfig,
         dns: Arc<Dns>,
         timeout: Duration,
@@ -197,7 +197,11 @@ impl WireguardManager {
         }
     }
 
-    pub async fn get_wg_conn(&self, config: &WireguardConfig) -> anyhow::Result<Arc<Endpoint>> {
+    pub async fn get_wg_conn(
+        &self,
+        config: &WireguardConfig,
+        adapter: Option<AdapterOrSocket>,
+    ) -> anyhow::Result<Arc<Endpoint>> {
         loop {
             // get an existing conn, or create
             return match self.active_conn.entry(config.clone()) {
@@ -210,7 +214,7 @@ impl WireguardManager {
                 }
                 Entry::Vacant(entry) => {
                     let server_addr = get_dst(&self.dns, &config.endpoint).await?;
-                    let outbound = match server_addr {
+                    let outbound = adapter.unwrap_or(AdapterOrSocket::Socket(match server_addr {
                         SocketAddr::V4(_) => {
                             let socket = Egress::new(&self.iface).udpv4_socket().await?;
                             socket.connect(server_addr).await?;
@@ -221,7 +225,7 @@ impl WireguardManager {
                             socket.connect(server_addr).await?;
                             socket
                         }
-                    };
+                    }));
                     let ep =
                         Endpoint::new(outbound, config, self.dns.clone(), self.timeout).await?;
                     entry.insert(ep.clone());
@@ -236,43 +240,61 @@ impl WireguardManager {
 pub struct WireguardHandle {
     src_port: u16,
     dst: NetworkAddr,
-    endpoint: Arc<Endpoint>,
+    config: WireguardConfig,
+    manager: Arc<WireguardManager>,
     dns: Arc<Dns>,
 }
 
 impl WireguardHandle {
-    pub fn new(src_port: u16, dst: NetworkAddr, endpoint: Arc<Endpoint>, dns: Arc<Dns>) -> Self {
+    pub fn new(
+        src_port: u16,
+        dst: NetworkAddr,
+        config: WireguardConfig,
+        manager: Arc<WireguardManager>,
+        dns: Arc<Dns>,
+    ) -> Self {
         Self {
             src_port,
             dst,
-            endpoint,
+            config,
+            manager,
             dns,
         }
     }
 
-    async fn attach_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
+    async fn attach_tcp(
+        self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+        adapter: Option<AdapterOrSocket>,
+    ) -> io::Result<()> {
         // todo: remote dns
         let dst = get_dst(&self.dns, &self.dst).await?;
-        let notify = self.endpoint.clone_notify();
-        self.endpoint
-            .stack
-            .lock()
+        let endpoint = self
+            .manager
+            .get_wg_conn(&self.config, adapter)
             .await
-            .open_tcp(self.src_port, dst, inbound, abort_handle, notify)
+            .map_err(|e| io_err(format!("{}", e).as_str()))?;
+        let notify = endpoint.clone_notify();
+        let mut x = endpoint.stack.lock().await;
+        x.open_tcp(self.src_port, dst, inbound, abort_handle, notify)
     }
 
     async fn attach_udp(
         self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        adapter: Option<AdapterOrSocket>,
     ) -> io::Result<()> {
         // todo: remote dns
-        let notify = self.endpoint.clone_notify();
-        self.endpoint
-            .stack
-            .lock()
+        let endpoint = self
+            .manager
+            .get_wg_conn(&self.config, adapter)
             .await
-            .open_udp(self.src_port, inbound, abort_handle, notify)
+            .map_err(|e| io_err(format!("{}", e).as_str()))?;
+        let notify = endpoint.clone_notify();
+        let mut x = endpoint.stack.lock().await;
+        x.open_udp(self.src_port, inbound, abort_handle, notify)
     }
 }
 
@@ -282,17 +304,18 @@ impl TcpOutBound for WireguardHandle {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tokio::spawn(self.clone().attach_tcp(inbound, abort_handle))
+        tokio::spawn(self.clone().attach_tcp(inbound, abort_handle, None))
     }
 
     fn spawn_tcp_with_outbound(
         &self,
-        inbound: Connector,
-        _outbound: Box<dyn OutboundTrait>,
-        abort_handle: ConnAbortHandle,
+        _inbound: Connector,
+        _tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with Wireguard");
-        self.spawn_tcp(inbound, abort_handle)
+        empty_handle()
     }
 }
 
@@ -306,7 +329,7 @@ impl UdpOutBound for WireguardHandle {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tokio::spawn(self.clone().attach_udp(inbound, abort_handle))
+        tokio::spawn(self.clone().attach_udp(inbound, abort_handle, None))
     }
 
     fn spawn_udp_with_outbound(
@@ -317,8 +340,17 @@ impl UdpOutBound for WireguardHandle {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         tracing::warn!("TODO: spawn_udp_with_outbound() has not been implemented");
-        todo!();
-        tokio::spawn(self.clone().attach_udp(inbound, abort_handle))
+        if tcp_outbound.is_some() || udp_outbound.is_none() {
+            tracing::error!("Invalid Wireguard UDP outbound ancestor");
+            return tokio::spawn(async move { Ok(()) });
+        }
+        let udp_outbound = udp_outbound.unwrap();
+        tokio::spawn(self.clone().attach_udp(
+            inbound,
+            abort_handle,
+            Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
+        ));
+        todo!()
     }
 }
 

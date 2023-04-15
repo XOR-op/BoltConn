@@ -1,12 +1,13 @@
 use crate::adapter::{
-    AddrConnector, AddrConnectorWrapper, BothOutBound, Connector, OutboundType, TcpOutBound,
-    UdpOutBound, UdpSocketAdapter, UdpTransferType,
+    empty_handle, AddrConnector, AddrConnectorWrapper, BothOutBound, Connector, OutboundType,
+    TcpOutBound, UdpOutBound, UdpTransferType,
 };
 use std::io;
 
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::OutboundTrait;
 use crate::proxy::ConnAbortHandle;
+use crate::transport::UdpSocketAdapter;
 use tokio::task::JoinHandle;
 
 pub struct ChainOutbound {
@@ -34,7 +35,8 @@ impl TcpOutBound for ChainOutbound {
             let inbound = inbound_container.take().unwrap();
             let (inner, outer) = Connector::new_pair(10);
             let chan = Box::new(DuplexChan::new(inner));
-            let handle = tunnel.spawn_tcp_with_outbound(inbound, chan, abort_handle.clone());
+            let handle =
+                tunnel.spawn_tcp_with_outbound(inbound, Some(chan), None, abort_handle.clone());
             handles.push(handle);
             inbound_container = Some(outer)
         }
@@ -55,12 +57,13 @@ impl TcpOutBound for ChainOutbound {
 
     fn spawn_tcp_with_outbound(
         &self,
-        inbound: Connector,
-        _outbound: Box<dyn OutboundTrait>,
-        abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<std::io::Result<()>> {
+        _inbound: Connector,
+        _tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _abort_handle: ConnAbortHandle,
+    ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with ChainOutbound");
-        self.spawn_tcp(inbound, abort_handle)
+        empty_handle()
     }
 }
 
@@ -103,7 +106,12 @@ impl UdpOutBound for ChainUdpOutbound {
                 let (inner, outer) = Connector::new_pair(10);
                 let chan = Box::new(DuplexChan::new(inner));
                 inbound_tcp_container = Some(outer);
-                handles.push(tunnel.spawn_tcp_with_outbound(inbound, chan, abort_handle.clone()));
+                handles.push(tunnel.spawn_tcp_with_outbound(
+                    inbound,
+                    Some(chan),
+                    None,
+                    abort_handle.clone(),
+                ));
             } else {
                 let inbound = inbound_container.take().unwrap();
                 if tunnel.outbound_type().udp_transfer_type() == UdpTransferType::UdpOverTcp {

@@ -2,6 +2,7 @@ use crate::common::io_err;
 use crate::common::MAX_PKT_SIZE;
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
+use crate::transport::AdapterOrSocket;
 use boringtun::noise::errors::WireGuardError;
 use boringtun::noise::{Tunn, TunnResult};
 use bytes::BytesMut;
@@ -11,7 +12,6 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tokio::net::UdpSocket;
 use tokio::sync::Notify;
 
 // We left AllowedIPs since it's boltconn that manages routing.
@@ -58,7 +58,7 @@ impl Hash for WireguardConfig {
 
 /// Wireguard Tunnel, with only one peer.
 pub struct WireguardTunnel {
-    outbound: UdpSocket,
+    outbound: AdapterOrSocket,
     tunnel: Box<Tunn>,
     /// remote address on the genuine Internet
     endpoint: SocketAddr,
@@ -67,7 +67,7 @@ pub struct WireguardTunnel {
 
 impl WireguardTunnel {
     pub async fn new(
-        outbound: UdpSocket,
+        outbound: AdapterOrSocket,
         config: &WireguardConfig,
         dns: Arc<Dns>,
         smol_notify: Arc<Notify>,
@@ -105,9 +105,26 @@ impl WireguardTunnel {
     async fn flush_pending_queue(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> anyhow::Result<()> {
         // flush pending queue
         while let TunnResult::WriteToNetwork(data) = self.tunnel.decapsulate(None, &[], buf) {
-            self.outbound.send(data).await?;
+            self.outbound_send(data).await?;
         }
         Ok(())
+    }
+
+    async fn outbound_send(&self, data: &[u8]) -> anyhow::Result<usize> {
+        match &self.outbound {
+            AdapterOrSocket::Adapter(a) => {
+                a.send_to(data, NetworkAddr::Raw(self.endpoint)).await?;
+                Ok(data.len())
+            }
+            AdapterOrSocket::Socket(s) => Ok(s.send(data).await?),
+        }
+    }
+
+    async fn outbound_recv(&self, data: &mut [u8]) -> anyhow::Result<usize> {
+        match &self.outbound {
+            AdapterOrSocket::Adapter(a) => Ok(a.recv_from(data).await?.0),
+            AdapterOrSocket::Socket(s) => Ok(s.recv(data).await?),
+        }
     }
 
     /// Receive wg packet from Internet
@@ -117,7 +134,7 @@ impl WireguardTunnel {
         buf: &mut [u8; MAX_PKT_SIZE],
         wg_buf: &mut [u8; MAX_PKT_SIZE],
     ) -> anyhow::Result<bool> {
-        let len = self.outbound.recv(buf).await?;
+        let len = self.outbound_recv(buf).await?;
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
         Ok(match self.tunnel.decapsulate(None, &buf[..len], wg_buf) {
@@ -134,7 +151,7 @@ impl WireguardTunnel {
                 true
             }
             TunnResult::WriteToNetwork(data) => {
-                self.outbound.send(data).await?;
+                self.outbound_send(data).await?;
                 self.flush_pending_queue(wg_buf).await?;
                 false
             }
@@ -153,7 +170,7 @@ impl WireguardTunnel {
             .map_err(|_| io::Error::from(ErrorKind::ConnectionAborted))?;
         match self.tunnel.encapsulate(data.as_ref(), wg_buf) {
             TunnResult::WriteToNetwork(packet) => {
-                if self.outbound.send(packet).await? != packet.len() {
+                if self.outbound_send(packet).await? != packet.len() {
                     // size exceeded
                     Err(io::Error::from(ErrorKind::WouldBlock))?;
                 }
@@ -179,7 +196,7 @@ impl WireguardTunnel {
                         // handshake ongoing, ignore
                     }
                     TunnResult::WriteToNetwork(data) => {
-                        let _ = self.outbound.send(data).await;
+                        let _ = self.outbound_send(data).await;
                     }
                     other => {
                         tracing::warn!("Unexpected wireguard timer message: {:?}", other);
@@ -187,7 +204,7 @@ impl WireguardTunnel {
                 }
             }
             TunnResult::WriteToNetwork(packet) => {
-                if let Err(e) = self.outbound.send(packet).await {
+                if let Err(e) = self.outbound_send(packet).await {
                     tracing::warn!("Failed to send timer message: {}", e);
                 }
             }

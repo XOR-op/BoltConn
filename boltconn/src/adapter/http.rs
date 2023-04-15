@@ -1,9 +1,10 @@
-use crate::adapter::{established_tcp, lookup, Connector, TcpOutBound};
+use crate::adapter::{empty_handle, established_tcp, lookup, Connector, TcpOutBound};
 
 use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::transport::UdpSocketAdapter;
 use base64::Engine;
 use httparse::Response;
 use std::io;
@@ -112,13 +113,18 @@ impl TcpOutBound for HttpOutbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: Box<dyn OutboundTrait>,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
+        if tcp_outbound.is_none() || udp_outbound.is_some() {
+            tracing::error!("Invalid HTTP proxy tcp spawn");
+            return empty_handle();
+        }
         let self_clone = self.clone();
         tokio::spawn(async move {
             self_clone
-                .run_tcp(inbound, outbound, abort_handle)
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))
         })

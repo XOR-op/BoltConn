@@ -27,7 +27,7 @@ pub struct Dispatcher {
     ca_certificate: Certificate,
     modifier: RwLock<ModifierClosure>,
     intercept_filter: RwLock<Arc<Dispatching>>,
-    wireguard_mgr: WireguardManager,
+    wireguard_mgr: Arc<WireguardManager>,
 }
 
 impl Dispatcher {
@@ -50,7 +50,7 @@ impl Dispatcher {
             ca_certificate,
             modifier: RwLock::new(modifier),
             intercept_filter: RwLock::new(intercept_filter),
-            wireguard_mgr: wg_mgr,
+            wireguard_mgr: Arc::new(wg_mgr),
         }
     }
 
@@ -66,7 +66,7 @@ impl Dispatcher {
         *self.modifier.write().unwrap() = closure;
     }
 
-    async fn build_tcp_outbound(
+    fn build_tcp_outbound(
         &self,
         iface_name: &str,
         proxy_config: &ProxyImpl,
@@ -121,21 +121,16 @@ impl Dispatcher {
                 )),
                 OutboundType::Trojan,
             ),
-            ProxyImpl::Wireguard(cfg) => {
-                let Ok(outbound) = self.wireguard_mgr.get_wg_conn(cfg).await else {
-                    tracing::warn!("Failed to create wireguard connection");
-                    return Err(());
-                };
-                (
-                    Box::new(WireguardHandle::new(
-                        src_addr.port(),
-                        dst_addr.clone(),
-                        outbound,
-                        self.dns.clone(),
-                    )),
-                    OutboundType::Wireguard,
-                )
-            }
+            ProxyImpl::Wireguard(cfg) => (
+                Box::new(WireguardHandle::new(
+                    src_addr.port(),
+                    dst_addr.clone(),
+                    cfg.clone(),
+                    self.wireguard_mgr.clone(),
+                    self.dns.clone(),
+                )),
+                OutboundType::Wireguard,
+            ),
             ProxyImpl::Chain(_) => {
                 tracing::warn!("Nested chain unsupported");
                 return Err(());
@@ -143,7 +138,7 @@ impl Dispatcher {
         })
     }
 
-    async fn create_chain(
+    fn create_chain(
         &self,
         vec: &[GeneralProxy],
         src_addr: SocketAddr,
@@ -174,14 +169,12 @@ impl Dispatcher {
         }
 
         for idx in 0..vec.len() {
-            let (outbounding, _) = self
-                .build_tcp_outbound(
-                    iface_name,
-                    impls.get(idx).unwrap().as_ref(),
-                    &src_addr,
-                    dst_addrs.get(idx).unwrap(),
-                )
-                .await?;
+            let (outbounding, _) = self.build_tcp_outbound(
+                iface_name,
+                impls.get(idx).unwrap().as_ref(),
+                &src_addr,
+                dst_addrs.get(idx).unwrap(),
+            )?;
             res.push(outbounding);
         }
         Ok(ChainOutbound::new(res))
@@ -210,15 +203,11 @@ impl Dispatcher {
         let (outbounding, proxy_type): (Box<dyn TcpOutBound>, OutboundType) =
             if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
                 (
-                    Box::new(
-                        self.create_chain(vec, src_addr, &dst_addr, iface_name)
-                            .await?,
-                    ),
+                    Box::new(self.create_chain(vec, src_addr, &dst_addr, iface_name)?),
                     OutboundType::Chain,
                 )
             } else {
-                self.build_tcp_outbound(iface_name, proxy_config.as_ref(), &src_addr, &dst_addr)
-                    .await?
+                self.build_tcp_outbound(iface_name, proxy_config.as_ref(), &src_addr, &dst_addr)?
             };
 
         // conn info
@@ -343,7 +332,8 @@ impl Dispatcher {
         Ok(())
     }
 
-    async fn route_udp(
+    #[allow(clippy::type_complexity)]
+    fn route_udp(
         &self,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
@@ -404,29 +394,24 @@ impl Dispatcher {
                     )),
                     OutboundType::Trojan,
                 ),
-                ProxyImpl::Wireguard(cfg) => {
-                    let Ok(outbound) = self.wireguard_mgr.get_wg_conn(cfg).await else{
-                        tracing::warn!("Failed to create wireguard connection");
-                        return Err(());
-                    };
-                    (
-                        Box::new(WireguardHandle::new(
-                            src_addr.port(),
-                            dst_addr.clone(),
-                            outbound,
-                            self.dns.clone(),
-                        )),
-                        OutboundType::Wireguard,
-                    )
-                }
+                ProxyImpl::Wireguard(cfg) => (
+                    Box::new(WireguardHandle::new(
+                        src_addr.port(),
+                        dst_addr.clone(),
+                        cfg.clone(),
+                        self.wireguard_mgr.clone(),
+                        self.dns.clone(),
+                    )),
+                    OutboundType::Wireguard,
+                ),
                 ProxyImpl::Chain(_) => unreachable!(),
             };
 
         // conn info
         let abort_handle = ConnAbortHandle::new();
         let info = Arc::new(tokio::sync::RwLock::new(ConnAgent::new(
-            dst_addr.clone(),
-            conn_info.process_info.clone(),
+            dst_addr,
+            conn_info.process_info,
             proxy_type,
             NetworkType::Udp,
             abort_handle.clone(),
@@ -474,8 +459,7 @@ impl Dispatcher {
             connection_type: NetworkType::Udp,
             process_info: proc_info,
         };
-        let (outbounding, info, abort_handle) =
-            self.route_udp(src_addr, dst_addr, conn_info).await?;
+        let (outbounding, info, abort_handle) = self.route_udp(src_addr, dst_addr, conn_info)?;
 
         let mut handles = Vec::new();
 
@@ -519,8 +503,7 @@ impl Dispatcher {
             connection_type: NetworkType::Udp,
             process_info: process_info.clone(),
         };
-        let (outbounding, info, abort_handle) =
-            self.route_udp(src_addr, dst_addr, conn_info).await?;
+        let (outbounding, info, abort_handle) = self.route_udp(src_addr, dst_addr, conn_info)?;
         let mut handles = Vec::new();
 
         let (adapter_conn, adapter_next) = AddrConnector::new_pair(10);

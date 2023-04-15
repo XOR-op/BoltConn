@@ -1,12 +1,13 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType, TcpOutBound,
-    UdpOutBound, UdpSocketAdapter,
+    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType,
+    TcpOutBound, UdpOutBound,
 };
 
 use crate::common::{io_err, OutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use io::Result;
@@ -144,14 +145,19 @@ impl TcpOutBound for SSOutbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: Box<dyn OutboundTrait>,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
+        if tcp_outbound.is_none() || udp_outbound.is_some() {
+            tracing::error!("Invalid Shadowsocks tcp spawn");
+            return empty_handle();
+        }
         let self_clone = self.clone();
         tokio::spawn(async move {
             let server_addr = self_clone.get_server_addr().await?;
             self_clone
-                .run_tcp(inbound, outbound, server_addr, abort_handle)
+                .run_tcp(inbound, tcp_outbound.unwrap(), server_addr, abort_handle)
                 .await
         })
     }
@@ -198,7 +204,7 @@ impl UdpOutBound for SSOutbound {
     ) -> JoinHandle<Result<()>> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Shadowsocks UDP outbound ancestor");
-            return self.spawn_udp(inbound, abort_handle);
+            return empty_handle();
         }
         let udp_outbound = udp_outbound.unwrap();
         let self_clone = self.clone();
@@ -214,11 +220,6 @@ impl UdpOutBound for SSOutbound {
                 .await
         })
     }
-}
-
-enum AdapterOrSocket {
-    Adapter(Arc<dyn UdpSocketAdapter>),
-    Socket(tokio::net::UdpSocket),
 }
 
 struct ShadowsocksUdpAdapter {

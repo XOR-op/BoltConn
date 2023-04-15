@@ -1,6 +1,6 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType, TcpOutBound,
-    UdpOutBound, UdpSocketAdapter,
+    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, OutboundType,
+    TcpOutBound, UdpOutBound,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
@@ -12,6 +12,7 @@ use crate::transport::trojan::{
     encapsule_udp_packet, make_tls_config, TrojanAddr, TrojanCmd, TrojanConfig, TrojanReqInner,
     TrojanRequest, TrojanUdpSocket,
 };
+use crate::transport::UdpSocketAdapter;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -173,10 +174,18 @@ impl TcpOutBound for TrojanOutbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: Box<dyn OutboundTrait>,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tokio::spawn(self.clone().run_tcp(inbound, outbound, abort_handle))
+        if tcp_outbound.is_none() || udp_outbound.is_some() {
+            tracing::error!("Invalid Trojan UDP outbound ancestor");
+            return empty_handle();
+        }
+        tokio::spawn(
+            self.clone()
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle),
+        )
     }
 }
 
@@ -210,7 +219,7 @@ impl UdpOutBound for TrojanOutbound {
     ) -> JoinHandle<io::Result<()>> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
-            return self.spawn_udp(inbound, abort_handle);
+            return empty_handle();
         }
         let tcp_outbound = tcp_outbound.unwrap();
         let self_clone = self.clone();

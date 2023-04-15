@@ -27,6 +27,7 @@ pub use super::adapter::shadowsocks::*;
 use crate::common::{io_err, mut_buf, read_to_bytes_mut, OutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
+use crate::transport::UdpSocketAdapter;
 pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
@@ -132,7 +133,8 @@ pub trait TcpOutBound: Send + Sync {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: Box<dyn OutboundTrait>,
+        tcp_outbound: Option<Box<dyn OutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
 }
@@ -157,6 +159,10 @@ pub trait UdpOutBound: Send + Sync {
 }
 
 pub trait BothOutBound: TcpOutBound + UdpOutBound {}
+
+fn empty_handle() -> JoinHandle<io::Result<()>> {
+    tokio::spawn(async move { Err(io_err("Invalid spawn")) })
+}
 
 async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)
 where
@@ -197,14 +203,6 @@ where
             }
         }
     }
-}
-
-#[async_trait]
-pub trait UdpSocketAdapter: Send + Sync {
-    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()>;
-
-    // @return: <length>, <if addr matches target>
-    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)>;
 }
 
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
