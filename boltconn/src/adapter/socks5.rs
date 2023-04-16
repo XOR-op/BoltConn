@@ -1,12 +1,13 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
-    UdpSocketAdapter,
+    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
+    OutboundType,
 };
 
-use crate::common::{as_io_err, io_err, OutboundTrait};
+use crate::common::{as_io_err, io_err, StreamOutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use fast_socks5::client::Socks5Stream;
 use fast_socks5::util::target_addr::TargetAddr;
@@ -91,6 +92,7 @@ impl Socks5Outbound {
         inbound: AddrConnector,
         outbound: S,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -115,12 +117,22 @@ impl Socks5Outbound {
             .next()
             .unwrap();
         out_sock.connect(bound_addr).await?;
-        established_udp(inbound, Socks5UdpAdapter(out_sock), abort_handle).await;
+        established_udp(
+            inbound,
+            Socks5UdpAdapter(out_sock),
+            if tunnel_only { Some(self.dst) } else { None },
+            abort_handle,
+        )
+        .await;
         Ok(())
     }
 }
 
-impl TcpOutBound for Socks5Outbound {
+impl Outbound for Socks5Outbound {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Socks5
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -140,18 +152,25 @@ impl TcpOutBound for Socks5Outbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: Box<dyn OutboundTrait>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tokio::spawn(self.clone().run_tcp(inbound, outbound, abort_handle))
+        if tcp_outbound.is_none() || udp_outbound.is_some() {
+            tracing::error!("Invalid Socks5 tcp spawn");
+            return empty_handle();
+        }
+        tokio::spawn(
+            self.clone()
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle),
+        )
     }
-}
 
-impl UdpOutBound for Socks5Outbound {
     fn spawn_udp(
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -160,8 +179,22 @@ impl UdpOutBound for Socks5Outbound {
             let socks_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self_clone.run_udp(inbound, socks_conn, abort_handle).await
+            self_clone
+                .run_udp(inbound, socks_conn, abort_handle, tunnel_only)
+                .await
         })
+    }
+
+    fn spawn_udp_with_outbound(
+        &self,
+        _inbound: AddrConnector,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
+    ) -> JoinHandle<io::Result<()>> {
+        tracing::error!("Socks5 does not support UDP chain");
+        empty_handle()
     }
 }
 

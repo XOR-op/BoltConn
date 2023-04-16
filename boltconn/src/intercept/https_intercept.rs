@@ -1,4 +1,4 @@
-use crate::adapter::{Connector, TcpOutBound};
+use crate::adapter::{Connector, Outbound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
@@ -24,7 +24,7 @@ pub struct HttpsIntercept {
     server_name: String,
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
-    creator: Arc<dyn TcpOutBound>,
+    creator: Arc<dyn Outbound>,
     conn_info: Arc<RwLock<ConnAgent>>,
 }
 
@@ -34,7 +34,7 @@ impl HttpsIntercept {
         server_name: String,
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
-        creator: Box<dyn TcpOutBound>,
+        creator: Box<dyn Outbound>,
         conn_info: Arc<RwLock<ConnAgent>>,
     ) -> anyhow::Result<Self> {
         let (cert, priv_key) = sign_site_cert(server_name.as_str(), ca_cert)?;
@@ -52,7 +52,7 @@ impl HttpsIntercept {
     async fn proxy(
         client_tls: TlsConnector,
         server_name: ServerName,
-        creator: Arc<dyn TcpOutBound>,
+        creator: Arc<dyn Outbound>,
         abort_handle: ConnAbortHandle,
         modifier: Arc<dyn Modifier>,
         req: Request<Body>,

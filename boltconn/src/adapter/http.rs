@@ -1,9 +1,12 @@
-use crate::adapter::{established_tcp, lookup, Connector, TcpOutBound};
+use crate::adapter::{
+    empty_handle, established_tcp, lookup, AddrConnector, Connector, Outbound, OutboundType,
+};
 
-use crate::common::{io_err, OutboundTrait};
+use crate::common::{io_err, StreamOutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::transport::UdpSocketAdapter;
 use base64::Engine;
 use httparse::Response;
 use std::io;
@@ -89,7 +92,11 @@ impl HttpOutbound {
     }
 }
 
-impl TcpOutBound for HttpOutbound {
+impl Outbound for HttpOutbound {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Http
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -112,15 +119,42 @@ impl TcpOutBound for HttpOutbound {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: Box<dyn OutboundTrait>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
+        if tcp_outbound.is_none() || udp_outbound.is_some() {
+            tracing::error!("Invalid HTTP proxy tcp spawn");
+            return empty_handle();
+        }
         let self_clone = self.clone();
         tokio::spawn(async move {
             self_clone
-                .run_tcp(inbound, outbound, abort_handle)
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))
         })
+    }
+
+    fn spawn_udp(
+        &self,
+        _inbound: AddrConnector,
+        _abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
+    ) -> JoinHandle<io::Result<()>> {
+        tracing::error!("spawn_udp() should not be called with HttpOutbound");
+        empty_handle()
+    }
+
+    fn spawn_udp_with_outbound(
+        &self,
+        _inbound: AddrConnector,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
+    ) -> JoinHandle<io::Result<()>> {
+        tracing::error!("spawn_udp_with_outbound() should not be called with HttpOutbound");
+        empty_handle()
     }
 }

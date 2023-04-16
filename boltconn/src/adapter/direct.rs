@@ -1,11 +1,12 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, TcpOutBound, UdpOutBound,
-    UdpSocketAdapter,
+    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
+    OutboundType,
 };
-use crate::common::OutboundTrait;
+use crate::common::StreamOutboundTrait;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use io::Result;
 use std::io;
@@ -43,6 +44,7 @@ impl DirectOutbound {
         established_udp(
             inbound,
             DirectUdpAdapter(outbound, self.dns.clone()),
+            None,
             abort_handle,
         )
         .await;
@@ -50,7 +52,11 @@ impl DirectOutbound {
     }
 }
 
-impl TcpOutBound for DirectOutbound {
+impl Outbound for DirectOutbound {
+    fn outbound_type(&self) -> OutboundType {
+        OutboundType::Direct
+    }
+
     fn spawn_tcp(
         &self,
         inbound: Connector,
@@ -61,22 +67,34 @@ impl TcpOutBound for DirectOutbound {
 
     fn spawn_tcp_with_outbound(
         &self,
-        inbound: Connector,
-        _outbound: Box<dyn OutboundTrait>,
-        abort_handle: ConnAbortHandle,
+        _inbound: Connector,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tracing::warn!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
-        tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
+        tracing::error!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
+        empty_handle()
     }
-}
 
-impl UdpOutBound for DirectOutbound {
     fn spawn_udp(
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().run_udp(inbound, abort_handle))
+    }
+
+    fn spawn_udp_with_outbound(
+        &self,
+        _inbound: AddrConnector,
+        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        _abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
+    ) -> JoinHandle<io::Result<()>> {
+        tracing::error!("spawn_udp_with_outbound() should not be called with DirectOutbound");
+        empty_handle()
     }
 }
 

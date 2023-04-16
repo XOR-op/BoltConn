@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::select;
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 mod chain;
@@ -24,9 +24,10 @@ mod wireguard;
 pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
 
-use crate::common::{io_err, mut_buf, read_to_bytes_mut, OutboundTrait, MAX_PKT_SIZE};
+use crate::common::{io_err, mut_buf, read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
+use crate::transport::UdpSocketAdapter;
 pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
@@ -75,6 +76,21 @@ pub type Connector = AdapterConnector<Bytes>;
 pub type AddrConnector = AdapterConnector<(Bytes, NetworkAddr)>;
 
 #[derive(Debug, Clone)]
+struct AddrConnectorWrapper {
+    pub tx: mpsc::Sender<(Bytes, NetworkAddr)>,
+    pub rx: Arc<Mutex<mpsc::Receiver<(Bytes, NetworkAddr)>>>,
+}
+
+impl From<AddrConnector> for AddrConnectorWrapper {
+    fn from(value: AddrConnector) -> Self {
+        Self {
+            tx: value.tx,
+            rx: Arc::new(Mutex::new(value.rx)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum OutboundType {
     Direct,
     Socks5,
@@ -85,7 +101,49 @@ pub enum OutboundType {
     Chain,
 }
 
-pub trait TcpOutBound: Send + Sync {
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TcpTransferType {
+    Tcp,
+    TcpOverUdp,
+    NotApplicable,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum UdpTransferType {
+    Udp,
+    UdpOverTcp,
+    NotApplicable,
+}
+
+impl OutboundType {
+    pub fn tcp_transfer_type(&self) -> TcpTransferType {
+        match self {
+            OutboundType::Direct
+            | OutboundType::Socks5
+            | OutboundType::Http
+            | OutboundType::Shadowsocks
+            | OutboundType::Trojan => TcpTransferType::Tcp,
+            OutboundType::Wireguard => TcpTransferType::TcpOverUdp,
+            OutboundType::Chain => TcpTransferType::NotApplicable,
+        }
+    }
+
+    pub fn udp_transfer_type(&self) -> UdpTransferType {
+        match self {
+            OutboundType::Direct => UdpTransferType::NotApplicable,
+            OutboundType::Socks5 => UdpTransferType::Udp,
+            OutboundType::Http => UdpTransferType::NotApplicable,
+            OutboundType::Shadowsocks => UdpTransferType::Udp,
+            OutboundType::Trojan => UdpTransferType::UdpOverTcp,
+            OutboundType::Wireguard => UdpTransferType::Udp,
+            OutboundType::Chain => UdpTransferType::NotApplicable,
+        }
+    }
+}
+
+pub trait Outbound: Send + Sync {
+    fn outbound_type(&self) -> OutboundType;
+
     /// Run with tokio::spawn.
     fn spawn_tcp(
         &self,
@@ -96,18 +154,31 @@ pub trait TcpOutBound: Send + Sync {
     fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
-        outbound: Box<dyn OutboundTrait>,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
-}
 
-pub trait UdpOutBound: Send + Sync {
     /// Run with tokio::spawn.
     fn spawn_udp(
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>>;
+
+    fn spawn_udp_with_outbound(
+        &self,
+        inbound: AddrConnector,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
+    ) -> JoinHandle<io::Result<()>>;
+}
+
+fn empty_handle() -> JoinHandle<io::Result<()>> {
+    tokio::spawn(async move { Err(io_err("Invalid spawn")) })
 }
 
 async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)
@@ -151,25 +222,21 @@ where
     }
 }
 
-#[async_trait]
-trait UdpSocketAdapter: Clone + Send {
-    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()>;
-
-    // @return: <length>, <if addr matches target>
-    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)>;
-}
-
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     inbound: AddrConnector,
     outbound: S,
+    tunnel_addr: Option<NetworkAddr>,
     abort_handle: ConnAbortHandle,
 ) {
     // establish udp
+    let outbound = Arc::new(outbound);
     let outbound2 = outbound.clone();
+    let tunnel_addr2 = tunnel_addr.clone();
     let AddrConnector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let _guard = UdpDropGuard(tokio::spawn(async move {
         while let Some((buf, addr)) = rx.recv().await {
+            let addr = tunnel_addr2.clone().unwrap_or(addr);
             let res = outbound2.send_to(buf.as_ref(), addr).await;
             if let Err(err) = res {
                 tracing::warn!("write to outbound failed: {}", err);
@@ -187,6 +254,12 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
             }
             Ok((n, addr)) => {
                 unsafe { buf.advance_mut(n) };
+                if let Some(t_addr) = &tunnel_addr {
+                    if *t_addr != addr {
+                        // drop
+                        break;
+                    }
+                }
                 if tx.send((buf.freeze(), addr)).await.is_err() {
                     tracing::warn!("write to inbound failed");
                     abort_handle.cancel().await;
@@ -198,6 +271,35 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                 abort_handle.cancel().await;
                 break;
             }
+        }
+    }
+}
+
+#[async_trait]
+impl UdpSocketAdapter for AddrConnectorWrapper {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+        self.tx
+            .send((Bytes::copy_from_slice(data), addr))
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to send"))
+    }
+
+    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+        let (buf, addr) = self
+            .rx
+            .lock()
+            .await
+            .recv()
+            .await
+            .ok_or(anyhow::anyhow!("Nothing received"))?;
+        if data.len() < buf.len() {
+            let len = data.len();
+            data[..len].copy_from_slice(&buf[..len]);
+            Ok((len, addr))
+        } else {
+            let len = buf.len();
+            data[..len].copy_from_slice(&buf[..len]);
+            Ok((len, addr))
         }
     }
 }

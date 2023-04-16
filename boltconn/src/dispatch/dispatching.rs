@@ -138,6 +138,7 @@ impl DispatchingBuilder {
         }
 
         // read proxy groups
+        let mut wg_history = HashMap::new();
         let mut queued_groups = HashSet::new();
         let group_order: Vec<String> = loaded_config.config.proxy_group.keys().cloned().collect();
         for (name, group) in &config.proxy_group {
@@ -148,6 +149,7 @@ impl DispatchingBuilder {
                 &config.proxy_group,
                 proxy_schema,
                 &mut queued_groups,
+                &mut wg_history,
                 false,
             )?;
         }
@@ -428,6 +430,7 @@ impl DispatchingBuilder {
         proxy_group_list: &LinkedHashMap<String, RawProxyGroupCfg>,
         proxy_schema: &HashMap<String, ProxySchema>,
         queued_groups: &mut HashSet<String>,
+        wg_history: &mut HashMap<String, bool>,
         dup_as_error: bool,
     ) -> anyhow::Result<()> {
         if self.groups.contains_key(name)
@@ -448,14 +451,23 @@ impl DispatchingBuilder {
             // not proxy group, just chains
             let mut contents = vec![];
             for p in chains.iter().rev() {
-                contents.push(self.parse_one_proxy(
+                let proxy = self.parse_one_proxy(
                     p,
                     name,
                     state,
                     proxy_group_list,
                     proxy_schema,
                     queued_groups,
-                )?);
+                    wg_history,
+                )?;
+                if let GeneralProxy::Single(px) = &proxy {
+                    if px.get_impl().simple_description() == "wireguard"
+                        && wg_history.insert(p.clone(), true).is_some()
+                    {
+                        tracing::warn!("Wireguard {} should not appear in different chains", p);
+                    }
+                }
+                contents.push(proxy);
             }
             self.proxies.insert(
                 name.to_string(),
@@ -475,7 +487,15 @@ impl DispatchingBuilder {
                     proxy_group_list,
                     proxy_schema,
                     queued_groups,
+                    wg_history,
                 )?;
+                if let GeneralProxy::Single(px) = &content {
+                    if px.get_impl().simple_description() == "wireguard"
+                        && wg_history.insert(p.clone(), false) == Some(true)
+                    {
+                        tracing::warn!("Wireguard {} should not appear in different chains", p);
+                    }
+                }
                 if p == state.group_selection.get(name).unwrap_or(&String::new()) {
                     selection = Some(content.clone());
                 }
@@ -544,6 +564,7 @@ impl DispatchingBuilder {
     }
 
     // Just to avoid code duplication
+    #[allow(clippy::too_many_arguments)]
     fn parse_one_proxy(
         &mut self,
         p: &str,
@@ -552,6 +573,7 @@ impl DispatchingBuilder {
         proxy_group_list: &LinkedHashMap<String, RawProxyGroupCfg>,
         proxy_schema: &HashMap<String, ProxySchema>,
         queued_groups: &mut HashSet<String>,
+        wg_history: &mut HashMap<String, bool>,
     ) -> anyhow::Result<GeneralProxy> {
         Ok(if let Some(single) = self.proxies.get(p) {
             GeneralProxy::Single(single.clone())
@@ -569,6 +591,7 @@ impl DispatchingBuilder {
                     proxy_group_list,
                     proxy_schema,
                     queued_groups,
+                    wg_history,
                     true,
                 )?;
             } else {
