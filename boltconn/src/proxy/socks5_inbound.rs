@@ -40,17 +40,18 @@ impl Socks5Inbound {
         while let Ok((socket, src_addr)) = self.server.accept().await {
             let disp = self.dispatcher.clone();
             let auth = self.auth.clone();
-            tokio::spawn(Self::serve_connection(socket, auth, src_addr, disp));
+            tokio::spawn(Self::serve_connection(socket, auth, src_addr, disp, None));
         }
     }
 
-    async fn serve_connection(
+    pub(super) async fn serve_connection(
         mut socks_stream: TcpStream,
         auth: Option<(String, String)>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
+        first_byte: Option<u8>,
     ) -> anyhow::Result<()> {
-        Self::process_auth(&mut socks_stream, auth).await?;
+        Self::process_auth(&mut socks_stream, auth, first_byte).await?;
         let [version, cmd, _rsv, address_type] = read_exact!(socks_stream, [0u8; 4])?;
 
         if version != consts::SOCKS5_VERSION {
@@ -119,8 +120,13 @@ impl Socks5Inbound {
     async fn process_auth(
         socket: &mut TcpStream,
         auth: Option<(String, String)>,
+        first_byte: Option<u8>,
     ) -> Result<(), SocksError> {
-        let [version, method_len] = read_exact!(socket, [0u8; 2])?;
+        let [version, method_len] = if let Some(byte) = first_byte {
+            [byte, read_exact!(socket, [0u8; 1])?[0]]
+        } else {
+            read_exact!(socket, [0u8; 2])?
+        };
         if version != consts::SOCKS5_VERSION {
             return Err(SocksError::UnsupportedSocksVersion(version));
         }

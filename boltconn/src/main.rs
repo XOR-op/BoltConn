@@ -8,7 +8,9 @@ use crate::external::{ApiServer, StreamLoggerHandle};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
-use crate::proxy::{AgentCenter, HttpCapturer, HttpInbound, Socks5Inbound, TunUdpInbound};
+use crate::proxy::{
+    AgentCenter, HttpCapturer, HttpInbound, MixedInbound, Socks5Inbound, TunUdpInbound,
+};
 use ipnet::Ipv4Net;
 use is_root::is_root;
 use network::tun_device::TunDevice;
@@ -315,21 +317,32 @@ fn main() -> ExitCode {
     let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
     let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
-    if let Some(http_port) = config.http_port {
+    if config.http_port == config.socks5_port && config.http_port.is_some() {
+        // Mixed inbound
+        let port = config.http_port.unwrap();
         let dispatcher = dispatcher.clone();
         rt.spawn(async move {
-            let http_proxy = HttpInbound::new(http_port, None, dispatcher).await?;
-            http_proxy.run().await;
+            let mixed_proxy = MixedInbound::new(port, None, None, dispatcher).await?;
+            mixed_proxy.run().await;
             Ok::<(), io::Error>(())
         });
-    }
-    if let Some(socks5_port) = config.socks5_port {
-        let dispatcher = dispatcher.clone();
-        rt.spawn(async move {
-            let socks_proxy = Socks5Inbound::new(socks5_port, None, dispatcher).await?;
-            socks_proxy.run().await;
-            Ok::<(), io::Error>(())
-        });
+    } else {
+        if let Some(http_port) = config.http_port {
+            let dispatcher = dispatcher.clone();
+            rt.spawn(async move {
+                let http_proxy = HttpInbound::new(http_port, None, dispatcher).await?;
+                http_proxy.run().await;
+                Ok::<(), io::Error>(())
+            });
+        }
+        if let Some(socks5_port) = config.socks5_port {
+            let dispatcher = dispatcher.clone();
+            rt.spawn(async move {
+                let socks_proxy = Socks5Inbound::new(socks5_port, None, dispatcher).await?;
+                socks_proxy.run().await;
+                Ok::<(), io::Error>(())
+            });
+        }
     }
 
     rt.block_on(async move {

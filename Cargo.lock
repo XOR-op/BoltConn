@@ -365,8 +365,8 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
- "trust-dns-proto",
- "trust-dns-resolver",
+ "trust-dns-proto 0.22.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "trust-dns-resolver 0.22.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "webpki-roots",
  "x25519-dalek",
 ]
@@ -2272,8 +2272,8 @@ dependencies = [
 
 [[package]]
 name = "shadowsocks"
-version = "1.15.3"
-source = "git+https://github.com/shadowsocks/shadowsocks-rust#8be8047f1f377c37660d1d04bbabf90eb24a94c1"
+version = "1.16.0"
+source = "git+https://github.com/shadowsocks/shadowsocks-rust#1a5e57d2de75d72e372b597df19c699d603ab100"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2299,7 +2299,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-tfo",
- "trust-dns-resolver",
+ "trust-dns-resolver 0.22.0 (git+https://github.com/bluejekyll/trust-dns.git)",
  "url",
  "windows-sys 0.48.0",
 ]
@@ -2846,6 +2846,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "trust-dns-proto"
+version = "0.22.0"
+source = "git+https://github.com/bluejekyll/trust-dns.git#c551ebb45a4a15343b8305193fece2e5c23a84ed"
+dependencies = [
+ "async-trait",
+ "cfg-if",
+ "data-encoding",
+ "enum-as-inner",
+ "futures-channel",
+ "futures-io",
+ "futures-util",
+ "idna 0.3.0",
+ "ipnet",
+ "lazy_static",
+ "rand",
+ "smallvec",
+ "thiserror",
+ "tinyvec",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "trust-dns-resolver"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2864,8 +2888,28 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
- "trust-dns-proto",
+ "trust-dns-proto 0.22.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "webpki-roots",
+]
+
+[[package]]
+name = "trust-dns-resolver"
+version = "0.22.0"
+source = "git+https://github.com/bluejekyll/trust-dns.git#c551ebb45a4a15343b8305193fece2e5c23a84ed"
+dependencies = [
+ "cfg-if",
+ "futures-util",
+ "ipconfig",
+ "lazy_static",
+ "lru-cache",
+ "parking_lot",
+ "rand",
+ "resolv-conf",
+ "smallvec",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "trust-dns-proto 0.22.0 (git+https://github.com/bluejekyll/trust-dns.git)",
 ]
 
 [[package]]

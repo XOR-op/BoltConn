@@ -37,19 +37,24 @@ impl HttpInbound {
         while let Ok((socket, addr)) = self.server.accept().await {
             let disp = self.dispatcher.clone();
             let auth = self.auth.clone();
-            tokio::spawn(Self::serve_connection(socket, auth, addr, disp));
+            tokio::spawn(Self::serve_connection(socket, auth, addr, disp, None));
         }
     }
 
-    async fn serve_connection(
+    pub(super) async fn serve_connection(
         socket: TcpStream,
         auth: Option<String>,
         addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
+        first_byte: Option<String>,
     ) -> anyhow::Result<()> {
         // get response
         let mut buf_reader = BufReader::new(socket);
-        let mut req = String::new();
+        let mut req = if let Some(byte) = first_byte {
+            byte
+        } else {
+            String::new()
+        };
         while !req.ends_with("\r\n\r\n") {
             if buf_reader.read_line(&mut req).await? == 0 {
                 return Err(anyhow!("EOF"));
