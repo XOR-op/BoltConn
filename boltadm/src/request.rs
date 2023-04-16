@@ -119,6 +119,29 @@ impl Requester {
         Ok(())
     }
 
+    pub async fn get_tun(&self) -> Result<()> {
+        let data = reqwest::get(self.route("/tun")).await?.text().await?;
+        let result: boltapi::TunStatusSchema = serde_json::from_str(data.as_str())?;
+        println!("TUN: {}", if result.enabled { "ON" } else { "OFF" });
+        Ok(())
+    }
+
+    pub async fn set_tun(&self, content: &str) -> Result<()> {
+        let enabled = boltapi::TunStatusSchema {
+            enabled: match content.to_lowercase().as_str() {
+                "on" => true,
+                "off" => false,
+                _ => return Err(anyhow::anyhow!("Unknown TUN setting: {}", content)),
+            },
+        };
+        reqwest::Client::new()
+            .put(self.route("/tun"))
+            .json(&enabled)
+            .send()
+            .await?;
+        Ok(())
+    }
+
     pub async fn intercept(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
         let uri = match range {
             None => self.route("/intercept/all"),

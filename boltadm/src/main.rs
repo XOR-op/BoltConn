@@ -49,6 +49,14 @@ enum DebugOptions {
 }
 
 #[derive(Debug, StructOpt)]
+enum TunOptions {
+    /// Set TUN
+    Set { s: String },
+    /// Get TUN status
+    Get,
+}
+
+#[derive(Debug, StructOpt)]
 struct CertOptions {
     #[structopt(short, long)]
     path: Option<String>,
@@ -78,6 +86,8 @@ enum SubCommand {
     Cert(CertOptions),
     /// Captured HTTP data
     Intercept(InterceptOptions),
+    /// Adjust TUN status
+    Tun(TunOptions),
     /// Clean unexpected shutdown
     Clean,
     /// Reload Configuration
@@ -128,6 +138,10 @@ async fn main() {
                 Err(e) => Err(e),
             }
         }
+        SubCommand::Tun(opt) => match opt {
+            TunOptions::Get => requestor.get_tun().await,
+            TunOptions::Set { s } => requestor.set_tun(s.as_str()).await,
+        },
         SubCommand::Intercept(opt) => match opt {
             InterceptOptions::List => requestor.intercept(None).await,
             InterceptOptions::Range { start, end } => requestor.intercept(Some((start, end))).await,
