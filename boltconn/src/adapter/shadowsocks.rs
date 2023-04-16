@@ -116,10 +116,17 @@ impl SSOutbound {
         inbound: AddrConnector,
         server_addr: SocketAddr,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> Result<()> {
         let (_, context, resolved_config) = self.create_internal(server_addr).await;
         let proxy_socket = ShadowsocksUdpAdapter::new(context, &resolved_config, adapter_or_socket);
-        established_udp(inbound, proxy_socket, abort_handle).await;
+        established_udp(
+            inbound,
+            proxy_socket,
+            if tunnel_only { Some(self.dst) } else { None },
+            abort_handle,
+        )
+        .await;
         Ok(())
     }
 }
@@ -170,6 +177,7 @@ impl Outbound for SSOutbound {
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -188,6 +196,7 @@ impl Outbound for SSOutbound {
                     inbound,
                     server_addr,
                     abort_handle,
+                    tunnel_only,
                 )
                 .await
         })
@@ -199,7 +208,8 @@ impl Outbound for SSOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<Result<()>> {
+        tunnel_only: bool,
+    ) -> JoinHandle<io::Result<()>> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Shadowsocks UDP outbound ancestor");
             return empty_handle();
@@ -214,6 +224,7 @@ impl Outbound for SSOutbound {
                     inbound,
                     server_addr,
                     abort_handle,
+                    tunnel_only,
                 )
                 .await
         })

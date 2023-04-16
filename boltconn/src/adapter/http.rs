@@ -140,6 +140,7 @@ impl Outbound for HttpOutbound {
         &self,
         _inbound: AddrConnector,
         _abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_udp() should not be called with HttpOutbound");
         empty_handle()
@@ -151,6 +152,7 @@ impl Outbound for HttpOutbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_udp_with_outbound() should not be called with HttpOutbound");
         empty_handle()

@@ -417,7 +417,6 @@ impl ApiServer {
             .is_ok();
         if r {
             let mut state = server.state.lock().unwrap();
-            tracing::debug!("State!");
             if let Some(val) = state.state.group_selection.get_mut(&group) {
                 *val = args.selected;
             } else {

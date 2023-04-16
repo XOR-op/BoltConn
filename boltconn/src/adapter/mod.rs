@@ -164,6 +164,7 @@ pub trait Outbound: Send + Sync {
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>>;
 
     fn spawn_udp_with_outbound(
@@ -172,6 +173,7 @@ pub trait Outbound: Send + Sync {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>>;
 }
 
@@ -223,15 +225,18 @@ where
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     inbound: AddrConnector,
     outbound: S,
+    tunnel_addr: Option<NetworkAddr>,
     abort_handle: ConnAbortHandle,
 ) {
     // establish udp
     let outbound = Arc::new(outbound);
     let outbound2 = outbound.clone();
+    let tunnel_addr2 = tunnel_addr.clone();
     let AddrConnector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let _guard = UdpDropGuard(tokio::spawn(async move {
         while let Some((buf, addr)) = rx.recv().await {
+            let addr = tunnel_addr2.clone().unwrap_or(addr);
             let res = outbound2.send_to(buf.as_ref(), addr).await;
             if let Err(err) = res {
                 tracing::warn!("write to outbound failed: {}", err);
@@ -249,6 +254,12 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
             }
             Ok((n, addr)) => {
                 unsafe { buf.advance_mut(n) };
+                if let Some(t_addr) = &tunnel_addr {
+                    if *t_addr != addr {
+                        // drop
+                        break;
+                    }
+                }
                 if tx.send((buf.freeze(), addr)).await.is_err() {
                     tracing::warn!("write to inbound failed");
                     abort_handle.cancel().await;
@@ -282,11 +293,13 @@ impl UdpSocketAdapter for AddrConnectorWrapper {
             .await
             .ok_or(anyhow::anyhow!("Nothing received"))?;
         if data.len() < buf.len() {
-            data.copy_from_slice(&buf[..data.len()]);
-            Ok((data.len(), addr))
+            let len = data.len();
+            data[..len].copy_from_slice(&buf[..len]);
+            Ok((len, addr))
         } else {
-            data.copy_from_slice(&buf[..buf.len()]);
-            Ok((buf.len(), addr))
+            let len = buf.len();
+            data[..len].copy_from_slice(&buf[..len]);
+            Ok((len, addr))
         }
     }
 }

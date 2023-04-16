@@ -66,7 +66,7 @@ impl Dispatcher {
         *self.modifier.write().unwrap() = closure;
     }
 
-    fn build_tcp_outbound(
+    fn build_normal_outbound(
         &self,
         iface_name: &str,
         proxy_config: &ProxyImpl,
@@ -169,7 +169,7 @@ impl Dispatcher {
         }
 
         for idx in 0..vec.len() {
-            let (outbounding, _) = self.build_tcp_outbound(
+            let (outbounding, _) = self.build_normal_outbound(
                 iface_name,
                 impls.get(idx).unwrap().as_ref(),
                 &src_addr,
@@ -207,7 +207,7 @@ impl Dispatcher {
                     OutboundType::Chain,
                 )
             } else {
-                self.build_tcp_outbound(iface_name, proxy_config.as_ref(), &src_addr, &dst_addr)?
+                self.build_normal_outbound(iface_name, proxy_config.as_ref(), &src_addr, &dst_addr)?
             };
 
         // conn info
@@ -351,62 +351,14 @@ impl Dispatcher {
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
         let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
-            match proxy_config.as_ref() {
-                ProxyImpl::Direct => (
-                    Box::new(DirectOutbound::new(
-                        iface_name,
-                        dst_addr.clone(),
-                        self.dns.clone(),
-                    )),
-                    OutboundType::Direct,
-                ),
-                ProxyImpl::Reject => {
-                    return Err(());
-                }
-                ProxyImpl::Http(_) => {
-                    // http proxy doesn't support udp
-                    unreachable!()
-                }
-                ProxyImpl::Socks5(cfg) => (
-                    Box::new(Socks5Outbound::new(
-                        iface_name,
-                        dst_addr.clone(),
-                        self.dns.clone(),
-                        cfg.clone(),
-                    )),
-                    OutboundType::Socks5,
-                ),
-                ProxyImpl::Shadowsocks(cfg) => (
-                    Box::new(SSOutbound::new(
-                        iface_name,
-                        dst_addr.clone(),
-                        self.dns.clone(),
-                        cfg.clone(),
-                    )),
-                    OutboundType::Shadowsocks,
-                ),
-                ProxyImpl::Trojan(cfg) => (
-                    Box::new(TrojanOutbound::new(
-                        iface_name,
-                        dst_addr.clone(),
-                        self.dns.clone(),
-                        cfg.clone(),
-                    )),
-                    OutboundType::Trojan,
-                ),
-                ProxyImpl::Wireguard(cfg) => (
-                    Box::new(WireguardHandle::new(
-                        src_addr.port(),
-                        dst_addr.clone(),
-                        cfg.clone(),
-                        self.wireguard_mgr.clone(),
-                        self.dns.clone(),
-                    )),
-                    OutboundType::Wireguard,
-                ),
-                ProxyImpl::Chain(_) => unreachable!(),
+            if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
+                (
+                    Box::new(self.create_chain(vec, src_addr, &dst_addr, iface_name)?),
+                    OutboundType::Chain,
+                )
+            } else {
+                self.build_normal_outbound(iface_name, proxy_config.as_ref(), &src_addr, &dst_addr)?
             };
-
         // conn info
         let abort_handle = ConnAbortHandle::new();
         let info = Arc::new(tokio::sync::RwLock::new(ConnAgent::new(
@@ -479,7 +431,10 @@ impl Dispatcher {
         });
         let abort_handle2 = abort_handle.clone();
         handles.push(tokio::spawn(async move {
-            if let Err(err) = outbounding.spawn_udp(adapter_next, abort_handle2).await {
+            if let Err(err) = outbounding
+                .spawn_udp(adapter_next, abort_handle2, false)
+                .await
+            {
                 tracing::error!("[Dispatcher] create failed: {}", err)
             }
         }));
@@ -521,7 +476,10 @@ impl Dispatcher {
         });
         let abort_handle2 = abort_handle.clone();
         handles.push(tokio::spawn(async move {
-            if let Err(err) = outbounding.spawn_udp(adapter_next, abort_handle2).await {
+            if let Err(err) = outbounding
+                .spawn_udp(adapter_next, abort_handle2, false)
+                .await
+            {
                 tracing::error!("[Dispatcher] create failed: {}", err)
             }
         }));

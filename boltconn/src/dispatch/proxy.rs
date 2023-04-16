@@ -45,12 +45,15 @@ pub enum ProxyImpl {
 impl ProxyImpl {
     pub fn support_udp(&self) -> bool {
         match self {
+            ProxyImpl::Direct => true,
+            ProxyImpl::Reject => false,
             ProxyImpl::Http(_) => false,
             ProxyImpl::Socks5(c) => c.udp,
             ProxyImpl::Shadowsocks(c) => c.udp,
             ProxyImpl::Trojan(c) => c.udp,
-            ProxyImpl::Chain(_) => false,
-            _ => true,
+            ProxyImpl::Wireguard(_) => true,
+            // since it's hard to determine, we just assume it true
+            ProxyImpl::Chain(_) => true,
         }
     }
 

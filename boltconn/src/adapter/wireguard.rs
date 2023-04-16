@@ -324,6 +324,7 @@ impl Outbound for WireguardHandle {
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().attach_udp(inbound, abort_handle, None))
     }
@@ -334,6 +335,7 @@ impl Outbound for WireguardHandle {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         tracing::warn!("TODO: spawn_udp_with_outbound() has not been implemented");
         if tcp_outbound.is_some() || udp_outbound.is_none() {

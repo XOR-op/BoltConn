@@ -76,6 +76,7 @@ impl TrojanOutbound {
         mut inbound: AddrConnector,
         outbound: S,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> io::Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
@@ -94,7 +95,13 @@ impl TrojanOutbound {
             let adapter = TrojanUdpAdapter {
                 socket: Arc::new(udp_socket),
             };
-            established_udp(inbound, adapter, abort_handle).await;
+            established_udp(
+                inbound,
+                adapter,
+                if tunnel_only { Some(self.dst) } else { None },
+                abort_handle,
+            )
+            .await;
         } else {
             self.first_packet(first_packet, TrojanCmd::Associate, &mut stream)
                 .await?;
@@ -102,7 +109,13 @@ impl TrojanOutbound {
             let adapter = TrojanUdpAdapter {
                 socket: Arc::new(udp_socket),
             };
-            established_udp(inbound, adapter, abort_handle).await;
+            established_udp(
+                inbound,
+                adapter,
+                if tunnel_only { Some(self.dst) } else { None },
+                abort_handle,
+            )
+            .await;
         }
         Ok(())
     }
@@ -196,6 +209,7 @@ impl Outbound for TrojanOutbound {
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -204,7 +218,9 @@ impl Outbound for TrojanOutbound {
             let tcp_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self_clone.run_udp(inbound, tcp_conn, abort_handle).await
+            self_clone
+                .run_udp(inbound, tcp_conn, abort_handle, tunnel_only)
+                .await
         })
     }
 
@@ -214,6 +230,7 @@ impl Outbound for TrojanOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
@@ -223,7 +240,7 @@ impl Outbound for TrojanOutbound {
         let self_clone = self.clone();
         tokio::spawn(async move {
             self_clone
-                .run_udp(inbound, tcp_outbound, abort_handle)
+                .run_udp(inbound, tcp_outbound, abort_handle, tunnel_only)
                 .await
         })
     }

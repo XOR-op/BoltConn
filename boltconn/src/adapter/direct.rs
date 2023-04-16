@@ -44,6 +44,7 @@ impl DirectOutbound {
         established_udp(
             inbound,
             DirectUdpAdapter(outbound, self.dns.clone()),
+            None,
             abort_handle,
         )
         .await;
@@ -79,6 +80,7 @@ impl Outbound for DirectOutbound {
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(self.clone().run_udp(inbound, abort_handle))
     }
@@ -89,7 +91,8 @@ impl Outbound for DirectOutbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<Result<()>> {
+        _tunnel_only: bool,
+    ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_udp_with_outbound() should not be called with DirectOutbound");
         empty_handle()
     }

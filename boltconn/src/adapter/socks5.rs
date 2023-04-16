@@ -92,6 +92,7 @@ impl Socks5Outbound {
         inbound: AddrConnector,
         outbound: S,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -116,7 +117,13 @@ impl Socks5Outbound {
             .next()
             .unwrap();
         out_sock.connect(bound_addr).await?;
-        established_udp(inbound, Socks5UdpAdapter(out_sock), abort_handle).await;
+        established_udp(
+            inbound,
+            Socks5UdpAdapter(out_sock),
+            if tunnel_only { Some(self.dst) } else { None },
+            abort_handle,
+        )
+        .await;
         Ok(())
     }
 }
@@ -163,6 +170,7 @@ impl Outbound for Socks5Outbound {
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -171,7 +179,9 @@ impl Outbound for Socks5Outbound {
             let socks_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self_clone.run_udp(inbound, socks_conn, abort_handle).await
+            self_clone
+                .run_udp(inbound, socks_conn, abort_handle, tunnel_only)
+                .await
         })
     }
 
@@ -181,6 +191,7 @@ impl Outbound for Socks5Outbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         tracing::error!("Socks5 does not support UDP chain");
         empty_handle()

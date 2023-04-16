@@ -27,6 +27,7 @@ impl ChainOutbound {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         let mut handles = vec![];
+        let mut not_first_jump = false;
         let (first_part, last_one) = self.chains.split_at(self.chains.len() - 1);
 
         // connect proxies
@@ -67,6 +68,7 @@ impl ChainOutbound {
                         Some(chan),
                         None,
                         abort_handle.clone(),
+                        not_first_jump,
                     ));
                 } else {
                     let (inner, outer) = AddrConnector::new_pair(10);
@@ -76,9 +78,11 @@ impl ChainOutbound {
                         None,
                         Some(Box::new(AddrConnectorWrapper::from(inner))),
                         abort_handle.clone(),
+                        not_first_jump,
                     ));
                 };
             }
+            not_first_jump = true;
         }
 
         // connect last one
@@ -87,7 +91,7 @@ impl ChainOutbound {
             handles.push(last_one[0].spawn_tcp(inbound, abort_handle));
         } else {
             let inbound = inbound_udp_container.unwrap();
-            handles.push(last_one[0].spawn_udp(inbound, abort_handle));
+            handles.push(last_one[0].spawn_udp(inbound, abort_handle, true));
         }
 
         tokio::spawn(async move {
@@ -129,18 +133,20 @@ impl Outbound for ChainOutbound {
         &self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<std::io::Result<()>> {
+        _tunnel_only: bool,
+    ) -> JoinHandle<io::Result<()>> {
         self.spawn(false, None, Some(inbound), abort_handle)
     }
 
     fn spawn_udp_with_outbound(
         &self,
-        inbound: AddrConnector,
+        _inbound: AddrConnector,
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
-        abort_handle: ConnAbortHandle,
+        _abort_handle: ConnAbortHandle,
+        _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         tracing::error!("spawn_udp_with_outbound() should not be called with ChainUdpOutbound");
-        self.spawn_udp(inbound, abort_handle)
+        empty_handle()
     }
 }
