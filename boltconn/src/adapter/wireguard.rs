@@ -1,4 +1,4 @@
-use crate::adapter::{empty_handle, AddrConnector, Connector, Outbound, OutboundType};
+use crate::adapter::{AddrConnector, Connector, Outbound, OutboundType};
 
 use crate::common::{io_err, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
@@ -311,13 +311,21 @@ impl Outbound for WireguardHandle {
 
     fn spawn_tcp_with_outbound(
         &self,
-        _inbound: Connector,
-        _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
-        _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
-        _abort_handle: ConnAbortHandle,
+        inbound: Connector,
+        tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
+        udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
+        abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tracing::error!("spawn_tcp_with_outbound() should not be called with Wireguard");
-        empty_handle()
+        if tcp_outbound.is_some() || udp_outbound.is_none() {
+            tracing::error!("Invalid Wireguard UDP outbound ancestor");
+            return tokio::spawn(async move { Ok(()) });
+        }
+        let udp_outbound = udp_outbound.unwrap();
+        tokio::spawn(self.clone().attach_tcp(
+            inbound,
+            abort_handle,
+            Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
+        ))
     }
 
     fn spawn_udp(
@@ -337,7 +345,6 @@ impl Outbound for WireguardHandle {
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
-        tracing::warn!("TODO: spawn_udp_with_outbound() has not been implemented");
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
             return tokio::spawn(async move { Ok(()) });
@@ -347,8 +354,7 @@ impl Outbound for WireguardHandle {
             inbound,
             abort_handle,
             Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-        ));
-        todo!()
+        ))
     }
 }
 
