@@ -363,6 +363,7 @@ impl DispatchingBuilder {
                     mtu,
                     preshared_key,
                     keepalive,
+                    reserved,
                 } => {
                     let endpoint = match endpoint {
                         RawServerSockAddr::Ip(addr) => NetworkAddr::Raw(*addr),
@@ -411,6 +412,7 @@ impl DispatchingBuilder {
                             mtu: *mtu,
                             preshared_key,
                             keepalive: *keepalive,
+                            reserved: *reserved,
                         }),
                     ))
                 }

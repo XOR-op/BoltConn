@@ -26,6 +26,8 @@ pub struct WireguardConfig {
     pub mtu: usize,
     pub preshared_key: Option<[u8; 32]>,
     pub keepalive: Option<u16>,
+    // reserved fields
+    pub reserved: Option<[u8; 3]>,
 }
 
 impl Debug for WireguardConfig {
@@ -63,6 +65,7 @@ pub struct WireguardTunnel {
     /// remote address on the genuine Internet
     endpoint: SocketAddr,
     smol_notify: Arc<Notify>,
+    reserved: Option<[u8; 3]>,
 }
 
 impl WireguardTunnel {
@@ -99,6 +102,7 @@ impl WireguardTunnel {
             tunnel,
             endpoint,
             smol_notify,
+            reserved: config.reserved,
         })
     }
 
@@ -110,7 +114,14 @@ impl WireguardTunnel {
         Ok(())
     }
 
-    async fn outbound_send(&self, data: &[u8]) -> anyhow::Result<usize> {
+    async fn outbound_send(&self, data: &mut [u8]) -> anyhow::Result<usize> {
+        if data.len() >= 4 {
+            if let Some(r) = &self.reserved {
+                data[1] = r[0];
+                data[2] = r[1];
+                data[3] = r[2];
+            }
+        }
         match &self.outbound {
             AdapterOrSocket::Adapter(a) => {
                 a.send_to(data, NetworkAddr::Raw(self.endpoint)).await?;

@@ -83,6 +83,25 @@ impl NetworkAddr {
         }
     }
 
+    pub fn definitely_not_equal(&self, rhs: &NetworkAddr) -> bool {
+        match &self {
+            NetworkAddr::Raw(s1) => match rhs {
+                NetworkAddr::Raw(s2) => s1 != s2,
+                NetworkAddr::DomainName {
+                    domain_name: _,
+                    port,
+                } => s1.port() != *port,
+            },
+            NetworkAddr::DomainName { domain_name, port } => match rhs {
+                NetworkAddr::Raw(s) => s.port() != *port,
+                NetworkAddr::DomainName {
+                    domain_name: d2,
+                    port: p2,
+                } => domain_name != d2 || *port != *p2,
+            },
+        }
+    }
+
     pub fn from(addr: &RawServerAddr, port: u16) -> Self {
         match addr {
             RawServerAddr::IpAddr(ip) => Self::Raw(SocketAddr::new(*ip, port)),

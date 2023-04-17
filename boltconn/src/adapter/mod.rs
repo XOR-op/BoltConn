@@ -255,8 +255,8 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
             Ok((n, addr)) => {
                 unsafe { buf.advance_mut(n) };
                 if let Some(t_addr) = &tunnel_addr {
-                    if *t_addr != addr {
-                        // drop
+                    if addr.definitely_not_equal(t_addr) {
+                        // drop definitely unequal packets; for domain name & socket address pair, only compare ports
                         break;
                     }
                 }

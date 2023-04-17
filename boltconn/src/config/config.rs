@@ -112,6 +112,7 @@ pub enum RawProxyLocalCfg {
         #[serde(alias = "public-key")]
         preshared_key: Option<String>,
         keepalive: Option<u16>,
+        reserved: Option<[u8; 3]>,
     },
 }
 
