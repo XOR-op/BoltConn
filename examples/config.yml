@@ -7,7 +7,6 @@ socks5-port: 8080
 
 # Able to reload
 dns:
-  force-direct-dns: true
   bootstrap:
     - 8.8.8.8
   nameserver:

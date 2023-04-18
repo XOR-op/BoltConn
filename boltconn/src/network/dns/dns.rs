@@ -1,4 +1,5 @@
 use crate::network::dns::dns_table::DnsTable;
+use crate::network::dns::provider::IfaceProvider;
 use std::io;
 use std::io::Result;
 use std::net::IpAddr;
@@ -6,19 +7,26 @@ use tokio::sync::RwLock;
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
-use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::AsyncResolver;
 
 pub struct Dns {
     table: DnsTable,
-    resolvers: RwLock<Vec<TokioAsyncResolver>>,
+    resolvers: RwLock<Vec<AsyncResolver<IfaceProvider>>>,
 }
 
 impl Dns {
-    pub fn with_config(configs: Vec<NameServerConfigGroup>) -> anyhow::Result<Dns> {
+    pub fn with_config(
+        iface_name: &str,
+        configs: Vec<NameServerConfigGroup>,
+    ) -> anyhow::Result<Dns> {
         let mut resolvers = Vec::new();
         for config in configs {
             let cfg = ResolverConfig::from_parts(None, vec![], config);
-            resolvers.push(TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?);
+            resolvers.push(AsyncResolver::new(
+                cfg,
+                ResolverOpts::default(),
+                IfaceProvider::new(iface_name),
+            )?);
         }
         Ok(Dns {
             table: DnsTable::new(),
@@ -33,11 +41,19 @@ impl Dns {
         }
     }
 
-    pub async fn replace_resolvers(&self, configs: Vec<NameServerConfigGroup>) -> Result<()> {
+    pub async fn replace_resolvers(
+        &self,
+        iface_name: &str,
+        configs: Vec<NameServerConfigGroup>,
+    ) -> Result<()> {
         let mut resolvers = Vec::new();
         for config in configs {
             let cfg = ResolverConfig::from_parts(None, vec![], config);
-            resolvers.push(TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?);
+            resolvers.push(AsyncResolver::new(
+                cfg,
+                ResolverOpts::default(),
+                IfaceProvider::new(iface_name),
+            )?);
         }
         *self.resolvers.write().await = resolvers;
         Ok(())
@@ -64,7 +80,8 @@ impl Dns {
         for r in self.resolvers.read().await.iter() {
             if let Ok(result) = r.ipv4_lookup(domain_name).await {
                 if let Some(i) = result.iter().next() {
-                    return Some(IpAddr::V4(*i));
+                    tracing::trace!("[DNS] search domain name {}: {}", domain_name, i.0);
+                    return Some(IpAddr::V4(i.0));
                 }
             }
         }

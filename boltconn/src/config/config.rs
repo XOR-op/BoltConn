@@ -52,8 +52,6 @@ pub enum RawServerSockAddr {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawDnsConfig {
-    #[serde(alias = "force-direct-dns")]
-    pub force_direct_dns: bool,
     pub bootstrap: Vec<IpAddr>,
     pub nameserver: Vec<String>,
 }

@@ -1,6 +1,7 @@
 #[allow(clippy::module_inception)]
 mod dns;
 mod dns_table;
+mod provider;
 
 pub use dns::Dns;
 use std::net::{IpAddr, SocketAddr};
@@ -21,7 +22,7 @@ fn add_tls_server(
             socket_addr: SocketAddr::new(*ip, port),
             protocol,
             tls_dns_name: Some(tls_name.to_string()),
-            trust_nx_responses: false,
+            trust_negative_responses: false,
             tls_config: None,
             bind_addr: None,
         })

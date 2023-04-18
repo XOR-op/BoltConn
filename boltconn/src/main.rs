@@ -7,7 +7,7 @@ use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::{ApiServer, StreamLoggerHandle};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
-use crate::network::dns::{extract_address, new_bootstrap_resolver, parse_dns_config};
+use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{
     AgentCenter, HttpCapturer, HttpInbound, MixedInbound, Socks5Inbound, TunUdpInbound,
 };
@@ -140,8 +140,15 @@ fn main() -> ExitCode {
     };
     let config = &loaded_config.config;
 
+    let outbound_iface = if config.interface != "auto" {
+        config.interface.clone()
+    } else {
+        tracing::info!("Auto detected interface: {}", real_iface_name);
+        real_iface_name
+    };
+
     // initialize resources
-    let (dns, dns_ips) = {
+    let dns = {
         let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice()).unwrap();
         let group = match rt.block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap))) {
             Ok(g) => g,
@@ -150,22 +157,9 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let dns_ips = if config.dns.force_direct_dns {
-            Some(extract_address(&group))
-        } else {
-            None
-        };
-        (
-            Arc::new(Dns::with_config(group).expect("DNS failed to initialize")),
-            dns_ips,
+        Arc::new(
+            Dns::with_config(outbound_iface.as_str(), group).expect("DNS failed to initialize"),
         )
-    };
-
-    let outbound_iface = if config.interface != "auto" {
-        config.interface.clone()
-    } else {
-        tracing::info!("Auto detected interface: {}", real_iface_name);
-        real_iface_name
     };
 
     let tun = rt.block_on(async {
@@ -202,10 +196,7 @@ fn main() -> ExitCode {
     );
 
     let dispatching = {
-        let mut builder = DispatchingBuilder::new();
-        if let Some(list) = dns_ips {
-            builder.direct_prioritize("DNS-PRIO", list);
-        }
+        let builder = DispatchingBuilder::new();
         let result = match builder.build(&loaded_config) {
             Ok(r) => r,
             Err(e) => {
@@ -352,7 +343,7 @@ fn main() -> ExitCode {
                 restart = receiver.recv() => {
                     if restart.is_some(){
                         // try restarting components
-                        match reload(&config_path,dns.clone()).await{
+                        match reload(&config_path, outbound_iface.as_str(), dns.clone()).await{
                             Ok((dispatching, intercept_filter,url_rewriter,header_rewriter)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
                                 let hcap2 = http_capturer.clone();
@@ -380,6 +371,7 @@ fn main() -> ExitCode {
 
 async fn reload(
     config_path: &Path,
+    iface_name: &str,
     dns: Arc<Dns>,
 ) -> anyhow::Result<(
     Arc<Dispatching>,
@@ -399,10 +391,7 @@ async fn reload(
     let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
-        let mut builder = DispatchingBuilder::new();
-        if config.dns.force_direct_dns {
-            builder.direct_prioritize("DNS_PRIO", extract_address(&group));
-        }
+        let builder = DispatchingBuilder::new();
         Arc::new(builder.build(&loaded_config)?)
     };
     let intercept_filter = {
@@ -410,6 +399,6 @@ async fn reload(
         let rule_schema = &loaded_config.rule_schema;
         Arc::new(builder.build_filter(config.intercept_rule.as_slice(), rule_schema)?)
     };
-    dns.replace_resolvers(group).await?;
+    dns.replace_resolvers(iface_name, group).await?;
     Ok((dispatching, intercept_filter, url_mod, hdr_mod))
 }
