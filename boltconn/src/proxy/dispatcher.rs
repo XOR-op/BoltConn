@@ -127,7 +127,7 @@ impl Dispatcher {
                     dst_addr.clone(),
                     cfg.clone(),
                     self.wireguard_mgr.clone(),
-                    self.dns.clone(),
+                    Arc::new(cfg.dns.clone()),
                 )),
                 OutboundType::Wireguard,
             ),

@@ -7,6 +7,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use flume::TryRecvError;
+use rand::Rng;
 use smoltcp::iface::{Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::{
@@ -255,30 +256,67 @@ impl SmolStack {
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> io::Result<()> {
-        match self.tcp_conn.entry(local_port) {
-            Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
-            Entry::Vacant(e) => {
-                // create socket resource
-                let tx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
-                let rx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
-                let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
-                // Since we are behind kernel's TCP/IP stack, no second Nagle is needed.
-                client_socket.set_nagle_enabled(false);
-
-                // connect to remote
-                client_socket
-                    .connect(
-                        self.iface.context(),
+        if local_port == 0 {
+            for _ in 0..10 {
+                let port = rand::thread_rng().gen_range(32768..65534);
+                match self.tcp_conn.entry(port) {
+                    Entry::Occupied(_) => continue,
+                    Entry::Vacant(e) => {
+                        let handle = Self::open_tcp_inner(
+                            &mut self.iface,
+                            &mut self.socket_set,
+                            self.ip_addr,
+                            port,
+                            remote_addr,
+                        )?;
+                        e.insert(TcpConnTask::new(connector, handle, abort_handle, notify));
+                        return Ok(());
+                    }
+                }
+            }
+            Err(ErrorKind::AddrNotAvailable.into())
+        } else {
+            match self.tcp_conn.entry(local_port) {
+                Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
+                Entry::Vacant(e) => {
+                    let handle = Self::open_tcp_inner(
+                        &mut self.iface,
+                        &mut self.socket_set,
+                        self.ip_addr,
+                        local_port,
                         remote_addr,
-                        SocketAddr::new(self.ip_addr, local_port),
-                    )
-                    .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
-
-                let handle = self.socket_set.add(client_socket);
-                e.insert(TcpConnTask::new(connector, handle, abort_handle, notify));
-                Ok(())
+                    )?;
+                    e.insert(TcpConnTask::new(connector, handle, abort_handle, notify));
+                    Ok(())
+                }
             }
         }
+    }
+
+    fn open_tcp_inner(
+        iface: &mut Interface,
+        socket_set: &mut SocketSet<'static>,
+        ip_addr: IpAddr,
+        local_port: u16,
+        remote_addr: SocketAddr,
+    ) -> io::Result<SocketHandle> {
+        // create socket resource
+        let tx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
+        let rx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
+        let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
+        // Since we are behind kernel's TCP/IP stack, no second Nagle is needed.
+        client_socket.set_nagle_enabled(false);
+
+        // connect to remote
+        client_socket
+            .connect(
+                iface.context(),
+                remote_addr,
+                SocketAddr::new(ip_addr, local_port),
+            )
+            .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
+
+        Ok(socket_set.add(client_socket))
     }
 
     pub fn open_udp(
@@ -288,35 +326,63 @@ impl SmolStack {
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> io::Result<()> {
-        match self.udp_conn.entry(local_port) {
-            Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
-            Entry::Vacant(e) => {
-                // create socket resource
-                let tx_buf = UdpSocketBuffer::new(
-                    vec![UdpPacketMetadata::EMPTY; 16],
-                    vec![0u8; MAX_PKT_SIZE],
-                );
-                let rx_buf = UdpSocketBuffer::new(
-                    vec![UdpPacketMetadata::EMPTY; 16],
-                    vec![0u8; MAX_PKT_SIZE],
-                );
-                let mut client_socket = SmolUdpSocket::new(rx_buf, tx_buf);
-
-                client_socket
-                    .bind(IpEndpoint::new(self.ip_addr.into(), local_port))
-                    .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
-                let handle = self.socket_set.add(client_socket);
-
-                e.insert(UdpConnTask::new(
-                    connector,
-                    handle,
-                    abort_handle,
-                    self.dns.clone(),
-                    notify,
-                ));
-                Ok(())
+        if local_port == 0 {
+            for _ in 0..10 {
+                let port = rand::thread_rng().gen_range(32768..65534);
+                match self.udp_conn.entry(port) {
+                    Entry::Occupied(_) => continue,
+                    Entry::Vacant(e) => {
+                        let handle =
+                            Self::open_udp_inner(&mut self.socket_set, self.ip_addr, port)?;
+                        // todo: remote dns
+                        e.insert(UdpConnTask::new(
+                            connector,
+                            handle,
+                            abort_handle,
+                            self.dns.clone(),
+                            notify,
+                        ));
+                        return Ok(());
+                    }
+                }
+            }
+            Err(ErrorKind::AddrNotAvailable.into())
+        } else {
+            match self.udp_conn.entry(local_port) {
+                Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
+                Entry::Vacant(e) => {
+                    let handle =
+                        Self::open_udp_inner(&mut self.socket_set, self.ip_addr, local_port)?;
+                    // todo: remote dns
+                    e.insert(UdpConnTask::new(
+                        connector,
+                        handle,
+                        abort_handle,
+                        self.dns.clone(),
+                        notify,
+                    ));
+                    Ok(())
+                }
             }
         }
+    }
+
+    fn open_udp_inner(
+        socket_set: &mut SocketSet<'static>,
+        ip_addr: IpAddr,
+        local_port: u16,
+    ) -> io::Result<SocketHandle> {
+        // create socket resource
+        let tx_buf =
+            UdpSocketBuffer::new(vec![UdpPacketMetadata::EMPTY; 16], vec![0u8; MAX_PKT_SIZE]);
+        let rx_buf =
+            UdpSocketBuffer::new(vec![UdpPacketMetadata::EMPTY; 16], vec![0u8; MAX_PKT_SIZE]);
+        let mut client_socket = SmolUdpSocket::new(rx_buf, tx_buf);
+
+        client_socket
+            .bind(IpEndpoint::new(ip_addr.into(), local_port))
+            .map_err(|_| io::Error::from(ErrorKind::ConnectionRefused))?;
+        Ok(socket_set.add(client_socket))
     }
 
     pub async fn poll_all_tcp(&mut self) -> bool {

@@ -1,5 +1,7 @@
-use crate::adapter::{AddrConnector, Connector, Outbound, OutboundType};
+use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, OutboundType};
+use std::future::Future;
 
+use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
@@ -7,15 +9,26 @@ use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
+use bytes::Bytes;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::io;
-use std::net::SocketAddr;
+use std::io::ErrorKind;
+use std::net::{IpAddr, SocketAddr};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::task::{ready, Context, Poll};
 use std::time::{Duration, Instant};
+use tokio::select;
 use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinHandle;
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+use trust_dns_resolver::name_server::RuntimeProvider;
+use trust_dns_resolver::proto::iocompat::AsyncIoTokioAsStd;
+use trust_dns_resolver::proto::udp::DnsUdpSocket;
+use trust_dns_resolver::proto::TokioTime;
+use trust_dns_resolver::{AsyncResolver, TokioHandle};
 
 // Shared Wireguard Tunnel between multiple client connections
 pub struct Endpoint {
@@ -127,7 +140,10 @@ impl Endpoint {
                     stack_handle.purge_timeout_udp();
                     drop(stack_handle);
                     if !immediate_next_loop {
-                        notifier.notified().await;
+                        select! {
+                            _ = tokio::time::sleep(Duration::from_secs(3)) =>{}
+                            _ = notifier.notified() =>{}
+                        }
                     }
                     immediate_next_loop = false;
                 }
@@ -238,9 +254,9 @@ impl WireguardManager {
 pub struct WireguardHandle {
     src_port: u16,
     dst: NetworkAddr,
-    config: WireguardConfig,
+    config: Arc<WireguardConfig>,
     manager: Arc<WireguardManager>,
-    dns: Arc<Dns>,
+    dns_config: Arc<ResolverConfig>,
 }
 
 impl WireguardHandle {
@@ -249,14 +265,14 @@ impl WireguardHandle {
         dst: NetworkAddr,
         config: WireguardConfig,
         manager: Arc<WireguardManager>,
-        dns: Arc<Dns>,
+        dns_config: Arc<ResolverConfig>,
     ) -> Self {
         Self {
             src_port,
             dst,
-            config,
+            config: Arc::new(config),
             manager,
-            dns,
+            dns_config,
         }
     }
 
@@ -266,16 +282,43 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
         adapter: Option<AdapterOrSocket>,
     ) -> io::Result<()> {
-        // todo: remote dns
-        let dst = get_dst(&self.dns, &self.dst).await?;
-        let endpoint = self
-            .manager
-            .get_wg_conn(&self.config, adapter)
-            .await
-            .map_err(|e| io_err(format!("{}", e).as_str()))?;
+        let endpoint = self.get_endpoint(adapter).await?;
+        let dst = match self.dst {
+            NetworkAddr::Raw(s) => s,
+            NetworkAddr::DomainName { domain_name, port } => {
+                let abort_h = ConnAbortHandle::new();
+                abort_h.fulfill(vec![]).await;
+                let resolver = AsyncResolver::new(
+                    self.dns_config.as_ref().clone(),
+                    ResolverOpts::default(),
+                    WireguardDnsProvider {
+                        handle: Default::default(),
+                        endpoint: endpoint.clone(),
+                        abort_handle: abort_h,
+                    },
+                )
+                .map_err(|_| io_err("Create Wireguard DNS failed"))?;
+                let r = resolver
+                    .ipv4_lookup(domain_name)
+                    .await
+                    .map_err(|_| io_err("Failed to resolve"))?;
+                match r.into_iter().next() {
+                    None => return Err(io_err("Not found")),
+                    Some(dst) => SocketAddr::new(dst.0.into(), port),
+                }
+            }
+        };
+
         let notify = endpoint.clone_notify();
         let mut x = endpoint.stack.lock().await;
         x.open_tcp(self.src_port, dst, inbound, abort_handle, notify)
+    }
+
+    async fn get_endpoint(&self, adapter: Option<AdapterOrSocket>) -> io::Result<Arc<Endpoint>> {
+        self.manager
+            .get_wg_conn(&self.config, adapter)
+            .await
+            .map_err(|e| io_err(format!("{}", e).as_str()))
     }
 
     async fn attach_udp(
@@ -284,12 +327,7 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
         adapter: Option<AdapterOrSocket>,
     ) -> io::Result<()> {
-        // todo: remote dns
-        let endpoint = self
-            .manager
-            .get_wg_conn(&self.config, adapter)
-            .await
-            .map_err(|e| io_err(format!("{}", e).as_str()))?;
+        let endpoint = self.get_endpoint(adapter).await?;
         let notify = endpoint.clone_notify();
         let mut x = endpoint.stack.lock().await;
         x.open_udp(self.src_port, inbound, abort_handle, notify)
@@ -371,4 +409,114 @@ async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAddr> {
         }
         NetworkAddr::Raw(s) => *s,
     })
+}
+
+#[derive(Clone)]
+struct WireguardDnsProvider {
+    handle: TokioHandle,
+    endpoint: Arc<Endpoint>,
+    abort_handle: ConnAbortHandle,
+}
+
+impl RuntimeProvider for WireguardDnsProvider {
+    type Handle = TokioHandle;
+    type Timer = TokioTime;
+    type Udp = AddrConnectorWrapper;
+    type Tcp = AsyncIoTokioAsStd<DuplexChan>;
+
+    fn create_handle(&self) -> Self::Handle {
+        self.handle.clone()
+    }
+
+    fn connect_tcp(
+        &self,
+        server_addr: SocketAddr,
+    ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Tcp>>>> {
+        let ep = self.endpoint.clone();
+        let handle = self.abort_handle.clone();
+        let (inbound, outbound) = Connector::new_pair(10);
+        Box::pin(async move {
+            let notify = ep.clone_notify();
+            let mut x = ep.stack.lock().await;
+            x.open_tcp(0, server_addr, inbound, handle, notify)?;
+            Ok(AsyncIoTokioAsStd(DuplexChan::new(outbound)))
+        })
+    }
+
+    fn bind_udp(
+        &self,
+        _local_addr: SocketAddr,
+        _server_addr: SocketAddr,
+    ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Udp>>>> {
+        let ep = self.endpoint.clone();
+        let handle = self.abort_handle.clone();
+        let (inbound, outbound) = AddrConnector::new_pair(10);
+        Box::pin(async move {
+            let notify = ep.clone_notify();
+            let mut x = ep.stack.lock().await;
+            x.open_udp(0, inbound, handle, notify)?;
+            let outbound = AddrConnectorWrapper::from(outbound);
+            Ok(outbound)
+        })
+    }
+}
+
+impl DnsUdpSocket for AddrConnectorWrapper {
+    type Time = TokioTime;
+
+    fn poll_recv_from(
+        &self,
+        cx: &mut Context<'_>,
+        data: &mut [u8],
+    ) -> Poll<io::Result<(usize, SocketAddr)>> {
+        // By design, only one of AddrConnectorWrapper::rx should be used. So a blocking lock is ok.
+        let mut guard = match self.rx.try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                tracing::error!("Lock should not fail");
+                return Poll::Pending;
+            }
+        };
+        match ready!(guard.poll_recv(cx)) {
+            None => Poll::Ready(Err(ErrorKind::ConnectionAborted.into())),
+            Some((buf, addr)) => {
+                let len = if data.len() < buf.len() {
+                    let len = data.len();
+                    data[..len].copy_from_slice(&buf[..len]);
+                    len
+                } else {
+                    let len = buf.len();
+                    data[..len].copy_from_slice(&buf[..len]);
+                    len
+                };
+                let addr = match addr {
+                    NetworkAddr::Raw(s) => s,
+                    NetworkAddr::DomainName {
+                        domain_name: _,
+                        port,
+                    } => {
+                        tracing::warn!("AddrConnector: should be unreachable");
+                        SocketAddr::new(IpAddr::from([0, 0, 0, 0]), port)
+                    }
+                };
+                Poll::Ready(Ok((len, addr)))
+            }
+        }
+    }
+
+    fn poll_send_to(
+        &self,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+        target: SocketAddr,
+    ) -> Poll<io::Result<usize>> {
+        let len = buf.len();
+        match self
+            .tx
+            .try_send((Bytes::copy_from_slice(buf), NetworkAddr::Raw(target)))
+        {
+            Ok(_) => Poll::Ready(Ok(len)),
+            Err(_) => Poll::Pending,
+        }
+    }
 }

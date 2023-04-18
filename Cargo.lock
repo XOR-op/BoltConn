@@ -346,6 +346,7 @@ dependencies = [
  "netlink-packet-sock-diag",
  "netlink-sys",
  "radix_trie",
+ "rand",
  "rcgen",
  "regex",
  "reqwest",

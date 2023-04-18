@@ -20,6 +20,7 @@ use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 
 pub struct ConnInfo {
     pub src: SocketAddr,
@@ -363,6 +364,7 @@ impl DispatchingBuilder {
                     mtu,
                     preshared_key,
                     keepalive,
+                    dns,
                     reserved,
                 } => {
                     let endpoint = match endpoint {
@@ -401,6 +403,15 @@ impl DispatchingBuilder {
                     } else {
                         None
                     };
+                    let dns = {
+                        let list = String::from("[") + dns.as_str() + "]";
+                        let list: Vec<IpAddr> = serde_yaml::from_str(list.as_str())?;
+                        let group: Vec<NameServerConfig> = list
+                            .into_iter()
+                            .map(|i| NameServerConfig::new(SocketAddr::new(i, 53), Protocol::Udp))
+                            .collect();
+                        ResolverConfig::from_parts(None, vec![], group)
+                    };
 
                     Arc::new(Proxy::new(
                         name.clone(),
@@ -412,6 +423,7 @@ impl DispatchingBuilder {
                             mtu: *mtu,
                             preshared_key,
                             keepalive: *keepalive,
+                            dns,
                             reserved: *reserved,
                         }),
                     ))

@@ -151,7 +151,14 @@ fn main() -> ExitCode {
     let dns = {
         let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice()).unwrap();
         let group = match rt.block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap))) {
-            Ok(g) => g,
+            Ok(g) => {
+                if g.is_empty() {
+                    eprintln!("No DNS specified");
+                    return ExitCode::from(1);
+                } else {
+                    g
+                }
+            }
             Err(e) => {
                 eprintln!("Parse dns config failed: {}", e);
                 return ExitCode::from(1);

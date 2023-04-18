@@ -106,6 +106,7 @@ pub enum RawProxyLocalCfg {
         #[serde(alias = "public-key")]
         public_key: String,
         endpoint: RawServerSockAddr,
+        dns: String,
         mtu: usize,
         #[serde(alias = "public-key")]
         preshared_key: Option<String>,

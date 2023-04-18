@@ -13,6 +13,7 @@ use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Notify;
+use trust_dns_resolver::config::ResolverConfig;
 
 // We left AllowedIPs since it's boltconn that manages routing.
 #[derive(Clone)]
@@ -26,6 +27,7 @@ pub struct WireguardConfig {
     pub mtu: usize,
     pub preshared_key: Option<[u8; 32]>,
     pub keepalive: Option<u16>,
+    pub dns: ResolverConfig,
     // reserved fields
     pub reserved: Option<[u8; 3]>,
 }
