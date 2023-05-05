@@ -36,11 +36,12 @@ impl HttpIntercept {
 
     async fn proxy(
         creator: Arc<dyn Outbound>,
-        abort_handle: ConnAbortHandle,
         modifier: Arc<dyn Modifier>,
         req: Request<Body>,
         ctx: ModifierContext,
     ) -> anyhow::Result<Response<Body>> {
+        let abort_handle = ConnAbortHandle::new();
+        abort_handle.fulfill(vec![]).await;
         let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
         if let Some(resp) = fake_resp {
             return Ok(resp);
@@ -56,12 +57,11 @@ impl HttpIntercept {
         Ok(resp)
     }
 
-    pub async fn run(self, abort_handle: ConnAbortHandle) -> io::Result<()> {
+    pub async fn run(self) -> io::Result<()> {
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
             Self::proxy(
                 self.creator.clone(),
-                abort_handle.clone(),
                 self.modifier.clone(),
                 req,
                 ModifierContext {

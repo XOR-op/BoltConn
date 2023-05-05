@@ -53,11 +53,12 @@ impl HttpsIntercept {
         client_tls: TlsConnector,
         server_name: ServerName,
         creator: Arc<dyn Outbound>,
-        abort_handle: ConnAbortHandle,
         modifier: Arc<dyn Modifier>,
         req: Request<Body>,
         ctx: ModifierContext,
     ) -> anyhow::Result<Response<Body>> {
+        let abort_handle = ConnAbortHandle::new();
+        abort_handle.fulfill(vec![]).await;
         let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
         if let Some(resp) = fake_resp {
             return Ok(resp);
@@ -74,7 +75,7 @@ impl HttpsIntercept {
         Ok(resp)
     }
 
-    pub async fn run(self, abort_handle: ConnAbortHandle) -> io::Result<()> {
+    pub async fn run(self) -> io::Result<()> {
         // tls server
         let tls_config = ServerConfig::builder()
             .with_safe_defaults()
@@ -109,7 +110,6 @@ impl HttpsIntercept {
                 client_tls.clone(),
                 server_name.clone(),
                 self.creator.clone(),
-                abort_handle.clone(),
                 self.modifier.clone(),
                 req,
                 ModifierContext {

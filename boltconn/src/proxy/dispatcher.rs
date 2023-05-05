@@ -264,9 +264,8 @@ impl Dispatcher {
                     80 => {
                         // hijack
                         tracing::trace!("HTTP intercept for {}", domain_name);
-                        handles.push({
+                        {
                             let info = info.clone();
-                            let abort_handle = abort_handle.clone();
                             tokio::spawn(async move {
                                 let mocker = HttpIntercept::new(
                                     DuplexChan::new(tun_next),
@@ -274,20 +273,19 @@ impl Dispatcher {
                                     outbounding,
                                     info,
                                 );
-                                if let Err(err) = mocker.run(abort_handle).await {
+                                if let Err(err) = mocker.run().await {
                                     tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
                                 }
                             })
-                        });
+                        };
                         abort_handle.fulfill(handles).await;
                         self.stat_center.push(info).await;
                         return Ok(());
                     }
                     443 => {
                         tracing::trace!("HTTPS intercept for {}", domain_name);
-                        handles.push({
+                        {
                             let info = info.clone();
-                            let abort_handle = abort_handle.clone();
                             let mocker = match HttpsIntercept::new(
                                 &self.ca_certificate,
                                 domain_name,
@@ -306,11 +304,11 @@ impl Dispatcher {
                                 }
                             };
                             tokio::spawn(async move {
-                                if let Err(err) = mocker.run(abort_handle).await {
+                                if let Err(err) = mocker.run().await {
                                     tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
                                 }
                             })
-                        });
+                        };
                         abort_handle.fulfill(handles).await;
                         self.stat_center.push(info).await;
                         return Ok(());
