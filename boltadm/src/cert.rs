@@ -1,9 +1,19 @@
+use nix::unistd::{Gid, Uid};
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     IsCa, KeyUsagePurpose,
 };
 use std::fs;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+fn safe_write(path: PathBuf, content: &str) -> anyhow::Result<()> {
+    fs::write(path.as_path(), content)?;
+    nix::unistd::chown(&path, Some(Uid::from(0)), Some(Gid::from(0)))?;
+    let perm = fs::Permissions::from_mode(0o600);
+    fs::set_permissions(&path, perm)?;
+    Ok(())
+}
 
 pub fn generate_cert<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     // generate ca only now
@@ -25,9 +35,8 @@ pub fn generate_cert<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     let cert = Certificate::from_params(params)?;
     let cert_crt = cert.serialize_pem().unwrap();
     let private_key = cert.serialize_private_key_pem();
-    // todo: chown root && chmod 600
-    fs::write(path.as_ref().join("crt.pem"), cert_crt)?;
-    fs::write(path.as_ref().join("key.pem"), private_key)?;
+    safe_write(path.as_ref().join("crt.pem"), &cert_crt)?;
+    safe_write(path.as_ref().join("key.pem"), &private_key)?;
     println!("Successfully generated certificate and private key.");
     Ok(())
 }

@@ -117,25 +117,30 @@ async fn main() {
             DebugOptions::Session => requestor.get_sessions().await,
         },
         SubCommand::Cert(opt) => {
-            fn fetch_path() -> anyhow::Result<String> {
-                let p = PathBuf::from(std::env::var("HOME")?)
-                    .join(".config")
-                    .join("boltconn");
-                if !p.exists() {
-                    Err(anyhow!("${{HOME}}/.config/boltconn does not exist"))?;
+            if !is_root() {
+                eprintln!("Must be run with root/admin privilege");
+                exit(-1)
+            } else {
+                fn fetch_path() -> anyhow::Result<String> {
+                    let p = PathBuf::from(std::env::var("HOME")?)
+                        .join(".config")
+                        .join("boltconn");
+                    if !p.exists() {
+                        Err(anyhow!("${{HOME}}/.config/boltconn does not exist"))?;
+                    }
+                    let p = p.join("cert");
+                    if !p.exists() {
+                        std::fs::create_dir(p.clone())?;
+                    }
+                    Ok(p.to_string_lossy().to_string())
                 }
-                let p = p.join("cert");
-                if !p.exists() {
-                    std::fs::create_dir(p.clone())?;
+                match match opt.path {
+                    None => fetch_path(),
+                    Some(p) => Ok(p),
+                } {
+                    Ok(path) => cert::generate_cert(path),
+                    Err(e) => Err(e),
                 }
-                Ok(p.to_string_lossy().to_string())
-            }
-            match match opt.path {
-                None => fetch_path(),
-                Some(p) => Ok(p),
-            } {
-                Ok(path) => cert::generate_cert(path),
-                Err(e) => Err(e),
             }
         }
         SubCommand::Tun(opt) => match opt {

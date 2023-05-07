@@ -10,6 +10,7 @@ boltapi = { path = "../boltapi" }
 colored = "2.0.0"
 ipnet = "2.7.0"
 is-root = "0.1.2"
+nix = { version = "0.26.2", features = ["fs", "user"] }
 rcgen = "0.10.0"
 reqwest = { version = "0.11.16", default-features = false, features = ["json", "rustls"] }
 serde = "1.0.148"
