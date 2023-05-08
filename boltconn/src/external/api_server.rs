@@ -3,7 +3,10 @@ use crate::dispatch::{Dispatching, GeneralProxy, Latency};
 use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
 use crate::platform::process::ProcessInfo;
-use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
+use crate::proxy::{
+    latency_test, AgentCenter, Dispatcher, DumpedRequest, DumpedResponse, HttpCapturer,
+    SessionManager,
+};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
 use axum::middleware::map_request;
@@ -15,7 +18,6 @@ use boltapi::{
     TrafficResp, TunStatusSchema,
 };
 use serde_json::json;
-use serde_json::Value::Null;
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -32,6 +34,7 @@ pub struct ApiServer {
     manager: Arc<SessionManager>,
     stat_center: Arc<AgentCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
+    dispatcher: Arc<Dispatcher>,
     dispatching: SharedDispatching,
     tun_configure: Arc<Mutex<TunConfigure>>,
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
@@ -46,6 +49,7 @@ impl ApiServer {
         manager: Arc<SessionManager>,
         stat_center: Arc<AgentCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
+        dispatcher: Arc<Dispatcher>,
         dispatching: SharedDispatching,
         global_setting: Arc<Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
@@ -58,6 +62,7 @@ impl ApiServer {
             stat_center,
             http_capturer,
             tun_configure: global_setting,
+            dispatcher,
             dispatching,
             reload_sender: Arc::new(reload_sender),
             state: Arc::new(Mutex::new(state)),
@@ -90,6 +95,7 @@ impl ApiServer {
                 "/proxies/:group",
                 get(Self::get_proxy_group).put(Self::set_selection),
             )
+            .route("/speedtest/:group", get(Self::update_latency))
             .route("/reload", post(Self::reload))
             .route_layer(map_request(wrapper))
             .with_state(self);
@@ -407,7 +413,7 @@ impl ApiServer {
         Json(args): Json<SetGroupReqSchema>,
     ) -> Json<serde_json::Value> {
         let group = {
-            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            let Some(group) = params.get("group") else { return Json(serde_json::Value::Null); };
             group.clone()
         };
         let r = server
@@ -444,13 +450,14 @@ impl ApiServer {
     }
 
     async fn update_latency(
-        State(server): State<Self>,
+        State(server): State<ApiServer>,
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
         let group = {
-            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            let Some(group) = params.get("group") else { return Json(serde_json::Value::Bool(false)); };
             group.clone()
         };
+        tracing::trace!("Start speedtest for group {}", group);
         let list = server.dispatching.read().await.get_group_list();
         for g in list.iter() {
             if g.get_name() == group {
@@ -458,13 +465,28 @@ impl ApiServer {
                 let mut handles = vec![];
                 for p in g.get_members() {
                     if let GeneralProxy::Single(p) = p {
-                        handles.push(todo!())
+                        if let Ok(h) = latency_test(
+                            server.dispatcher.as_ref(),
+                            p.clone(),
+                            "http://cp.cloudflare.com/generate_204",
+                            // "https://www.gstatic.com/generate_204",
+                            Duration::from_secs(2),
+                        )
+                        .await
+                        {
+                            handles.push(h);
+                        } else {
+                            p.set_latency(Latency::Failed)
+                        }
                     }
+                }
+                for h in handles {
+                    let _ = h.await;
                 }
                 break;
             }
         }
-        Json(Null)
+        Json(serde_json::Value::Bool(true))
     }
 
     async fn reload(State(server): State<Self>) {

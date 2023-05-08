@@ -218,20 +218,6 @@ fn main() -> ExitCode {
     let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
     let api_port = config.api_port;
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
-    let api_server = ApiServer::new(
-        config.api_key.clone(),
-        manager.clone(),
-        stat_center.clone(),
-        Some(http_capturer.clone()),
-        api_dispatching_handler.clone(),
-        tun_configure.clone(),
-        sender,
-        LinkedState {
-            state_path: state_path(&config_path),
-            state: loaded_config.state,
-        },
-        stream_logger,
-    );
 
     let dispatcher = {
         // tls mitm
@@ -281,7 +267,7 @@ fn main() -> ExitCode {
         Arc::new(Dispatcher::new(
             outbound_iface.as_str(),
             dns.clone(),
-            stat_center,
+            stat_center.clone(),
             dispatching,
             cert,
             Box::new(move |pi| {
@@ -295,6 +281,23 @@ fn main() -> ExitCode {
             Arc::new(intercept_filter),
         ))
     };
+
+    let api_server = ApiServer::new(
+        config.api_key.clone(),
+        manager.clone(),
+        stat_center,
+        Some(http_capturer.clone()),
+        dispatcher.clone(),
+        api_dispatching_handler.clone(),
+        tun_configure.clone(),
+        sender,
+        LinkedState {
+            state_path: state_path(&config_path),
+            state: loaded_config.state,
+        },
+        stream_logger,
+    );
+
     let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
         nat_addr,
         manager.clone(),

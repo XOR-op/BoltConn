@@ -39,7 +39,7 @@ impl Proxy {
     }
 
     pub fn get_latency(&self) -> Latency {
-        self.latency.lock().unwrap().clone()
+        *self.latency.lock().unwrap()
     }
 
     pub fn set_latency(&self, latency: Latency) {

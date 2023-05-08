@@ -13,10 +13,7 @@ use rcgen::Certificate as CaCertificate;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio_rustls::rustls::{
-    Certificate, ClientConfig, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig,
-    ServerName,
-};
+use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig, ServerName};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub struct HttpsIntercept {
