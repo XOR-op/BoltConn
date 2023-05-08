@@ -1,5 +1,5 @@
 use crate::config::LinkedState;
-use crate::dispatch::{Dispatching, GeneralProxy};
+use crate::dispatch::{Dispatching, GeneralProxy, Latency};
 use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
 use crate::platform::process::ProcessInfo;
@@ -15,6 +15,7 @@ use boltapi::{
     TrafficResp, TunStatusSchema,
 };
 use serde_json::json;
+use serde_json::Value::Null;
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -442,6 +443,30 @@ impl ApiServer {
         Json(json!(r))
     }
 
+    async fn update_latency(
+        State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        let group = {
+            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            group.clone()
+        };
+        let list = server.dispatching.read().await.get_group_list();
+        for g in list.iter() {
+            if g.get_name() == group {
+                // update all latency inside the group
+                let mut handles = vec![];
+                for p in g.get_members() {
+                    if let GeneralProxy::Single(p) = p {
+                        handles.push(todo!())
+                    }
+                }
+                break;
+            }
+        }
+        Json(Null)
+    }
+
     async fn reload(State(server): State<Self>) {
         let _ = server.reload_sender.send(()).await;
     }
@@ -452,10 +477,16 @@ fn pretty_proxy(g: &GeneralProxy) -> ProxyData {
         GeneralProxy::Single(p) => ProxyData {
             name: p.get_name(),
             proto: p.get_impl().simple_description(),
+            latency: match p.get_latency() {
+                Latency::Unknown => None,
+                Latency::Value(ms) => Some(format!("{ms} ms")),
+                Latency::Failed => Some("Failed".to_string()),
+            },
         },
         GeneralProxy::Group(g) => ProxyData {
             name: g.get_name(),
             proto: "group".to_string(),
+            latency: None,
         },
     }
 }

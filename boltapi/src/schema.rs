@@ -40,6 +40,7 @@ pub struct HttpInterceptSchema {
 pub struct ProxyData {
     pub name: String,
     pub proto: String,
+    pub latency: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

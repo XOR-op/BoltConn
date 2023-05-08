@@ -5,13 +5,21 @@ use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
 use shadowsocks::ServerAddr;
 use std::fmt::{Display, Formatter};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Latency {
+    Unknown,
+    Value(u32),
+    Failed,
+}
 
 /// Single proxy configuation.
 #[derive(Debug)]
 pub struct Proxy {
     name: String,
     detail: Arc<ProxyImpl>,
+    latency: Mutex<Latency>,
 }
 
 impl Proxy {
@@ -19,6 +27,7 @@ impl Proxy {
         Self {
             name: name.into(),
             detail: Arc::new(detail),
+            latency: Mutex::new(Latency::Unknown),
         }
     }
     pub fn get_name(&self) -> String {
@@ -27,6 +36,14 @@ impl Proxy {
 
     pub fn get_impl(&self) -> Arc<ProxyImpl> {
         self.detail.clone()
+    }
+
+    pub fn get_latency(&self) -> Latency {
+        self.latency.lock().unwrap().clone()
+    }
+
+    pub fn set_latency(&self, latency: Latency) {
+        *self.latency.lock().unwrap() = latency;
     }
 }
 
