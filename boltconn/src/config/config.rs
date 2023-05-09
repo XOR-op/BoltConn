@@ -17,6 +17,8 @@ pub struct RawRootCfg {
     pub http_port: Option<u16>,
     #[serde(alias = "socks5-port")]
     pub socks5_port: Option<u16>,
+    #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
+    pub speedtest_url: String,
     pub dns: RawDnsConfig,
     #[serde(alias = "proxy-local", default = "default_local_proxy")]
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
@@ -126,6 +128,10 @@ fn default_local_proxy() -> HashMap<String, RawProxyLocalCfg> {
 
 fn default_proxy_provider() -> HashMap<String, ProxyProvider> {
     Default::default()
+}
+
+fn default_speedtest_url() -> String {
+    "http://www.gstatic.com/generate_204".to_string()
 }
 
 pub(super) fn default_rule_provider() -> HashMap<String, RuleProvider> {

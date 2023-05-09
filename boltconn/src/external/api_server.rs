@@ -40,6 +40,7 @@ pub struct ApiServer {
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<Mutex<LinkedState>>,
     stream_logger: StreamLoggerHandle,
+    speedtest_url: Arc<Mutex<String>>,
 }
 
 impl ApiServer {
@@ -55,6 +56,7 @@ impl ApiServer {
         reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
         stream_logger: StreamLoggerHandle,
+        speedtest_url: Arc<Mutex<String>>,
     ) -> Self {
         Self {
             secret,
@@ -67,6 +69,7 @@ impl ApiServer {
             reload_sender: Arc::new(reload_sender),
             state: Arc::new(Mutex::new(state)),
             stream_logger,
+            speedtest_url,
         }
     }
 
@@ -458,6 +461,7 @@ impl ApiServer {
             group.clone()
         };
         tracing::trace!("Start speedtest for group {}", group);
+        let speedtest_url = server.speedtest_url.lock().unwrap().clone();
         let list = server.dispatching.read().await.get_group_list();
         for g in list.iter() {
             if g.get_name() == group {
@@ -468,8 +472,7 @@ impl ApiServer {
                         if let Ok(h) = latency_test(
                             server.dispatcher.as_ref(),
                             p.clone(),
-                            "http://cp.cloudflare.com/generate_204",
-                            // "https://www.gstatic.com/generate_204",
+                            speedtest_url.as_str(),
                             Duration::from_secs(2),
                         )
                         .await
