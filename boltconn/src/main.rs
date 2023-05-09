@@ -218,20 +218,6 @@ fn main() -> ExitCode {
     let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
     let api_port = config.api_port;
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
-    let api_server = ApiServer::new(
-        config.api_key.clone(),
-        manager.clone(),
-        stat_center.clone(),
-        Some(http_capturer.clone()),
-        api_dispatching_handler.clone(),
-        tun_configure.clone(),
-        sender,
-        LinkedState {
-            state_path: state_path(&config_path),
-            state: loaded_config.state,
-        },
-        stream_logger,
-    );
 
     let dispatcher = {
         // tls mitm
@@ -281,7 +267,7 @@ fn main() -> ExitCode {
         Arc::new(Dispatcher::new(
             outbound_iface.as_str(),
             dns.clone(),
-            stat_center,
+            stat_center.clone(),
             dispatching,
             cert,
             Box::new(move |pi| {
@@ -295,6 +281,26 @@ fn main() -> ExitCode {
             Arc::new(intercept_filter),
         ))
     };
+
+    let speedtest_url = Arc::new(std::sync::Mutex::new(config.speedtest_url.clone()));
+
+    let api_server = ApiServer::new(
+        config.api_key.clone(),
+        manager.clone(),
+        stat_center,
+        Some(http_capturer.clone()),
+        dispatcher.clone(),
+        api_dispatching_handler.clone(),
+        tun_configure.clone(),
+        sender,
+        LinkedState {
+            state_path: state_path(&config_path),
+            state: loaded_config.state,
+        },
+        stream_logger,
+        speedtest_url.clone(),
+    );
+
     let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
         nat_addr,
         manager.clone(),
@@ -351,12 +357,13 @@ fn main() -> ExitCode {
                     if restart.is_some(){
                         // try restarting components
                         match reload(&config_path, outbound_iface.as_str(), dns.clone()).await{
-                            Ok((dispatching, intercept_filter,url_rewriter,header_rewriter)) => {
+                            Ok((dispatching, intercept_filter,url_rewriter,header_rewriter,new_speedtest_url)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
                                 let hcap2 = http_capturer.clone();
                                 dispatcher.replace_dispatching(dispatching);
                                 dispatcher.replace_intercept_filter(intercept_filter);
                                 dispatcher.replace_modifier(Box::new(move |pi| Arc::new(InterceptModifier::new(hcap2.clone(),url_rewriter.clone(),header_rewriter.clone(),pi))));
+                                *speedtest_url.lock().unwrap() = new_speedtest_url;
                                 tracing::info!("Reloaded config successfully");
                             }
                             Err(err)=>{
@@ -385,6 +392,7 @@ async fn reload(
     Arc<Dispatching>,
     Arc<UrlModManager>,
     Arc<HeaderModManager>,
+    String,
 )> {
     let loaded_config = LoadedConfig::load_config(config_path).await?;
     let config = &loaded_config.config;
@@ -407,5 +415,11 @@ async fn reload(
         Arc::new(builder.build_filter(config.intercept_rule.as_slice(), rule_schema)?)
     };
     dns.replace_resolvers(iface_name, group).await?;
-    Ok((dispatching, intercept_filter, url_mod, hdr_mod))
+    Ok((
+        dispatching,
+        intercept_filter,
+        url_mod,
+        hdr_mod,
+        config.speedtest_url.clone(),
+    ))
 }

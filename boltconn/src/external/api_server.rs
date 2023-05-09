@@ -1,9 +1,12 @@
 use crate::config::LinkedState;
-use crate::dispatch::{Dispatching, GeneralProxy};
+use crate::dispatch::{Dispatching, GeneralProxy, Latency};
 use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
 use crate::platform::process::ProcessInfo;
-use crate::proxy::{AgentCenter, DumpedRequest, DumpedResponse, HttpCapturer, SessionManager};
+use crate::proxy::{
+    latency_test, AgentCenter, Dispatcher, DumpedRequest, DumpedResponse, HttpCapturer,
+    SessionManager,
+};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
 use axum::middleware::map_request;
@@ -31,11 +34,13 @@ pub struct ApiServer {
     manager: Arc<SessionManager>,
     stat_center: Arc<AgentCenter>,
     http_capturer: Option<Arc<HttpCapturer>>,
+    dispatcher: Arc<Dispatcher>,
     dispatching: SharedDispatching,
     tun_configure: Arc<Mutex<TunConfigure>>,
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<Mutex<LinkedState>>,
     stream_logger: StreamLoggerHandle,
+    speedtest_url: Arc<Mutex<String>>,
 }
 
 impl ApiServer {
@@ -45,11 +50,13 @@ impl ApiServer {
         manager: Arc<SessionManager>,
         stat_center: Arc<AgentCenter>,
         http_capturer: Option<Arc<HttpCapturer>>,
+        dispatcher: Arc<Dispatcher>,
         dispatching: SharedDispatching,
         global_setting: Arc<Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
         stream_logger: StreamLoggerHandle,
+        speedtest_url: Arc<Mutex<String>>,
     ) -> Self {
         Self {
             secret,
@@ -57,10 +64,12 @@ impl ApiServer {
             stat_center,
             http_capturer,
             tun_configure: global_setting,
+            dispatcher,
             dispatching,
             reload_sender: Arc::new(reload_sender),
             state: Arc::new(Mutex::new(state)),
             stream_logger,
+            speedtest_url,
         }
     }
 
@@ -89,6 +98,7 @@ impl ApiServer {
                 "/proxies/:group",
                 get(Self::get_proxy_group).put(Self::set_selection),
             )
+            .route("/speedtest/:group", get(Self::update_latency))
             .route("/reload", post(Self::reload))
             .route_layer(map_request(wrapper))
             .with_state(self);
@@ -406,7 +416,7 @@ impl ApiServer {
         Json(args): Json<SetGroupReqSchema>,
     ) -> Json<serde_json::Value> {
         let group = {
-            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            let Some(group) = params.get("group") else { return Json(serde_json::Value::Null); };
             group.clone()
         };
         let r = server
@@ -442,6 +452,48 @@ impl ApiServer {
         Json(json!(r))
     }
 
+    async fn update_latency(
+        State(server): State<ApiServer>,
+        Path(params): Path<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        let group = {
+            let Some(group) = params.get("group") else { return Json(serde_json::Value::Bool(false)); };
+            group.clone()
+        };
+        tracing::trace!("Start speedtest for group {}", group);
+        let speedtest_url = server.speedtest_url.lock().unwrap().clone();
+        let list = server.dispatching.read().await.get_group_list();
+        for g in list.iter() {
+            if g.get_name() == group {
+                let iface = g.get_direct_interface();
+                // update all latency inside the group
+                let mut handles = vec![];
+                for p in g.get_members() {
+                    if let GeneralProxy::Single(p) = p {
+                        if let Ok(h) = latency_test(
+                            server.dispatcher.as_ref(),
+                            p.clone(),
+                            speedtest_url.as_str(),
+                            Duration::from_secs(2),
+                            iface.clone(),
+                        )
+                        .await
+                        {
+                            handles.push(h);
+                        } else {
+                            p.set_latency(Latency::Failed)
+                        }
+                    }
+                }
+                for h in handles {
+                    let _ = h.await;
+                }
+                break;
+            }
+        }
+        Json(serde_json::Value::Bool(true))
+    }
+
     async fn reload(State(server): State<Self>) {
         let _ = server.reload_sender.send(()).await;
     }
@@ -452,10 +504,16 @@ fn pretty_proxy(g: &GeneralProxy) -> ProxyData {
         GeneralProxy::Single(p) => ProxyData {
             name: p.get_name(),
             proto: p.get_impl().simple_description(),
+            latency: match p.get_latency() {
+                Latency::Unknown => None,
+                Latency::Value(ms) => Some(format!("{ms} ms")),
+                Latency::Failed => Some("Failed".to_string()),
+            },
         },
         GeneralProxy::Group(g) => ProxyData {
             name: g.get_name(),
             proto: "group".to_string(),
+            latency: None,
         },
     }
 }

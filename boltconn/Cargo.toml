@@ -10,7 +10,7 @@ aho-corasick = "0.7.20"
 anyhow = "1.0.66"
 arrayref = "0.3.6"
 async-trait = "0.1.58"
-axum = { version = "0.6.1", features = ["ws"] }
+axum = { version = "0.6.18", features = ["ws"] }
 base64 = "0.21.0"
 boltapi = { path = "../boltapi" }
 boringtun = "0.5.2"
@@ -33,7 +33,7 @@ is-root = "0.1.2"
 libc = "0.2.141"
 linked-hash-map = { version = "0.5.6", features = ["serde_impl"] }
 radix_trie = "0.2.1"
-rand = "0.8.5"
+rand = { version = "0.8.5", features = ["small_rng"] }
 rcgen = { version = "0.10.0", features = ["pem", "x509-parser"] }
 regex = "1.7.0"
 reqwest = { version = "0.11.14", default-features = false, features = ["rustls"] }
@@ -55,8 +55,10 @@ tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std", "fmt", "json"] }
 trust-dns-proto = "0.22.0"
 trust-dns-resolver = { git = "https://github.com/bluejekyll/trust-dns.git", features = ['dns-over-rustls', 'dns-over-https-rustls', 'dns-over-https', 'dns-over-tls'] }
+url = "2.3.1"
 webpki-roots = "0.23.0"
 x25519-dalek = "2.0.0-pre.1"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-sys = "0.8.3"
 netlink-packet-core = "0.5.0"

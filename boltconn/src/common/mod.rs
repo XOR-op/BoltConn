@@ -2,7 +2,10 @@ use bytes::{BufMut, BytesMut};
 use std::error::Error;
 use std::intrinsics::transmute;
 use std::io;
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadHalf};
+use tokio_rustls::rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore};
+use tokio_rustls::TlsConnector;
 
 pub mod async_raw_fd;
 pub mod async_socket;
@@ -38,4 +41,20 @@ pub async fn read_to_bytes_mut(
 
 pub(crate) unsafe fn mut_buf(buf: &mut BytesMut) -> &mut [u8] {
     unsafe { transmute(buf.spare_capacity_mut()) }
+}
+
+pub fn create_tls_connector() -> TlsConnector {
+    let mut root_cert_store = RootCertStore::empty();
+    root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+        OwnedTrustAnchor::from_subject_spki_name_constraints(
+            ta.subject,
+            ta.spki,
+            ta.name_constraints,
+        )
+    }));
+    let client_cfg = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+    TlsConnector::from(Arc::new(client_cfg))
 }

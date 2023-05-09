@@ -1,4 +1,5 @@
 use crate::adapter::{Connector, Outbound};
+use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
@@ -12,10 +13,7 @@ use rcgen::Certificate as CaCertificate;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio_rustls::rustls::{
-    Certificate, ClientConfig, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig,
-    ServerName,
-};
+use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig, ServerName};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub struct HttpsIntercept {
@@ -86,21 +84,7 @@ impl HttpsIntercept {
         let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
         // tls client
-        let mut root_cert_store = RootCertStore::empty();
-        root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
-            |ta| {
-                OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                )
-            },
-        ));
-        let client_cfg = ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-        let client_tls = TlsConnector::from(Arc::new(client_cfg));
+        let client_tls = create_tls_connector();
         let server_name = ServerName::try_from(self.server_name.as_str())
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         let id_gen = IdGenerator::default();

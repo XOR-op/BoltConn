@@ -8,12 +8,142 @@ mod socks5_inbound;
 mod tun_inbound;
 mod tun_udp_inbound;
 
+use crate::adapter::{Connector, Outbound};
+use crate::common::create_tls_connector;
+use crate::common::duplex_chan::DuplexChan;
+use crate::dispatch::{Latency, Proxy, ProxyImpl};
 pub use agent::*;
 pub use dispatcher::*;
+use http::Request;
 pub use http_inbound::*;
+use hyper::client::conn;
 pub use manager::*;
 pub use mixed_inbound::*;
+use rand::{Rng, SeedableRng};
 pub use session_ctl::*;
 pub use socks5_inbound::*;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+use tokio::task::JoinHandle;
+use tokio_rustls::rustls::ServerName;
 pub use tun_inbound::*;
 pub use tun_udp_inbound::*;
+use url::Host;
+
+pub async fn latency_test(
+    dispatcher: &Dispatcher,
+    proxy: Arc<Proxy>,
+    url: &str,
+    timeout: Duration,
+    iface: Option<String>,
+) -> anyhow::Result<JoinHandle<()>> {
+    let tls_conector = create_tls_connector();
+    let req = Request::builder()
+        .method("GET")
+        .uri(url)
+        .body(hyper::body::Body::empty())
+        .unwrap();
+    let (inbound, outbound) = Connector::new_pair(10);
+    let parsed_url = url::Url::parse(url)?;
+    let port = match parsed_url.port() {
+        Some(p) => p,
+        None => match parsed_url.scheme() {
+            "https" => 443,
+            "http" => 80,
+            _ => return Err(anyhow::anyhow!("Invalid test url scheme")),
+        },
+    };
+    let dst_addr = match parsed_url
+        .host()
+        .ok_or(anyhow::anyhow!("No host in test url"))?
+    {
+        Host::Domain(domain) => NetworkAddr::DomainName {
+            domain_name: domain.to_string(),
+            port,
+        },
+        Host::Ipv4(ip) => NetworkAddr::Raw(SocketAddr::new(ip.into(), port)),
+        Host::Ipv6(ip) => NetworkAddr::Raw(SocketAddr::new(ip.into(), port)),
+    };
+    let server_name = match &dst_addr {
+        NetworkAddr::Raw(s) => ServerName::IpAddress(s.ip()),
+        NetworkAddr::DomainName {
+            domain_name,
+            port: _,
+        } => ServerName::try_from(domain_name.as_str())?,
+    };
+    let mut rng = rand::rngs::SmallRng::from_entropy();
+    let iface = iface.unwrap_or(dispatcher.get_iface_name());
+
+    // create outbound
+    let creator: Box<dyn Outbound> = match proxy.get_impl().as_ref() {
+        ProxyImpl::Chain(vec) => {
+            match dispatcher.create_chain(
+                vec,
+                rng.gen_range(32768..65535),
+                &dst_addr,
+                iface.as_str(),
+            ) {
+                Ok(o) => Box::new(o),
+                Err(_) => {
+                    proxy.set_latency(Latency::Failed);
+                    return Err(anyhow::anyhow!("Create outbound failed"));
+                }
+            }
+        }
+        proxy_config => {
+            let creator = match dispatcher.build_normal_outbound(
+                iface.as_str(),
+                proxy_config,
+                rng.gen_range(32768..65535),
+                &dst_addr,
+            ) {
+                Ok((o, _)) => o,
+                Err(_) => {
+                    proxy.set_latency(Latency::Failed);
+                    return Err(anyhow::anyhow!("Create outbound failed"));
+                }
+            };
+            creator
+        }
+    };
+
+    let abort_handle = ConnAbortHandle::new();
+    abort_handle.fulfill(vec![]).await;
+    let proxy_handle = creator.spawn_tcp(inbound, abort_handle.clone());
+
+    // connect to the url
+    let http_handle: JoinHandle<anyhow::Result<Latency>> = tokio::spawn(async move {
+        let start_timer = SystemTime::now();
+        let mut sender = if parsed_url.scheme() == "https" {
+            let outbound = tls_conector
+                .connect(server_name, DuplexChan::new(outbound))
+                .await?;
+            let (sender, connection) = conn::Builder::new().handshake(outbound).await?;
+            tokio::spawn(async move { connection.await });
+            sender
+        } else {
+            let (sender, connection) = conn::Builder::new()
+                .handshake(DuplexChan::new(outbound))
+                .await?;
+            tokio::spawn(async move { connection.await });
+            sender
+        };
+        let _ = sender.send_request(req).await?;
+        let end_timer = SystemTime::now();
+        match end_timer.duration_since(start_timer) {
+            Ok(duration) => Ok(Latency::Value(duration.as_millis() as u32)),
+            Err(_) => Ok(Latency::Failed),
+        }
+    });
+
+    let timeout_future = tokio::spawn(async move {
+        if let Ok(Ok(Ok(l))) = tokio::time::timeout(timeout, http_handle).await {
+            proxy.set_latency(l);
+        } else {
+            proxy.set_latency(Latency::Failed)
+        }
+        proxy_handle.abort()
+    });
+    Ok(timeout_future)
+}
