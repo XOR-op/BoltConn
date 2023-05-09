@@ -36,6 +36,7 @@ pub async fn latency_test(
     proxy: Arc<Proxy>,
     url: &str,
     timeout: Duration,
+    iface: Option<String>,
 ) -> anyhow::Result<JoinHandle<()>> {
     let tls_conector = create_tls_connector();
     let req = Request::builder()
@@ -72,6 +73,7 @@ pub async fn latency_test(
         } => ServerName::try_from(domain_name.as_str())?,
     };
     let mut rng = rand::rngs::SmallRng::from_entropy();
+    let iface = iface.unwrap_or(dispatcher.get_iface_name());
 
     // create outbound
     let creator: Box<dyn Outbound> = match proxy.get_impl().as_ref() {
@@ -80,7 +82,7 @@ pub async fn latency_test(
                 vec,
                 rng.gen_range(32768..65535),
                 &dst_addr,
-                dispatcher.get_iface_name().as_str(),
+                iface.as_str(),
             ) {
                 Ok(o) => Box::new(o),
                 Err(_) => {
@@ -91,7 +93,7 @@ pub async fn latency_test(
         }
         proxy_config => {
             let creator = match dispatcher.build_normal_outbound(
-                dispatcher.get_iface_name().as_str(),
+                iface.as_str(),
                 proxy_config,
                 rng.gen_range(32768..65535),
                 &dst_addr,

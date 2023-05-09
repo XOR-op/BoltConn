@@ -465,6 +465,7 @@ impl ApiServer {
         let list = server.dispatching.read().await.get_group_list();
         for g in list.iter() {
             if g.get_name() == group {
+                let iface = g.get_direct_interface();
                 // update all latency inside the group
                 let mut handles = vec![];
                 for p in g.get_members() {
@@ -474,6 +475,7 @@ impl ApiServer {
                             p.clone(),
                             speedtest_url.as_str(),
                             Duration::from_secs(2),
+                            iface.clone(),
                         )
                         .await
                         {
