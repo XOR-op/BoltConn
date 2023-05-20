@@ -2,10 +2,8 @@ use crate::config::LinkedState;
 use crate::dispatch::{Dispatching, GeneralProxy, Latency};
 use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
-use crate::platform::process::ProcessInfo;
 use crate::proxy::{
-    latency_test, AgentCenter, Dispatcher, DumpedRequest, DumpedResponse, HttpCapturer,
-    SessionManager,
+    latency_test, AgentCenter, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
 };
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
@@ -280,14 +278,21 @@ impl ApiServer {
         Json(json!(result))
     }
 
-    fn collect_captured(
-        list: Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>,
-    ) -> Json<serde_json::Value> {
+    fn collect_captured(list: Vec<HttpInterceptData>) -> Json<serde_json::Value> {
         let mut result = Vec::new();
-        for (idx, (host, proc, req, resp)) in list.into_iter().enumerate() {
+        for (
+            idx,
+            HttpInterceptData {
+                host,
+                process_info,
+                req,
+                resp,
+            },
+        ) in list.into_iter().enumerate()
+        {
             let item = boltapi::HttpInterceptSchema {
                 intercept_id: idx as u64,
-                client: proc.map(|proc| proc.name),
+                client: process_info.map(|proc| proc.name),
                 uri: {
                     let s = req.uri.to_string();
                     if s.starts_with("https://") || s.starts_with("http://") {
@@ -346,7 +351,12 @@ impl ApiServer {
         if let Some(capturer) = &server.http_capturer {
             if let Some(list) = capturer.get_range_copy(id, Some(id + 1)) {
                 if list.len() == 1 {
-                    let (_, _, req, resp) = list.get(0).unwrap();
+                    let HttpInterceptData {
+                        host: _,
+                        process_info: _,
+                        req,
+                        resp,
+                    } = list.get(0).unwrap();
                     let result = GetInterceptDataResp {
                         req_header: req
                             .headers

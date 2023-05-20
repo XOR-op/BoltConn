@@ -364,9 +364,32 @@ impl DumpedResponse {
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[derive(Clone, Debug)]
+pub struct HttpInterceptData {
+    pub host: String,
+    pub process_info: Option<ProcessInfo>,
+    pub req: DumpedRequest,
+    pub resp: DumpedResponse,
+}
+
+impl HttpInterceptData {
+    pub fn new(
+        host: String,
+        process_info: Option<ProcessInfo>,
+        req: DumpedRequest,
+        resp: DumpedResponse,
+    ) -> Self {
+        Self {
+            host,
+            process_info,
+            req,
+            resp,
+        }
+    }
+}
+
 pub struct HttpCapturer {
-    contents: Mutex<Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>>,
+    contents: Mutex<Vec<HttpInterceptData>>,
 }
 
 impl HttpCapturer {
@@ -385,10 +408,10 @@ impl HttpCapturer {
         self.contents
             .lock()
             .unwrap()
-            .push((host, client, pair.0, pair.1))
+            .push(HttpInterceptData::new(host, client, pair.0, pair.1))
     }
 
-    pub fn get_copy(&self) -> Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)> {
+    pub fn get_copy(&self) -> Vec<HttpInterceptData> {
         self.contents.lock().unwrap().clone()
     }
 
@@ -397,7 +420,7 @@ impl HttpCapturer {
         &self,
         start: usize,
         end: Option<usize>,
-    ) -> Option<Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>> {
+    ) -> Option<Vec<HttpInterceptData>> {
         let arr = self.contents.lock().unwrap();
         if start >= arr.len() || (end.is_some() && end.unwrap() > arr.len()) {
             return None;
