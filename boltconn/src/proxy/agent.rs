@@ -1,5 +1,6 @@
 use crate::adapter::OutboundType;
 use crate::config::RawServerAddr;
+use crate::external::DatabaseHandle;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use fast_socks5::util::target_addr::TargetAddr;
 use std::fmt::{Display, Formatter};
@@ -286,14 +287,16 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
 
 pub struct AgentCenter {
     content: RwLock<Vec<Arc<RwLock<ConnAgent>>>>,
+    // db_handle: DatabaseHandle,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
 }
 
 impl AgentCenter {
-    pub fn new() -> Self {
+    pub fn new(db_handle: DatabaseHandle) -> Self {
         Self {
             content: RwLock::new(Vec::new()),
+            // db_handle,
             global_upload: Arc::new(Default::default()),
             global_download: Arc::new(Default::default()),
         }
@@ -415,12 +418,14 @@ impl HttpInterceptData {
 
 pub struct HttpCapturer {
     contents: Mutex<Vec<HttpInterceptData>>,
+    // db_handle: DatabaseHandle,
 }
 
 impl HttpCapturer {
-    pub fn new() -> Self {
+    pub fn new(db_handle: DatabaseHandle) -> Self {
         Self {
             contents: Mutex::new(Vec::new()),
+            // db_handle: Arc::new(db_handle),
         }
     }
 

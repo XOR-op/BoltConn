@@ -11,6 +11,7 @@ pub mod async_raw_fd;
 pub mod async_socket;
 pub mod async_ws_stream;
 pub mod duplex_chan;
+pub mod evictable_vec;
 pub mod host_matcher;
 pub mod id_gen;
 

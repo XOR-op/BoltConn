@@ -4,11 +4,11 @@ use boltapi::ConnectionSchema;
 use rusqlite::{params, Error, ErrorCode, OpenFlags};
 use std::path::Path;
 
-pub struct Database {
+pub struct DatabaseHandle {
     conn: rusqlite::Connection,
 }
 
-impl Database {
+impl DatabaseHandle {
     const CONN_TABLE_SCHEMA: &'static str = "CREATE TABLE Conn (
                     id INTEGER PRIMARY KEY,
                     dest TEXT NOT NULL,
@@ -151,7 +151,7 @@ impl Database {
 
 #[test]
 fn test_database() {
-    let mut db = Database::open("/tmp/test.sqlite").unwrap();
+    let mut db = DatabaseHandle::open("/tmp/test.sqlite").unwrap();
     db.add_connections(&[ConnectionSchema {
         conn_id: 0,
         destination: "www.google.com".to_string(),
@@ -165,6 +165,6 @@ fn test_database() {
     }])
     .unwrap();
     drop(db);
-    let db = Database::open("/tmp/test.sqlite").unwrap();
+    let db = DatabaseHandle::open("/tmp/test.sqlite").unwrap();
     drop(db);
 }
