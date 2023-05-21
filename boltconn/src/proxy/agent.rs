@@ -341,6 +341,13 @@ impl DumpedRequest {
             time: Instant::now(),
         }
     }
+
+    pub fn collect_headers(&self) -> Vec<String> {
+        self.headers
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA")))
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -361,6 +368,13 @@ impl DumpedResponse {
             body: body.clone(),
             time: Instant::now(),
         }
+    }
+
+    pub fn collect_headers(&self) -> Vec<String> {
+        self.headers
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA")))
+            .collect()
     }
 }
 
@@ -384,6 +398,17 @@ impl HttpInterceptData {
             process_info,
             req,
             resp,
+        }
+    }
+
+    pub fn get_full_uri(&self) -> String {
+        let s = self.req.uri.to_string();
+        if s.starts_with("https://") || s.starts_with("http://") {
+            // http2
+            s
+        } else {
+            // http1.1, with no host in uri field
+            self.host.clone() + s.as_str()
         }
     }
 }

@@ -280,33 +280,16 @@ impl ApiServer {
 
     fn collect_captured(list: Vec<HttpInterceptData>) -> Json<serde_json::Value> {
         let mut result = Vec::new();
-        for (
-            idx,
-            HttpInterceptData {
-                host,
-                process_info,
-                req,
-                resp,
-            },
-        ) in list.into_iter().enumerate()
-        {
+        for (idx, data) in list.into_iter().enumerate() {
+            let uri = data.get_full_uri();
             let item = boltapi::HttpInterceptSchema {
                 intercept_id: idx as u64,
-                client: process_info.map(|proc| proc.name),
-                uri: {
-                    let s = req.uri.to_string();
-                    if s.starts_with("https://") || s.starts_with("http://") {
-                        // http2
-                        s
-                    } else {
-                        // http1.1, with no host in uri field
-                        host + s.as_str()
-                    }
-                },
-                method: req.method.to_string(),
-                status: resp.status.as_u16(),
-                size: resp.body.len() as u64,
-                time: pretty_latency(resp.time - req.time),
+                client: data.process_info.map(|proc| proc.name),
+                uri,
+                method: data.req.method.to_string(),
+                status: data.resp.status.as_u16(),
+                size: data.resp.body.len() as u64,
+                time: pretty_latency(data.resp.time - data.req.time),
             };
             result.push(item);
         }
@@ -358,21 +341,9 @@ impl ApiServer {
                         resp,
                     } = list.get(0).unwrap();
                     let result = GetInterceptDataResp {
-                        req_header: req
-                            .headers
-                            .iter()
-                            .map(|(k, v)| {
-                                format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA"))
-                            })
-                            .collect(),
+                        req_header: req.collect_headers(),
                         req_body: req.body.to_vec(),
-                        resp_header: resp
-                            .headers
-                            .iter()
-                            .map(|(k, v)| {
-                                format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA"))
-                            })
-                            .collect(),
+                        resp_header: resp.collect_headers(),
                         resp_body: resp.body.to_vec(),
                     };
                     return Json(json!(result));
