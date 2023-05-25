@@ -1,4 +1,5 @@
 use crate::adapter::OutboundType;
+use crate::common::evictable_vec::EvictableVec;
 use crate::config::RawServerAddr;
 use crate::external::DatabaseHandle;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -287,7 +288,7 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
 
 pub struct AgentCenter {
     content: RwLock<Vec<Arc<RwLock<ConnAgent>>>>,
-    // db_handle: DatabaseHandle,
+    db_handle: Mutex<DatabaseHandle>,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
 }
@@ -296,7 +297,7 @@ impl AgentCenter {
     pub fn new(db_handle: DatabaseHandle) -> Self {
         Self {
             content: RwLock::new(Vec::new()),
-            // db_handle,
+            db_handle: Mutex::new(db_handle),
             global_upload: Arc::new(Default::default()),
             global_download: Arc::new(Default::default()),
         }
@@ -417,15 +418,27 @@ impl HttpInterceptData {
 }
 
 pub struct HttpCapturer {
-    contents: Mutex<Vec<HttpInterceptData>>,
-    // db_handle: DatabaseHandle,
+    inner: Mutex<HttpCapturerInner>,
+}
+
+struct HttpCapturerInner {
+    /// how many elements are allowed to return to caller
+    keep_count: usize,
+    // how many extra elements are allowed to reside in memory, in order to reduce database operation times.
+    grace_threshold: usize,
+    contents: EvictableVec<HttpInterceptData>,
+    db_handle: DatabaseHandle,
 }
 
 impl HttpCapturer {
     pub fn new(db_handle: DatabaseHandle) -> Self {
         Self {
-            contents: Mutex::new(Vec::new()),
-            // db_handle: Arc::new(db_handle),
+            inner: Mutex::new(HttpCapturerInner {
+                keep_count: 50,
+                grace_threshold: 10,
+                contents: EvictableVec::new(),
+                db_handle,
+            }),
         }
     }
 
@@ -435,14 +448,18 @@ impl HttpCapturer {
         host: String,
         client: Option<ProcessInfo>,
     ) {
-        self.contents
+        self.inner
             .lock()
             .unwrap()
+            .contents
             .push(HttpInterceptData::new(host, client, pair.0, pair.1))
     }
 
     pub fn get_copy(&self) -> Vec<HttpInterceptData> {
-        self.contents.lock().unwrap().clone()
+        let result = self.inner.lock().unwrap().get_allowed_elements();
+        // GC
+        self.inner.lock().unwrap().evict();
+        result
     }
 
     #[allow(clippy::type_complexity)]
@@ -451,14 +468,44 @@ impl HttpCapturer {
         start: usize,
         end: Option<usize>,
     ) -> Option<Vec<HttpInterceptData>> {
-        let arr = self.contents.lock().unwrap();
-        if start >= arr.len() || (end.is_some() && end.unwrap() > arr.len()) {
+        let inner = self.inner.lock().unwrap();
+
+        let start = if start >= inner.contents.current_offset() {
+            start
+        } else {
+            inner.contents.current_offset()
+        };
+        // check if the range is valid logically
+        if start >= inner.contents.logical_len()
+            || (end.is_some()
+                && (end.unwrap() > inner.contents.logical_len() || start >= end.unwrap()))
+        {
             return None;
         }
-        Some(if let Some(end) = end {
-            arr.as_slice()[start..end].to_vec()
-        } else {
-            arr.as_slice()[start..].to_vec()
+        Some(inner.contents.logical_slice(start, end).to_vec())
+    }
+}
+
+impl HttpCapturerInner {
+    fn get_allowed_elements(&self) -> Vec<HttpInterceptData> {
+        self.contents.get_last_n(self.keep_count)
+    }
+
+    fn evict(&mut self) {
+        if self.contents.real_len() > self.keep_count + self.grace_threshold {
+            self.contents.evict_with(self.keep_count, |data| {
+                if let Err(err) = self.db_handle.add_interceptions(data) {
+                    tracing::warn!("Write intercepted http data failed: {}", err)
+                }
+            })
+        }
+    }
+}
+
+impl Drop for HttpCapturerInner {
+    fn drop(&mut self) {
+        self.contents.evict_with(0, |data| {
+            let _ = self.db_handle.add_interceptions(data);
         })
     }
 }

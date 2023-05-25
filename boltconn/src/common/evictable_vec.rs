@@ -5,6 +5,13 @@ pub struct EvictableVec<T> {
 }
 
 impl<T> EvictableVec<T> {
+    pub fn new() -> Self {
+        Self {
+            in_mem_offset: 0,
+            inner: Vec::new(),
+        }
+    }
+
     pub fn push(&mut self, val: T) {
         self.inner.push(val)
     }
@@ -40,6 +47,30 @@ impl<T> EvictableVec<T> {
             f(&self.inner[..mid]);
             self.in_mem_offset += mid;
             self.inner = self.inner.split_off(mid);
+        }
+    }
+
+    pub fn logical_slice(&self, start: usize, end: Option<usize>) -> &[T] {
+        match end {
+            None => &self.inner.as_slice()[(start - self.in_mem_offset)..],
+            Some(end) => {
+                &self.inner.as_slice()[(start - self.in_mem_offset)..(end - self.in_mem_offset)]
+            }
+        }
+    }
+}
+
+impl<T: Clone> EvictableVec<T> {
+    pub fn as_vec(&self) -> Vec<T> {
+        self.inner.clone()
+    }
+
+    pub fn get_last_n(&self, n: usize) -> Vec<T> {
+        if self.inner.len() <= n {
+            self.inner.clone()
+        } else {
+            let start = self.inner.len() - n;
+            self.inner.as_slice()[start..].to_vec()
         }
     }
 }
