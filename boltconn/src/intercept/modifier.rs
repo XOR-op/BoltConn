@@ -1,5 +1,5 @@
 use crate::platform::process::ProcessInfo;
-use crate::proxy::{ConnAgent, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
+use crate::proxy::{ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -12,7 +12,7 @@ pub type ModifierClosure = Box<dyn Fn(Option<ProcessInfo>) -> Arc<dyn Modifier> 
 
 pub struct ModifierContext {
     pub tag: u64,
-    pub conn_info: Arc<RwLock<ConnAgent>>,
+    pub conn_info: Arc<RwLock<ConnContext>>,
 }
 
 #[async_trait]

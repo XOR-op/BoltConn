@@ -26,7 +26,7 @@ pub use super::adapter::shadowsocks::*;
 
 use crate::common::{io_err, mut_buf, read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
-use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 pub use chain::*;
 pub use direct::*;
@@ -306,7 +306,7 @@ impl UdpSocketAdapter for AddrConnectorWrapper {
 
 struct TcpIndicatorGuard {
     pub indicator: Arc<AtomicU8>,
-    pub info: Arc<RwLock<ConnAgent>>,
+    pub info: Arc<RwLock<ConnContext>>,
 }
 
 impl Drop for TcpIndicatorGuard {

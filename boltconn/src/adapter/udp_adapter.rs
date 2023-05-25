@@ -3,7 +3,7 @@
 use crate::adapter::{AddrConnector, DuplexCloseGuard};
 use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
-use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
 use bytes::{BufMut, Bytes, BytesMut};
 use io::Result;
 use std::io;
@@ -18,7 +18,7 @@ use tokio::time::timeout;
 const UDP_ALIVE_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct TunUdpAdapter {
-    info: Arc<RwLock<ConnAgent>>,
+    info: Arc<RwLock<ConnContext>>,
     send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
     recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
     next: AddrConnector,
@@ -30,7 +30,7 @@ impl TunUdpAdapter {
     const BUF_SIZE: usize = 65536;
 
     pub fn new(
-        info: Arc<RwLock<ConnAgent>>,
+        info: Arc<RwLock<ConnContext>>,
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
         next: AddrConnector,
@@ -106,7 +106,7 @@ impl TunUdpAdapter {
 }
 
 pub struct StandardUdpAdapter {
-    info: Arc<RwLock<ConnAgent>>,
+    info: Arc<RwLock<ConnContext>>,
     inbound: UdpSocket,
     src: SocketAddr,
     available: Arc<AtomicBool>,
@@ -115,7 +115,7 @@ pub struct StandardUdpAdapter {
 
 impl StandardUdpAdapter {
     pub fn new(
-        info: Arc<RwLock<ConnAgent>>,
+        info: Arc<RwLock<ConnContext>>,
         inbound: UdpSocket,
         src: SocketAddr,
         available: Arc<AtomicBool>,

@@ -3,7 +3,7 @@ use crate::dispatch::{Dispatching, GeneralProxy, Latency};
 use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
 use crate::proxy::{
-    latency_test, AgentCenter, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
+    latency_test, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
 };
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
@@ -30,7 +30,7 @@ pub type SharedDispatching = Arc<RwLock<Arc<Dispatching>>>;
 pub struct ApiServer {
     secret: Option<String>,
     manager: Arc<SessionManager>,
-    stat_center: Arc<AgentCenter>,
+    stat_center: Arc<ContextManager>,
     http_capturer: Option<Arc<HttpCapturer>>,
     dispatcher: Arc<Dispatcher>,
     dispatching: SharedDispatching,
@@ -46,7 +46,7 @@ impl ApiServer {
     pub fn new(
         secret: Option<String>,
         manager: Arc<SessionManager>,
-        stat_center: Arc<AgentCenter>,
+        stat_center: Arc<ContextManager>,
         http_capturer: Option<Arc<HttpCapturer>>,
         dispatcher: Arc<Dispatcher>,
         dispatching: SharedDispatching,

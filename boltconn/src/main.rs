@@ -9,7 +9,7 @@ use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{
-    AgentCenter, HttpCapturer, HttpInbound, MixedInbound, Socks5Inbound, TunUdpInbound,
+    ContextManager, HttpCapturer, HttpInbound, MixedInbound, Socks5Inbound, TunUdpInbound,
 };
 use ipnet::Ipv4Net;
 use is_root::is_root;
@@ -135,7 +135,7 @@ fn main() -> ExitCode {
 
     // config-independent components
     let manager = Arc::new(SessionManager::new());
-    let stat_center = Arc::new(AgentCenter::new());
+    let stat_center = Arc::new(ContextManager::new());
     let http_capturer = Arc::new(HttpCapturer::new());
     let hcap_copy = http_capturer.clone();
     let (tun_udp_tx, tun_udp_rx) = flume::unbounded();

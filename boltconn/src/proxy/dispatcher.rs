@@ -9,7 +9,7 @@ use crate::intercept::{HttpIntercept, HttpsIntercept, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
-use crate::proxy::{AgentCenter, ConnAbortHandle, ConnAgent, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnContext, ContextManager, NetworkAddr};
 use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 pub struct Dispatcher {
     iface_name: String,
     dns: Arc<Dns>,
-    stat_center: Arc<AgentCenter>,
+    stat_center: Arc<ContextManager>,
     dispatching: RwLock<Arc<Dispatching>>,
     ca_certificate: Certificate,
     modifier: RwLock<ModifierClosure>,
@@ -35,7 +35,7 @@ impl Dispatcher {
     pub fn new(
         iface_name: &str,
         dns: Arc<Dns>,
-        stat_center: Arc<AgentCenter>,
+        stat_center: Arc<ContextManager>,
         dispatching: Arc<Dispatching>,
         ca_certificate: Certificate,
         modifier: ModifierClosure,
@@ -221,7 +221,7 @@ impl Dispatcher {
 
         // conn info
         let abort_handle = ConnAbortHandle::new();
-        let info = Arc::new(tokio::sync::RwLock::new(ConnAgent::new(
+        let info = Arc::new(tokio::sync::RwLock::new(ConnContext::new(
             dst_addr.clone(),
             process_info.clone(),
             proxy_type,
@@ -348,7 +348,7 @@ impl Dispatcher {
     ) -> Result<
         (
             Box<dyn Outbound>,
-            Arc<tokio::sync::RwLock<ConnAgent>>,
+            Arc<tokio::sync::RwLock<ConnContext>>,
             ConnAbortHandle,
         ),
         (),
@@ -373,7 +373,7 @@ impl Dispatcher {
             };
         // conn info
         let abort_handle = ConnAbortHandle::new();
-        let info = Arc::new(tokio::sync::RwLock::new(ConnAgent::new(
+        let info = Arc::new(tokio::sync::RwLock::new(ConnContext::new(
             dst_addr,
             conn_info.process_info,
             proxy_type,

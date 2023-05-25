@@ -192,7 +192,7 @@ impl ConnAbortHandle {
 
 // Info about one connection
 #[derive(Debug)]
-pub struct ConnAgent {
+pub struct ConnContext {
     pub start_time: SystemTime,
     pub dest: NetworkAddr,
     pub process_info: Option<ProcessInfo>,
@@ -206,7 +206,7 @@ pub struct ConnAgent {
     abort_handle: ConnAbortHandle,
 }
 
-impl ConnAgent {
+impl ConnContext {
     pub fn new(
         dst: NetworkAddr,
         process_info: Option<ProcessInfo>,
@@ -286,14 +286,14 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
     SessionProtocol::Tcp
 }
 
-pub struct AgentCenter {
-    content: RwLock<Vec<Arc<RwLock<ConnAgent>>>>,
+pub struct ContextManager {
+    content: RwLock<Vec<Arc<RwLock<ConnContext>>>>,
     db_handle: Mutex<DatabaseHandle>,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
 }
 
-impl AgentCenter {
+impl ContextManager {
     pub fn new(db_handle: DatabaseHandle) -> Self {
         Self {
             content: RwLock::new(Vec::new()),
@@ -311,15 +311,15 @@ impl AgentCenter {
         self.global_download.clone()
     }
 
-    pub async fn push(&self, info: Arc<RwLock<ConnAgent>>) {
+    pub async fn push(&self, info: Arc<RwLock<ConnContext>>) {
         self.content.write().await.push(info);
     }
 
-    pub async fn get_copy(&self) -> Vec<Arc<RwLock<ConnAgent>>> {
+    pub async fn get_copy(&self) -> Vec<Arc<RwLock<ConnContext>>> {
         self.content.read().await.clone()
     }
 
-    pub async fn get_nth(&self, idx: usize) -> Option<Arc<RwLock<ConnAgent>>> {
+    pub async fn get_nth(&self, idx: usize) -> Option<Arc<RwLock<ConnContext>>> {
         self.content.read().await.get(idx).cloned()
     }
 }
