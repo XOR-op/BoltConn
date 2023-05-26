@@ -287,16 +287,18 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
 }
 
 pub struct ContextManager {
-    content: RwLock<Vec<Arc<RwLock<ConnContext>>>>,
+    content: RwLock<EvictableVec<Arc<RwLock<ConnContext>>>>,
+    keep_count: usize,
+    grace_threshold: usize,
     db_handle: Mutex<DatabaseHandle>,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
 }
 
 impl ContextManager {
-    pub fn new(db_handle: DatabaseHandle) -> Self {
+    pub fn new(db_handle: DatabaseHandle, keep_count: usize, grace_threshold: usize) -> Self {
         Self {
-            content: RwLock::new(Vec::new()),
+            content: RwLock::new(EvictableVec::new()),
             db_handle: Mutex::new(db_handle),
             global_upload: Arc::new(Default::default()),
             global_download: Arc::new(Default::default()),
@@ -316,11 +318,30 @@ impl ContextManager {
     }
 
     pub async fn get_copy(&self) -> Vec<Arc<RwLock<ConnContext>>> {
-        self.content.read().await.clone()
+        let vec = self.content.read().await;
+        vec.get_last_n(vec.real_len())
     }
 
     pub async fn get_nth(&self, idx: usize) -> Option<Arc<RwLock<ConnContext>>> {
         self.content.read().await.get(idx).cloned()
+    }
+
+    async fn evict(&self) {
+        let mut write_vec = self.content.write().await;
+        let mut handle = self.db_handle.lock().unwrap();
+        if write_vec.real_len() > self.keep_count + self.grace_threshold {
+            write_vec.evict_with(self.keep_count, |data| {
+                if let Err(err) = handle.add_interceptions(data) {
+                    tracing::warn!("Write connection data failed: {}", err)
+                }
+            })
+        }
+    }
+}
+
+impl Drop for ContextManager {
+    fn drop(&mut self) {
+        todo!()
     }
 }
 

@@ -50,6 +50,28 @@ impl<T> EvictableVec<T> {
         }
     }
 
+    /// Evict elements with evction from start to before the element pred(ele,left_len(including this ele)) returning false.
+    /// Return the size of evicted elements.
+    pub fn evict_until<F1: Fn(&T, usize) -> bool, F2: FnMut(&[T])>(
+        &mut self,
+        pred: F1,
+        eviction: F2,
+    ) -> usize {
+        let vec_len = self.inner.len();
+        let mut idx = 0;
+        for e in self.inner.iter() {
+            if !pred(e, vec_len - idx) {
+                break;
+            }
+            idx += 1;
+        }
+        let mut splitted = self.inner.split_off(idx);
+        // keep the latter part
+        std::mem::swap(&mut splitted, &mut self.inner);
+        eviction(splitted.as_slice());
+        idx
+    }
+
     pub fn logical_slice(&self, start: usize, end: Option<usize>) -> &[T] {
         match end {
             None => &self.inner.as_slice()[(start - self.in_mem_offset)..],
