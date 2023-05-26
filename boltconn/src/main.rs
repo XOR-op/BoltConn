@@ -4,7 +4,7 @@ extern crate core;
 
 use crate::config::{LinkedState, LoadedConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
-use crate::external::{ApiServer, StreamLoggerHandle};
+use crate::external::{ApiServer, DatabaseHandle, StreamLoggerHandle};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
@@ -111,6 +111,17 @@ fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)
     Ok((url_list, header_list))
 }
 
+fn open_database_handle(data_path: &Path) -> Option<DatabaseHandle> {
+    let path = data_path.join("data.sqlite");
+    match DatabaseHandle::open(path) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            eprintln!("Open data.sqlite from {:?} failed: {}", data_path, e);
+            None
+        }
+    }
+}
+
 fn main() -> ExitCode {
     if !is_root() {
         eprintln!("BoltConn must be run with root privilege.");
@@ -133,10 +144,18 @@ fn main() -> ExitCode {
     let _guard = rt.enter();
     let fake_dns_server = "198.18.99.88".parse().unwrap();
 
+    // database handle
+    let Some(conn_handle) = open_database_handle(data_path.as_path()) else{
+        return ExitCode::from(1);
+    };
+    let Some(intercept_handle) = open_database_handle(data_path.as_path()) else{
+        return ExitCode::from(1);
+    };
+
     // config-independent components
     let manager = Arc::new(SessionManager::new());
-    let stat_center = Arc::new(ContextManager::new());
-    let http_capturer = Arc::new(HttpCapturer::new());
+    let stat_center = Arc::new(ContextManager::new(conn_handle));
+    let http_capturer = Arc::new(HttpCapturer::new(intercept_handle));
     let hcap_copy = http_capturer.clone();
     let (tun_udp_tx, tun_udp_rx) = flume::unbounded();
     let (udp_tun_tx, udp_tun_rx) = flume::unbounded();

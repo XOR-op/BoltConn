@@ -40,7 +40,7 @@ impl<T> EvictableVec<T> {
     }
 
     /// Evict elements with f. After the operation, only `left` at maximum remains in memory.
-    pub fn evict_with<F: FnMut(&[T])>(&mut self, left: usize, f: F) {
+    pub fn evict_with<F: FnMut(&[T])>(&mut self, left: usize, mut f: F) {
         let vec_len = self.inner.len();
         if vec_len > left {
             let mid = vec_len - left;
@@ -55,7 +55,7 @@ impl<T> EvictableVec<T> {
     pub fn evict_until<F1: Fn(&T, usize) -> bool, F2: FnMut(&[T])>(
         &mut self,
         pred: F1,
-        eviction: F2,
+        mut eviction: F2,
     ) -> usize {
         let vec_len = self.inner.len();
         let mut idx = 0;

@@ -8,9 +8,8 @@ use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
-use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,7 +195,7 @@ pub struct ConnContext {
     pub start_time: SystemTime,
     pub dest: NetworkAddr,
     pub process_info: Option<ProcessInfo>,
-    pub session_proto: std::sync::RwLock<SessionProtocol>,
+    pub session_proto: RwLock<SessionProtocol>,
     pub rule: OutboundType,
     pub upload_traffic: AtomicU64,
     pub download_traffic: AtomicU64,
@@ -235,7 +234,7 @@ impl ConnContext {
     }
 
     pub fn update_proto(&self, packet: &[u8]) {
-        let lock = self.session_proto.write().unwrap();
+        let mut lock = self.session_proto.write().unwrap();
         if *lock == SessionProtocol::Tcp {
             *lock = check_tcp_protocol(packet);
         }
@@ -290,21 +289,27 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
 }
 
 pub struct ContextManager {
-    content: RwLock<EvictableVec<Arc<ConnContext>>>,
-    keep_count: usize,
-    grace_threshold: usize,
-    db_handle: Mutex<DatabaseHandle>,
+    inner: RwLock<ContextManagerInner>,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
 }
 
+struct ContextManagerInner {
+    content: EvictableVec<Arc<ConnContext>>,
+    keep_count: usize,
+    grace_threshold: usize,
+    db_handle: DatabaseHandle,
+}
+
 impl ContextManager {
-    pub fn new(db_handle: DatabaseHandle, keep_count: usize, grace_threshold: usize) -> Self {
+    pub fn new(db_handle: DatabaseHandle) -> Self {
         Self {
-            content: RwLock::new(EvictableVec::new()),
-            keep_count,
-            grace_threshold,
-            db_handle: Mutex::new(db_handle),
+            inner: RwLock::new(ContextManagerInner {
+                content: EvictableVec::new(),
+                keep_count: 100,
+                grace_threshold: 20,
+                db_handle,
+            }),
             global_upload: Arc::new(Default::default()),
             global_download: Arc::new(Default::default()),
         }
@@ -318,35 +323,42 @@ impl ContextManager {
         self.global_download.clone()
     }
 
-    pub async fn push(&self, info: Arc<ConnContext>) {
-        self.content.write().await.push(info);
+    pub fn push(&self, info: Arc<ConnContext>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.content.push(info);
+        inner.evict();
     }
 
-    pub async fn get_copy(&self) -> Vec<Arc<ConnContext>> {
-        let vec = self.content.read().await;
-        vec.get_last_n(vec.real_len())
+    pub fn get_copy(&self) -> Vec<Arc<ConnContext>> {
+        let inner = self.inner.read().unwrap();
+        inner.content.get_last_n(inner.content.real_len())
     }
 
     pub async fn get_nth(&self, idx: usize) -> Option<Arc<ConnContext>> {
-        self.content.read().await.get(idx).cloned()
+        self.inner.read().unwrap().content.get(idx).cloned()
     }
+}
 
-    async fn evict(&self) {
-        let mut write_vec = self.content.write().await;
-        let mut handle = self.db_handle.lock().unwrap();
-        if write_vec.real_len() > self.keep_count + self.grace_threshold {
-            write_vec.evict_with(self.keep_count, |data| {
-                if let Err(err) = handle.add_connections(data) {
-                    tracing::warn!("Write connection data failed: {}", err)
-                }
-            })
+impl ContextManagerInner {
+    fn evict(&mut self) {
+        if self.content.real_len() > self.keep_count + self.grace_threshold {
+            self.content.evict_until(
+                |c, left| -> bool { !(left <= self.keep_count || c.done.load(Ordering::Relaxed)) },
+                |data| {
+                    if let Err(err) = self.db_handle.add_connections(data) {
+                        tracing::warn!("Write connection data failed: {}", err)
+                    }
+                },
+            );
         }
     }
 }
 
-impl Drop for ContextManager {
+impl Drop for ContextManagerInner {
     fn drop(&mut self) {
-        todo!()
+        self.content.evict_with(0, |data| {
+            let _ = self.db_handle.add_connections(data);
+        })
     }
 }
 

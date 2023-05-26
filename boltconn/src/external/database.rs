@@ -1,11 +1,14 @@
 use crate::proxy::{ConnContext, HttpInterceptData};
 use anyhow::anyhow;
+use nix::unistd::{Gid, Uid};
 use rusqlite::{params, Error, ErrorCode, OpenFlags};
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+// todo: use a standalone thread to connect to the database
 pub struct DatabaseHandle {
     conn: rusqlite::Connection,
 }
@@ -36,7 +39,7 @@ impl DatabaseHandle {
                     resp_body BLOB
                 )";
 
-    pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub fn open(path: PathBuf) -> anyhow::Result<Self> {
         let conn =
             match rusqlite::Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE) {
                 Ok(c) => {
@@ -47,9 +50,13 @@ impl DatabaseHandle {
                     let Error::SqliteFailure(e, _) = err else{Err(err)?};
                     if e.code == ErrorCode::CannotOpen {
                         // create with open
+                        let _ = std::fs::File::create(&path)?;
+                        nix::unistd::chown(&path, Some(Uid::from(0)), Some(Gid::from(0)))?;
+                        let perm = std::fs::Permissions::from_mode(0o600);
+                        std::fs::set_permissions(&path, perm)?;
                         let conn = rusqlite::Connection::open_with_flags(
                             path,
-                            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+                            OpenFlags::SQLITE_OPEN_READ_WRITE,
                         )?;
                         Self::create_db_table(&conn)?;
                         conn
