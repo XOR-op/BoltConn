@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::select;
-use tokio::sync::RwLock;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
@@ -26,7 +25,7 @@ pub use super::adapter::shadowsocks::*;
 
 use crate::common::{io_err, mut_buf, read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
-use crate::proxy::{ConnAbortHandle, ConnAgent, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 pub use chain::*;
 pub use direct::*;
@@ -306,15 +305,14 @@ impl UdpSocketAdapter for AddrConnectorWrapper {
 
 struct TcpIndicatorGuard {
     pub indicator: Arc<AtomicU8>,
-    pub info: Arc<RwLock<ConnAgent>>,
+    pub info: Arc<ConnContext>,
 }
 
 impl Drop for TcpIndicatorGuard {
     fn drop(&mut self) {
         self.indicator.fetch_sub(1, Ordering::Relaxed);
         if self.indicator.load(Ordering::Relaxed) == 0 {
-            let info = self.info.clone();
-            tokio::spawn(async move { info.write().await.mark_fin() });
+            self.info.mark_fin();
         }
     }
 }

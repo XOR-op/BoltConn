@@ -3,20 +3,19 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
 use crate::intercept::ModifierContext;
-use crate::proxy::{ConnAbortHandle, ConnAgent};
+use crate::proxy::{ConnAbortHandle, ConnContext};
 use hyper::client::conn;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 use std::io;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 pub struct HttpIntercept {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Arc<dyn Outbound>,
-    conn_info: Arc<RwLock<ConnAgent>>,
+    conn_info: Arc<ConnContext>,
 }
 
 impl HttpIntercept {
@@ -24,7 +23,7 @@ impl HttpIntercept {
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn Outbound>,
-        conn_info: Arc<RwLock<ConnAgent>>,
+        conn_info: Arc<ConnContext>,
     ) -> Self {
         Self {
             inbound,

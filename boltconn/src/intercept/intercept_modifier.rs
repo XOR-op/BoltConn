@@ -48,7 +48,7 @@ impl Modifier for InterceptModifier {
 
         let url = match parts.version {
             Version::HTTP_11 => {
-                let prefix = if ctx.conn_info.read().await.dest.port() == 443 {
+                let prefix = if ctx.conn_info.dest.port() == 443 {
                     "https://"
                 } else {
                     "http://"
@@ -96,7 +96,7 @@ impl Modifier for InterceptModifier {
                         body: resp_body.clone(),
                         time: Instant::now(),
                     };
-                    let host = match &ctx.conn_info.read().await.dest {
+                    let host = match &ctx.conn_info.dest {
                         NetworkAddr::Raw(addr) => addr.ip().to_string(),
                         NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
                     };
@@ -138,7 +138,7 @@ impl Modifier for InterceptModifier {
             .try_rewrite_response(req.uri.to_string().as_str(), &mut parts.headers)
             .await;
         let resp_copy = DumpedResponse::from_parts(&parts, &whole_body);
-        let host = match &ctx.conn_info.read().await.dest {
+        let host = match &ctx.conn_info.dest {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
         };

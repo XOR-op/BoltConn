@@ -1,4 +1,4 @@
-mod agent;
+mod context;
 mod dispatcher;
 mod http_inbound;
 mod manager;
@@ -12,7 +12,7 @@ use crate::adapter::{Connector, Outbound};
 use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{Latency, Proxy, ProxyImpl};
-pub use agent::*;
+pub use context::*;
 pub use dispatcher::*;
 use http::Request;
 pub use http_inbound::*;

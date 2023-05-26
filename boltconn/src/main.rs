@@ -4,12 +4,12 @@ extern crate core;
 
 use crate::config::{LinkedState, LoadedConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
-use crate::external::{ApiServer, StreamLoggerHandle};
+use crate::external::{ApiServer, DatabaseHandle, StreamLoggerHandle};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{
-    AgentCenter, HttpCapturer, HttpInbound, MixedInbound, Socks5Inbound, TunUdpInbound,
+    ContextManager, HttpCapturer, HttpInbound, MixedInbound, Socks5Inbound, TunUdpInbound,
 };
 use ipnet::Ipv4Net;
 use is_root::is_root;
@@ -49,15 +49,19 @@ struct Args {
     /// Path of configutation. Default to $HOME/.config/boltconn
     #[structopt(short, long)]
     pub config: Option<PathBuf>,
-    /// Path of certificate. Default to ${config}/cert
+    /// Path of application data. Default to $HOME/.local/share/boltconn
+    #[structopt(short = "d", long = "data")]
+    pub app_data: Option<PathBuf>,
+    /// Path of certificate. Default to ${app_data}/cert
     #[structopt(long)]
     pub cert: Option<PathBuf>,
 }
 
-fn parse_config_path(
+fn parse_paths(
     config: &Option<PathBuf>,
+    app_data: &Option<PathBuf>,
     cert: &Option<PathBuf>,
-) -> anyhow::Result<(PathBuf, PathBuf)> {
+) -> anyhow::Result<(PathBuf, PathBuf, PathBuf)> {
     let config_path = match config {
         None => {
             let home = PathBuf::from(std::env::var("HOME")?);
@@ -65,11 +69,18 @@ fn parse_config_path(
         }
         Some(p) => p.clone(),
     };
-    let cert_path = match cert {
-        None => config_path.join("cert"),
+    let data_path = match app_data {
+        None => {
+            let home = PathBuf::from(std::env::var("HOME")?);
+            home.join(".local").join("share").join("boltconn")
+        }
         Some(p) => p.clone(),
     };
-    Ok((config_path, cert_path))
+    let cert_path = match cert {
+        None => data_path.join("cert"),
+        Some(p) => p.clone(),
+    };
+    Ok((config_path, data_path, cert_path))
 }
 
 fn load_cert_and_key(cert_path: &Path) -> anyhow::Result<Certificate> {
@@ -81,8 +92,8 @@ fn load_cert_and_key(cert_path: &Path) -> anyhow::Result<Certificate> {
     Ok(cert)
 }
 
-fn state_path(config_path: &Path) -> PathBuf {
-    config_path.join("state.yml")
+fn state_path(app_data_path: &Path) -> PathBuf {
+    app_data_path.join("state.yml")
 }
 
 fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)> {
@@ -100,14 +111,25 @@ fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)
     Ok((url_list, header_list))
 }
 
+fn open_database_handle(data_path: &Path) -> Option<DatabaseHandle> {
+    let path = data_path.join("data.sqlite");
+    match DatabaseHandle::open(path) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            eprintln!("Open data.sqlite from {:?} failed: {}", data_path, e);
+            None
+        }
+    }
+}
+
 fn main() -> ExitCode {
     if !is_root() {
         eprintln!("BoltConn must be run with root privilege.");
         return ExitCode::from(1);
     }
     let args: Args = Args::from_args();
-    let (config_path, cert_path) =
-        parse_config_path(&args.config, &args.cert).expect("Invalid config path");
+    let (config_path, data_path, cert_path) =
+        parse_paths(&args.config, &args.app_data, &args.cert).expect("Invalid config path");
 
     // tokio and tracing
     let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
@@ -122,16 +144,24 @@ fn main() -> ExitCode {
     let _guard = rt.enter();
     let fake_dns_server = "198.18.99.88".parse().unwrap();
 
+    // database handle
+    let Some(conn_handle) = open_database_handle(data_path.as_path()) else{
+        return ExitCode::from(1);
+    };
+    let Some(intercept_handle) = open_database_handle(data_path.as_path()) else{
+        return ExitCode::from(1);
+    };
+
     // config-independent components
     let manager = Arc::new(SessionManager::new());
-    let stat_center = Arc::new(AgentCenter::new());
-    let http_capturer = Arc::new(HttpCapturer::new());
+    let stat_center = Arc::new(ContextManager::new(conn_handle));
+    let http_capturer = Arc::new(HttpCapturer::new(intercept_handle));
     let hcap_copy = http_capturer.clone();
     let (tun_udp_tx, tun_udp_rx) = flume::unbounded();
     let (udp_tun_tx, udp_tun_rx) = flume::unbounded();
 
     // Read initial config
-    let loaded_config = match rt.block_on(LoadedConfig::load_config(&config_path)) {
+    let loaded_config = match rt.block_on(LoadedConfig::load_config(&config_path, &data_path)) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Load config from {:?} failed: {}", &config_path, e);
@@ -294,7 +324,7 @@ fn main() -> ExitCode {
         tun_configure.clone(),
         sender,
         LinkedState {
-            state_path: state_path(&config_path),
+            state_path: state_path(&data_path),
             state: loaded_config.state,
         },
         stream_logger,
@@ -356,7 +386,7 @@ fn main() -> ExitCode {
                 restart = receiver.recv() => {
                     if restart.is_some(){
                         // try restarting components
-                        match reload(&config_path, outbound_iface.as_str(), dns.clone()).await{
+                        match reload(&config_path, &data_path, outbound_iface.as_str(), dns.clone()).await{
                             Ok((dispatching, intercept_filter,url_rewriter,header_rewriter,new_speedtest_url)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
                                 let hcap2 = http_capturer.clone();
@@ -385,6 +415,7 @@ fn main() -> ExitCode {
 
 async fn reload(
     config_path: &Path,
+    data_path: &Path,
     iface_name: &str,
     dns: Arc<Dns>,
 ) -> anyhow::Result<(
@@ -394,7 +425,7 @@ async fn reload(
     Arc<HeaderModManager>,
     String,
 )> {
-    let loaded_config = LoadedConfig::load_config(config_path).await?;
+    let loaded_config = LoadedConfig::load_config(config_path, data_path).await?;
     let config = &loaded_config.config;
     let (url_mod, hdr_mod) = {
         let (url, hdr) = mapping_rewrite(config.rewrite.as_slice())?;

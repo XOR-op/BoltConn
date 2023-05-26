@@ -45,10 +45,10 @@ pub struct LoadedConfig {
 }
 
 impl LoadedConfig {
-    pub async fn load_config(config_path: &Path) -> anyhow::Result<Self> {
+    pub async fn load_config(config_path: &Path, data_path: &Path) -> anyhow::Result<Self> {
         let config_text = fs::read_to_string(config_path.join("config.yml"))?;
         let mut raw_config: RawRootCfg = serde_yaml::from_str(&config_text)?;
-        let state_text = fs::read_to_string(state_path(config_path))?;
+        let state_text = fs::read_to_string(state_path(data_path))?;
         let raw_state: RawState = serde_yaml::from_str(&state_text)?;
 
         let module_schema =

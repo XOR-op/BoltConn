@@ -9,7 +9,7 @@ use crate::intercept::{HttpIntercept, HttpsIntercept, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
-use crate::proxy::{AgentCenter, ConnAbortHandle, ConnAgent, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnContext, ContextManager, NetworkAddr};
 use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 pub struct Dispatcher {
     iface_name: String,
     dns: Arc<Dns>,
-    stat_center: Arc<AgentCenter>,
+    stat_center: Arc<ContextManager>,
     dispatching: RwLock<Arc<Dispatching>>,
     ca_certificate: Certificate,
     modifier: RwLock<ModifierClosure>,
@@ -35,7 +35,7 @@ impl Dispatcher {
     pub fn new(
         iface_name: &str,
         dns: Arc<Dns>,
-        stat_center: Arc<AgentCenter>,
+        stat_center: Arc<ContextManager>,
         dispatching: Arc<Dispatching>,
         ca_certificate: Certificate,
         modifier: ModifierClosure,
@@ -221,7 +221,7 @@ impl Dispatcher {
 
         // conn info
         let abort_handle = ConnAbortHandle::new();
-        let info = Arc::new(tokio::sync::RwLock::new(ConnAgent::new(
+        let info = Arc::new(ConnContext::new(
             dst_addr.clone(),
             process_info.clone(),
             proxy_type,
@@ -229,7 +229,7 @@ impl Dispatcher {
             abort_handle.clone(),
             self.stat_center.get_upload(),
             self.stat_center.get_download(),
-        )));
+        ));
 
         let (tun_conn, tun_next) = Connector::new_pair(10);
         let mut handles = Vec::new();
@@ -288,7 +288,7 @@ impl Dispatcher {
                             })
                         };
                         abort_handle.fulfill(handles).await;
-                        self.stat_center.push(info).await;
+                        self.stat_center.push(info);
                         return Ok(());
                     }
                     443 => {
@@ -319,7 +319,7 @@ impl Dispatcher {
                             })
                         };
                         abort_handle.fulfill(handles).await;
-                        self.stat_center.push(info).await;
+                        self.stat_center.push(info);
                         return Ok(());
                     }
                     _ => {
@@ -335,7 +335,7 @@ impl Dispatcher {
             }
         }));
         abort_handle.fulfill(handles).await;
-        self.stat_center.push(info).await;
+        self.stat_center.push(info);
         Ok(())
     }
 
@@ -345,14 +345,7 @@ impl Dispatcher {
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         conn_info: ConnInfo,
-    ) -> Result<
-        (
-            Box<dyn Outbound>,
-            Arc<tokio::sync::RwLock<ConnAgent>>,
-            ConnAbortHandle,
-        ),
-        (),
-    > {
+    ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), ()> {
         let (proxy_config, iface) = self.dispatching.read().unwrap().matches(&conn_info, true);
         let iface_name = iface
             .as_ref()
@@ -373,7 +366,7 @@ impl Dispatcher {
             };
         // conn info
         let abort_handle = ConnAbortHandle::new();
-        let info = Arc::new(tokio::sync::RwLock::new(ConnAgent::new(
+        let info = Arc::new(ConnContext::new(
             dst_addr,
             conn_info.process_info,
             proxy_type,
@@ -381,7 +374,7 @@ impl Dispatcher {
             abort_handle.clone(),
             self.stat_center.get_upload(),
             self.stat_center.get_download(),
-        )));
+        ));
         Ok((outbounding, info, abort_handle))
     }
 
@@ -451,7 +444,7 @@ impl Dispatcher {
             }
         }));
         abort_handle.fulfill(handles).await;
-        self.stat_center.push(info.clone()).await;
+        self.stat_center.push(info.clone());
         Ok(())
     }
 
@@ -496,7 +489,7 @@ impl Dispatcher {
             }
         }));
         abort_handle.fulfill(handles).await;
-        self.stat_center.push(info.clone()).await;
+        self.stat_center.push(info.clone());
         Ok(())
     }
 }

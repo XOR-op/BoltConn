@@ -1,18 +1,17 @@
 use crate::platform::process::ProcessInfo;
-use crate::proxy::{ConnAgent, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
+use crate::proxy::{ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hyper::{Body, Request, Response};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
 
 pub type ModifierClosure = Box<dyn Fn(Option<ProcessInfo>) -> Arc<dyn Modifier> + Send + Sync>;
 
 pub struct ModifierContext {
     pub tag: u64,
-    pub conn_info: Arc<RwLock<ConnAgent>>,
+    pub conn_info: Arc<ConnContext>,
 }
 
 #[async_trait]
@@ -133,7 +132,7 @@ impl Modifier for Recorder {
             .remove(&ctx.tag)
             .ok_or_else(|| anyhow!("no id"))?
             .1;
-        let host = match &ctx.conn_info.read().await.dest {
+        let host = match &ctx.conn_info.dest {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
         };

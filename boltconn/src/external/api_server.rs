@@ -2,10 +2,8 @@ use crate::config::LinkedState;
 use crate::dispatch::{Dispatching, GeneralProxy, Latency};
 use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
-use crate::platform::process::ProcessInfo;
 use crate::proxy::{
-    latency_test, AgentCenter, Dispatcher, DumpedRequest, DumpedResponse, HttpCapturer,
-    SessionManager,
+    latency_test, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
 };
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
@@ -32,7 +30,7 @@ pub type SharedDispatching = Arc<RwLock<Arc<Dispatching>>>;
 pub struct ApiServer {
     secret: Option<String>,
     manager: Arc<SessionManager>,
-    stat_center: Arc<AgentCenter>,
+    stat_center: Arc<ContextManager>,
     http_capturer: Option<Arc<HttpCapturer>>,
     dispatcher: Arc<Dispatcher>,
     dispatching: SharedDispatching,
@@ -48,7 +46,7 @@ impl ApiServer {
     pub fn new(
         secret: Option<String>,
         manager: Arc<SessionManager>,
-        stat_center: Arc<AgentCenter>,
+        stat_center: Arc<ContextManager>,
         http_capturer: Option<Arc<HttpCapturer>>,
         dispatcher: Arc<Dispatcher>,
         dispatching: SharedDispatching,
@@ -199,24 +197,23 @@ impl ApiServer {
     }
 
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
-        let list = server.stat_center.get_copy().await;
+        let (list, offset) = server.stat_center.get_copy();
         let mut result = Vec::new();
-        for (idx, entry) in list.iter().enumerate() {
-            let info = entry.read().await;
+        for (idx, info) in list.iter().enumerate() {
             let conn = boltapi::ConnectionSchema {
-                conn_id: idx as u64,
+                conn_id: (idx + offset) as u64,
                 destination: info.dest.to_string(),
-                protocol: info.session_proto.to_string(),
+                protocol: info.session_proto.write().unwrap().to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
                 process: info.process_info.as_ref().map(|i| i.name.clone()),
-                upload: info.upload_traffic,
-                download: info.download_traffic,
+                upload: info.upload_traffic.load(Ordering::Relaxed),
+                download: info.download_traffic.load(Ordering::Relaxed),
                 start_time: info
                     .start_time
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_secs(),
-                active: !info.done,
+                active: !info.done.load(Ordering::Relaxed),
             };
             result.push(conn);
         }
@@ -224,10 +221,9 @@ impl ApiServer {
     }
 
     async fn stop_all_conn(State(server): State<Self>) {
-        let list = server.stat_center.get_copy().await;
+        let (list, _) = server.stat_center.get_copy();
         for entry in list {
-            let mut info = entry.write().await;
-            info.abort().await;
+            entry.abort().await;
         }
     }
 
@@ -244,7 +240,7 @@ impl ApiServer {
             }
         };
         if let Some(ele) = server.stat_center.get_nth(id).await {
-            ele.write().await.abort().await;
+            ele.abort().await;
             return Json(serde_json::Value::Bool(true));
         }
         Json(serde_json::Value::Bool(false))
@@ -280,28 +276,18 @@ impl ApiServer {
         Json(json!(result))
     }
 
-    fn collect_captured(
-        list: Vec<(String, Option<ProcessInfo>, DumpedRequest, DumpedResponse)>,
-    ) -> Json<serde_json::Value> {
+    fn collect_captured(list: Vec<HttpInterceptData>, offset: usize) -> Json<serde_json::Value> {
         let mut result = Vec::new();
-        for (idx, (host, proc, req, resp)) in list.into_iter().enumerate() {
+        for (idx, data) in list.into_iter().enumerate() {
+            let uri = data.get_full_uri();
             let item = boltapi::HttpInterceptSchema {
-                intercept_id: idx as u64,
-                client: proc.map(|proc| proc.name),
-                uri: {
-                    let s = req.uri.to_string();
-                    if s.starts_with("https://") || s.starts_with("http://") {
-                        // http2
-                        s
-                    } else {
-                        // http1.1, with no host in uri field
-                        host + s.as_str()
-                    }
-                },
-                method: req.method.to_string(),
-                status: resp.status.as_u16(),
-                size: resp.body.len() as u64,
-                time: pretty_latency(resp.time - req.time),
+                intercept_id: (idx + offset) as u64,
+                client: data.process_info.map(|proc| proc.name),
+                uri,
+                method: data.req.method.to_string(),
+                status: data.resp.status.as_u16(),
+                size: data.resp.body.len() as u64,
+                time: pretty_latency(data.resp.time - data.req.time),
             };
             result.push(item);
         }
@@ -310,8 +296,8 @@ impl ApiServer {
 
     async fn get_intercept(State(server): State<Self>) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
-            let list = capturer.get_copy();
-            Self::collect_captured(list)
+            let (list, offset) = capturer.get_copy();
+            Self::collect_captured(list, offset)
         } else {
             Json(serde_json::Value::Null)
         }
@@ -322,10 +308,10 @@ impl ApiServer {
         Query(params): Query<GetInterceptRangeReq>,
     ) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
-            if let Some(list) =
+            if let Some((list, offset)) =
                 capturer.get_range_copy(params.start as usize, params.end.map(|p| p as usize))
             {
-                return Self::collect_captured(list);
+                return Self::collect_captured(list, offset);
             }
         }
         Json(serde_json::Value::Null)
@@ -344,25 +330,18 @@ impl ApiServer {
             }
         };
         if let Some(capturer) = &server.http_capturer {
-            if let Some(list) = capturer.get_range_copy(id, Some(id + 1)) {
+            if let Some((list, _)) = capturer.get_range_copy(id, Some(id + 1)) {
                 if list.len() == 1 {
-                    let (_, _, req, resp) = list.get(0).unwrap();
+                    let HttpInterceptData {
+                        host: _,
+                        process_info: _,
+                        req,
+                        resp,
+                    } = list.get(0).unwrap();
                     let result = GetInterceptDataResp {
-                        req_header: req
-                            .headers
-                            .iter()
-                            .map(|(k, v)| {
-                                format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA"))
-                            })
-                            .collect(),
+                        req_header: req.collect_headers(),
                         req_body: req.body.to_vec(),
-                        resp_header: resp
-                            .headers
-                            .iter()
-                            .map(|(k, v)| {
-                                format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA"))
-                            })
-                            .collect(),
+                        resp_header: resp.collect_headers(),
                         resp_body: resp.body.to_vec(),
                     };
                     return Json(json!(result));
