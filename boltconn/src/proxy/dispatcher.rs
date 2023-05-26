@@ -288,7 +288,7 @@ impl Dispatcher {
                             })
                         };
                         abort_handle.fulfill(handles).await;
-                        self.stat_center.push(info).await;
+                        self.stat_center.push(info);
                         return Ok(());
                     }
                     443 => {
@@ -319,7 +319,7 @@ impl Dispatcher {
                             })
                         };
                         abort_handle.fulfill(handles).await;
-                        self.stat_center.push(info).await;
+                        self.stat_center.push(info);
                         return Ok(());
                     }
                     _ => {
@@ -335,7 +335,7 @@ impl Dispatcher {
             }
         }));
         abort_handle.fulfill(handles).await;
-        self.stat_center.push(info).await;
+        self.stat_center.push(info);
         Ok(())
     }
 
@@ -444,7 +444,7 @@ impl Dispatcher {
             }
         }));
         abort_handle.fulfill(handles).await;
-        self.stat_center.push(info.clone()).await;
+        self.stat_center.push(info.clone());
         Ok(())
     }
 
@@ -489,7 +489,7 @@ impl Dispatcher {
             }
         }));
         abort_handle.fulfill(handles).await;
-        self.stat_center.push(info.clone()).await;
+        self.stat_center.push(info.clone());
         Ok(())
     }
 }

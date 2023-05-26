@@ -6,11 +6,15 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::UNIX_EPOCH;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedSender;
 
-// todo: use a standalone thread to connect to the database
+#[derive(Clone, Debug)]
 pub struct DatabaseHandle {
-    conn: rusqlite::Connection,
+    conn_sender: UnboundedSender<Vec<Arc<ConnContext>>>,
+    intercept_sender: UnboundedSender<Vec<HttpInterceptData>>,
 }
 
 impl DatabaseHandle {
@@ -40,7 +44,7 @@ impl DatabaseHandle {
                 )";
 
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
-        let conn =
+        let mut conn =
             match rusqlite::Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE) {
                 Ok(c) => {
                     Self::verify(&c)?;
@@ -65,7 +69,51 @@ impl DatabaseHandle {
                     }
                 }
             };
-        Ok(Self { conn })
+        let (conn_send, mut conn_recv) = mpsc::unbounded_channel();
+        let (inte_send, mut inte_recv) = mpsc::unbounded_channel();
+        // Standalone thread for asynchronous database insert
+        thread::spawn(move || {
+            let thread_rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("Failed to create database thread");
+            let result: anyhow::Result<()> = thread_rt.block_on(async move {
+                let conn_may_available = loop {
+                    tokio::select! {
+                        dat = conn_recv.recv() =>{
+                            if let Some(dat) = dat{
+                                Self::insert_connections(&mut conn,dat)?;
+                            }else{
+                                break false;
+                            }
+                        }
+                        dat = inte_recv.recv() =>{
+                            if let Some(dat) = dat{
+                                Self::insert_interceptions(&mut conn,dat)?;
+                            }else{
+                                break true;
+                            }
+                        }
+                    }
+                };
+                if conn_may_available {
+                    while let Some(dat) = conn_recv.recv().await {
+                        Self::insert_connections(&mut conn, dat)?;
+                    }
+                } else {
+                    while let Some(dat) = inte_recv.recv().await {
+                        Self::insert_interceptions(&mut conn, dat)?;
+                    }
+                }
+                Ok(())
+            });
+            if let Err(err) = result {
+                tracing::error!("Database write failed: {:?}", err);
+            }
+        });
+        Ok(Self {
+            conn_sender: conn_send,
+            intercept_sender: inte_send,
+        })
     }
 
     fn verify(conn: &rusqlite::Connection) -> anyhow::Result<()> {
@@ -113,12 +161,21 @@ impl DatabaseHandle {
         conn.execute(Self::INTERCEPT_TABLE_SCHEMA, ())?;
         Ok(())
     }
+    pub fn add_connections(&mut self, conns: Vec<Arc<ConnContext>>) {
+        let _ = self.conn_sender.send(conns);
+    }
+    pub fn add_interceptions(&mut self, intes: Vec<HttpInterceptData>) {
+        let _ = self.intercept_sender.send(intes);
+    }
 
-    pub fn add_connections(&mut self, conns: &[Arc<ConnContext>]) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
+    fn insert_connections(
+        conn: &mut rusqlite::Connection,
+        data: Vec<Arc<ConnContext>>,
+    ) -> anyhow::Result<()> {
+        let tx = conn.transaction()?;
         let mut stmt = tx
             .prepare_cached("INSERT INTO Conn (dest,protocol,proxy,process,upload,download,start_time) VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
-        for c in conns.iter() {
+        for c in data.iter() {
             stmt.execute(params![
                 c.dest.to_string().as_str(),
                 c.session_proto.read().unwrap().to_string().as_str(),
@@ -134,10 +191,13 @@ impl DatabaseHandle {
         Ok(())
     }
 
-    pub fn add_interceptions(&mut self, intes: &[HttpInterceptData]) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
+    pub fn insert_interceptions(
+        conn: &mut rusqlite::Connection,
+        intes: Vec<HttpInterceptData>,
+    ) -> anyhow::Result<()> {
+        let tx = conn.transaction()?;
         let mut stmt = tx
-            .prepare_cached("INSERT INTO Conn (client,uri,method,status,size,time,req_header,req_body,resp_header,resp_body) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
+            .prepare_cached("INSERT INTO Intercept (process,uri,method,status,size,time,req_header,req_body,resp_header,resp_body) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
         for c in intes.iter() {
             stmt.execute(params![
                 c.process_info.as_ref().map(|proc| &proc.name),

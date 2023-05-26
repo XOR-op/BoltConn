@@ -40,19 +40,20 @@ impl<T> EvictableVec<T> {
     }
 
     /// Evict elements with f. After the operation, only `left` at maximum remains in memory.
-    pub fn evict_with<F: FnMut(&[T])>(&mut self, left: usize, mut f: F) {
+    pub fn evict_with<F: FnMut(Vec<T>)>(&mut self, left: usize, mut f: F) {
         let vec_len = self.inner.len();
         if vec_len > left {
             let mid = vec_len - left;
-            f(&self.inner[..mid]);
             self.in_mem_offset += mid;
-            self.inner = self.inner.split_off(mid);
+            let mut splitted = self.inner.split_off(mid);
+            std::mem::swap(&mut splitted, &mut self.inner);
+            f(splitted);
         }
     }
 
     /// Evict elements with evction from start to before the element pred(ele,left_len(including this ele)) returning false.
     /// Return the size of evicted elements.
-    pub fn evict_until<F1: Fn(&T, usize) -> bool, F2: FnMut(&[T])>(
+    pub fn evict_until<F1: Fn(&T, usize) -> bool, F2: FnMut(Vec<T>)>(
         &mut self,
         pred: F1,
         mut eviction: F2,
@@ -68,7 +69,7 @@ impl<T> EvictableVec<T> {
         let mut splitted = self.inner.split_off(idx);
         // keep the latter part
         std::mem::swap(&mut splitted, &mut self.inner);
-        eviction(splitted.as_slice());
+        eviction(splitted);
         idx
     }
 

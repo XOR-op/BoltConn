@@ -197,11 +197,11 @@ impl ApiServer {
     }
 
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
-        let list = server.stat_center.get_copy().await;
+        let (list, offset) = server.stat_center.get_copy();
         let mut result = Vec::new();
         for (idx, info) in list.iter().enumerate() {
             let conn = boltapi::ConnectionSchema {
-                conn_id: idx as u64,
+                conn_id: (idx + offset) as u64,
                 destination: info.dest.to_string(),
                 protocol: info.session_proto.write().unwrap().to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
@@ -221,7 +221,7 @@ impl ApiServer {
     }
 
     async fn stop_all_conn(State(server): State<Self>) {
-        let list = server.stat_center.get_copy().await;
+        let (list, _) = server.stat_center.get_copy();
         for entry in list {
             entry.abort().await;
         }
@@ -276,12 +276,12 @@ impl ApiServer {
         Json(json!(result))
     }
 
-    fn collect_captured(list: Vec<HttpInterceptData>) -> Json<serde_json::Value> {
+    fn collect_captured(list: Vec<HttpInterceptData>, offset: usize) -> Json<serde_json::Value> {
         let mut result = Vec::new();
         for (idx, data) in list.into_iter().enumerate() {
             let uri = data.get_full_uri();
             let item = boltapi::HttpInterceptSchema {
-                intercept_id: idx as u64,
+                intercept_id: (idx + offset) as u64,
                 client: data.process_info.map(|proc| proc.name),
                 uri,
                 method: data.req.method.to_string(),
@@ -296,8 +296,8 @@ impl ApiServer {
 
     async fn get_intercept(State(server): State<Self>) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
-            let list = capturer.get_copy();
-            Self::collect_captured(list)
+            let (list, offset) = capturer.get_copy();
+            Self::collect_captured(list, offset)
         } else {
             Json(serde_json::Value::Null)
         }
@@ -308,10 +308,10 @@ impl ApiServer {
         Query(params): Query<GetInterceptRangeReq>,
     ) -> Json<serde_json::Value> {
         if let Some(capturer) = &server.http_capturer {
-            if let Some(list) =
+            if let Some((list, offset)) =
                 capturer.get_range_copy(params.start as usize, params.end.map(|p| p as usize))
             {
-                return Self::collect_captured(list);
+                return Self::collect_captured(list, offset);
             }
         }
         Json(serde_json::Value::Null)
@@ -330,7 +330,7 @@ impl ApiServer {
             }
         };
         if let Some(capturer) = &server.http_capturer {
-            if let Some(list) = capturer.get_range_copy(id, Some(id + 1)) {
+            if let Some((list, _)) = capturer.get_range_copy(id, Some(id + 1)) {
                 if list.len() == 1 {
                     let HttpInterceptData {
                         host: _,

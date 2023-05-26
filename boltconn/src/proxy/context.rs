@@ -306,8 +306,8 @@ impl ContextManager {
         Self {
             inner: RwLock::new(ContextManagerInner {
                 content: EvictableVec::new(),
-                keep_count: 100,
-                grace_threshold: 20,
+                keep_count: 20,
+                grace_threshold: 5,
                 db_handle,
             }),
             global_upload: Arc::new(Default::default()),
@@ -329,9 +329,10 @@ impl ContextManager {
         inner.evict();
     }
 
-    pub fn get_copy(&self) -> Vec<Arc<ConnContext>> {
+    pub fn get_copy(&self) -> (Vec<Arc<ConnContext>>, usize) {
         let inner = self.inner.read().unwrap();
-        inner.content.get_last_n(inner.content.real_len())
+        let data = inner.content.get_last_n(inner.content.real_len());
+        (data, inner.content.logical_len() - inner.keep_count)
     }
 
     pub async fn get_nth(&self, idx: usize) -> Option<Arc<ConnContext>> {
@@ -343,12 +344,8 @@ impl ContextManagerInner {
     fn evict(&mut self) {
         if self.content.real_len() > self.keep_count + self.grace_threshold {
             self.content.evict_until(
-                |c, left| -> bool { !(left <= self.keep_count || c.done.load(Ordering::Relaxed)) },
-                |data| {
-                    if let Err(err) = self.db_handle.add_connections(data) {
-                        tracing::warn!("Write connection data failed: {}", err)
-                    }
-                },
+                |c, left| -> bool { left > self.keep_count && c.done.load(Ordering::Relaxed) },
+                |data| self.db_handle.add_connections(data),
             );
         }
     }
@@ -356,9 +353,8 @@ impl ContextManagerInner {
 
 impl Drop for ContextManagerInner {
     fn drop(&mut self) {
-        self.content.evict_with(0, |data| {
-            let _ = self.db_handle.add_connections(data);
-        })
+        self.content
+            .evict_with(0, |data| self.db_handle.add_connections(data))
     }
 }
 
@@ -472,8 +468,8 @@ impl HttpCapturer {
     pub fn new(db_handle: DatabaseHandle) -> Self {
         Self {
             inner: Mutex::new(HttpCapturerInner {
-                keep_count: 50,
-                grace_threshold: 10,
+                keep_count: 5,
+                grace_threshold: 3,
                 contents: EvictableVec::new(),
                 db_handle,
             }),
@@ -486,18 +482,19 @@ impl HttpCapturer {
         host: String,
         client: Option<ProcessInfo>,
     ) {
-        self.inner
-            .lock()
-            .unwrap()
+        let mut inner = self.inner.lock().unwrap();
+        inner.evict();
+        inner
             .contents
             .push(HttpInterceptData::new(host, client, pair.0, pair.1))
     }
 
-    pub fn get_copy(&self) -> Vec<HttpInterceptData> {
-        let result = self.inner.lock().unwrap().get_allowed_elements();
-        // GC
-        self.inner.lock().unwrap().evict();
-        result
+    pub fn get_copy(&self) -> (Vec<HttpInterceptData>, usize) {
+        let inner = self.inner.lock().unwrap();
+        (
+            inner.get_allowed_elements(),
+            inner.contents.logical_len() - inner.keep_count,
+        )
     }
 
     #[allow(clippy::type_complexity)]
@@ -505,13 +502,14 @@ impl HttpCapturer {
         &self,
         start: usize,
         end: Option<usize>,
-    ) -> Option<Vec<HttpInterceptData>> {
+    ) -> Option<(Vec<HttpInterceptData>, usize)> {
         let inner = self.inner.lock().unwrap();
+        let allowed_start = inner.contents.logical_len() - inner.keep_count;
 
-        let start = if start >= inner.contents.current_offset() {
+        let start = if start >= allowed_start {
             start
         } else {
-            inner.contents.current_offset()
+            allowed_start
         };
         // check if the range is valid logically
         if start >= inner.contents.logical_len()
@@ -520,7 +518,10 @@ impl HttpCapturer {
         {
             return None;
         }
-        Some(inner.contents.logical_slice(start, end).to_vec())
+        Some((
+            inner.contents.logical_slice(start, end).to_vec(),
+            allowed_start,
+        ))
     }
 }
 
@@ -532,9 +533,7 @@ impl HttpCapturerInner {
     fn evict(&mut self) {
         if self.contents.real_len() > self.keep_count + self.grace_threshold {
             self.contents.evict_with(self.keep_count, |data| {
-                if let Err(err) = self.db_handle.add_interceptions(data) {
-                    tracing::warn!("Write intercepted http data failed: {}", err)
-                }
+                self.db_handle.add_interceptions(data)
             })
         }
     }
@@ -542,8 +541,7 @@ impl HttpCapturerInner {
 
 impl Drop for HttpCapturerInner {
     fn drop(&mut self) {
-        self.contents.evict_with(0, |data| {
-            let _ = self.db_handle.add_interceptions(data);
-        })
+        self.contents
+            .evict_with(0, |data| self.db_handle.add_interceptions(data))
     }
 }
