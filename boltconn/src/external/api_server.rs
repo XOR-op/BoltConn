@@ -199,22 +199,21 @@ impl ApiServer {
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
         let list = server.stat_center.get_copy().await;
         let mut result = Vec::new();
-        for (idx, entry) in list.iter().enumerate() {
-            let info = entry.read().await;
+        for (idx, info) in list.iter().enumerate() {
             let conn = boltapi::ConnectionSchema {
                 conn_id: idx as u64,
                 destination: info.dest.to_string(),
-                protocol: info.session_proto.to_string(),
+                protocol: info.session_proto.write().unwrap().to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
                 process: info.process_info.as_ref().map(|i| i.name.clone()),
-                upload: info.upload_traffic,
-                download: info.download_traffic,
+                upload: info.upload_traffic.load(Ordering::Relaxed),
+                download: info.download_traffic.load(Ordering::Relaxed),
                 start_time: info
                     .start_time
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_secs(),
-                active: !info.done,
+                active: !info.done.load(Ordering::Relaxed),
             };
             result.push(conn);
         }
@@ -224,8 +223,7 @@ impl ApiServer {
     async fn stop_all_conn(State(server): State<Self>) {
         let list = server.stat_center.get_copy().await;
         for entry in list {
-            let mut info = entry.write().await;
-            info.abort().await;
+            entry.abort().await;
         }
     }
 
@@ -242,7 +240,7 @@ impl ApiServer {
             }
         };
         if let Some(ele) = server.stat_center.get_nth(id).await {
-            ele.write().await.abort().await;
+            ele.abort().await;
             return Json(serde_json::Value::Bool(true));
         }
         Json(serde_json::Value::Bool(false))

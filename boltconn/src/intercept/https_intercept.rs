@@ -12,7 +12,6 @@ use hyper::{Body, Request, Response};
 use rcgen::Certificate as CaCertificate;
 use std::io;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig, ServerName};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
@@ -23,7 +22,7 @@ pub struct HttpsIntercept {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Arc<dyn Outbound>,
-    conn_info: Arc<RwLock<ConnContext>>,
+    conn_info: Arc<ConnContext>,
 }
 
 impl HttpsIntercept {
@@ -33,7 +32,7 @@ impl HttpsIntercept {
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn Outbound>,
-        conn_info: Arc<RwLock<ConnContext>>,
+        conn_info: Arc<ConnContext>,
     ) -> anyhow::Result<Self> {
         let (cert, priv_key) = sign_site_cert(server_name.as_str(), ca_cert)?;
         Ok(Self {

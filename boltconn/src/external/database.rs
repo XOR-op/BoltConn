@@ -1,8 +1,10 @@
-use crate::proxy::HttpInterceptData;
+use crate::proxy::{ConnContext, HttpInterceptData};
 use anyhow::anyhow;
-use boltapi::ConnectionSchema;
 use rusqlite::{params, Error, ErrorCode, OpenFlags};
 use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 pub struct DatabaseHandle {
     conn: rusqlite::Connection,
@@ -105,19 +107,19 @@ impl DatabaseHandle {
         Ok(())
     }
 
-    pub fn add_connections(&mut self, conns: &[ConnectionSchema]) -> anyhow::Result<()> {
+    pub fn add_connections(&mut self, conns: &[Arc<ConnContext>]) -> anyhow::Result<()> {
         let tx = self.conn.transaction()?;
         let mut stmt = tx
             .prepare_cached("INSERT INTO Conn (dest,protocol,proxy,process,upload,download,start_time) VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
         for c in conns.iter() {
             stmt.execute(params![
-                c.destination.as_str(),
-                c.protocol.as_str(),
-                c.proxy.as_str(),
-                c.process.as_ref(),
-                c.upload,
-                c.download,
-                c.start_time,
+                c.dest.to_string().as_str(),
+                c.session_proto.read().unwrap().to_string().as_str(),
+                format!("{:?}", c.rule).to_ascii_lowercase(),
+                c.process_info.as_ref().map(|i| i.name.clone()),
+                c.upload_traffic.load(Ordering::Relaxed),
+                c.download_traffic.load(Ordering::Relaxed),
+                c.start_time.duration_since(UNIX_EPOCH).unwrap().as_secs(),
             ])?;
         }
         drop(stmt);
@@ -147,24 +149,4 @@ impl DatabaseHandle {
         tx.commit()?;
         Ok(())
     }
-}
-
-#[test]
-fn test_database() {
-    let mut db = DatabaseHandle::open("/tmp/test.sqlite").unwrap();
-    db.add_connections(&[ConnectionSchema {
-        conn_id: 0,
-        destination: "www.google.com".to_string(),
-        protocol: "TCP".to_string(),
-        proxy: "DIRECT".to_string(),
-        process: Some("curl".to_string()),
-        upload: 1024,
-        download: 4096,
-        start_time: 123456789,
-        active: false,
-    }])
-    .unwrap();
-    drop(db);
-    let db = DatabaseHandle::open("/tmp/test.sqlite").unwrap();
-    drop(db);
 }

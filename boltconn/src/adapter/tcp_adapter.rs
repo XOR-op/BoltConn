@@ -9,11 +9,10 @@ use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::RwLock;
 
 pub struct TcpAdapter {
     stat: TcpStatus,
-    info: Arc<RwLock<ConnContext>>,
+    info: Arc<ConnContext>,
     inbound: TcpStream,
     connector: Connector,
     abort_handle: ConnAbortHandle,
@@ -26,7 +25,7 @@ impl TcpAdapter {
     pub fn new(
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
-        info: Arc<RwLock<ConnContext>>,
+        info: Arc<ConnContext>,
         inbound: TcpStream,
         available: Arc<AtomicU8>,
         connector: Connector,
@@ -64,9 +63,9 @@ impl TcpAdapter {
                     Ok(size) => {
                         if first_packet {
                             first_packet = false;
-                            outgoing_info_arc.write().await.update_proto(buf.as_ref());
+                            outgoing_info_arc.update_proto(buf.as_ref());
                         }
-                        outgoing_info_arc.write().await.more_upload(size);
+                        outgoing_info_arc.more_upload(size);
                         if tx.send(buf.freeze()).await.is_err() {
                             tracing::warn!("TunAdapter tx send err");
                             break;
@@ -86,7 +85,7 @@ impl TcpAdapter {
             info: self.info.clone(),
         };
         while let Some(buf) = rx.recv().await {
-            self.info.write().await.more_download(buf.len());
+            self.info.more_download(buf.len());
             if let Err(err) = in_write.write_all(buf.as_ref()).await {
                 tracing::warn!("TunAdapter write to inbound failed: {}", err);
                 self.abort_handle.cancel().await;

@@ -10,13 +10,12 @@ use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 use std::io;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 pub struct HttpIntercept {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Arc<dyn Outbound>,
-    conn_info: Arc<RwLock<ConnContext>>,
+    conn_info: Arc<ConnContext>,
 }
 
 impl HttpIntercept {
@@ -24,7 +23,7 @@ impl HttpIntercept {
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn Outbound>,
-        conn_info: Arc<RwLock<ConnContext>>,
+        conn_info: Arc<ConnContext>,
     ) -> Self {
         Self {
             inbound,

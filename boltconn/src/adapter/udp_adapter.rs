@@ -12,13 +12,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 const UDP_ALIVE_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct TunUdpAdapter {
-    info: Arc<RwLock<ConnContext>>,
+    info: Arc<ConnContext>,
     send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
     recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
     next: AddrConnector,
@@ -30,7 +30,7 @@ impl TunUdpAdapter {
     const BUF_SIZE: usize = 65536;
 
     pub fn new(
-        info: Arc<RwLock<ConnContext>>,
+        info: Arc<ConnContext>,
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
         next: AddrConnector,
@@ -70,9 +70,9 @@ impl TunUdpAdapter {
                     Some((buf, addr)) => {
                         if first_packet {
                             first_packet = false;
-                            outgoing_info_arc.write().await.update_proto(buf.as_ref());
+                            outgoing_info_arc.update_proto(buf.as_ref());
                         }
-                        outgoing_info_arc.write().await.more_upload(buf.len());
+                        outgoing_info_arc.more_upload(buf.len());
                         if tx.send((buf, addr)).await.is_err() {
                             tracing::warn!("TunUdpAdapter tx send err");
                             available2.store(false, Ordering::Relaxed);
@@ -82,12 +82,12 @@ impl TunUdpAdapter {
                     }
                 }
             }
-            outgoing_info_arc.write().await.mark_fin();
+            outgoing_info_arc.mark_fin();
         }));
         duplex_guard.set_err_exit();
         // recv from outbound and send to inbound
         while let Some((data, addr)) = rx.recv().await {
-            self.info.write().await.more_download(data.len());
+            self.info.more_download(data.len());
             let src_addr = match addr {
                 NetworkAddr::Raw(s) => s,
                 NetworkAddr::DomainName { domain_name, port } => {
@@ -100,13 +100,13 @@ impl TunUdpAdapter {
                 break;
             }
         }
-        self.info.write().await.mark_fin();
+        self.info.mark_fin();
         Ok(())
     }
 }
 
 pub struct StandardUdpAdapter {
-    info: Arc<RwLock<ConnContext>>,
+    info: Arc<ConnContext>,
     inbound: UdpSocket,
     src: SocketAddr,
     available: Arc<AtomicBool>,
@@ -115,7 +115,7 @@ pub struct StandardUdpAdapter {
 
 impl StandardUdpAdapter {
     pub fn new(
-        info: Arc<RwLock<ConnContext>>,
+        info: Arc<ConnContext>,
         inbound: UdpSocket,
         src: SocketAddr,
         available: Arc<AtomicBool>,
@@ -166,9 +166,9 @@ impl StandardUdpAdapter {
 
                         if first_packet {
                             first_packet = false;
-                            outgoing_info_arc.write().await.update_proto(payload);
+                            outgoing_info_arc.update_proto(payload);
                         }
-                        outgoing_info_arc.write().await.more_upload(buf.len());
+                        outgoing_info_arc.more_upload(buf.len());
                         if tx
                             .send((buf.slice_ref(payload), addr.into()))
                             .await
@@ -186,13 +186,13 @@ impl StandardUdpAdapter {
                     break;
                 }
             }
-            outgoing_info_arc.write().await.mark_fin();
+            outgoing_info_arc.mark_fin();
         }));
         duplex_guard.set_err_exit();
 
         // recv from outbound and send to inbound
         while let Some((buf, src)) = rx.recv().await {
-            self.info.write().await.more_download(buf.len());
+            self.info.more_download(buf.len());
             // encapsule
             let Ok(data) = (match src {
                 NetworkAddr::Raw(s) => fast_socks5::new_udp_header(s),
@@ -205,7 +205,7 @@ impl StandardUdpAdapter {
                 break;
             }
         }
-        self.info.write().await.mark_fin();
+        self.info.mark_fin();
         Ok(())
     }
 }

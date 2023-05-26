@@ -7,7 +7,7 @@ use fast_socks5::util::target_addr::TargetAddr;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
@@ -196,11 +196,11 @@ pub struct ConnContext {
     pub start_time: SystemTime,
     pub dest: NetworkAddr,
     pub process_info: Option<ProcessInfo>,
-    pub session_proto: SessionProtocol,
+    pub session_proto: std::sync::RwLock<SessionProtocol>,
     pub rule: OutboundType,
-    pub upload_traffic: u64,
-    pub download_traffic: u64,
-    pub done: bool,
+    pub upload_traffic: AtomicU64,
+    pub download_traffic: AtomicU64,
+    pub done: AtomicBool,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
     abort_handle: ConnAbortHandle,
@@ -220,42 +220,45 @@ impl ConnContext {
             start_time: SystemTime::now(),
             dest: dst,
             process_info,
-            session_proto: match network_type {
+            session_proto: std::sync::RwLock::new(match network_type {
                 NetworkType::Tcp => SessionProtocol::Tcp,
                 NetworkType::Udp => SessionProtocol::Udp,
-            },
+            }),
             rule,
-            upload_traffic: 0,
-            download_traffic: 0,
-            done: false,
+            upload_traffic: AtomicU64::new(0),
+            download_traffic: AtomicU64::new(0),
+            done: AtomicBool::new(false),
             global_upload,
             global_download,
             abort_handle,
         }
     }
 
-    pub fn update_proto(&mut self, packet: &[u8]) {
-        if self.session_proto == SessionProtocol::Tcp {
-            self.session_proto = check_tcp_protocol(packet);
+    pub fn update_proto(&self, packet: &[u8]) {
+        let lock = self.session_proto.write().unwrap();
+        if *lock == SessionProtocol::Tcp {
+            *lock = check_tcp_protocol(packet);
         }
     }
 
-    pub fn more_upload(&mut self, size: usize) {
-        self.upload_traffic += size as u64;
+    pub fn more_upload(&self, size: usize) {
+        self.upload_traffic
+            .fetch_add(size as u64, Ordering::Relaxed);
         self.global_upload.fetch_add(size as u64, Ordering::Relaxed);
     }
 
-    pub fn more_download(&mut self, size: usize) {
-        self.download_traffic += size as u64;
+    pub fn more_download(&self, size: usize) {
+        self.download_traffic
+            .fetch_add(size as u64, Ordering::Relaxed);
         self.global_download
             .fetch_add(size as u64, Ordering::Relaxed);
     }
 
-    pub fn mark_fin(&mut self) {
-        self.done = true;
+    pub fn mark_fin(&self) {
+        self.done.store(true, Ordering::Relaxed);
     }
 
-    pub async fn abort(&mut self) {
+    pub async fn abort(&self) {
         self.abort_handle.cancel().await;
         self.mark_fin();
     }
@@ -287,7 +290,7 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
 }
 
 pub struct ContextManager {
-    content: RwLock<EvictableVec<Arc<RwLock<ConnContext>>>>,
+    content: RwLock<EvictableVec<Arc<ConnContext>>>,
     keep_count: usize,
     grace_threshold: usize,
     db_handle: Mutex<DatabaseHandle>,
@@ -299,6 +302,8 @@ impl ContextManager {
     pub fn new(db_handle: DatabaseHandle, keep_count: usize, grace_threshold: usize) -> Self {
         Self {
             content: RwLock::new(EvictableVec::new()),
+            keep_count,
+            grace_threshold,
             db_handle: Mutex::new(db_handle),
             global_upload: Arc::new(Default::default()),
             global_download: Arc::new(Default::default()),
@@ -313,16 +318,16 @@ impl ContextManager {
         self.global_download.clone()
     }
 
-    pub async fn push(&self, info: Arc<RwLock<ConnContext>>) {
+    pub async fn push(&self, info: Arc<ConnContext>) {
         self.content.write().await.push(info);
     }
 
-    pub async fn get_copy(&self) -> Vec<Arc<RwLock<ConnContext>>> {
+    pub async fn get_copy(&self) -> Vec<Arc<ConnContext>> {
         let vec = self.content.read().await;
         vec.get_last_n(vec.real_len())
     }
 
-    pub async fn get_nth(&self, idx: usize) -> Option<Arc<RwLock<ConnContext>>> {
+    pub async fn get_nth(&self, idx: usize) -> Option<Arc<ConnContext>> {
         self.content.read().await.get(idx).cloned()
     }
 
@@ -331,7 +336,7 @@ impl ContextManager {
         let mut handle = self.db_handle.lock().unwrap();
         if write_vec.real_len() > self.keep_count + self.grace_threshold {
             write_vec.evict_with(self.keep_count, |data| {
-                if let Err(err) = handle.add_interceptions(data) {
+                if let Err(err) = handle.add_connections(data) {
                     tracing::warn!("Write connection data failed: {}", err)
                 }
             })
