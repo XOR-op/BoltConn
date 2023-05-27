@@ -306,7 +306,7 @@ impl ContextManager {
         Self {
             inner: RwLock::new(ContextManagerInner {
                 content: EvictableVec::new(),
-                keep_count: 20,
+                keep_count: 50,
                 grace_threshold: 5,
                 db_handle,
             }),
@@ -468,7 +468,7 @@ impl HttpCapturer {
     pub fn new(db_handle: DatabaseHandle) -> Self {
         Self {
             inner: Mutex::new(HttpCapturerInner {
-                keep_count: 5,
+                keep_count: 20,
                 grace_threshold: 3,
                 contents: EvictableVec::new(),
                 db_handle,

@@ -1,13 +1,12 @@
 use crate::proxy::{ConnContext, HttpInterceptData};
 use anyhow::anyhow;
-use nix::unistd::{Gid, Uid};
 use rusqlite::{params, Error, ErrorCode, OpenFlags};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -42,6 +41,8 @@ impl DatabaseHandle {
                     resp_header TEXT,
                     resp_body BLOB
                 )";
+    const VACUUM_OLDEST: &'static str =
+        "DELETE FROM {} where ID not in (SELECT id from {} order by ID DESC LIMIT {})";
 
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
         let mut conn =
@@ -54,13 +55,9 @@ impl DatabaseHandle {
                     let Error::SqliteFailure(e, _) = err else{Err(err)?};
                     if e.code == ErrorCode::CannotOpen {
                         // create with open
-                        let _ = std::fs::File::create(&path)?;
-                        nix::unistd::chown(&path, Some(Uid::from(0)), Some(Gid::from(0)))?;
-                        let perm = std::fs::Permissions::from_mode(0o600);
-                        std::fs::set_permissions(&path, perm)?;
                         let conn = rusqlite::Connection::open_with_flags(
                             path,
-                            OpenFlags::SQLITE_OPEN_READ_WRITE,
+                            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
                         )?;
                         Self::create_db_table(&conn)?;
                         conn
@@ -74,10 +71,12 @@ impl DatabaseHandle {
         // Standalone thread for asynchronous database insert
         thread::spawn(move || {
             let thread_rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
                 .build()
                 .expect("Failed to create database thread");
             let result: anyhow::Result<()> = thread_rt.block_on(async move {
                 let conn_may_available = loop {
+                    let s = tokio::time::sleep(Duration::from_secs(30 * 60));
                     tokio::select! {
                         dat = conn_recv.recv() =>{
                             if let Some(dat) = dat{
@@ -92,6 +91,10 @@ impl DatabaseHandle {
                             }else{
                                 break true;
                             }
+                        }
+                        _ = s =>{
+                            Self::vacuum_oldest(&mut conn, 40000, 5000)
+                            tracing::trace!("Vacuum database")
                         }
                     }
                 };
@@ -191,7 +194,7 @@ impl DatabaseHandle {
         Ok(())
     }
 
-    pub fn insert_interceptions(
+    fn insert_interceptions(
         conn: &mut rusqlite::Connection,
         intes: Vec<HttpInterceptData>,
     ) -> anyhow::Result<()> {
@@ -215,5 +218,19 @@ impl DatabaseHandle {
         drop(stmt);
         tx.commit()?;
         Ok(())
+    }
+
+    fn vacuum_oldest(conn: &rusqlite::Connection, conn_limit: usize, inte_limit: usize) {
+        if let Err(err) = conn.execute(
+            format!(Self::VACUUM_OLDEST, "Conn", "Conn", conn_limit).as_str(),
+            [],
+        ) {
+            tracing::error!("Vacuum table 'Conn' failed: {}", err);
+        } else if let Err(err) = conn.execute(
+            format!(Self::VACUUM_OLDEST, "Intercept", "Intercept", inte_limit).as_str(),
+            [],
+        ) {
+            tracing::error!("Vacuum table 'Intercept' failed: {}", err);
+        }
     }
 }

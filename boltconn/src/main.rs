@@ -148,9 +148,7 @@ fn main() -> ExitCode {
     let Some(conn_handle) = open_database_handle(data_path.as_path()) else{
         return ExitCode::from(1);
     };
-    let Some(intercept_handle) = open_database_handle(data_path.as_path()) else{
-        return ExitCode::from(1);
-    };
+    let intercept_handle = conn_handle.clone();
 
     // config-independent components
     let manager = Arc::new(SessionManager::new());

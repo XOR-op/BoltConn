@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "boltconn"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -362,7 +362,6 @@ dependencies = [
  "netlink-packet-core",
  "netlink-packet-sock-diag",
  "netlink-sys",
- "nix 0.26.2",
  "radix_trie",
  "rand",
  "rcgen",
