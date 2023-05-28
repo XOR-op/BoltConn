@@ -1,4 +1,6 @@
 use chrono::Timelike;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tracing_subscriber::fmt::{format::Writer, time::FormatTime, MakeWriter};
@@ -7,17 +9,22 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 #[derive(Clone)]
 pub struct StreamLoggerSend {
     sender: broadcast::Sender<String>,
+    backup: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl StreamLoggerSend {
     pub fn new() -> Self {
-        let (sender, _) = broadcast::channel(15);
-        Self { sender }
+        let (sender, _) = broadcast::channel(50);
+        Self {
+            sender,
+            backup: Arc::new(Mutex::new(Default::default())),
+        }
     }
 
     pub fn subscribe(&self) -> StreamLoggerRecv {
         StreamLoggerRecv {
             receiver: self.sender.subscribe(),
+            prior_buf: self.backup.lock().unwrap().clone(),
         }
     }
 }
@@ -26,6 +33,11 @@ impl std::io::Write for StreamLoggerSend {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if let Ok(s) = std::str::from_utf8(buf) {
             let _ = self.sender.send(s.to_string());
+            let mut backup = self.backup.lock().unwrap();
+            backup.push_back(s.to_string());
+            if backup.len() > 10 {
+                backup.pop_front();
+            }
         }
         Ok(buf.len())
     }
@@ -37,11 +49,15 @@ impl std::io::Write for StreamLoggerSend {
 
 pub struct StreamLoggerRecv {
     receiver: broadcast::Receiver<String>,
+    prior_buf: VecDeque<String>,
 }
 
 impl StreamLoggerRecv {
     pub async fn recv(&mut self) -> Result<String, RecvError> {
         loop {
+            if !self.prior_buf.is_empty() {
+                return Ok(self.prior_buf.pop_front().unwrap());
+            }
             match self.receiver.recv().await {
                 Err(RecvError::Lagged(_)) => continue,
                 r => return r,
@@ -68,15 +84,13 @@ impl FormatTime for SystemTime {
 }
 
 struct LoggerMaker {
-    logger: broadcast::Sender<String>,
+    logger: StreamLoggerSend,
 }
 impl<'a> MakeWriter<'a> for LoggerMaker {
     type Writer = StreamLoggerSend;
 
     fn make_writer(&'a self) -> Self::Writer {
-        StreamLoggerSend {
-            sender: self.logger.clone(),
-        }
+        self.logger.clone()
     }
 }
 
@@ -88,7 +102,7 @@ pub fn init_tracing(logger: &StreamLoggerSend) {
     let stream_layer = fmt::layer()
         .json()
         .with_writer(LoggerMaker {
-            logger: logger.sender.clone(),
+            logger: logger.clone(),
         })
         .with_timer(SystemTime::default());
     tracing_subscriber::registry()

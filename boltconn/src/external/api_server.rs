@@ -143,7 +143,7 @@ impl ApiServer {
         Json(json!(if status.enabled {
             server.tun_configure.lock().unwrap().enable().is_ok()
         } else {
-            server.tun_configure.lock().unwrap().disable();
+            server.tun_configure.lock().unwrap().disable(true);
             true
         }))
     }

@@ -410,7 +410,7 @@ fn main() -> ExitCode {
         }
     });
     tracing::info!("Exiting...");
-    tun_configure.lock().unwrap().disable();
+    tun_configure.lock().unwrap().disable(false);
     rt.shutdown_background();
     ExitCode::from(0)
 }

@@ -32,10 +32,12 @@ impl TunConfigure {
         Ok(())
     }
 
-    pub fn disable(&mut self) {
+    pub fn disable(&mut self, show_log: bool) {
         self.disable_routing_table();
         self.disable_dns();
-        tracing::info!("Tun mode has been disabled");
+        if show_log {
+            tracing::info!("Tun mode has been disabled");
+        }
     }
 
     pub fn get_status(&self) -> bool {
@@ -73,6 +75,6 @@ impl TunConfigure {
 
 impl Drop for TunConfigure {
     fn drop(&mut self) {
-        self.disable()
+        self.disable(false)
     }
 }
