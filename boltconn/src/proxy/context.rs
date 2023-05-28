@@ -332,7 +332,10 @@ impl ContextManager {
     pub fn get_copy(&self) -> (Vec<Arc<ConnContext>>, usize) {
         let inner = self.inner.read().unwrap();
         let data = inner.content.get_last_n(inner.content.real_len());
-        (data, inner.content.logical_len() - inner.keep_count)
+        (
+            data,
+            minimum_start(inner.content.logical_len(), inner.keep_count),
+        )
     }
 
     pub async fn get_nth(&self, idx: usize) -> Option<Arc<ConnContext>> {
@@ -389,21 +392,27 @@ impl DumpedRequest {
 }
 
 #[derive(Clone, Debug)]
+pub enum BodyOrWarning {
+    Body(hyper::body::Bytes),
+    Warning(String),
+}
+
+#[derive(Clone, Debug)]
 pub struct DumpedResponse {
     pub status: http::StatusCode,
     pub version: http::Version,
     pub headers: http::HeaderMap<http::HeaderValue>,
-    pub body: hyper::body::Bytes,
+    pub body: BodyOrWarning,
     pub time: Instant,
 }
 
 impl DumpedResponse {
-    pub fn from_parts(parts: &http::response::Parts, body: &hyper::body::Bytes) -> Self {
+    pub fn from_parts(parts: &http::response::Parts, body: BodyOrWarning) -> Self {
         Self {
             status: parts.status,
             version: parts.version,
             headers: parts.headers.clone(),
-            body: body.clone(),
+            body,
             time: Instant::now(),
         }
     }
@@ -413,6 +422,13 @@ impl DumpedResponse {
             .iter()
             .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("INVALID NON-ASCII DATA")))
             .collect()
+    }
+
+    pub fn body_len(&self) -> Option<u64> {
+        match &self.body {
+            BodyOrWarning::Body(b) => Some(b.len() as u64),
+            BodyOrWarning::Warning(_) => None,
+        }
     }
 }
 
@@ -493,7 +509,7 @@ impl HttpCapturer {
         let inner = self.inner.lock().unwrap();
         (
             inner.get_allowed_elements(),
-            inner.contents.logical_len() - inner.keep_count,
+            minimum_start(inner.contents.logical_len(), inner.keep_count),
         )
     }
 
@@ -504,7 +520,7 @@ impl HttpCapturer {
         end: Option<usize>,
     ) -> Option<(Vec<HttpInterceptData>, usize)> {
         let inner = self.inner.lock().unwrap();
-        let allowed_start = inner.contents.logical_len() - inner.keep_count;
+        let allowed_start = minimum_start(inner.contents.logical_len(), inner.keep_count);
 
         let start = if start >= allowed_start {
             start
@@ -543,5 +559,13 @@ impl Drop for HttpCapturerInner {
     fn drop(&mut self) {
         self.contents
             .evict_with(0, |data| self.db_handle.add_interceptions(data))
+    }
+}
+
+fn minimum_start(logical_len: usize, limit: usize) -> usize {
+    if logical_len > limit {
+        logical_len - limit
+    } else {
+        0
     }
 }

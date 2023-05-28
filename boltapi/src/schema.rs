@@ -31,7 +31,7 @@ pub struct HttpInterceptSchema {
     pub uri: String,
     pub method: String,
     pub status: u16,
-    pub size: u64,
+    pub size: Option<u64>,
     pub time: String,
 }
 
@@ -79,6 +79,7 @@ pub struct GetInterceptDataResp {
     pub resp_header: Vec<String>,
     #[serde(with = "base64ext")]
     pub resp_body: Vec<u8>,
+    pub warning: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

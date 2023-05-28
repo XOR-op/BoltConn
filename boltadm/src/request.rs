@@ -169,7 +169,7 @@ impl Requester {
                     .with_cell(ele.uri)
                     .with_cell(ele.method)
                     .with_cell(format!("{}", ele.status))
-                    .with_cell(pretty_size(ele.size))
+                    .with_cell(ele.size.map_or("N/A".to_string(), pretty_size))
                     .with_cell(ele.time),
             );
         }

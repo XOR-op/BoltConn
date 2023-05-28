@@ -1,5 +1,7 @@
 use crate::platform::process::ProcessInfo;
-use crate::proxy::{ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
+use crate::proxy::{
+    BodyOrWarning, ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr,
+};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -124,7 +126,7 @@ impl Modifier for Recorder {
             status: parts.status,
             version: parts.version,
             headers: parts.headers.clone(),
-            body: whole_body.clone(),
+            body: BodyOrWarning::Body(whole_body.clone()),
             time: Instant::now(),
         };
         let req = self

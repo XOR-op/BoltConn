@@ -1,7 +1,6 @@
-use crate::proxy::{ConnContext, HttpInterceptData};
+use crate::proxy::{BodyOrWarning, ConnContext, HttpInterceptData};
 use anyhow::anyhow;
 use rusqlite::{params, Error, ErrorCode, OpenFlags};
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -34,15 +33,13 @@ impl DatabaseHandle {
                     uri TEXT NOT NULL,
                     method TEXT NOT NULL,
                     status INTEGER NOT NULL,
-                    size INTEGER NOT NULL,
+                    size INTEGER,
                     time INTEGER NOT NULL,
                     req_header TEXT,
                     req_body BLOB,
                     resp_header TEXT,
                     resp_body BLOB
                 )";
-    const VACUUM_OLDEST: &'static str =
-        "DELETE FROM {} where ID not in (SELECT id from {} order by ID DESC LIMIT {})";
 
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
         let mut conn =
@@ -93,7 +90,7 @@ impl DatabaseHandle {
                             }
                         }
                         _ = s =>{
-                            Self::vacuum_oldest(&mut conn, 40000, 5000)
+                            Self::vacuum_oldest(&conn, 40000, 5000);
                             tracing::trace!("Vacuum database")
                         }
                     }
@@ -202,17 +199,21 @@ impl DatabaseHandle {
         let mut stmt = tx
             .prepare_cached("INSERT INTO Intercept (process,uri,method,status,size,time,req_header,req_body,resp_header,resp_body) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
         for c in intes.iter() {
+            let resp_body = match &c.resp.body {
+                BodyOrWarning::Body(b) => Some(b.as_ref()),
+                BodyOrWarning::Warning(_) => None,
+            };
             stmt.execute(params![
                 c.process_info.as_ref().map(|proc| &proc.name),
                 c.get_full_uri().as_str(),
                 c.req.method.as_str(),
                 c.resp.status.as_u16(),
-                c.resp.body.len(),
+                c.resp.body_len(),
                 (c.resp.time - c.req.time).as_millis() as u64,
                 c.req.collect_headers().join("\n"),
                 c.req.body.as_ref(),
                 c.resp.collect_headers().join("\n"),
-                c.resp.body.as_ref(),
+                resp_body
             ])?;
         }
         drop(stmt);
@@ -222,12 +223,20 @@ impl DatabaseHandle {
 
     fn vacuum_oldest(conn: &rusqlite::Connection, conn_limit: usize, inte_limit: usize) {
         if let Err(err) = conn.execute(
-            format!(Self::VACUUM_OLDEST, "Conn", "Conn", conn_limit).as_str(),
+            format!(
+                "DELETE FROM {} where ID not in (SELECT id from {} order by ID DESC LIMIT {})",
+                "Conn", "Conn", conn_limit
+            )
+            .as_str(),
             [],
         ) {
             tracing::error!("Vacuum table 'Conn' failed: {}", err);
         } else if let Err(err) = conn.execute(
-            format!(Self::VACUUM_OLDEST, "Intercept", "Intercept", inte_limit).as_str(),
+            format!(
+                "DELETE FROM {} where ID not in (SELECT id from {} order by ID DESC LIMIT {})",
+                "Intercept", "Intercept", inte_limit
+            )
+            .as_str(),
             [],
         ) {
             tracing::error!("Vacuum table 'Intercept' failed: {}", err);

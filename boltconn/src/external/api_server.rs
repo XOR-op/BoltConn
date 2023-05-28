@@ -3,7 +3,8 @@ use crate::dispatch::{Dispatching, GeneralProxy, Latency};
 use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
 use crate::network::configure::TunConfigure;
 use crate::proxy::{
-    latency_test, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
+    latency_test, BodyOrWarning, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData,
+    SessionManager,
 };
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
@@ -286,7 +287,7 @@ impl ApiServer {
                 uri,
                 method: data.req.method.to_string(),
                 status: data.resp.status.as_u16(),
-                size: data.resp.body.len() as u64,
+                size: data.resp.body_len(),
                 time: pretty_latency(data.resp.time - data.req.time),
             };
             result.push(item);
@@ -338,11 +339,16 @@ impl ApiServer {
                         req,
                         resp,
                     } = list.get(0).unwrap();
+                    let (body, warning) = match &resp.body {
+                        BodyOrWarning::Body(b) => (b.to_vec(), None),
+                        BodyOrWarning::Warning(w) => (vec![], Some(w.clone())),
+                    };
                     let result = GetInterceptDataResp {
                         req_header: req.collect_headers(),
                         req_body: req.body.to_vec(),
                         resp_header: resp.collect_headers(),
-                        resp_body: resp.body.to_vec(),
+                        resp_body: body,
+                        warning,
                     };
                     return Json(json!(result));
                 }
