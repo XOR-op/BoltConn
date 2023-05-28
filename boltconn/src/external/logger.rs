@@ -5,15 +5,11 @@ use tracing_subscriber::fmt::{format::Writer, time::FormatTime, MakeWriter};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Clone)]
-pub struct StreamLoggerHandle {
+pub struct StreamLoggerSend {
     sender: broadcast::Sender<String>,
 }
 
-struct StreamLogger {
-    sender: broadcast::Sender<String>,
-}
-
-impl StreamLoggerHandle {
+impl StreamLoggerSend {
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(15);
         Self { sender }
@@ -26,7 +22,7 @@ impl StreamLoggerHandle {
     }
 }
 
-impl std::io::Write for StreamLogger {
+impl std::io::Write for StreamLoggerSend {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if let Ok(s) = std::str::from_utf8(buf) {
             let _ = self.sender.send(s.to_string());
@@ -75,16 +71,16 @@ struct LoggerMaker {
     logger: broadcast::Sender<String>,
 }
 impl<'a> MakeWriter<'a> for LoggerMaker {
-    type Writer = StreamLogger;
+    type Writer = StreamLoggerSend;
 
     fn make_writer(&'a self) -> Self::Writer {
-        StreamLogger {
+        StreamLoggerSend {
             sender: self.logger.clone(),
         }
     }
 }
 
-pub fn init_tracing(logger: &StreamLoggerHandle) {
+pub fn init_tracing(logger: &StreamLoggerSend) {
     let stdout_layer = fmt::layer()
         .compact()
         .with_writer(std::io::stdout)

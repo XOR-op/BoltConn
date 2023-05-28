@@ -1,6 +1,6 @@
 use crate::config::LinkedState;
 use crate::dispatch::{Dispatching, GeneralProxy, Latency};
-use crate::external::{StreamLoggerHandle, StreamLoggerRecv};
+use crate::external::{StreamLoggerRecv, StreamLoggerSend};
 use crate::network::configure::TunConfigure;
 use crate::proxy::{
     latency_test, BodyOrWarning, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData,
@@ -38,7 +38,7 @@ pub struct ApiServer {
     tun_configure: Arc<Mutex<TunConfigure>>,
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<Mutex<LinkedState>>,
-    stream_logger: StreamLoggerHandle,
+    stream_logger: StreamLoggerSend,
     speedtest_url: Arc<Mutex<String>>,
 }
 
@@ -54,7 +54,7 @@ impl ApiServer {
         global_setting: Arc<Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
-        stream_logger: StreamLoggerHandle,
+        stream_logger: StreamLoggerSend,
         speedtest_url: Arc<Mutex<String>>,
     ) -> Self {
         Self {

@@ -4,7 +4,7 @@ extern crate core;
 
 use crate::config::{LinkedState, LoadedConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
-use crate::external::{ApiServer, DatabaseHandle, StreamLoggerHandle};
+use crate::external::{ApiServer, DatabaseHandle, StreamLoggerSend};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
@@ -134,7 +134,7 @@ fn main() -> ExitCode {
     // tokio and tracing
     let rt = tokio::runtime::Runtime::new().expect("Tokio failed to initialize");
 
-    let stream_logger = StreamLoggerHandle::new();
+    let stream_logger = StreamLoggerSend::new();
     external::init_tracing(&stream_logger);
 
     // interface

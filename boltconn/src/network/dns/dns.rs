@@ -80,7 +80,6 @@ impl Dns {
         for r in self.resolvers.read().await.iter() {
             if let Ok(result) = r.ipv4_lookup(domain_name).await {
                 if let Some(i) = result.iter().next() {
-                    tracing::trace!("[DNS] search domain name {}: {}", domain_name, i.0);
                     return Some(IpAddr::V4(i.0));
                 }
             }
