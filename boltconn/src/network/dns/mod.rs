@@ -3,12 +3,13 @@ mod dns;
 mod dns_table;
 mod provider;
 
+use crate::network::dns::provider::IfaceProvider;
 pub use dns::Dns;
 use std::net::{IpAddr, SocketAddr};
 use trust_dns_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
 };
-use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::AsyncResolver;
 
 fn add_tls_server(
     ips: &[IpAddr],
@@ -31,7 +32,7 @@ fn add_tls_server(
 }
 
 async fn resolve_dns(
-    bootstrap: &Option<TokioAsyncResolver>,
+    bootstrap: &Option<AsyncResolver<IfaceProvider>>,
     dn: &str,
 ) -> anyhow::Result<Vec<IpAddr>> {
     let Some(resolver) = bootstrap else {
@@ -48,7 +49,10 @@ async fn resolve_dns(
     }
 }
 
-pub fn new_bootstrap_resolver(addr: &[IpAddr]) -> anyhow::Result<TokioAsyncResolver> {
+pub fn new_bootstrap_resolver(
+    iface_name: &str,
+    addr: &[IpAddr],
+) -> anyhow::Result<AsyncResolver<IfaceProvider>> {
     let cfg = ResolverConfig::from_parts(
         None,
         vec![],
@@ -58,13 +62,14 @@ pub fn new_bootstrap_resolver(addr: &[IpAddr]) -> anyhow::Result<TokioAsyncResol
                 .collect::<Vec<NameServerConfig>>(),
         ),
     );
-    let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default())?;
+    let resolver =
+        AsyncResolver::new(cfg, ResolverOpts::default(), IfaceProvider::new(iface_name))?;
     Ok(resolver)
 }
 
 pub async fn parse_dns_config(
     lines: &Vec<String>,
-    bootstrap: Option<TokioAsyncResolver>,
+    bootstrap: Option<AsyncResolver<IfaceProvider>>,
 ) -> anyhow::Result<Vec<NameServerConfigGroup>> {
     let mut arr = Vec::new();
     for l in lines {

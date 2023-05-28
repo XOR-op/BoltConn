@@ -26,7 +26,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{fs, io};
 use structopt::StructOpt;
 use tokio::select;
@@ -177,7 +177,9 @@ fn main() -> ExitCode {
 
     // initialize resources
     let dns = {
-        let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice()).unwrap();
+        let bootstrap =
+            new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice())
+                .unwrap();
         let group = match rt.block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap))) {
             Ok(g) => {
                 if g.is_empty() {
@@ -384,6 +386,7 @@ fn main() -> ExitCode {
                 restart = receiver.recv() => {
                     if restart.is_some(){
                         // try restarting components
+                        let start = Instant::now();
                         match reload(&config_path, &data_path, outbound_iface.as_str(), dns.clone()).await{
                             Ok((dispatching, intercept_filter,url_rewriter,header_rewriter,new_speedtest_url)) => {
                                 *api_dispatching_handler.write().await = dispatching.clone();
@@ -392,7 +395,8 @@ fn main() -> ExitCode {
                                 dispatcher.replace_intercept_filter(intercept_filter);
                                 dispatcher.replace_modifier(Box::new(move |pi| Arc::new(InterceptModifier::new(hcap2.clone(),url_rewriter.clone(),header_rewriter.clone(),pi))));
                                 *speedtest_url.lock().unwrap() = new_speedtest_url;
-                                tracing::info!("Reloaded config successfully");
+
+                                tracing::info!("Reloaded config successfully in {}ms",start.elapsed().as_millis());
                             }
                             Err(err)=>{
                                 tracing::error!("Reloading config failed: {}",err);
@@ -432,7 +436,7 @@ async fn reload(
             Arc::new(HeaderModManager::new(hdr.as_slice())?),
         )
     };
-    let bootstrap = new_bootstrap_resolver(config.dns.bootstrap.as_slice())?;
+    let bootstrap = new_bootstrap_resolver(iface_name, config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
         let builder = DispatchingBuilder::new();
