@@ -18,6 +18,7 @@ pub enum SessionProtocol {
     Udp,
     Http,
     Tls(TlsVersion),
+    Quic(u8),
 }
 
 impl Display for SessionProtocol {
@@ -27,6 +28,7 @@ impl Display for SessionProtocol {
             SessionProtocol::Udp => f.write_str("udp"),
             SessionProtocol::Http => f.write_str("http"),
             SessionProtocol::Tls(_) => f.write_str("tls"),
+            SessionProtocol::Quic(_) => f.write_str("quic"),
         }
     }
 }
@@ -237,6 +239,8 @@ impl ConnContext {
         let mut lock = self.session_proto.write().unwrap();
         if *lock == SessionProtocol::Tcp {
             *lock = check_tcp_protocol(packet);
+        } else if *lock == SessionProtocol::Udp {
+            *lock = check_udp_protocol(packet)
         }
     }
 
@@ -286,6 +290,22 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
     }
     // Unknown
     SessionProtocol::Tcp
+}
+
+/// The packet as argument should be the first packet of the connection
+pub fn check_udp_protocol(packet: &[u8]) -> SessionProtocol {
+    if packet.len() >= 16
+        && (packet[0] & 0xf0 == 0xc0
+            && packet[1] == 0
+            && packet[2] == 0
+            && packet[3] == 0
+            && (packet[4] == 1 || packet[4] == 2))
+    {
+        // conservative idetification
+        SessionProtocol::Quic(packet[4])
+    } else {
+        SessionProtocol::Udp
+    }
 }
 
 pub struct ContextManager {

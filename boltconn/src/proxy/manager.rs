@@ -38,7 +38,7 @@ impl SessionManager {
         // If original connection silently expired
         if pair.dest_addr != dst_addr {
             tracing::warn!(
-                "[Session] Recreate record {}: src={}, old={}, new={}",
+                "[Session] Recreate TCP record {}: src={}, old={}, new={}",
                 src_addr.port(),
                 src_addr,
                 pair.dest_addr,
