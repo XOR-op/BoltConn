@@ -16,6 +16,7 @@ use boltapi::{
     GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq, ProxyData, SetGroupReqSchema,
     TrafficResp, TunStatusSchema,
 };
+use http::Method;
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::Write;
@@ -24,6 +25,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 use tokio::sync::RwLock;
+use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 
 pub type SharedDispatching = Arc<RwLock<Arc<Dispatching>>>;
 
@@ -72,10 +74,11 @@ impl ApiServer {
         }
     }
 
-    pub async fn run(self, port: u16) {
+    pub async fn run(self, port: u16, cors_allowed_list: Option<AllowOrigin>) {
         let secret = Arc::new(self.secret.clone());
         let wrapper = move |r| Self::auth(secret.clone(), r);
-        let app = Router::new()
+
+        let mut app = Router::new()
             .route("/ws/traffic", get(Self::ws_get_traffic))
             .route("/ws/logs", get(Self::ws_get_logs))
             .route(
@@ -101,6 +104,15 @@ impl ApiServer {
             .route("/reload", post(Self::reload))
             .route_layer(map_request(wrapper))
             .with_state(self);
+        if let Some(origin) = cors_allowed_list {
+            app = app.layer(
+                CorsLayer::new()
+                    .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                    .allow_origin(origin)
+                    .allow_headers(AllowHeaders::any()),
+            );
+        }
+
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
         axum::Server::bind(&addr)
             .serve(app.into_make_service())

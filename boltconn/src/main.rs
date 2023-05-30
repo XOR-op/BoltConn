@@ -11,6 +11,7 @@ use crate::network::dns::{new_bootstrap_resolver, parse_dns_config};
 use crate::proxy::{
     ContextManager, HttpCapturer, HttpInbound, MixedInbound, Socks5Inbound, TunUdpInbound,
 };
+use http::HeaderValue;
 use ipnet::Ipv4Net;
 use is_root::is_root;
 use network::tun_device::TunDevice;
@@ -30,6 +31,7 @@ use std::time::{Duration, Instant};
 use std::{fs, io};
 use structopt::StructOpt;
 use tokio::select;
+use tower_http::cors::AllowOrigin;
 use tracing::{event, Level};
 
 mod adapter;
@@ -122,6 +124,22 @@ fn open_database_handle(data_path: &Path) -> Option<DatabaseHandle> {
     }
 }
 
+fn parse_api_cors_origin(cors_allowed_list: &[String]) -> Option<AllowOrigin> {
+    if !cors_allowed_list.is_empty() {
+        let mut list = vec![];
+        for i in cors_allowed_list.iter() {
+            if i == "*" {
+                return Some(AllowOrigin::any());
+            } else {
+                list.push(HeaderValue::from_str(i.as_str()).ok()?)
+            }
+        }
+        Some(AllowOrigin::list(list.into_iter()))
+    } else {
+        None
+    }
+}
+
 fn main() -> ExitCode {
     if !is_root() {
         eprintln!("BoltConn must be run with root privilege.");
@@ -174,6 +192,7 @@ fn main() -> ExitCode {
         tracing::info!("Auto detected interface: {}", real_iface_name);
         real_iface_name
     };
+    let cors_domains = parse_api_cors_origin(&config.cors_allowed_list);
 
     // initialize resources
     let dns = {
@@ -350,7 +369,7 @@ fn main() -> ExitCode {
     let _tun_inbound_tcp_handle = rt.spawn(async move { tun_inbound_tcp.run().await });
     let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run().await });
     let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
-    let _api_handle = rt.spawn(async move { api_server.run(api_port).await });
+    let _api_handle = rt.spawn(async move { api_server.run(api_port, cors_domains).await });
     if config.http_port == config.socks5_port && config.http_port.is_some() {
         // Mixed inbound
         let port = config.http_port.unwrap();
