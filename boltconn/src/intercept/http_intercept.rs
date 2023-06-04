@@ -50,7 +50,7 @@ impl HttpIntercept {
         let (mut sender, connection) = conn::Builder::new()
             .handshake(DuplexChan::new(outbound))
             .await?;
-        tokio::spawn(async move { connection.await });
+        tokio::spawn(connection);
         let resp = sender.send_request(req).await?;
         let resp = modifier.modify_response(resp, &ctx).await?;
         Ok(resp)

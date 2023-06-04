@@ -120,13 +120,13 @@ pub async fn latency_test(
                 .connect(server_name, DuplexChan::new(outbound))
                 .await?;
             let (sender, connection) = conn::Builder::new().handshake(outbound).await?;
-            tokio::spawn(async move { connection.await });
+            tokio::spawn(connection);
             sender
         } else {
             let (sender, connection) = conn::Builder::new()
                 .handshake(DuplexChan::new(outbound))
                 .await?;
-            tokio::spawn(async move { connection.await });
+            tokio::spawn(connection);
             sender
         };
         let _ = sender.send_request(req).await?;
