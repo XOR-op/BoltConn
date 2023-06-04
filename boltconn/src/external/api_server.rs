@@ -16,9 +16,9 @@ use boltapi::{
     GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq, ProxyData, SetGroupReqSchema,
     TrafficResp, TunStatusSchema,
 };
-use http::Method;
+use http::{HeaderValue, Method};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
@@ -74,9 +74,10 @@ impl ApiServer {
         }
     }
 
-    pub async fn run(self, port: u16, cors_allowed_list: Option<AllowOrigin>) {
+    pub async fn run(self, port: u16, cors_allowed_list: &[String]) {
         let secret = Arc::new(self.secret.clone());
-        let wrapper = move |r| Self::auth(secret.clone(), r);
+        let cors_vec = parse_cors_allow(cors_allowed_list);
+        let wrapper = move |r| Self::auth(secret.clone(), r, cors_vec.clone());
 
         let mut app = Router::new()
             .route("/ws/traffic", get(Self::ws_get_traffic))
@@ -104,7 +105,7 @@ impl ApiServer {
             .route("/reload", post(Self::reload))
             .route_layer(map_request(wrapper))
             .with_state(self);
-        if let Some(origin) = cors_allowed_list {
+        if let Some(origin) = parse_api_cors_origin(cors_allowed_list) {
             app = app.layer(
                 CorsLayer::new()
                     .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
@@ -127,7 +128,24 @@ impl ApiServer {
     async fn auth<B>(
         auth: Arc<Option<String>>,
         request: http::Request<B>,
+        cors_allow: CorsAllow,
     ) -> Result<http::Request<B>, http::StatusCode> {
+        // Validate websocket origin
+        // The `origin` header will be set automatically by browser
+        if request.headers().contains_key("Upgrade")
+            && request.headers().contains_key("origin")
+            && !cors_allow.validate(
+                request
+                    .headers()
+                    .get("origin")
+                    .unwrap()
+                    .to_str()
+                    .map_err(|_| http::StatusCode::UNAUTHORIZED)?,
+            )
+        {
+            return Err(http::StatusCode::UNAUTHORIZED);
+        }
+
         if let Some(auth) = auth.as_ref() {
             let auth_header = request
                 .headers()
@@ -531,5 +549,62 @@ fn pretty_latency(elapsed: Duration) -> String {
         format!("{}ms", ms)
     } else {
         format!("{:.2}s", ms as f64 / 1000.0)
+    }
+}
+
+fn parse_api_cors_origin(cors_allowed_list: &[String]) -> Option<AllowOrigin> {
+    if !cors_allowed_list.is_empty() {
+        let mut list = vec![];
+        for i in cors_allowed_list.iter() {
+            if i == "*" {
+                return Some(AllowOrigin::any());
+            } else {
+                list.push(HeaderValue::from_str(i.as_str()).ok()?)
+            }
+        }
+        Some(AllowOrigin::list(list.into_iter()))
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+enum CorsAllow {
+    Any,
+    None,
+    Some(Arc<HashSet<String>>),
+}
+
+impl CorsAllow {
+    fn validate(&self, source: &str) -> bool {
+        match self {
+            CorsAllow::Any => true,
+            CorsAllow::None => Self::is_local(source),
+            CorsAllow::Some(set) => set.contains(source) || Self::is_local(source),
+        }
+    }
+
+    fn is_local(source: &str) -> bool {
+        source.starts_with("http://localhost")
+            || source.starts_with("http://127.0.0.1")
+            || source.starts_with("file://")
+            || source.starts_with("https://localhost")
+            || source.starts_with("https://127.0.0.1")
+    }
+}
+
+fn parse_cors_allow(cors_allowed_list: &[String]) -> CorsAllow {
+    if !cors_allowed_list.is_empty() {
+        let mut list = HashSet::new();
+        for i in cors_allowed_list.iter() {
+            if i == "*" {
+                return CorsAllow::Any;
+            } else {
+                list.insert(i.clone());
+            }
+        }
+        CorsAllow::Some(Arc::new(list))
+    } else {
+        CorsAllow::None
     }
 }
