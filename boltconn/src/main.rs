@@ -192,7 +192,7 @@ fn main() -> ExitCode {
         tracing::info!("Auto detected interface: {}", real_iface_name);
         real_iface_name
     };
-    let cors_domains = parse_api_cors_origin(&config.cors_allowed_list);
+    let cors_domains = parse_api_cors_origin(&config.restful.cors_allowed_list);
 
     // initialize resources
     let dns = {
@@ -265,7 +265,7 @@ fn main() -> ExitCode {
 
     // external controller
     let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
-    let api_port = config.api_port;
+    let api_port = config.restful.api_port;
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
 
     let dispatcher = {
@@ -331,10 +331,10 @@ fn main() -> ExitCode {
         ))
     };
 
-    let speedtest_url = Arc::new(std::sync::Mutex::new(config.speedtest_url.clone()));
+    let speedtest_url = Arc::new(std::sync::Mutex::new(config.restful.speedtest_url.clone()));
 
     let api_server = ApiServer::new(
-        config.api_key.clone(),
+        config.restful.api_key.clone(),
         manager.clone(),
         stat_center,
         Some(http_capturer.clone()),
@@ -472,6 +472,6 @@ async fn reload(
         intercept_filter,
         url_mod,
         hdr_mod,
-        config.speedtest_url.clone(),
+        config.restful.speedtest_url.clone(),
     ))
 }

@@ -9,18 +9,11 @@ use std::net::{IpAddr, SocketAddr};
 #[serde(deny_unknown_fields)]
 pub struct RawRootCfg {
     pub interface: String,
-    #[serde(alias = "api-port")]
-    pub api_port: u16,
-    #[serde(alias = "api-key")]
-    pub api_key: Option<String>,
     #[serde(alias = "http-port")]
     pub http_port: Option<u16>,
     #[serde(alias = "socks5-port")]
     pub socks5_port: Option<u16>,
-    #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
-    pub speedtest_url: String,
-    #[serde(alias = "cors-allowed-list", default = "default_str_vec")]
-    pub cors_allowed_list: Vec<String>,
+    pub restful: RawApiServerConfig,
     // From now on, all the configs should be reloaded properly
     pub dns: RawDnsConfig,
     #[serde(alias = "proxy-local", default = "default_local_proxy")]
@@ -59,6 +52,18 @@ pub enum RawServerSockAddr {
 pub struct RawDnsConfig {
     pub bootstrap: Vec<IpAddr>,
     pub nameserver: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RawApiServerConfig {
+    #[serde(alias = "api-port")]
+    pub api_port: u16,
+    #[serde(alias = "api-key")]
+    pub api_key: Option<String>,
+    #[serde(alias = "cors-allowed-list", default = "default_str_vec")]
+    pub cors_allowed_list: Vec<String>,
+    #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
+    pub speedtest_url: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
