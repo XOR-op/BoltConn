@@ -6,7 +6,6 @@ mod proxy_provider;
 mod rule_provider;
 mod state;
 
-use crate::state_path;
 use anyhow::anyhow;
 pub use config::*;
 pub use module::*;
@@ -46,12 +45,16 @@ pub struct LoadedConfig {
 }
 
 impl LoadedConfig {
+    pub fn state_path(app_data_path: &Path) -> PathBuf {
+        app_data_path.join("state.yml")
+    }
+
     pub async fn load_config(config_path: &Path, data_path: &Path) -> anyhow::Result<Self> {
         let config_text = fs::read_to_string(config_path.join("config.yml"))
             .map_err(|e| anyhow!("config.yml ({:?}): {}", config_path, e))?;
         let mut raw_config: RawRootCfg =
             serde_yaml::from_str(&config_text).map_err(|e| anyhow!("Read config.yml: {}", e))?;
-        let state_text = fs::read_to_string(state_path(data_path))
+        let state_text = fs::read_to_string(Self::state_path(data_path))
             .map_err(|e| anyhow!("state.yml ({:?}): {}", data_path, e))?;
         let raw_state: RawState =
             serde_yaml::from_str(&state_text).map_err(|e| anyhow!("Read state.yml: {}", e))?;
