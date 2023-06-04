@@ -52,13 +52,18 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-    let app = match App::new(config_path, data_path, cert_path) {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let _guard = rt.enter();
+    let app = match rt.block_on(App::create(config_path, data_path, cert_path)) {
         Ok(app) => app,
         Err(e) => {
             eprintln!("{e}");
             return ExitCode::from(1);
         }
     };
+    rt.block_on(app.serve_command());
+    tracing::info!("Exiting...");
+    rt.shutdown_background();
     ExitCode::from(0)
 }
 

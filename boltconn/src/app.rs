@@ -12,7 +12,6 @@ use crate::proxy::{
 };
 use crate::{external, platform};
 use anyhow::anyhow;
-use futures::TryFutureExt;
 use ipnet::Ipv4Net;
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -22,19 +21,26 @@ use std::time::{Duration, Instant};
 use std::{fs, io};
 use tokio::select;
 
-#[derive(Debug)]
-pub struct App {}
+pub struct App {
+    config_path: PathBuf,
+    data_path: PathBuf,
+    outbound_iface: String,
+    dns: Arc<Dns>,
+    api_dispatching_handler: Arc<tokio::sync::RwLock<Arc<Dispatching>>>,
+    dispatcher: Arc<Dispatcher>,
+    http_capturer: Arc<HttpCapturer>,
+    speedtest_url: Arc<std::sync::Mutex<String>>,
+    tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
+    receiver: tokio::sync::mpsc::Receiver<()>,
+}
 
 impl App {
-    pub fn new(
+    /// Create a running App instance.
+    pub async fn create(
         config_path: PathBuf,
         data_path: PathBuf,
         cert_path: PathBuf,
     ) -> anyhow::Result<Self> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| anyhow!("Tokio failed to initialize: {e}"))?;
-        let _guard = rt.enter();
-
         // tokio and tracing
 
         let stream_logger = StreamLoggerSend::new();
@@ -59,10 +65,9 @@ impl App {
         let (udp_tun_tx, udp_tun_rx) = flume::unbounded();
 
         // Read initial config
-        let loaded_config = rt.block_on(
-            LoadedConfig::load_config(&config_path, &data_path)
-                .map_err(|e| anyhow!("Load config from {:?} failed: {}", &config_path, e)),
-        )?;
+        let loaded_config = LoadedConfig::load_config(&config_path, &data_path)
+            .await
+            .map_err(|e| anyhow!("Load config from {:?} failed: {}", &config_path, e))?;
         let config = &loaded_config.config;
 
         let outbound_iface = if config.interface != "auto" {
@@ -78,8 +83,7 @@ impl App {
             let bootstrap =
                 new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice())
                     .unwrap();
-            let group = match rt.block_on(parse_dns_config(&config.dns.nameserver, Some(bootstrap)))
-            {
+            let group = match parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await {
                 Ok(g) => {
                     if g.is_empty() {
                         return Err(anyhow!("No DNS specified"));
@@ -137,7 +141,7 @@ impl App {
         // external controller
         let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
         let api_port = config.restful.api_port;
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
+        let (sender, receiver) = tokio::sync::mpsc::channel::<()>(1);
 
         let dispatcher = {
             // tls mitm
@@ -211,17 +215,16 @@ impl App {
         );
 
         // run
-        let _mgr_flush_handle = manager.flush_with_interval(Duration::from_secs(30));
-        let _tun_inbound_tcp_handle = rt.spawn(async move { tun_inbound_tcp.run().await });
-        let _tun_inbound_udp_handle = rt.spawn(async move { tun_inbound_udp.run().await });
-        let _tun_handle = rt.spawn(async move { tun.run(nat_addr).await });
-        let _api_handle =
-            rt.spawn(async move { api_server.run(api_port, cors_domains.as_slice()).await });
+        manager.flush_with_interval(Duration::from_secs(30));
+        tokio::spawn(async move { tun_inbound_tcp.run().await });
+        tokio::spawn(async move { tun_inbound_udp.run().await });
+        tokio::spawn(async move { tun.run(nat_addr).await });
+        tokio::spawn(async move { api_server.run(api_port, cors_domains.as_slice()).await });
         if config.http_port == config.socks5_port && config.http_port.is_some() {
             // Mixed inbound
             let port = config.http_port.unwrap();
             let dispatcher = dispatcher.clone();
-            rt.spawn(async move {
+            tokio::spawn(async move {
                 let mixed_proxy = MixedInbound::new(port, None, None, dispatcher).await?;
                 mixed_proxy.run().await;
                 Ok::<(), io::Error>(())
@@ -229,7 +232,7 @@ impl App {
         } else {
             if let Some(http_port) = config.http_port {
                 let dispatcher = dispatcher.clone();
-                rt.spawn(async move {
+                tokio::spawn(async move {
                     let http_proxy = HttpInbound::new(http_port, None, dispatcher).await?;
                     http_proxy.run().await;
                     Ok::<(), io::Error>(())
@@ -237,52 +240,87 @@ impl App {
             }
             if let Some(socks5_port) = config.socks5_port {
                 let dispatcher = dispatcher.clone();
-                rt.spawn(async move {
+                tokio::spawn(async move {
                     let socks_proxy = Socks5Inbound::new(socks5_port, None, dispatcher).await?;
                     socks_proxy.run().await;
                     Ok::<(), io::Error>(())
                 });
             }
         }
+        Ok(Self {
+            config_path,
+            data_path,
+            outbound_iface,
+            dns,
+            api_dispatching_handler,
+            dispatcher,
+            http_capturer,
+            speedtest_url,
+            tun_configure,
+            receiver,
+        })
+    }
 
-        rt.block_on(async move {
-            loop {
-                select! {
-                _ = tokio::signal::ctrl_c()=>return,
-                restart = receiver.recv() => {
+    /// Serve Ctrl-C and reload command from API server.
+    pub async fn serve_command(mut self) {
+        let tun_configure = self.tun_configure.clone();
+        'outer: loop {
+            select! {
+                _ = tokio::signal::ctrl_c()=>break 'outer,
+                restart = self.receiver.recv() => {
                     if restart.is_some(){
                         // try restarting components
-                        let start = Instant::now();
-                        match reload(&config_path, &data_path, outbound_iface.as_str(), dns.clone()).await{
-                            Ok((dispatching, intercept_filter,url_rewriter,header_rewriter,new_speedtest_url)) => {
-                                *api_dispatching_handler.write().await = dispatching.clone();
-                                let hcap2 = http_capturer.clone();
-                                dispatcher.replace_dispatching(dispatching);
-                                dispatcher.replace_intercept_filter(intercept_filter);
-                                dispatcher.replace_modifier(Box::new(move |pi| Arc::new(InterceptModifier::new(hcap2.clone(),url_rewriter.clone(),header_rewriter.clone(),pi))));
-                                *speedtest_url.lock().unwrap() = new_speedtest_url;
-
-                                tracing::info!("Reloaded config successfully in {}ms",start.elapsed().as_millis());
-                            }
-                            Err(err)=>{
-                                tracing::error!("Reloading config failed: {}",err);
-                            }
-                        }
+                       self.reload().await;
                     } else {
-                        return;
+                        break 'outer;
                     }
                 }
             }
-            }
-        });
-        tracing::info!("Exiting...");
+        }
         tun_configure.lock().unwrap().disable(false);
-        rt.shutdown_background();
-        Ok(Self {})
+    }
+
+    async fn reload(&self) {
+        let start = Instant::now();
+        match reload(
+            &self.config_path,
+            &self.data_path,
+            self.outbound_iface.as_str(),
+            self.dns.clone(),
+        )
+        .await
+        {
+            Ok((
+                dispatching,
+                intercept_filter,
+                url_rewriter,
+                header_rewriter,
+                new_speedtest_url,
+            )) => {
+                *self.api_dispatching_handler.write().await = dispatching.clone();
+                let hcap2 = self.http_capturer.clone();
+                self.dispatcher.replace_dispatching(dispatching);
+                self.dispatcher.replace_intercept_filter(intercept_filter);
+                self.dispatcher.replace_modifier(Box::new(move |pi| {
+                    Arc::new(InterceptModifier::new(
+                        hcap2.clone(),
+                        url_rewriter.clone(),
+                        header_rewriter.clone(),
+                        pi,
+                    ))
+                }));
+                *self.speedtest_url.lock().unwrap() = new_speedtest_url;
+                tracing::info!(
+                    "Reloaded config successfully in {}ms",
+                    start.elapsed().as_millis()
+                );
+            }
+            Err(err) => {
+                tracing::error!("Reloading config failed: {}", err);
+            }
+        }
     }
 }
-
-pub struct AppBuilder {}
 
 fn load_cert_and_key(cert_path: &Path) -> anyhow::Result<Certificate> {
     let cert_str = fs::read_to_string(cert_path.join("crt.pem"))?;
