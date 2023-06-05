@@ -1,6 +1,6 @@
 use crate::config::{LinkedState, LoadedConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
-use crate::external::{ApiServer, DatabaseHandle, StreamLoggerSend};
+use crate::external::{ApiServer, Controller, DatabaseHandle, StreamLoggerSend};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns};
@@ -183,8 +183,7 @@ impl App {
 
         let speedtest_url = Arc::new(std::sync::Mutex::new(config.restful.speedtest_url.clone()));
 
-        let api_server = ApiServer::new(
-            config.restful.api_key.clone(),
+        let controller = Arc::new(Controller::new(
             manager.clone(),
             stat_center,
             Some(http_capturer.clone()),
@@ -198,7 +197,8 @@ impl App {
             },
             stream_logger,
             speedtest_url.clone(),
-        );
+        ));
+        let api_server = ApiServer::new(config.restful.api_key.clone(), controller);
 
         let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
             nat_addr,
