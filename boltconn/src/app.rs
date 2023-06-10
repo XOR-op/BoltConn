@@ -1,6 +1,8 @@
 use crate::config::{LinkedState, LoadedConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
-use crate::external::{ApiServer, Controller, DatabaseHandle, SharedDispatching, StreamLoggerSend};
+use crate::external::{
+    Controller, DatabaseHandle, SharedDispatching, StreamLoggerSend, WebController,
+};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns};
@@ -76,7 +78,7 @@ impl App {
             tracing::info!("Auto detected interface: {}", real_iface_name);
             real_iface_name
         };
-        let cors_domains = config.restful.cors_allowed_list.clone();
+        let cors_domains = config.web_controller.cors_allowed_list.clone();
 
         // initialize resources
         let dns = {
@@ -140,7 +142,7 @@ impl App {
 
         // external controller
         let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
-        let api_port = config.restful.api_port;
+        let api_port = config.web_controller.api_port;
         let (sender, receiver) = tokio::sync::mpsc::channel::<()>(1);
 
         let dispatcher = {
@@ -181,7 +183,9 @@ impl App {
             ))
         };
 
-        let speedtest_url = Arc::new(std::sync::Mutex::new(config.restful.speedtest_url.clone()));
+        let speedtest_url = Arc::new(std::sync::Mutex::new(
+            config.web_controller.speedtest_url.clone(),
+        ));
 
         let controller = Arc::new(Controller::new(
             manager.clone(),
@@ -198,7 +202,7 @@ impl App {
             stream_logger,
             speedtest_url.clone(),
         ));
-        let api_server = ApiServer::new(config.restful.api_key.clone(), controller);
+        let api_server = WebController::new(config.web_controller.api_key.clone(), controller);
 
         let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
             nat_addr,
@@ -396,6 +400,6 @@ async fn reload(
         intercept_filter,
         url_mod,
         hdr_mod,
-        config.restful.speedtest_url.clone(),
+        config.web_controller.speedtest_url.clone(),
     ))
 }

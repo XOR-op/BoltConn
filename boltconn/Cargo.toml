@@ -30,6 +30,7 @@ ipnet = "2.5.1"
 ip_network = "0.4.1"
 ip_network_table = "0.2.0"
 is-root = "0.1.2"
+jsonrpsee = {version = "0.18.2",defailt-features = false, features = ["client-core","server-core"]}
 libc = "0.2.141"
 linked-hash-map = { version = "0.5.6", features = ["serde_impl"] }
 radix_trie = "0.2.1"

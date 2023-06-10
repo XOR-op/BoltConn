@@ -13,7 +13,8 @@ pub struct RawRootCfg {
     pub http_port: Option<u16>,
     #[serde(alias = "socks5-port")]
     pub socks5_port: Option<u16>,
-    pub restful: RawApiServerConfig,
+    #[serde(alias = "web-controller")]
+    pub web_controller: RawWebControllerConfig,
     // From now on, all the configs should be reloaded properly
     pub dns: RawDnsConfig,
     #[serde(alias = "proxy-local", default = "default_local_proxy")]
@@ -55,7 +56,7 @@ pub struct RawDnsConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RawApiServerConfig {
+pub struct RawWebControllerConfig {
     #[serde(alias = "api-port")]
     pub api_port: u16,
     #[serde(alias = "api-key")]
