@@ -1,6 +1,6 @@
 use crate::config::{LinkedState, LoadedConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
-use crate::external::{ApiServer, Controller, DatabaseHandle, StreamLoggerSend};
+use crate::external::{ApiServer, Controller, DatabaseHandle, SharedDispatching, StreamLoggerSend};
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns};
@@ -26,11 +26,11 @@ pub struct App {
     data_path: PathBuf,
     outbound_iface: String,
     dns: Arc<Dns>,
-    api_dispatching_handler: Arc<tokio::sync::RwLock<Arc<Dispatching>>>,
     dispatcher: Arc<Dispatcher>,
+    api_dispatching_handler: SharedDispatching,
+    tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
     http_capturer: Arc<HttpCapturer>,
     speedtest_url: Arc<std::sync::Mutex<String>>,
-    tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
     receiver: tokio::sync::mpsc::Receiver<()>,
 }
 
@@ -252,11 +252,11 @@ impl App {
             data_path,
             outbound_iface,
             dns,
-            api_dispatching_handler,
             dispatcher,
+            api_dispatching_handler,
+            tun_configure,
             http_capturer,
             speedtest_url,
-            tun_configure,
             receiver,
         })
     }
