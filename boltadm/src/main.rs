@@ -1,6 +1,7 @@
 mod cert;
 mod clean;
 mod request;
+mod request_uds;
 
 use crate::request::Requester;
 use anyhow::anyhow;
@@ -80,8 +81,6 @@ enum SubCommand {
     Conn(ConnOptions),
     /// Logs Operations
     Log(LogOptions),
-    /// API for Debugging
-    Debug(DebugOptions),
     /// Generate Certificates
     Cert(CertOptions),
     /// Captured HTTP data
@@ -112,9 +111,6 @@ async fn main() {
                 // todo
                 Ok(())
             }
-        },
-        SubCommand::Debug(opt) => match opt {
-            DebugOptions::Session => requestor.get_sessions().await,
         },
         SubCommand::Cert(opt) => {
             if !is_root() {

@@ -34,6 +34,8 @@ pub trait ControlService {
     async fn set_tun(enabled: TunStatusSchema) -> bool;
 
     async fn get_traffic() -> TrafficResp;
+
+    async fn reload();
 }
 
 #[tarpc::service]

@@ -5,7 +5,6 @@ use boltapi::{
     HttpInterceptSchema, TrafficResp, TunStatusSchema,
 };
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel};
@@ -23,8 +22,7 @@ impl UdsController {
         Self { controller }
     }
 
-    pub async fn run(self, path: PathBuf) -> io::Result<()> {
-        let listener = UnixListener::bind(path)?;
+    pub async fn run(self, listener: UnixListener) -> io::Result<()> {
         let codec_builder = LengthDelimitedCodec::builder();
         loop {
             let (conn, _addr) = listener.accept().await?;
@@ -96,5 +94,9 @@ impl ControlService for UdsController {
 
     async fn get_traffic(self, _ctx: Context) -> TrafficResp {
         self.controller.get_traffic()
+    }
+
+    async fn reload(self, _ctx: Context) {
+        self.controller.reload().await
     }
 }

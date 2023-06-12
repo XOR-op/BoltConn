@@ -326,6 +326,7 @@ dependencies = [
  "serde_json",
  "structopt",
  "tabular",
+ "tarpc",
  "tokio",
 ]
 
