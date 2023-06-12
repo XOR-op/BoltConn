@@ -1,3 +1,4 @@
+pub mod rpc;
 mod schema;
 
 pub use schema::*;

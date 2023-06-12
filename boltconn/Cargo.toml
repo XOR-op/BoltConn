@@ -48,7 +48,7 @@ shadowsocks = { git = "https://github.com/shadowsocks/shadowsocks-rust" }
 socket2 = { version = "0.5.1", features = ["all"] }
 smoltcp = "0.9.0"
 structopt = "0.3.26"
-tarpc = "0.33.0"
+tarpc = { version = "0.33.0", features = ["serde-transport", "unix", "serde-transport-bincode"] }
 thiserror = "1.0.37"
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
 tokio-rustls = { version = "0.24.0", features = ["dangerous_configuration"] }
