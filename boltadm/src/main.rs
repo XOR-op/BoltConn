@@ -2,6 +2,7 @@ mod cert;
 mod clean;
 mod request;
 mod request_uds;
+mod request_web;
 
 use crate::request::Requester;
 use anyhow::anyhow;
@@ -13,9 +14,9 @@ use structopt::StructOpt;
 #[derive(Debug, StructOpt)]
 #[structopt(name = "boltadm", about = "Controller for BoltConn")]
 struct Args {
-    /// RESTful API port
-    #[structopt(short, long, default_value = "18086")]
-    pub port: u16,
+    /// RESTful API URL; if not set, BoltAdm will use unix domain socket as default.
+    #[structopt(short, long)]
+    pub url: Option<String>,
     #[structopt(subcommand)]
     pub cmd: SubCommand,
 }
@@ -96,7 +97,16 @@ enum SubCommand {
 #[tokio::main]
 async fn main() {
     let args: Args = Args::from_args();
-    let requestor = Requester { port: args.port };
+    let requestor = match match args.url {
+        None => Requester::new_uds(PathBuf::from("/var/run/boltconn.sock")).await,
+        Some(url) => Requester::new_web(url),
+    } {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("{}", err);
+            exit(-1)
+        }
+    };
     let result = match args.cmd {
         SubCommand::Proxy(opt) => match opt {
             ProxyOptions::Set { group, proxy } => requestor.set_group_proxy(group, proxy).await,

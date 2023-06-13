@@ -78,11 +78,11 @@ impl UdsConnector {
         })
     }
 
-    pub async fn get_intercept_payload(&self, id: u32) -> Result<Option<GetInterceptDataResp>> {
-        Ok(self
-            .client
+    pub async fn get_intercept_payload(&self, id: u32) -> Result<GetInterceptDataResp> {
+        self.client
             .get_intercepted_payload(Context::current(), id)
-            .await?)
+            .await?
+            .ok_or(anyhow::anyhow!("No response"))
     }
 
     pub async fn reload_config(&self) -> Result<()> {
