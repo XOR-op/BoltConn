@@ -1,4 +1,5 @@
 use crate::external::Controller;
+use crate::platform::get_user_info;
 use boltapi::rpc::ControlService;
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
@@ -19,10 +20,15 @@ pub struct UnixListenerGuard {
 }
 
 impl UnixListenerGuard {
-    pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let listener = UnixListener::bind(&path)?;
+        let (_, uid, gid) =
+            get_user_info().ok_or(anyhow::anyhow!("Cannot get user before sudo"))?;
+        nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))?;
         Ok(Self {
-            path: path.as_ref().to_path_buf(),
-            listener: Some(UnixListener::bind(path)?),
+            path,
+            listener: Some(listener),
         })
     }
     pub fn get_listener(&self) -> &UnixListener {

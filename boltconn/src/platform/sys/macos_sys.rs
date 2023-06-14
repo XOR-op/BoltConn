@@ -202,3 +202,16 @@ impl Drop for SystemDnsHandle {
         }
     }
 }
+
+pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
+    let name = match std::env::var("USER") {
+        Ok(name) => name,
+        Err(_) => return None,
+    };
+    let (uid, gid) = match nix::unistd::User::from_name(name.as_str()) {
+        Ok(Some(user)) => (user.uid.into(), user.gid.into()),
+        _ => return None,
+    };
+
+    Some((name, uid, gid))
+}

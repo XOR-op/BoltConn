@@ -114,3 +114,20 @@ impl Drop for SystemDnsHandle {
         let _ = run_command("umount", [Self::RESOLV]);
     }
 }
+
+pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
+    let user_name = unsafe { libc::getlogin() };
+    if user_name.is_null() {
+        return None;
+    }
+    let name = unsafe { CStr::from_ptr(user_name) }
+        .to_string_lossy()
+        .into_owned();
+    let user_info = unsafe { libc::getpwnam(user_name) };
+    if user_info.is_null() {
+        return None;
+    }
+    let uid = unsafe { (*user_info).pw_uid };
+    let gid = unsafe { (*user_info).pw_gid };
+    Some((name, uid, gid))
+}
