@@ -1,4 +1,5 @@
 use ipnet::Ipv4Net;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn delete_route_entry(addr: Ipv4Net) {
@@ -43,4 +44,8 @@ pub(crate) fn clean_route_table() {
     for ip in ipv4_relay_addresses() {
         delete_route_entry(ip);
     }
+}
+
+pub(crate) fn remove_unix_socket<P: AsRef<Path>>(path: P) {
+    let _ = std::fs::remove_file(path);
 }

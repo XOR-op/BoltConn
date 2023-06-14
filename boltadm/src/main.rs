@@ -97,8 +97,19 @@ enum SubCommand {
 #[tokio::main]
 async fn main() {
     let args: Args = Args::from_args();
+    let default_uds_path = "/var/run/boltconn.sock";
+    if matches!(args.cmd, SubCommand::Clean) {
+        if !is_root() {
+            eprintln!("Must be run with root/admin privilege");
+            exit(-1)
+        } else {
+            clean::clean_route_table();
+            clean::remove_unix_socket(default_uds_path);
+            exit(0)
+        }
+    }
     let requestor = match match args.url {
-        None => Requester::new_uds(PathBuf::from("/var/run/boltconn.sock")).await,
+        None => Requester::new_uds(PathBuf::from(default_uds_path)).await,
         Some(url) => Requester::new_web(url),
     } {
         Ok(r) => r,
@@ -158,15 +169,7 @@ async fn main() {
             InterceptOptions::Range { start, end } => requestor.intercept(Some((start, end))).await,
             InterceptOptions::Get { id } => requestor.get_intercept_payload(id).await,
         },
-        SubCommand::Clean => {
-            if !is_root() {
-                eprintln!("Must be run with root/admin privilege");
-                exit(-1)
-            } else {
-                clean::clean_route_table();
-                Ok(())
-            }
-        }
+        SubCommand::Clean => unreachable!(),
         SubCommand::Reload => requestor.reload_config().await,
     };
     match result {

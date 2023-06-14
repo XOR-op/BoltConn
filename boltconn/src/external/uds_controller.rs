@@ -5,12 +5,39 @@ use boltapi::{
     HttpInterceptSchema, TrafficResp, TunStatusSchema,
 };
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel};
 use tarpc::tokio_serde::formats::Bincode;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio::net::UnixListener;
+
+pub struct UnixListenerGuard {
+    path: PathBuf,
+    listener: Option<UnixListener>,
+}
+
+impl UnixListenerGuard {
+    pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Ok(Self {
+            path: path.as_ref().to_path_buf(),
+            listener: Some(UnixListener::bind(path)?),
+        })
+    }
+    pub fn get_listener(&self) -> &UnixListener {
+        self.listener.as_ref().unwrap()
+    }
+}
+
+impl Drop for UnixListenerGuard {
+    fn drop(&mut self) {
+        self.listener = None;
+        if let Err(e) = std::fs::remove_file(&self.path) {
+            tracing::error!("Error when removing unix domain socket: {}", e)
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct UdsController {
@@ -22,10 +49,10 @@ impl UdsController {
         Self { controller }
     }
 
-    pub async fn run(self, listener: UnixListener) -> io::Result<()> {
+    pub async fn run(self, listener: Arc<UnixListenerGuard>) -> io::Result<()> {
         let codec_builder = LengthDelimitedCodec::builder();
         loop {
-            let (conn, _addr) = listener.accept().await?;
+            let (conn, _addr) = listener.get_listener().accept().await?;
             let framed = codec_builder.new_framed(conn);
             let transport = tarpc::serde_transport::new(framed, Bincode::default());
 

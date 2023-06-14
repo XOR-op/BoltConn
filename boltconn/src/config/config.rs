@@ -14,8 +14,10 @@ pub struct RawRootCfg {
     #[serde(alias = "socks5-port")]
     pub socks5_port: Option<u16>,
     #[serde(alias = "web-controller")]
-    pub web_controller: RawWebControllerConfig,
+    pub web_controller: Option<RawWebControllerConfig>,
     // From now on, all the configs should be reloaded properly
+    #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
+    pub speedtest_url: String,
     pub dns: RawDnsConfig,
     #[serde(alias = "proxy-local", default = "default_local_proxy")]
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
@@ -63,8 +65,6 @@ pub struct RawWebControllerConfig {
     pub api_key: Option<String>,
     #[serde(alias = "cors-allowed-list", default = "default_str_vec")]
     pub cors_allowed_list: Vec<String>,
-    #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
-    pub speedtest_url: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

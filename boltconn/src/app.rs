@@ -1,7 +1,8 @@
 use crate::config::{LinkedState, LoadedConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::{
-    Controller, DatabaseHandle, SharedDispatching, StreamLoggerSend, WebController,
+    Controller, DatabaseHandle, SharedDispatching, StreamLoggerSend, UdsController,
+    UnixListenerGuard, WebController,
 };
 use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
 use crate::network::configure::TunConfigure;
@@ -34,6 +35,7 @@ pub struct App {
     http_capturer: Arc<HttpCapturer>,
     speedtest_url: Arc<std::sync::Mutex<String>>,
     receiver: tokio::sync::mpsc::Receiver<()>,
+    uds_socket: Arc<UnixListenerGuard>,
 }
 
 impl App {
@@ -43,28 +45,28 @@ impl App {
         data_path: PathBuf,
         cert_path: PathBuf,
     ) -> anyhow::Result<Self> {
-        // tokio and tracing
-
+        // tracing
         let stream_logger = StreamLoggerSend::new();
         external::init_tracing(&stream_logger);
 
         // interface
         let (_, real_iface_name) =
             get_default_route().map_err(|e| anyhow!("Failed to get default route: {}", e))?;
-
         let fake_dns_server = "198.18.99.88".parse().unwrap();
-
-        // database handle
-        let conn_handle = open_database_handle(data_path.as_path())?;
-        let intercept_handle = conn_handle.clone();
 
         // config-independent components
         let manager = Arc::new(SessionManager::new());
-        let stat_center = Arc::new(ContextManager::new(conn_handle));
-        let http_capturer = Arc::new(HttpCapturer::new(intercept_handle));
-        let hcap_copy = http_capturer.clone();
-        let (tun_udp_tx, tun_udp_rx) = flume::unbounded();
-        let (udp_tun_tx, udp_tun_rx) = flume::unbounded();
+        let (stat_center, http_capturer) = {
+            let conn_handle = open_database_handle(data_path.as_path())?;
+            let intercept_handle = conn_handle.clone();
+            (
+                Arc::new(ContextManager::new(conn_handle)),
+                Arc::new(HttpCapturer::new(intercept_handle)),
+            )
+        };
+
+        // setup Unix socket
+        let uds_listener = Arc::new(UnixListenerGuard::new("/var/run/boltconn.sock")?);
 
         // Read initial config
         let loaded_config = LoadedConfig::load_config(&config_path, &data_path)
@@ -78,7 +80,6 @@ impl App {
             tracing::info!("Auto detected interface: {}", real_iface_name);
             real_iface_name
         };
-        let cors_domains = config.web_controller.cors_allowed_list.clone();
 
         // initialize resources
         let dns = {
@@ -100,6 +101,9 @@ impl App {
             )
         };
 
+        // Create TUN
+        let (tun_udp_tx, tun_udp_rx) = flume::unbounded();
+        let (udp_tun_tx, udp_tun_rx) = flume::unbounded();
         let tun = {
             let mut tun = TunDevice::open(
                 manager.clone(),
@@ -117,16 +121,18 @@ impl App {
             tun.up().map_err(|e| anyhow!("TUN failed to up: {e}"))?;
             tun
         };
-
-        let tun_configure = Arc::new(std::sync::Mutex::new(TunConfigure::new(
-            fake_dns_server,
-            tun.get_name(),
-        )));
-        tun_configure
-            .lock()
-            .unwrap()
-            .enable()
-            .map_err(|e| anyhow!("Failed to enable global setting: {e}"))?;
+        let tun_configure = {
+            let tun_configure = Arc::new(std::sync::Mutex::new(TunConfigure::new(
+                fake_dns_server,
+                tun.get_name(),
+            )));
+            tun_configure
+                .lock()
+                .unwrap()
+                .enable()
+                .map_err(|e| anyhow!("Failed to enable global setting: {e}"))?;
+            tun_configure
+        };
 
         let nat_addr = SocketAddr::new(
             platform::get_iface_address(tun.get_name())
@@ -134,17 +140,12 @@ impl App {
             9961,
         );
 
+        // dispatch
         let dispatching = Arc::new(
             DispatchingBuilder::new()
                 .build(&loaded_config)
                 .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
         );
-
-        // external controller
-        let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching.clone()));
-        let api_port = config.web_controller.api_port;
-        let (sender, receiver) = tokio::sync::mpsc::channel::<()>(1);
-
         let dispatcher = {
             // tls mitm
             let cert = load_cert_and_key(&cert_path)
@@ -165,11 +166,12 @@ impl App {
                     })?),
                 )
             };
+            let hcap_copy = http_capturer.clone();
             Arc::new(Dispatcher::new(
                 outbound_iface.as_str(),
                 dns.clone(),
                 stat_center.clone(),
-                dispatching,
+                dispatching.clone(),
                 cert,
                 Box::new(move |pi| {
                     Arc::new(InterceptModifier::new(
@@ -183,10 +185,10 @@ impl App {
             ))
         };
 
-        let speedtest_url = Arc::new(std::sync::Mutex::new(
-            config.web_controller.speedtest_url.clone(),
-        ));
-
+        // create controller
+        let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching));
+        let (reload_sender, reload_receiver) = tokio::sync::mpsc::channel::<()>(1);
+        let speedtest_url = Arc::new(std::sync::Mutex::new(config.speedtest_url.clone()));
         let controller = Arc::new(Controller::new(
             manager.clone(),
             stat_center,
@@ -194,7 +196,7 @@ impl App {
             dispatcher.clone(),
             api_dispatching_handler.clone(),
             tun_configure.clone(),
-            sender,
+            reload_sender,
             LinkedState {
                 state_path: LoadedConfig::state_path(&data_path),
                 state: loaded_config.state,
@@ -202,8 +204,8 @@ impl App {
             stream_logger,
             speedtest_url.clone(),
         ));
-        let api_server = WebController::new(config.web_controller.api_key.clone(), controller);
 
+        // start tun
         let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
             nat_addr,
             manager.clone(),
@@ -217,13 +219,12 @@ impl App {
             manager.clone(),
             dns.clone(),
         );
-
-        // run
         manager.flush_with_interval(Duration::from_secs(30));
         tokio::spawn(async move { tun_inbound_tcp.run().await });
         tokio::spawn(async move { tun_inbound_udp.run().await });
         tokio::spawn(async move { tun.run(nat_addr).await });
-        tokio::spawn(async move { api_server.run(api_port, cors_domains.as_slice()).await });
+
+        // start http/socks5 inbound
         if config.http_port == config.socks5_port && config.http_port.is_some() {
             // Mixed inbound
             let port = config.http_port.unwrap();
@@ -251,6 +252,19 @@ impl App {
                 });
             }
         }
+
+        let uds_contoller = UdsController::new(controller.clone());
+        let uds_listener2 = uds_listener.clone();
+        tokio::spawn(async move { uds_contoller.run(uds_listener2).await });
+
+        // start web controller
+        if let Some(web_cfg) = &config.web_controller {
+            let api_port = web_cfg.api_port;
+            let api_server = WebController::new(web_cfg.api_key.clone(), controller);
+            let cors_domains = web_cfg.cors_allowed_list.clone();
+            tokio::spawn(async move { api_server.run(api_port, cors_domains.as_slice()).await });
+        }
+
         Ok(Self {
             config_path,
             data_path,
@@ -261,7 +275,8 @@ impl App {
             tun_configure,
             http_capturer,
             speedtest_url,
-            receiver,
+            receiver: reload_receiver,
+            uds_socket: uds_listener,
         })
     }
 
@@ -400,6 +415,6 @@ async fn reload(
         intercept_filter,
         url_mod,
         hdr_mod,
-        config.web_controller.speedtest_url.clone(),
+        config.speedtest_url.clone(),
     ))
 }
