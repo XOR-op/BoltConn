@@ -1,17 +1,42 @@
+use crate::request_uds::UdsConnector;
+use crate::request_web::WebConnector;
 use anyhow::{anyhow, Result};
 use colored::Colorize;
 use std::ops::Add;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tabular::{Row, Table};
 
+enum Inner {
+    Web(WebConnector),
+    Uds(UdsConnector),
+}
+
 pub struct Requester {
-    pub port: u16,
+    inner: Inner,
 }
 
 impl Requester {
+    pub fn new_web(url: String) -> Result<Self> {
+        if let Err(err) = reqwest::Url::parse(url.as_str()) {
+            return Err(anyhow!("{}", err));
+        }
+        Ok(Self {
+            inner: Inner::Web(WebConnector { url }),
+        })
+    }
+
+    pub async fn new_uds(path: PathBuf) -> Result<Self> {
+        Ok(Self {
+            inner: Inner::Uds(UdsConnector::new(path).await?),
+        })
+    }
+
     pub async fn get_group_list(&self) -> Result<()> {
-        let data = reqwest::get(self.route("/proxies")).await?.text().await?;
-        let result: Vec<boltapi::GetGroupRespSchema> = serde_json::from_str(data.as_str())?;
+        let result = match &self.inner {
+            Inner::Web(c) => c.get_group_list().await,
+            Inner::Uds(c) => c.get_group_list().await,
+        }?;
         for entry in result {
             println!("{}: {}", entry.name.bold().red(), entry.selected.blue());
             for i in entry.list {
@@ -22,36 +47,24 @@ impl Requester {
     }
 
     pub async fn set_group_proxy(&self, group: String, proxy: String) -> Result<()> {
-        let req = boltapi::SetGroupReqSchema { selected: proxy };
-        let result = reqwest::Client::new()
-            .put(self.route(format!("/proxies/{}", group).as_str()))
-            .json(&req)
-            .send()
-            .await?
-            .text()
-            .await?;
-        match result.as_str() {
-            "true" => {
-                println!("{}", "Success".green());
-                Ok(())
-            }
-            "false" => {
-                println!("{}", "Failed".red());
-                Err(anyhow!("Failed to set proxy"))
-            }
-            x => {
-                println!("{}", format!("Unknown: {}", x).red());
-                Err(anyhow!("Unknown response"))
-            }
+        let result = match &self.inner {
+            Inner::Web(c) => c.set_proxy_for(group, proxy).await,
+            Inner::Uds(c) => c.set_proxy_for(group, proxy).await,
+        }?;
+        if result {
+            println!("{}", "Success".green());
+            Ok(())
+        } else {
+            println!("{}", "Failed".red());
+            Err(anyhow!("Failed to set proxy"))
         }
     }
 
     pub async fn get_connections(&self) -> Result<()> {
-        let data = reqwest::get(self.route("/connections"))
-            .await?
-            .text()
-            .await?;
-        let result: Vec<boltapi::ConnectionSchema> = serde_json::from_str(data.as_str())?;
+        let result = match &self.inner {
+            Inner::Web(c) => c.get_connections().await,
+            Inner::Uds(c) => c.get_connections().await,
+        }?;
         for conn in result {
             println!(
                 "{} ({},{}) {}\t [up:{},down:{},time:{}] [{}]",
@@ -74,54 +87,23 @@ impl Requester {
         Ok(())
     }
     pub async fn stop_connections(&self, nth: Option<usize>) -> Result<()> {
-        if let Some(id) = nth {
-            let data = reqwest::Client::new()
-                .delete(self.route(format!("/connections/{}", id).as_str()))
-                .send()
-                .await?
-                .text()
-                .await?;
-            match data.as_str() {
-                "true" => println!("Success"),
-                _ => println!("Failed"),
-            };
+        let result = match &self.inner {
+            Inner::Web(c) => c.stop_connections(nth).await,
+            Inner::Uds(c) => c.stop_connections(nth).await,
+        }?;
+        if result {
+            println!("Success");
         } else {
-            reqwest::Client::new()
-                .delete(self.route("/connections"))
-                .send()
-                .await?;
-        }
-        Ok(())
-    }
-
-    pub async fn get_sessions(&self) -> Result<()> {
-        let data = reqwest::get(self.route("/sessions")).await?.text().await?;
-        let result: Vec<boltapi::SessionSchema> = serde_json::from_str(data.as_str())?;
-        for sess in result {
-            println!(
-                "{} [{}{}]",
-                sess.pair,
-                sess.time,
-                match sess.tcp_open {
-                    None => "".to_string(),
-                    Some(n) => {
-                        ", ".to_string()
-                            + match n {
-                                0 => "closed",
-                                1 => "half-closed",
-                                2 => "established",
-                                _ => "",
-                            }
-                    }
-                }
-            );
+            println!("Failed");
         }
         Ok(())
     }
 
     pub async fn get_tun(&self) -> Result<()> {
-        let data = reqwest::get(self.route("/tun")).await?.text().await?;
-        let result: boltapi::TunStatusSchema = serde_json::from_str(data.as_str())?;
+        let result = match &self.inner {
+            Inner::Web(c) => c.get_tun().await,
+            Inner::Uds(c) => c.get_tun().await,
+        }?;
         println!("TUN: {}", if result.enabled { "ON" } else { "OFF" });
         Ok(())
     }
@@ -134,24 +116,17 @@ impl Requester {
                 _ => return Err(anyhow::anyhow!("Unknown TUN setting: {}", content)),
             },
         };
-        reqwest::Client::new()
-            .put(self.route("/tun"))
-            .json(&enabled)
-            .send()
-            .await?;
-        Ok(())
+        match &self.inner {
+            Inner::Web(c) => c.set_tun(enabled).await,
+            Inner::Uds(c) => c.set_tun(enabled).await,
+        }
     }
 
     pub async fn intercept(&self, range: Option<(u32, Option<u32>)>) -> Result<()> {
-        let uri = match range {
-            None => self.route("/intercept/all"),
-            Some((s, Some(e))) => {
-                self.route(format!("/intercept/range?start={}&end={}", s, e).as_str())
-            }
-            Some((s, None)) => self.route(format!("/intercept/range?start={}", s).as_str()),
-        };
-        let data = reqwest::get(uri).await?.text().await?;
-        let result: Vec<boltapi::HttpInterceptSchema> = serde_json::from_str(data.as_str())?;
+        let result = match &self.inner {
+            Inner::Web(c) => c.intercept(range).await,
+            Inner::Uds(c) => c.intercept(range).await,
+        }?;
         let mut table = Table::new("{:<} {:<} {:<} {:<} {:<} {:<}");
         table.add_row(
             Row::new()
@@ -178,11 +153,10 @@ impl Requester {
     }
 
     pub async fn get_intercept_payload(&self, id: u32) -> Result<()> {
-        let data = reqwest::get(self.route(format!("/intercept/payload/{}", id).as_str()))
-            .await?
-            .text()
-            .await?;
-        let result: boltapi::GetInterceptDataResp = serde_json::from_str(data.as_str())?;
+        let result = match &self.inner {
+            Inner::Web(c) => c.get_intercept_payload(id).await,
+            Inner::Uds(c) => c.get_intercept_payload(id).await,
+        }?;
         println!("==================  Request  ===================");
         println!("Header:");
         result.req_header.iter().for_each(|l| println!("{}", l));
@@ -208,15 +182,10 @@ impl Requester {
     }
 
     pub async fn reload_config(&self) -> Result<()> {
-        reqwest::Client::new()
-            .post(self.route("/reload"))
-            .send()
-            .await?;
-        Ok(())
-    }
-
-    fn route(&self, s: &str) -> String {
-        format!("http://127.0.0.1:{}{}", self.port, s)
+        match &self.inner {
+            Inner::Web(c) => c.reload_config().await,
+            Inner::Uds(c) => c.reload_config().await,
+        }
     }
 }
 

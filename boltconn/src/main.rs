@@ -10,6 +10,7 @@ use network::{
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 use structopt::StructOpt;
 
 mod adapter;
@@ -63,7 +64,7 @@ fn main() -> ExitCode {
     };
     rt.block_on(app.serve_command());
     tracing::info!("Exiting...");
-    rt.shutdown_background();
+    rt.shutdown_timeout(Duration::from_millis(300));
     ExitCode::from(0)
 }
 

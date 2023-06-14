@@ -19,12 +19,12 @@ use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 pub type SharedDispatching = Arc<RwLock<Arc<Dispatching>>>;
 
 #[derive(Clone)]
-pub struct ApiServer {
+pub struct WebController {
     secret: Option<String>,
     controller: Arc<Controller>,
 }
 
-impl ApiServer {
+impl WebController {
     pub fn new(secret: Option<String>, controller: Arc<Controller>) -> Self {
         Self { secret, controller }
     }
@@ -260,7 +260,7 @@ impl ApiServer {
     }
 
     async fn update_latency(
-        State(server): State<ApiServer>,
+        State(server): State<WebController>,
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
         let group = {

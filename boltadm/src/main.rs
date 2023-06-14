@@ -1,6 +1,8 @@
 mod cert;
 mod clean;
 mod request;
+mod request_uds;
+mod request_web;
 
 use crate::request::Requester;
 use anyhow::anyhow;
@@ -12,9 +14,9 @@ use structopt::StructOpt;
 #[derive(Debug, StructOpt)]
 #[structopt(name = "boltadm", about = "Controller for BoltConn")]
 struct Args {
-    /// RESTful API port
-    #[structopt(short, long, default_value = "18086")]
-    pub port: u16,
+    /// RESTful API URL; if not set, BoltAdm will use unix domain socket as default.
+    #[structopt(short, long)]
+    pub url: Option<String>,
     #[structopt(subcommand)]
     pub cmd: SubCommand,
 }
@@ -80,8 +82,6 @@ enum SubCommand {
     Conn(ConnOptions),
     /// Logs Operations
     Log(LogOptions),
-    /// API for Debugging
-    Debug(DebugOptions),
     /// Generate Certificates
     Cert(CertOptions),
     /// Captured HTTP data
@@ -97,7 +97,27 @@ enum SubCommand {
 #[tokio::main]
 async fn main() {
     let args: Args = Args::from_args();
-    let requestor = Requester { port: args.port };
+    let default_uds_path = "/var/run/boltconn.sock";
+    if matches!(args.cmd, SubCommand::Clean) {
+        if !is_root() {
+            eprintln!("Must be run with root/admin privilege");
+            exit(-1)
+        } else {
+            clean::clean_route_table();
+            clean::remove_unix_socket(default_uds_path);
+            exit(0)
+        }
+    }
+    let requestor = match match args.url {
+        None => Requester::new_uds(PathBuf::from(default_uds_path)).await,
+        Some(url) => Requester::new_web(url),
+    } {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("{}", err);
+            exit(-1)
+        }
+    };
     let result = match args.cmd {
         SubCommand::Proxy(opt) => match opt {
             ProxyOptions::Set { group, proxy } => requestor.set_group_proxy(group, proxy).await,
@@ -112,9 +132,6 @@ async fn main() {
                 // todo
                 Ok(())
             }
-        },
-        SubCommand::Debug(opt) => match opt {
-            DebugOptions::Session => requestor.get_sessions().await,
         },
         SubCommand::Cert(opt) => {
             if !is_root() {
@@ -152,15 +169,7 @@ async fn main() {
             InterceptOptions::Range { start, end } => requestor.intercept(Some((start, end))).await,
             InterceptOptions::Get { id } => requestor.get_intercept_payload(id).await,
         },
-        SubCommand::Clean => {
-            if !is_root() {
-                eprintln!("Must be run with root/admin privilege");
-                exit(-1)
-            } else {
-                clean::clean_route_table();
-                Ok(())
-            }
-        }
+        SubCommand::Clean => unreachable!(),
         SubCommand::Reload => requestor.reload_config().await,
     };
     match result {
