@@ -11,7 +11,7 @@
 - Outbound chaining
 - Local interface binding
 ### DNS
-- DoT, DoH with domain name (DoT/DoH with raw ip addresses are not supported now).
+- DNS-over-TLS, DNS-over-HTTPS.
 - Preconfigured DoT/DoH configuration (inherit from trust-dns).
 ### Rules
 - DOMAIN
@@ -40,3 +40,4 @@ payload:
 - Record packets for further analysis
 ### RESTful API
 See [RESTful.md](restful.md).
+### Dump 

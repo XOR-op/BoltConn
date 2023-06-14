@@ -19,17 +19,16 @@
 </a>
 </p>
 
-A go-to solution for transparent application proxy & firewall with tunneling and MitM, designed with privacy and security in mind.
+A go-to solution for transparent application proxy & firewall with tunneling and MitM, designed with privacy and security in mind. 
+All efforts made to make you fully control your network.
 
 ## Features
-- **Transparent Proxy with Automatic Route Table Management:** The Tun device supports BoltConn's transparent proxy, and its route table is managed automatically.
-- **Multiple Outbound Protocols Support:** BoltConn supports HTTP, SOCKS5, Shadowsocks, Trojan, and Wireguard outbounds. It is also possible to chain all these outbounds.
-- **Fake-IP DNS Server for Leak Prevention:** BoltConn's Fake-IP DNS server prevents DNS query leaks and supports DoH/DoT upstream.
-- **Flexible Rule-Based Routing:** With domain name, process name, and other rules, BoltConn allows for flexible routing.
-- **Proxy/Rule List Subscription:** BoltConn supports proxy/rule list subscription; compatible with Clash.
-- **MitM Functionality for Fine-Grained Traffic Control and Privacy Preservation:** BoltConn supports MitM-based URL/header rewrite/redirect.
-- **Hot-Reload Capability for Seamless Upgrades:** BoltConn supports hot-reload without disconnecting existing connections.
-- **RESTful API and Command-Line Tool for Easy Configuration:** BoltConn provides a RESTful API and command-line tool to configure the program.
+- **Block Anything You Dislike**: Block annoying ads, ubiquitous telemetry or any traffic you don't want this app send.
+- **Secure Your Traffic with Tunneling**: Prevent your traffic sniffed by ISP or third-party with Wireguard, Shadowsocks and more.
+You can also chain them at client side, without support from proxy server.
+- **Audit Your Traffic**: Audit traffic history to make sure apps behave trustworthy.
+- **Modify in the Way You Want**: Manipulate requests and responses inside HTTPS traffic. Examine if the app secretly sends your data to their server, and block them once you find it.
+- **Flexible Configuration**: Combine all above features with highly-customizable rule system. Directly include components from community, and compose your unique configuration.
 
 For the full features, see [features.md](./docs/features.md).
 
@@ -59,18 +58,16 @@ Learn more about BoltConn's architecture, RESTful API, and how it compares to ot
 - [features.md](./docs/features.md) lists full features of BoltConn.
 
 ## Future Plan
-- more rules
+- Improve and release web dashboard and desktop GUI client
+- More rules
   - Wi-Fi SSID
   - ASN
   - GEO-IP
-- more MitM configurations
+- More MitM configurations
   - modify HTTP body
   - custom scripts
-- web portal
 - IPv6 support
 - Windows support with Wintun driver
-- refactor:
-  - better DNS handling
 
 ## License
 This software is released under the GPL-3.0 license.
