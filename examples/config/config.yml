@@ -1,0 +1,97 @@
+# Unable to reload
+interface: auto
+http-port: 7890
+socks5-port: 7890
+web-controller:
+  api-port: 18086
+  #api-key: 123
+  #cors-allowed-list: ["http://localhost:5173"]
+  #cors-allowed-list: ["*"]
+
+# Able to reload
+dns:
+  bootstrap:
+    - 114.114.114.114
+  nameserver:
+    #    - dot-preset, cloudflare
+    #    - doh-preset, google
+    - doh, dns.adguard.com
+    - udp, 8.8.8.8
+proxy-local:
+  lan_http:
+    type: http
+    server: 172.17.10.1
+    port: 8080
+  lan_socks:
+    type: socks5
+    server: 192.168.1.1
+    port: 1080
+
+proxy-provider:
+  US:
+    type: file
+    path: ./Remote/US.yaml
+
+proxy-group:
+  Relay:
+    proxies:
+      - lan_http
+      - lan_socks
+      - Chain
+      - DIRECT
+      - VPN
+    providers:
+      - US
+  Home:
+    proxies:
+      - local-chain
+      - DIRECT
+  US:
+    providers:
+      - US
+  SanJose:
+    providers:
+      - name: US
+        filter: '.*View.*'
+  VPN:
+    proxies:
+      - DIRECT
+    interface: tun1
+  local-chain:
+    chains:
+      - lan_http
+      - lan_socks
+  Chain:
+    chains:
+      - lan_socks
+      - US
+
+
+rule-provider:
+  APPLE:
+    type: file
+    path: ./Rules/Apple
+  TELEGRAM:
+    type: file
+    path: ./Rules/Telegram
+
+rule-local:
+  - DOMAIN-SUFFIX, wikipedia.org, VPN
+  - DOMAIN-SUFFIX, google.com, Relay
+  - DOMAIN-SUFFIX, twitter.com, REJECT
+  - RULE-SET, APPLE, US
+  - RULE-SET, TELEGRAM, lan_socks
+  - FALLBACK, DIRECT
+
+intercept-rule:
+  - DOMAIN-SUFFIX, twitter.com
+  - AND, [DOMAIN-SUFFIX, wikipedia.org], [PROCESS-NAME, curl]
+
+rewrite:
+  - url, ^https://img.twitter.com, 404
+  - header-resp, ^https://www.reddit.com, set, Set-Cookie, NO-API-FEE
+
+module:
+  - name: Google
+    type: file
+    path: ./Module/google.yaml
