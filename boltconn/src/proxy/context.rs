@@ -318,11 +318,11 @@ struct ContextManagerInner {
     content: EvictableVec<Arc<ConnContext>>,
     keep_count: usize,
     grace_threshold: usize,
-    db_handle: DatabaseHandle,
+    db_handle: Option<DatabaseHandle>,
 }
 
 impl ContextManager {
-    pub fn new(db_handle: DatabaseHandle) -> Self {
+    pub fn new(db_handle: Option<DatabaseHandle>) -> Self {
         Self {
             inner: RwLock::new(ContextManagerInner {
                 content: EvictableVec::new(),
@@ -368,7 +368,11 @@ impl ContextManagerInner {
         if self.content.real_len() > self.keep_count + self.grace_threshold {
             self.content.evict_until(
                 |c, left| -> bool { left > self.keep_count && c.done.load(Ordering::Relaxed) },
-                |data| self.db_handle.add_connections(data),
+                |data| {
+                    if let Some(handle) = &mut self.db_handle {
+                        handle.add_connections(data)
+                    }
+                },
             );
         }
     }
@@ -376,8 +380,11 @@ impl ContextManagerInner {
 
 impl Drop for ContextManagerInner {
     fn drop(&mut self) {
-        self.content
-            .evict_with(0, |data| self.db_handle.add_connections(data))
+        self.content.evict_with(0, |data| {
+            if let Some(handle) = &mut self.db_handle {
+                handle.add_connections(data)
+            }
+        })
     }
 }
 
@@ -497,11 +504,11 @@ struct HttpCapturerInner {
     // how many extra elements are allowed to reside in memory, in order to reduce database operation times.
     grace_threshold: usize,
     contents: EvictableVec<HttpInterceptData>,
-    db_handle: DatabaseHandle,
+    db_handle: Option<DatabaseHandle>,
 }
 
 impl HttpCapturer {
-    pub fn new(db_handle: DatabaseHandle) -> Self {
+    pub fn new(db_handle: Option<DatabaseHandle>) -> Self {
         Self {
             inner: Mutex::new(HttpCapturerInner {
                 keep_count: 20,
@@ -569,7 +576,9 @@ impl HttpCapturerInner {
     fn evict(&mut self) {
         if self.contents.real_len() > self.keep_count + self.grace_threshold {
             self.contents.evict_with(self.keep_count, |data| {
-                self.db_handle.add_interceptions(data)
+                if let Some(handle) = &mut self.db_handle {
+                    handle.add_interceptions(data)
+                }
             })
         }
     }
@@ -577,8 +586,11 @@ impl HttpCapturerInner {
 
 impl Drop for HttpCapturerInner {
     fn drop(&mut self) {
-        self.contents
-            .evict_with(0, |data| self.db_handle.add_interceptions(data))
+        self.contents.evict_with(0, |data| {
+            if let Some(handle) = &mut self.db_handle {
+                handle.add_interceptions(data)
+            }
+        })
     }
 }
 

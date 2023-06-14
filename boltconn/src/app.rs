@@ -54,17 +54,6 @@ impl App {
             get_default_route().map_err(|e| anyhow!("Failed to get default route: {}", e))?;
         let fake_dns_server = "198.18.99.88".parse().unwrap();
 
-        // config-independent components
-        let manager = Arc::new(SessionManager::new());
-        let (stat_center, http_capturer) = {
-            let conn_handle = open_database_handle(data_path.as_path())?;
-            let intercept_handle = conn_handle.clone();
-            (
-                Arc::new(ContextManager::new(conn_handle)),
-                Arc::new(HttpCapturer::new(intercept_handle)),
-            )
-        };
-
         // setup Unix socket
         let uds_listener = Arc::new(UnixListenerGuard::new("/var/run/boltconn.sock")?);
 
@@ -79,6 +68,20 @@ impl App {
         } else {
             tracing::info!("Auto detected interface: {}", real_iface_name);
             real_iface_name
+        };
+
+        let manager = Arc::new(SessionManager::new());
+        let (stat_center, http_capturer) = {
+            let conn_handle = if config.enable_dump {
+                Some(open_database_handle(data_path.as_path())?)
+            } else {
+                None
+            };
+            let intercept_handle = conn_handle.clone();
+            (
+                Arc::new(ContextManager::new(conn_handle)),
+                Arc::new(HttpCapturer::new(intercept_handle)),
+            )
         };
 
         // initialize resources

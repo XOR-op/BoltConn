@@ -15,6 +15,8 @@ pub struct RawRootCfg {
     pub socks5_port: Option<u16>,
     #[serde(alias = "web-controller")]
     pub web_controller: Option<RawWebControllerConfig>,
+    #[serde(default = "default_false")]
+    pub enable_dump: bool,
     // From now on, all the configs should be reloaded properly
     #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
     pub speedtest_url: String,
@@ -129,6 +131,10 @@ pub enum RawProxyLocalCfg {
 // Used for serde
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_local_proxy() -> HashMap<String, RawProxyLocalCfg> {
