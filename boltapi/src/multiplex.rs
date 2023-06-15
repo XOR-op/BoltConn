@@ -25,7 +25,7 @@ pub enum TwoWayMessage<Req, Resp> {
 /// The first transport can be used by a server: it receives requests and sends back responses.
 /// The second transport can be used by a client: it sends requests and receives back responses.
 #[allow(clippy::type_complexity)]
-pub fn spawn_twoway<Req1, Resp1, Req2, Resp2, T>(
+pub fn rpc_multiplex_twoway<Req1, Resp1, Req2, Resp2, T>(
     transport: T,
 ) -> (
     UnboundedChannel<tarpc::ClientMessage<Req1>, tarpc::Response<Resp1>>,
