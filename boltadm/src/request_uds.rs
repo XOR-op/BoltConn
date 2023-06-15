@@ -1,4 +1,5 @@
 use anyhow::Result;
+use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::ControlServiceClient;
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
@@ -8,6 +9,7 @@ use std::path::PathBuf;
 use tarpc::context::Context;
 use tarpc::tokio_serde::formats::Bincode;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
+use tarpc::transport::channel::UnboundedChannel;
 use tokio::net::UnixStream;
 
 pub struct UdsConnector {
@@ -21,7 +23,14 @@ impl UdsConnector {
             LengthDelimitedCodec::builder().new_framed(conn),
             Bincode::default(),
         );
-        let client = ControlServiceClient::new(Default::default(), transport).spawn();
+        let (placeholder, client_t, in_task, out_task) = rpc_multiplex_twoway(transport);
+        // dirty hack to make rustc infer correct type
+        fn infer_generic_type(_: UnboundedChannel<tarpc::ClientMessage<()>, tarpc::Response<()>>) {}
+        infer_generic_type(placeholder);
+
+        tokio::spawn(in_task);
+        tokio::spawn(out_task);
+        let client = ControlServiceClient::new(Default::default(), client_t).spawn();
 
         Ok(Self { client })
     }
