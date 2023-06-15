@@ -1,3 +1,4 @@
+mod multiplex;
 pub mod rpc;
 mod schema;
 
