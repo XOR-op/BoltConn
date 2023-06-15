@@ -36,6 +36,11 @@ pub trait ControlService {
     async fn get_traffic() -> TrafficResp;
 
     async fn reload();
+
+    // Streaming
+    async fn request_traffic_stream(enable: bool);
+
+    async fn request_log_stream(enable: bool);
 }
 
 #[tarpc::service]
@@ -44,5 +49,5 @@ pub trait ControlService {
 pub trait ClientStreamService {
     async fn post_traffic(traffic: TrafficResp);
 
-    async fn post_logs(logs: Vec<String>);
+    async fn post_log(log: String);
 }
