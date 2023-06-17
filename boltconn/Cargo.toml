@@ -24,7 +24,7 @@ flume = "0.10.14"
 futures = "0.3.25"
 http = "0.2.8"
 httparse = "1.8.0"
-hyper = { version = "0.14.23", features = ["stream", "server", "client", "http1", "http2"] }
+hyper = { version = "0.14.26", features = ["stream", "server", "client", "http1", "http2"] }
 ioctl-sys = "0.8.0"
 ipnet = "2.5.1"
 ip_network = "0.4.1"

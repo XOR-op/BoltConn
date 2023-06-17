@@ -104,7 +104,11 @@ impl HttpsIntercept {
 
         // start running
         let inbound = acceptor.accept(self.inbound).await?;
-        if let Err(http_err) = Http::new().serve_connection(inbound, service).await {
+        if let Err(http_err) = Http::new()
+            .http1_only(true)
+            .serve_connection(inbound, service)
+            .await
+        {
             tracing::warn!("Sniff err {}", http_err);
         }
         Ok(())
