@@ -33,7 +33,7 @@ pub struct App {
     api_dispatching_handler: SharedDispatching,
     tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
     http_capturer: Arc<HttpCapturer>,
-    speedtest_url: Arc<std::sync::Mutex<String>>,
+    speedtest_url: Arc<std::sync::RwLock<String>>,
     receiver: tokio::sync::mpsc::Receiver<()>,
     uds_socket: Arc<UnixListenerGuard>,
 }
@@ -191,7 +191,7 @@ impl App {
         // create controller
         let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching));
         let (reload_sender, reload_receiver) = tokio::sync::mpsc::channel::<()>(1);
-        let speedtest_url = Arc::new(std::sync::Mutex::new(config.speedtest_url.clone()));
+        let speedtest_url = Arc::new(std::sync::RwLock::new(config.speedtest_url.clone()));
         let controller = Arc::new(Controller::new(
             manager.clone(),
             stat_center,
@@ -331,7 +331,7 @@ impl App {
                         pi,
                     ))
                 }));
-                *self.speedtest_url.lock().unwrap() = new_speedtest_url;
+                *self.speedtest_url.write().unwrap() = new_speedtest_url;
                 tracing::info!(
                     "Reloaded config successfully in {}ms",
                     start.elapsed().as_millis()

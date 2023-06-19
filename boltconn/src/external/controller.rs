@@ -26,7 +26,7 @@ pub struct Controller {
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
     state: Arc<std::sync::Mutex<LinkedState>>,
     stream_logger: StreamLoggerSend,
-    speedtest_url: Arc<std::sync::Mutex<String>>,
+    speedtest_url: Arc<std::sync::RwLock<String>>,
 }
 
 impl Controller {
@@ -41,7 +41,7 @@ impl Controller {
         reload_sender: tokio::sync::mpsc::Sender<()>,
         state: LinkedState,
         stream_logger: StreamLoggerSend,
-        speedtest_url: Arc<std::sync::Mutex<String>>,
+        speedtest_url: Arc<std::sync::RwLock<String>>,
     ) -> Self {
         Self {
             manager,
@@ -290,7 +290,7 @@ impl Controller {
 
     pub async fn update_latency(&self, group: String) {
         tracing::trace!("Start speedtest for group {}", group);
-        let speedtest_url = self.speedtest_url.lock().unwrap().clone();
+        let speedtest_url = self.speedtest_url.read().unwrap().clone();
         let list = self.dispatching.read().await.get_group_list();
         for g in list.iter() {
             if g.get_name() == group {
