@@ -63,7 +63,7 @@ impl ProxyImpl {
     pub fn support_udp(&self) -> bool {
         match self {
             ProxyImpl::Direct => true,
-            ProxyImpl::Reject => false,
+            ProxyImpl::Reject => true,
             ProxyImpl::Http(_) => false,
             ProxyImpl::Socks5(c) => c.udp,
             ProxyImpl::Shadowsocks(c) => c.udp,

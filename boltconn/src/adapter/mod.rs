@@ -191,7 +191,7 @@ where
         while let Some(buf) = rx.recv().await {
             let res = out_write.write_all(buf.as_ref()).await;
             if let Err(err) = res {
-                tracing::warn!("write to outbound failed: {}", err);
+                tracing::trace!("write to outbound failed: {}", err);
                 break;
             }
         }
@@ -212,7 +212,7 @@ where
                     }
                 }
                 Err(err) => {
-                    tracing::warn!("outbound read error: {}", err);
+                    tracing::trace!("outbound read error: {}", err);
                     abort_handle.cancel().await;
                     break;
                 }
@@ -238,7 +238,7 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
             let addr = tunnel_addr2.clone().unwrap_or(addr);
             let res = outbound2.send_to(buf.as_ref(), addr).await;
             if let Err(err) = res {
-                tracing::warn!("write to outbound failed: {}", err);
+                tracing::trace!("write to outbound failed: {}", err);
                 break;
             }
         }
@@ -260,13 +260,13 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                     }
                 }
                 if tx.send((buf.freeze(), addr)).await.is_err() {
-                    tracing::warn!("write to inbound failed");
+                    tracing::trace!("write to inbound failed");
                     abort_handle.cancel().await;
                     break;
                 }
             }
             Err(err) => {
-                tracing::warn!("outbound read error: {}", err);
+                tracing::trace!("outbound read error: {}", err);
                 abort_handle.cancel().await;
                 break;
             }

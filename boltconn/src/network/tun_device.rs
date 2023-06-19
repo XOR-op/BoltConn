@@ -278,7 +278,7 @@ impl TunDevice {
             }
             IpProtocol::Icmp => {
                 // just echo now
-                tracing::trace!("ICMP packet: {} -> {}", src, dst);
+                // tracing::trace!("ICMP packet: {} -> {}", src, dst);
                 let mut pkt = Icmpv4Pkt::new(pkt);
                 pkt.rewrite_addr(dst, src);
                 let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
