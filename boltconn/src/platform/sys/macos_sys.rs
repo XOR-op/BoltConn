@@ -208,11 +208,57 @@ pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
         Ok(name) => name,
         Err(_) => return None,
     };
-    tracing::debug!("Got User: {}", name);
     let (uid, gid) = match nix::unistd::User::from_name(name.as_str()) {
         Ok(Some(user)) => (user.uid.into(), user.gid.into()),
         _ => return None,
     };
 
     Some((name, uid, gid))
+}
+
+pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
+    use std::cmp;
+    use std::mem::size_of_val;
+    use std::ptr::null_mut;
+
+    unsafe {
+        static CTL_KERN: c_int = 1;
+        static KERN_MAXFILESPERPROC: libc::c_int = 29;
+        // Fetch the kern.maxfilesperproc value
+        let mut mib: [c_int; 2] = [CTL_KERN, KERN_MAXFILESPERPROC];
+        let mut maxfiles: c_int = 0;
+        let mut size: libc::size_t = size_of_val(&maxfiles) as libc::size_t;
+        if libc::sysctl(
+            &mut mib[0],
+            2,
+            &mut maxfiles as *mut _ as *mut _,
+            &mut size,
+            null_mut(),
+            0,
+        ) != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+
+        // Fetch the current resource limits
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        // Bump the soft limit to the smaller of kern.maxfilesperproc and the hard
+        // limit
+        rlim.rlim_cur = cmp::min(maxfiles as libc::rlim_t, rlim.rlim_max);
+        rlim.rlim_cur = cmp::min(target_size as libc::rlim_t, rlim.rlim_cur);
+
+        // Set our newly-increased resource limit
+        if libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(rlim.rlim_cur as u32)
+    }
 }

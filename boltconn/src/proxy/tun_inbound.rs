@@ -37,11 +37,18 @@ impl TunTcpInbound {
             self.nat_addr
         );
         loop {
-            let (socket, addr) = tcp_listener.accept().await?;
+            // tracing::debug!("Wait for new NAT connection");
+            let (socket, addr) = match tcp_listener.accept().await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("[NAT] Failed to accept TCP: {}", e);
+                    Err(e)?
+                }
+            };
+            // tracing::debug!("Accepted new NAT connection");
             if let Ok((src_addr, dst_addr, indicator)) =
                 self.session_mgr.lookup_tcp_session(addr.port())
             {
-                // tracing::trace!("[NAT] received new connection {}->{}", src_addr, dst_addr);
                 let dst_addr = match self.dns.fake_ip_to_domain(dst_addr.ip()) {
                     None => NetworkAddr::Raw(dst_addr),
                     Some(s) => NetworkAddr::DomainName {
@@ -49,6 +56,7 @@ impl TunTcpInbound {
                         port: dst_addr.port(),
                     },
                 };
+                // tracing::debug!("[NAT] received new connection {}->{}", src_addr, dst_addr);
                 if self
                     .dispatcher
                     .submit_tcp(src_addr, dst_addr, indicator.clone(), socket)

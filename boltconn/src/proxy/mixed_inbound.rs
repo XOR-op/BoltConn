@@ -36,13 +36,21 @@ impl MixedInbound {
             "[Mixed] Listen proxy at 127.0.0.1:{}, running...",
             self.port
         );
-        while let Ok((socket, src_addr)) = self.server.accept().await {
-            let disp = self.dispatcher.clone();
-            let http_auth = self.http_auth.clone();
-            let socks_auth = self.socks_auth.clone();
-            tokio::spawn(Self::serve_connection(
-                socket, http_auth, socks_auth, src_addr, disp,
-            ));
+        loop {
+            match self.server.accept().await {
+                Ok((socket, src_addr)) => {
+                    let disp = self.dispatcher.clone();
+                    let http_auth = self.http_auth.clone();
+                    let socks_auth = self.socks_auth.clone();
+                    tokio::spawn(Self::serve_connection(
+                        socket, http_auth, socks_auth, src_addr, disp,
+                    ));
+                }
+                Err(err) => {
+                    tracing::error!("Mixed inbound failed to accept: {}", err);
+                    return;
+                }
+            }
         }
     }
 

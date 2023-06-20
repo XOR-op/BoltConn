@@ -3,6 +3,7 @@
 extern crate core;
 
 use crate::app::App;
+use crate::platform::set_maximum_opened_files;
 use is_root::is_root;
 use network::{
     dns::Dns,
@@ -41,8 +42,27 @@ struct Args {
 
 fn main() -> ExitCode {
     if !is_root() {
-        eprintln!("BoltConn must be run with root privilege.");
-        return ExitCode::from(1);
+        eprintln!("BoltConn must be run with root privilege");
+        return ExitCode::FAILURE;
+    }
+    let target_fd_size = 7568;
+    let result = set_maximum_opened_files(target_fd_size);
+    match result {
+        Ok(n) => {
+            if n != target_fd_size {
+                eprintln!(
+                    "Warning: target maximum fd={}, only set to {}",
+                    target_fd_size, n
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "Failed to increase maximum opened files to {}: {}",
+                target_fd_size, err
+            );
+            return ExitCode::FAILURE;
+        }
     }
     let args: Args = Args::from_args();
     let (config_path, data_path, cert_path) =
@@ -50,7 +70,7 @@ fn main() -> ExitCode {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Failed to load config and app data: {}", e);
-                return ExitCode::from(1);
+                return ExitCode::FAILURE;
             }
         };
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -59,13 +79,13 @@ fn main() -> ExitCode {
         Ok(app) => app,
         Err(e) => {
             eprintln!("{e}");
-            return ExitCode::from(1);
+            return ExitCode::FAILURE;
         }
     };
     rt.block_on(app.serve_command());
     tracing::info!("Exiting...");
     rt.shutdown_timeout(Duration::from_millis(300));
-    ExitCode::from(0)
+    ExitCode::SUCCESS
 }
 
 fn parse_paths(

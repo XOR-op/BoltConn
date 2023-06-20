@@ -37,10 +37,18 @@ impl Socks5Inbound {
             "[Socks5] Listen proxy at 127.0.0.1:{}, running...",
             self.port
         );
-        while let Ok((socket, src_addr)) = self.server.accept().await {
-            let disp = self.dispatcher.clone();
-            let auth = self.auth.clone();
-            tokio::spawn(Self::serve_connection(socket, auth, src_addr, disp, None));
+        loop {
+            match self.server.accept().await {
+                Ok((socket, src_addr)) => {
+                    let disp = self.dispatcher.clone();
+                    let auth = self.auth.clone();
+                    tokio::spawn(Self::serve_connection(socket, auth, src_addr, disp, None));
+                }
+                Err(err) => {
+                    tracing::error!("Socks5 inbound failed to accept: {}", err);
+                    return;
+                }
+            }
         }
     }
 

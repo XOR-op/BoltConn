@@ -34,10 +34,18 @@ impl HttpInbound {
 
     pub async fn run(self) {
         tracing::info!("[HTTP] Listen proxy at 127.0.0.1:{}, running...", self.port);
-        while let Ok((socket, addr)) = self.server.accept().await {
-            let disp = self.dispatcher.clone();
-            let auth = self.auth.clone();
-            tokio::spawn(Self::serve_connection(socket, auth, addr, disp, None));
+        loop {
+            match self.server.accept().await {
+                Ok((socket, addr)) => {
+                    let disp = self.dispatcher.clone();
+                    let auth = self.auth.clone();
+                    tokio::spawn(Self::serve_connection(socket, auth, addr, disp, None));
+                }
+                Err(err) => {
+                    tracing::error!("HTTP inbound failed to accept: {}", err);
+                    return;
+                }
+            }
         }
     }
 

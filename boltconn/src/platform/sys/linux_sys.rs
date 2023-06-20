@@ -7,7 +7,7 @@ use std::ffi::CStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
-use std::{io, mem};
+use std::{cmp, io, mem};
 
 use super::super::errno_err;
 
@@ -130,4 +130,27 @@ pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
     let uid = unsafe { (*user_info).pw_uid };
     let gid = unsafe { (*user_info).pw_gid };
     Some((name, uid, gid))
+}
+
+pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
+    unsafe {
+        // Fetch the current resource limits
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        // Set soft limit to hard imit
+        rlim.rlim_cur = cmp::min(rlim.rlim_max, target_size);
+
+        // Set our newly-increased resource limit
+        if libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(rlim.rlim_cur.into() as u32)
+    }
 }
