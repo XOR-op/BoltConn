@@ -144,13 +144,13 @@ pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
         }
 
         // Set soft limit to hard imit
-        rlim.rlim_cur = cmp::min(rlim.rlim_max, target_size);
+        rlim.rlim_cur = cmp::min(rlim.rlim_max, target_size as libc::rlim_t);
 
         // Set our newly-increased resource limit
         if libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) != 0 {
             return Err(io::Error::last_os_error());
         }
 
-        Ok(rlim.rlim_cur.into() as u32)
+        Ok(rlim.rlim_cur as u32)
     }
 }
