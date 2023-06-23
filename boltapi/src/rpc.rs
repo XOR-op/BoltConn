@@ -38,16 +38,17 @@ pub trait ControlService {
     async fn reload();
 
     // Streaming
-    async fn request_traffic_stream(enable: bool);
+    async fn request_traffic_stream(ctx_id: u64);
 
-    async fn request_log_stream(enable: bool);
+    async fn request_log_stream(ctx_id: u64);
 }
 
 #[tarpc::service]
 // Used for streaming response from server
 // Achieved by setting a listener in client side
+// When such methods return invalid ctx_id, we can safely terminate posting.
 pub trait ClientStreamService {
-    async fn post_traffic(traffic: TrafficResp);
+    async fn post_traffic(traffic: TrafficResp) -> u64;
 
-    async fn post_log(log: String);
+    async fn post_log(log: String) -> u64;
 }

@@ -15,7 +15,6 @@ use tarpc::server::{BaseChannel, Channel};
 use tarpc::tokio_serde::formats::Bincode;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio::net::UnixListener;
-use tokio::sync::Mutex;
 
 pub struct UnixListenerGuard {
     path: PathBuf,
@@ -74,8 +73,6 @@ impl UdsController {
                 UdsRpcBackClient {
                     client,
                     controller: self.controller.clone(),
-                    traffic_id: Arc::new(Default::default()),
-                    log_id: Arc::new(Default::default()),
                 }
                 .run(receiver),
             );
@@ -95,30 +92,23 @@ impl UdsController {
 
 #[derive(Clone, Debug)]
 enum ClientRequests {
-    Traffic(bool),
-    Logs(bool),
+    EnableTraffic(u64),
+    EnableLogs(u64),
 }
 
 struct UdsRpcBackClient {
     client: ClientStreamServiceClient,
     controller: Arc<Controller>,
-    // avoid ABA problem
-    traffic_id: Arc<Mutex<Option<u32>>>,
-    log_id: Arc<Mutex<Option<u32>>>,
 }
 
 impl UdsRpcBackClient {
     pub async fn run(self, mut receiver: tokio::sync::mpsc::UnboundedReceiver<ClientRequests>) {
         let me = Arc::new(self);
-        let mut last_traffic_id = 0;
-        let mut last_log_id = 0;
         let mut will_continue = true;
         while will_continue {
             will_continue = match receiver.recv().await {
                 Some(req) => {
-                    me.clone()
-                        .process_request(req, &mut last_traffic_id, &mut last_log_id)
-                        .await;
+                    me.clone().process_request(req).await;
                     true
                 }
                 _ => false,
@@ -126,79 +116,56 @@ impl UdsRpcBackClient {
         }
     }
 
-    async fn process_request(
-        self: Arc<Self>,
-        req: ClientRequests,
-        last_traffic_id: &mut u32,
-        last_log_id: &mut u32,
-    ) {
+    async fn process_request(self: Arc<Self>, req: ClientRequests) {
         match req {
-            ClientRequests::Traffic(enable) => {
-                let mut last_traffic = self.traffic_id.lock().await;
-                if last_traffic.is_none() && enable {
-                    let saved_id = *last_traffic_id;
-                    *last_traffic = Some(saved_id);
-                    *last_traffic_id += 1;
-                    drop(last_traffic);
-                    // spawn traffic processing coroutine
-                    tokio::spawn(async move {
-                        let tra = self.controller.get_traffic();
-                        let mut last_upload = tra.upload;
-                        let mut last_download = tra.download;
+            ClientRequests::EnableTraffic(ctx_id) => {
+                // spawn traffic processing coroutine
+                tokio::spawn(async move {
+                    let tra = self.controller.get_traffic();
+                    let mut last_upload = tra.upload;
+                    let mut last_download = tra.download;
 
-                        loop {
-                            let last_traffic_guard = self.traffic_id.lock().await;
-                            match *last_traffic_guard {
-                                Some(id) if id == saved_id => {
-                                    let TrafficResp {
-                                        upload,
-                                        download,
-                                        upload_speed: _,
-                                        download_speed: _,
-                                    } = self.controller.get_traffic();
-                                    let data = TrafficResp {
-                                        upload,
-                                        download,
-                                        upload_speed: Some(upload - last_upload),
-                                        download_speed: Some(download - last_download),
-                                    };
-                                    last_upload = upload;
-                                    last_download = download;
-                                    let _ =
-                                        self.client.post_traffic(Context::current(), data).await;
-                                    drop(last_traffic_guard);
-                                    tokio::time::sleep(Duration::from_secs(1)).await;
-                                }
-                                _ => break,
-                            }
+                    loop {
+                        let TrafficResp {
+                            upload,
+                            download,
+                            upload_speed: _,
+                            download_speed: _,
+                        } = self.controller.get_traffic();
+                        let data = TrafficResp {
+                            upload,
+                            download,
+                            upload_speed: Some(upload - last_upload),
+                            download_speed: Some(download - last_download),
+                        };
+                        last_upload = upload;
+                        last_download = download;
+                        if self
+                            .client
+                            .post_traffic(Context::current(), data)
+                            .await
+                            .is_ok_and(|x| x == ctx_id)
+                        {
+                            break;
                         }
-                    });
-                } else if !enable {
-                    *last_traffic = None;
-                }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                });
             }
-            ClientRequests::Logs(enable) => {
-                let mut guard = self.log_id.lock().await;
-                if guard.is_none() && enable {
-                    let saved_id = *last_log_id;
-                    *guard = Some(saved_id);
-                    *last_log_id += 1;
-                    let mut log_receiver = self.controller.get_log_subscriber();
-                    drop(guard);
-                    tokio::spawn(async move {
-                        while let Ok(log) = log_receiver.recv().await {
-                            let log_guard = self.log_id.lock().await;
-                            match *log_guard {
-                                Some(id) if id == saved_id => {
-                                    let _ = self.client.post_log(Context::current(), log).await;
-                                }
-                                _ => break,
-                            }
+            ClientRequests::EnableLogs(ctx_id) => {
+                let mut log_receiver = self.controller.get_log_subscriber();
+                tokio::spawn(async move {
+                    while let Ok(log) = log_receiver.recv().await {
+                        if self
+                            .client
+                            .post_log(Context::current(), log)
+                            .await
+                            .is_ok_and(|x| x == ctx_id)
+                        {
+                            break;
                         }
-                    });
-                } else if !enable {
-                    *guard = None
-                }
+                    }
+                });
             }
         }
     }
@@ -275,11 +242,11 @@ impl ControlService for UdsRpcServer {
         self.controller.reload().await
     }
 
-    async fn request_traffic_stream(self, _ctx: Context, enable: bool) {
-        let _ = self.sender.send(ClientRequests::Traffic(enable));
+    async fn request_traffic_stream(self, _ctx: Context, ctx_id: u64) {
+        let _ = self.sender.send(ClientRequests::EnableTraffic(ctx_id));
     }
 
-    async fn request_log_stream(self, _ctx: Context, enable: bool) {
-        let _ = self.sender.send(ClientRequests::Logs(enable));
+    async fn request_log_stream(self, _ctx: Context, ctx_id: u64) {
+        let _ = self.sender.send(ClientRequests::EnableLogs(ctx_id));
     }
 }
