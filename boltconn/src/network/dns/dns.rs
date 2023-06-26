@@ -7,11 +7,12 @@ use tokio::sync::RwLock;
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
+use trust_dns_resolver::name_server::GenericConnector;
 use trust_dns_resolver::AsyncResolver;
 
 pub struct Dns {
     table: DnsTable,
-    resolvers: RwLock<Vec<AsyncResolver<IfaceProvider>>>,
+    resolvers: RwLock<Vec<AsyncResolver<GenericConnector<IfaceProvider>>>>,
 }
 
 impl Dns {
@@ -25,8 +26,8 @@ impl Dns {
             resolvers.push(AsyncResolver::new(
                 cfg,
                 ResolverOpts::default(),
-                IfaceProvider::new(iface_name),
-            )?);
+                GenericConnector::new(IfaceProvider::new(iface_name)),
+            ));
         }
         Ok(Dns {
             table: DnsTable::new(),
@@ -52,8 +53,8 @@ impl Dns {
             resolvers.push(AsyncResolver::new(
                 cfg,
                 ResolverOpts::default(),
-                IfaceProvider::new(iface_name),
-            )?);
+                GenericConnector::new(IfaceProvider::new(iface_name)),
+            ));
         }
         *self.resolvers.write().await = resolvers;
         Ok(())

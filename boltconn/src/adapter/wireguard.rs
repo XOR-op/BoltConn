@@ -24,7 +24,7 @@ use tokio::select;
 use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinHandle;
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-use trust_dns_resolver::name_server::RuntimeProvider;
+use trust_dns_resolver::name_server::{GenericConnector, RuntimeProvider};
 use trust_dns_resolver::proto::iocompat::AsyncIoTokioAsStd;
 use trust_dns_resolver::proto::udp::DnsUdpSocket;
 use trust_dns_resolver::proto::TokioTime;
@@ -291,13 +291,12 @@ impl WireguardHandle {
                 let resolver = AsyncResolver::new(
                     self.dns_config.as_ref().clone(),
                     ResolverOpts::default(),
-                    WireguardDnsProvider {
+                    GenericConnector::new(WireguardDnsProvider {
                         handle: Default::default(),
                         endpoint: endpoint.clone(),
                         abort_handle: abort_h,
-                    },
-                )
-                .map_err(|_| io_err("Create Wireguard DNS failed"))?;
+                    }),
+                );
                 let r = resolver
                     .ipv4_lookup(domain_name)
                     .await

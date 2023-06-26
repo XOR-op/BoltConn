@@ -9,6 +9,7 @@ use std::net::{IpAddr, SocketAddr};
 use trust_dns_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
 };
+use trust_dns_resolver::name_server::GenericConnector;
 use trust_dns_resolver::AsyncResolver;
 
 fn add_tls_server(
@@ -32,7 +33,7 @@ fn add_tls_server(
 }
 
 async fn resolve_dns(
-    bootstrap: &Option<AsyncResolver<IfaceProvider>>,
+    bootstrap: &Option<AsyncResolver<GenericConnector<IfaceProvider>>>,
     dn: &str,
 ) -> anyhow::Result<Vec<IpAddr>> {
     let Some(resolver) = bootstrap else {
@@ -52,7 +53,7 @@ async fn resolve_dns(
 pub fn new_bootstrap_resolver(
     iface_name: &str,
     addr: &[IpAddr],
-) -> anyhow::Result<AsyncResolver<IfaceProvider>> {
+) -> anyhow::Result<AsyncResolver<GenericConnector<IfaceProvider>>> {
     let cfg = ResolverConfig::from_parts(
         None,
         vec![],
@@ -62,14 +63,17 @@ pub fn new_bootstrap_resolver(
                 .collect::<Vec<NameServerConfig>>(),
         ),
     );
-    let resolver =
-        AsyncResolver::new(cfg, ResolverOpts::default(), IfaceProvider::new(iface_name))?;
+    let resolver = AsyncResolver::new(
+        cfg,
+        ResolverOpts::default(),
+        GenericConnector::new(IfaceProvider::new(iface_name)),
+    );
     Ok(resolver)
 }
 
 pub async fn parse_dns_config(
     lines: &Vec<String>,
-    bootstrap: Option<AsyncResolver<IfaceProvider>>,
+    bootstrap: Option<AsyncResolver<GenericConnector<IfaceProvider>>>,
 ) -> anyhow::Result<Vec<NameServerConfigGroup>> {
     let mut arr = Vec::new();
     for l in lines {

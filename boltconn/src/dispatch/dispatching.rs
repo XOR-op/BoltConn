@@ -4,7 +4,7 @@ use crate::config::{
     RawServerAddr, RawServerSockAddr, RawState, RuleSchema,
 };
 use crate::dispatch::proxy::ProxyImpl;
-use crate::dispatch::rule::{Rule, RuleBuilder, RuleImpl};
+use crate::dispatch::rule::{Rule, RuleBuilder};
 use crate::dispatch::ruleset::RuleSetBuilder;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -186,7 +186,7 @@ impl DispatchingBuilder {
             let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Failed to parse provider {}",name));
             };
-            ruleset.insert(name.clone(), Arc::new(builder.build()));
+            ruleset.insert(name.clone(), Arc::new(builder.build()?));
         }
         let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
         for (idx, r) in config.rule_local.iter().enumerate() {
@@ -232,7 +232,7 @@ impl DispatchingBuilder {
             let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Filter: failed to parse provider {}",name));
             };
-            ruleset.insert(name.clone(), Arc::new(builder.build()));
+            ruleset.insert(name.clone(), Arc::new(builder.build()?));
         }
         let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
         for r in rules.iter() {
@@ -250,16 +250,6 @@ impl DispatchingBuilder {
             rules: self.rules,
             fallback: self.fallback.unwrap(),
         })
-    }
-
-    pub fn direct_prioritize(&mut self, name: &str, prioritized: Vec<IpAddr>) {
-        let ruleset = Arc::new(RuleSetBuilder::from_ipaddrs(name, prioritized).build());
-        let mut new_rules = vec![Rule::new(
-            RuleImpl::RuleSet(ruleset),
-            GeneralProxy::Single(Arc::new(Proxy::new("Direct", ProxyImpl::Direct))),
-        )];
-        new_rules.append(&mut self.rules);
-        self.rules = new_rules
     }
 
     fn parse_proxies<'a, I: Iterator<Item = (&'a String, &'a RawProxyLocalCfg)>>(

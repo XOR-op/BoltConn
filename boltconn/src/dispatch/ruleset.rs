@@ -191,8 +191,8 @@ impl RuleSetBuilder {
         self
     }
 
-    pub fn build(self) -> RuleSet {
-        RuleSet {
+    pub fn build(self) -> anyhow::Result<RuleSet> {
+        Ok(RuleSet {
             name: self.name,
             domain: self.domain.build(),
             ip: self.ip_cidr,
@@ -200,11 +200,11 @@ impl RuleSetBuilder {
             udp_port: self.udp_port,
             any_tcp: self.any_tcp,
             any_udp: self.any_udp,
-            domain_keyword: AhoCorasick::new_auto_configured(self.domain_keyword.as_slice()),
+            domain_keyword: AhoCorasick::new(self.domain_keyword.into_iter())?,
             process_name: self.process_name,
-            process_keyword: AhoCorasick::new_auto_configured(self.process_keyword.as_slice()),
-            procpath_keyword: AhoCorasick::new_auto_configured(self.procpath_keyword.as_slice()),
-        }
+            process_keyword: AhoCorasick::new(self.process_keyword.into_iter())?,
+            procpath_keyword: AhoCorasick::new(self.procpath_keyword.into_iter())?,
+        })
     }
 
     pub fn from_ipaddrs(name: &str, list: Vec<IpAddr>) -> Self {
@@ -244,7 +244,7 @@ fn test_rule_provider() {
         },
     );
     assert!(builder.is_some());
-    let ruleset = builder.unwrap().build();
+    let ruleset = builder.unwrap().build().unwrap();
     // println!("kw:{}, domain:{}", ruleset.domain_keyword.pattern_count(), ruleset.domain.len());
     let info1 = ConnInfo {
         src: "127.0.0.1:12345".parse().unwrap(),
