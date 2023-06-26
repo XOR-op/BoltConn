@@ -47,6 +47,10 @@ impl RuleSet {
             NetworkAddr::DomainName { domain_name, port } => {
                 if self.domain.matches(domain_name)
                     || self.domain_keyword.is_match(domain_name.as_str())
+                    || info
+                        .resolved_dst
+                        .as_ref()
+                        .is_some_and(|dst| self.ip.longest_match(dst.ip()).is_some())
                 {
                     return true;
                 }

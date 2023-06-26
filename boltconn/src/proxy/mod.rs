@@ -97,6 +97,7 @@ pub async fn latency_test(
                 proxy_config,
                 rng.gen_range(32768..65535),
                 &dst_addr,
+                None,
             ) {
                 Ok((o, _)) => o,
                 Err(_) => {

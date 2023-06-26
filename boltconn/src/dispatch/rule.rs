@@ -91,6 +91,8 @@ impl RuleImpl {
             RuleImpl::IpCidr(net) => {
                 if let NetworkAddr::Raw(addr) = &info.dst {
                     net.contains(&addr.ip())
+                } else if let Some(dst) = &info.resolved_dst {
+                    net.contains(&dst.ip())
                 } else {
                     false
                 }

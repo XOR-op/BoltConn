@@ -76,12 +76,14 @@ impl Dispatcher {
         proxy_config: &ProxyImpl,
         src_port: u16,
         dst_addr: &NetworkAddr,
+        resolved_dst: Option<&SocketAddr>,
     ) -> Result<(Box<dyn Outbound>, OutboundType), ()> {
         Ok(match proxy_config {
             ProxyImpl::Direct => (
                 Box::new(DirectOutbound::new(
                     iface_name,
                     dst_addr.clone(),
+                    resolved_dst.cloned(),
                     self.dns.clone(),
                 )),
                 OutboundType::Direct,
@@ -178,6 +180,7 @@ impl Dispatcher {
                 impls.get(idx).unwrap().as_ref(),
                 src_port,
                 dst_addrs.get(idx).unwrap(),
+                None,
             )?;
             res.push(outbounding);
         }
@@ -222,6 +225,7 @@ impl Dispatcher {
                     proxy_config.as_ref(),
                     src_addr.port(),
                     &dst_addr,
+                    conn_info.resolved_dst.as_ref(),
                 )?
             };
 
@@ -374,6 +378,7 @@ impl Dispatcher {
                     proxy_config.as_ref(),
                     src_addr.port(),
                     &dst_addr,
+                    conn_info.resolved_dst.as_ref(),
                 )?
             };
         // conn info

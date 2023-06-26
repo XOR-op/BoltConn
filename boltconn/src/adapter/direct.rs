@@ -19,20 +19,31 @@ use tokio::task::JoinHandle;
 pub struct DirectOutbound {
     iface_name: String,
     dst: NetworkAddr,
+    resolved_dst: Option<SocketAddr>,
     dns: Arc<Dns>,
 }
 
 impl DirectOutbound {
-    pub fn new(iface_name: &str, dst: NetworkAddr, dns: Arc<Dns>) -> Self {
+    pub fn new(
+        iface_name: &str,
+        dst: NetworkAddr,
+        resolved_dst: Option<SocketAddr>,
+        dns: Arc<Dns>,
+    ) -> Self {
         Self {
             iface_name: iface_name.into(),
             dst,
+            resolved_dst,
             dns,
         }
     }
 
     async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
-        let dst_addr = lookup(self.dns.as_ref(), &self.dst).await?;
+        let dst_addr = if let Some(dst) = self.resolved_dst {
+            dst
+        } else {
+            lookup(self.dns.as_ref(), &self.dst).await?
+        };
         let outbound = Egress::new(&self.iface_name).tcp_stream(dst_addr).await?;
 
         established_tcp(inbound, outbound, abort_handle).await;
