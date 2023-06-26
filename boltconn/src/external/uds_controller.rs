@@ -121,6 +121,7 @@ impl UdsRpcBackClient {
             ClientRequests::EnableTraffic(ctx_id) => {
                 // spawn traffic processing coroutine
                 tokio::spawn(async move {
+                    tracing::debug!("Enabled traffic: {}", ctx_id);
                     let tra = self.controller.get_traffic();
                     let mut last_upload = tra.upload;
                     let mut last_download = tra.download;
@@ -140,7 +141,7 @@ impl UdsRpcBackClient {
                         };
                         last_upload = upload;
                         last_download = download;
-                        if self
+                        if !self
                             .client
                             .post_traffic(Context::current(), data)
                             .await
@@ -156,7 +157,7 @@ impl UdsRpcBackClient {
                 let mut log_receiver = self.controller.get_log_subscriber();
                 tokio::spawn(async move {
                     while let Ok(log) = log_receiver.recv().await {
-                        if self
+                        if !self
                             .client
                             .post_log(Context::current(), log)
                             .await
