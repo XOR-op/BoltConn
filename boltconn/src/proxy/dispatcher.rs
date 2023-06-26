@@ -14,10 +14,10 @@ use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 
 pub struct Dispatcher {
     iface_name: String,
@@ -54,16 +54,16 @@ impl Dispatcher {
         }
     }
 
-    pub fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
-        *self.dispatching.write().unwrap() = dispatching;
+    pub async fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
+        *self.dispatching.write().await = dispatching;
     }
 
-    pub fn replace_intercept_filter(&self, intercept_filter: Arc<Dispatching>) {
-        *self.intercept_filter.write().unwrap() = intercept_filter;
+    pub async fn replace_intercept_filter(&self, intercept_filter: Arc<Dispatching>) {
+        *self.intercept_filter.write().await = intercept_filter;
     }
 
-    pub fn replace_modifier(&self, closure: ModifierClosure) {
-        *self.modifier.write().unwrap() = closure;
+    pub async fn replace_modifier(&self, closure: ModifierClosure) {
+        *self.modifier.write().await = closure;
     }
 
     pub(super) fn get_iface_name(&self) -> String {
@@ -193,14 +193,20 @@ impl Dispatcher {
     ) -> Result<(), ()> {
         let process_info = process::get_pid(src_addr, process::NetworkType::Tcp)
             .map_or(None, process::get_process_info);
-        let conn_info = ConnInfo {
+        let mut conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            resolved_dst: None,
             connection_type: NetworkType::Tcp,
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let (proxy_config, iface) = self.dispatching.read().unwrap().matches(&conn_info, true);
+        let (proxy_config, iface) = self
+            .dispatching
+            .read()
+            .await
+            .matches(&mut conn_info, true)
+            .await;
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
@@ -261,14 +267,15 @@ impl Dispatcher {
                 && matches!(
                     self.intercept_filter
                         .read()
-                        .unwrap()
-                        .matches(&conn_info, false)
+                        .await
+                        .matches(&mut conn_info, false)
+                        .await
                         .0
                         .as_ref(),
                     ProxyImpl::Direct
                 )
             {
-                let modifier = (self.modifier.read().unwrap())(process_info);
+                let modifier = (self.modifier.read().await)(process_info);
                 match port {
                     80 => {
                         // hijack
@@ -340,13 +347,18 @@ impl Dispatcher {
     }
 
     #[allow(clippy::type_complexity)]
-    fn route_udp(
+    async fn route_udp(
         &self,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
-        conn_info: ConnInfo,
+        mut conn_info: ConnInfo,
     ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), ()> {
-        let (proxy_config, iface) = self.dispatching.read().unwrap().matches(&conn_info, true);
+        let (proxy_config, iface) = self
+            .dispatching
+            .read()
+            .await
+            .matches(&mut conn_info, true)
+            .await;
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
@@ -384,17 +396,19 @@ impl Dispatcher {
         dst_addr: NetworkAddr,
         proc_info: Option<ProcessInfo>,
     ) -> bool {
-        let conn_info = ConnInfo {
+        let mut conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr,
+            resolved_dst: None,
             connection_type: NetworkType::Udp,
             process_info: proc_info,
         };
         !matches!(
             self.dispatching
                 .read()
-                .unwrap()
-                .matches(&conn_info, false)
+                .await
+                .matches(&mut conn_info, false)
+                .await
                 .0
                 .as_ref(),
             ProxyImpl::Reject
@@ -413,10 +427,12 @@ impl Dispatcher {
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            resolved_dst: None,
             connection_type: NetworkType::Udp,
             process_info: proc_info,
         };
-        let (outbounding, info, abort_handle) = self.route_udp(src_addr, dst_addr, conn_info)?;
+        let (outbounding, info, abort_handle) =
+            self.route_udp(src_addr, dst_addr, conn_info).await?;
 
         let mut handles = Vec::new();
 
@@ -460,10 +476,12 @@ impl Dispatcher {
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            resolved_dst: None,
             connection_type: NetworkType::Udp,
             process_info: process_info.clone(),
         };
-        let (outbounding, info, abort_handle) = self.route_udp(src_addr, dst_addr, conn_info)?;
+        let (outbounding, info, abort_handle) =
+            self.route_udp(src_addr, dst_addr, conn_info).await?;
         let mut handles = Vec::new();
 
         let (adapter_conn, adapter_next) = AddrConnector::new_pair(10);

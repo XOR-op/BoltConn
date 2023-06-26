@@ -1,5 +1,7 @@
+use crate::dispatch::action::{Action, LocalResolve};
 use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
+use crate::network::dns::Dns;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
@@ -146,11 +148,13 @@ pub(crate) struct RuleBuilder<'a> {
     proxies: &'a HashMap<String, Arc<Proxy>>,
     groups: &'a HashMap<String, Arc<ProxyGroup>>,
     rulesets: HashMap<String, Arc<RuleSet>>,
-    buffer: Vec<(RuleImpl, GeneralProxy)>,
+    buffer: Vec<RuleOrAction>,
+    dns: Arc<Dns>,
 }
 
 impl RuleBuilder<'_> {
     pub fn new<'a>(
+        dns: Arc<Dns>,
         proxies: &'a HashMap<String, Arc<Proxy>>,
         groups: &'a HashMap<String, Arc<ProxyGroup>>,
         rulesets: HashMap<String, Arc<RuleSet>>,
@@ -160,6 +164,7 @@ impl RuleBuilder<'_> {
             groups,
             rulesets,
             buffer: vec![],
+            dns,
         }
     }
 
@@ -167,6 +172,18 @@ impl RuleBuilder<'_> {
     pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
         let processed_str = "[".to_string() + s + "]";
         let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
+        if list.is_empty() {
+            return Err(anyhow!("Invalid length"));
+        }
+        // Actions
+        if list.len() == 1 && list.get(0).unwrap() == "ACTION-LOCAL-RESOLVE" {
+            self.buffer.push(RuleOrAction::Action(Action::LocalResolve(
+                LocalResolve::new(self.dns.clone()),
+            )));
+            return Ok(());
+        }
+
+        // Normal rules
         if list.len() < 3 {
             return Err(anyhow!("Invalid length"));
         }
@@ -190,7 +207,8 @@ impl RuleBuilder<'_> {
 
         let rule = self.parse_sub_rule(first)?;
 
-        self.buffer.push((rule, general));
+        self.buffer
+            .push(RuleOrAction::Rule(Rule::new(rule, general)));
         Ok(())
     }
 
@@ -309,11 +327,8 @@ impl RuleBuilder<'_> {
         }
     }
 
-    pub fn build(self) -> Vec<Rule> {
+    pub fn build(self) -> Vec<RuleOrAction> {
         self.buffer
-            .into_iter()
-            .map(|(r, e)| Rule::new(r, e))
-            .collect()
     }
 }
 
@@ -348,4 +363,9 @@ fn retrive_string(val: &serde_yaml::Value) -> anyhow::Result<String> {
         serde_yaml::Value::Number(n) => Ok(n.to_string()),
         _ => Err(anyhow!("Not a valid string")),
     }
+}
+
+pub enum RuleOrAction {
+    Rule(Rule),
+    Action(Action),
 }

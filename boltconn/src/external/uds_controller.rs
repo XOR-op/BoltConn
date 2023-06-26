@@ -121,7 +121,6 @@ impl UdsRpcBackClient {
             ClientRequests::EnableTraffic(ctx_id) => {
                 // spawn traffic processing coroutine
                 tokio::spawn(async move {
-                    tracing::debug!("Enabled traffic: {}", ctx_id);
                     let tra = self.controller.get_traffic();
                     let mut last_upload = tra.upload;
                     let mut last_download = tra.download;

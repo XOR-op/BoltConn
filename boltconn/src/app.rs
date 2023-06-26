@@ -145,7 +145,7 @@ impl App {
 
         // dispatch
         let dispatching = Arc::new(
-            DispatchingBuilder::new()
+            DispatchingBuilder::new(dns.clone())
                 .build(&loaded_config)
                 .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
         );
@@ -154,7 +154,7 @@ impl App {
             let cert = load_cert_and_key(&cert_path)
                 .map_err(|e| anyhow!("Load certs from path {:?} failed: {}", cert_path, e))?;
             let rule_schema = &loaded_config.rule_schema;
-            let intercept_filter = DispatchingBuilder::new()
+            let intercept_filter = DispatchingBuilder::new(dns.clone())
                 .build_filter(config.intercept_rule.as_slice(), rule_schema)
                 .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
             let (url_modifier, hdr_modifier) = {
@@ -321,16 +321,20 @@ impl App {
             )) => {
                 *self.api_dispatching_handler.write().await = dispatching.clone();
                 let hcap2 = self.http_capturer.clone();
-                self.dispatcher.replace_dispatching(dispatching);
-                self.dispatcher.replace_intercept_filter(intercept_filter);
-                self.dispatcher.replace_modifier(Box::new(move |pi| {
-                    Arc::new(InterceptModifier::new(
-                        hcap2.clone(),
-                        url_rewriter.clone(),
-                        header_rewriter.clone(),
-                        pi,
-                    ))
-                }));
+                self.dispatcher.replace_dispatching(dispatching).await;
+                self.dispatcher
+                    .replace_intercept_filter(intercept_filter)
+                    .await;
+                self.dispatcher
+                    .replace_modifier(Box::new(move |pi| {
+                        Arc::new(InterceptModifier::new(
+                            hcap2.clone(),
+                            url_rewriter.clone(),
+                            header_rewriter.clone(),
+                            pi,
+                        ))
+                    }))
+                    .await;
                 *self.speedtest_url.write().unwrap() = new_speedtest_url;
                 tracing::info!(
                     "Reloaded config successfully in {}ms",
@@ -404,11 +408,11 @@ async fn reload(
     let bootstrap = new_bootstrap_resolver(iface_name, config.dns.bootstrap.as_slice())?;
     let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
     let dispatching = {
-        let builder = DispatchingBuilder::new();
+        let builder = DispatchingBuilder::new(dns.clone());
         Arc::new(builder.build(&loaded_config)?)
     };
     let intercept_filter = {
-        let builder = DispatchingBuilder::new();
+        let builder = DispatchingBuilder::new(dns.clone());
         let rule_schema = &loaded_config.rule_schema;
         Arc::new(builder.build_filter(config.intercept_rule.as_slice(), rule_schema)?)
     };
