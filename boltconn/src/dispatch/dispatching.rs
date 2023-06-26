@@ -49,12 +49,24 @@ impl Dispatching {
                 };
                 if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
                     if verbose {
-                        tracing::info!("[{:?}] {} => {} failed: UDP disabled", v, info.dst, proxy);
+                        tracing::info!(
+                            "[{:?}]({}) {} => {} failed: UDP disabled",
+                            v,
+                            stringfy_process(info),
+                            info.dst,
+                            proxy
+                        );
                     }
                     return (Arc::new(ProxyImpl::Reject), None);
                 }
                 if verbose {
-                    tracing::info!("[{:?}] {} => {}", v, info.dst, proxy);
+                    tracing::info!(
+                        "[{:?}]({}) {} => {}",
+                        v,
+                        stringfy_process(info),
+                        info.dst,
+                        proxy
+                    );
                 }
                 return (proxy_impl, iface);
             }
@@ -71,7 +83,8 @@ impl Dispatching {
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
             if verbose {
                 tracing::info!(
-                    "[Fallback] {} => {} failed: UDP disabled",
+                    "[Fallback]({}) {} => {} failed: UDP disabled",
+                    stringfy_process(info),
                     info.dst,
                     self.fallback
                 );
@@ -79,7 +92,12 @@ impl Dispatching {
             return (Arc::new(ProxyImpl::Reject), None);
         }
         if verbose {
-            tracing::info!("[Fallback] {} => {}", info.dst, self.fallback);
+            tracing::info!(
+                "[Fallback]({}) {} => {}",
+                stringfy_process(info),
+                info.dst,
+                self.fallback
+            );
         }
         (proxy_impl, iface)
     }
@@ -95,6 +113,13 @@ impl Dispatching {
 
     pub fn get_group_list(&self) -> Vec<Arc<ProxyGroup>> {
         self.groups.values().cloned().collect()
+    }
+}
+
+fn stringfy_process(info: &ConnInfo) -> &str {
+    match &info.process_info {
+        None => "UNKNOWN",
+        Some(s) => s.name.as_str(),
     }
 }
 
