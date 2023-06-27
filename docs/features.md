@@ -18,7 +18,10 @@
 - DOMAIN-SUFFIX
 - DOMAIN-KEYWORD
 - IP-CIDR
+- SRC-PORT
 - DST-PORT
+- GEOIP
+- ASN
 - PROCESS-PATH
 - PROCESS-KEYWORD
 - PROC-PATH-KEYWORD (keyword matching for the path of process)
@@ -26,6 +29,8 @@
 - AND
 - OR
 - NOT
+### Rules(Action)
+- ACTION-LOCAL-RESOLVE (resolve the domain name of connection with local DNS)
 ### RuleSet
 Almost the same as what in Clash.
 Example: 
@@ -39,5 +44,10 @@ payload:
 - Rewrite header part of HTTP request/response
 - Record packets for further analysis
 ### RESTful API
-See [RESTful.md](restful.md).
+- Enable via `web-controller` field
+- CORS list configuration
+- See [RESTful.md](restful.md).
 ### Dump 
+- Dump connection logs & intercepted data to sqlite
+### Misc
+- Configure url of latency test by `speedtest-url` field

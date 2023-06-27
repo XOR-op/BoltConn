@@ -61,8 +61,6 @@ Learn more about BoltConn's architecture, RESTful API, and how it compares to ot
 - Improve and release web dashboard and desktop GUI client
 - More rules
   - Wi-Fi SSID
-  - ASN
-  - GEO-IP
 - More MitM configurations
   - modify HTTP body
   - custom scripts
