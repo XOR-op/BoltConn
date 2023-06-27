@@ -25,9 +25,9 @@ impl UnixListenerGuard {
     pub fn new<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let listener = UnixListener::bind(&path)?;
-        let (_, uid, gid) =
-            get_user_info().ok_or(anyhow::anyhow!("Cannot get user before sudo"))?;
-        nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))?;
+        if let Some((_, uid, gid)) = get_user_info() {
+            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))?;
+        }
         Ok(Self {
             path,
             listener: Some(listener),

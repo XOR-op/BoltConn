@@ -1,4 +1,4 @@
-use crate::config::{safe_join_path, RawProxyLocalCfg};
+use crate::config::{load_remote_config, safe_join_path, RawProxyLocalCfg};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -61,22 +61,7 @@ pub async fn read_proxy_schema(
                             Ok(content)
                         }
                         ProxyProvider::Http { url, path, .. } => {
-                            let full_path = safe_join_path(&root_path, &path)?;
-                            let content: ProxySchema =
-                                if !force_update && full_path.as_path().exists() {
-                                    serde_yaml::from_str(
-                                        fs::read_to_string(full_path.as_path())?.as_str(),
-                                    )?
-                                } else {
-                                    let resp = reqwest::get(url).await?;
-                                    let text = resp.text().await?;
-                                    let content: ProxySchema = serde_yaml::from_str(text.as_str())?;
-                                    // security: `full_path` should be (layers of) subdir of `root_path`,
-                                    //           so arbitrary write should not happen
-                                    fs::write(full_path.as_path(), text)?;
-                                    content
-                                };
-                            Ok(content)
+                            load_remote_config(url, path, &root_path, force_update).await
                         }
                     }
                 }),

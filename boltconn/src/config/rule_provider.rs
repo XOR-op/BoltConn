@@ -1,4 +1,5 @@
 use crate::config;
+use crate::config::load_remote_config;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -81,22 +82,8 @@ pub async fn read_rule_schema(
                             })
                         }
                         RuleLocation::Http { url, path, .. } => {
-                            let full_path = config::safe_join_path(&root_path, &path)?;
-                            let content: RawRuleSchema = if !force_update
-                                && full_path.as_path().exists()
-                            {
-                                serde_yaml::from_str(
-                                    fs::read_to_string(full_path.as_path())?.as_str(),
-                                )?
-                            } else {
-                                let resp = reqwest::get(url).await?;
-                                let text = resp.text().await?;
-                                let content: RawRuleSchema = serde_yaml::from_str(text.as_str())?;
-                                // security: `full_path` should be (layers of) subdir of `root_path`,
-                                //           so arbitrary write should not happen
-                                fs::write(full_path.as_path(), text)?;
-                                content
-                            };
+                            let content: RawRuleSchema =
+                                load_remote_config(url, path, &root_path, force_update).await?;
                             Ok(RuleSchema {
                                 behavior: item.behavior,
                                 payload: content.payload,

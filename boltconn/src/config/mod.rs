@@ -6,6 +6,7 @@ mod proxy_provider;
 mod rule_provider;
 mod state;
 
+use crate::platform::get_user_info;
 use anyhow::anyhow;
 pub use config::*;
 pub use module::*;
@@ -107,4 +108,32 @@ impl LoadedConfig {
         self.config.intercept_rule = intercept_rule;
         self.config.rewrite = rewrite;
     }
+}
+
+async fn load_remote_config<T>(
+    url: String,
+    path: String,
+    root_path: impl AsRef<Path>,
+    force_update: bool,
+) -> anyhow::Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let full_path = safe_join_path(root_path.as_ref(), &path)?;
+    let content: T = if !force_update && full_path.as_path().exists() {
+        serde_yaml::from_str(fs::read_to_string(full_path.as_path())?.as_str())?
+    } else {
+        tracing::trace!("Downloading external resource from {}", url);
+        let resp = reqwest::get(url).await?;
+        let text = resp.text().await?;
+        let content: T = serde_yaml::from_str(text.as_str())?;
+        // security: `full_path` should be (layers of) subdir of `root_path`,
+        //           so arbitrary write should not happen
+        fs::write(full_path.as_path(), text)?;
+        if let Some((_, uid, gid)) = get_user_info() {
+            nix::unistd::chown(&full_path, Some(uid.into()), Some(gid.into()))?;
+        }
+        content
+    };
+    Ok(content)
 }

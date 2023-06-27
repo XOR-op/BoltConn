@@ -1,3 +1,4 @@
+use crate::platform::get_user_info;
 use crate::proxy::{BodyOrWarning, ConnContext, HttpInterceptData};
 use anyhow::anyhow;
 use rusqlite::{params, Error, ErrorCode, OpenFlags};
@@ -53,9 +54,12 @@ impl DatabaseHandle {
                     if e.code == ErrorCode::CannotOpen {
                         // create with open
                         let conn = rusqlite::Connection::open_with_flags(
-                            path,
+                            &path,
                             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
                         )?;
+                        if let Some((_, uid, gid)) = get_user_info() {
+                            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))?;
+                        }
                         Self::create_db_table(&conn)?;
                         conn
                     } else {
