@@ -58,7 +58,8 @@ pub enum RuleImpl {
     DomainSuffix(String),
     DomainKeyword(String),
     IpCidr(IpNet),
-    Port(PortRule),
+    SrcPort(PortRule),
+    DstPort(PortRule),
     RuleSet(Arc<RuleSet>),
     GeoIP(Arc<MmdbReader>, String),
     Asn(Arc<MmdbReader>, u32),
@@ -98,7 +99,18 @@ impl RuleImpl {
             RuleImpl::Asn(mmdb, asn) => info
                 .socketaddr()
                 .is_some_and(|s| mmdb.search_asn(s.ip()).is_some_and(|a| a == *asn)),
-            RuleImpl::Port(port) => match port {
+            RuleImpl::SrcPort(port) => match port {
+                PortRule::Tcp(p) => {
+                    info.connection_type == NetworkType::Tcp && info.src.port() == *p
+                }
+                PortRule::Udp(p) => {
+                    info.connection_type == NetworkType::Udp && info.src.port() == *p
+                }
+                PortRule::All(p) => info.src.port() == *p,
+                PortRule::AnyTcp => info.connection_type == NetworkType::Tcp,
+                PortRule::AnyUdp => info.connection_type == NetworkType::Udp,
+            },
+            RuleImpl::DstPort(port) => match port {
                 PortRule::Tcp(p) => {
                     info.connection_type == NetworkType::Tcp && info.dst.port() == *p
                 }
@@ -335,7 +347,8 @@ impl RuleBuilder<'_> {
             "ASN" => {
                 mmdb.and_then(|x| Some(RuleImpl::Asn(x.clone(), content.parse::<u32>().ok()?)))
             }
-            "DST-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::Port),
+            "SRC-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::SrcPort),
+            "DST-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::DstPort),
             "RULE-SET" => rulesets
                 .and_then(|table| table.get(&content))
                 .map(|rs| RuleImpl::RuleSet(rs.clone())),
