@@ -19,7 +19,9 @@ pub enum NetworkType {
 #[derive(Debug, Default, Clone)]
 pub struct ProcessInfo {
     pub pid: i32,
+    pub ppid: i32,
     pub path: String,
     pub name: String,
     pub cmdline: String,
+    pub parent_name: Option<String>,
 }

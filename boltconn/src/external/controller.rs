@@ -8,7 +8,7 @@ use crate::proxy::{
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
-    HttpInterceptSchema, ProxyData, SessionSchema, TrafficResp, TunStatusSchema,
+    HttpInterceptSchema, ProcessSchema, ProxyData, SessionSchema, TrafficResp, TunStatusSchema,
 };
 use std::io::Write;
 use std::sync::atomic::Ordering;
@@ -94,7 +94,13 @@ impl Controller {
                 destination: info.dest.to_string(),
                 protocol: info.session_proto.write().unwrap().to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
-                process: info.process_info.as_ref().map(|i| i.name.clone()),
+                process: info.process_info.as_ref().map(|i| ProcessSchema {
+                    pid: i.pid,
+                    path: i.path.clone(),
+                    name: i.name.clone(),
+                    cmdline: i.cmdline.clone(),
+                    parent_name: i.parent_name.clone(),
+                }),
                 upload: info.upload_traffic.load(Ordering::Relaxed),
                 download: info.download_traffic.load(Ordering::Relaxed),
                 start_time: info

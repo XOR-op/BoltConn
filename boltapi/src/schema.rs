@@ -3,12 +3,22 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
+pub struct ProcessSchema {
+    pub pid: i32,
+    pub path: String,
+    pub name: String,
+    pub cmdline: String,
+    pub parent_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectionSchema {
     pub conn_id: u64,
     pub destination: String,
     pub protocol: String,
     pub proxy: String,
-    pub process: Option<String>,
+    pub process: Option<ProcessSchema>,
     pub upload: u64,
     pub download: u64,
     pub start_time: u64,

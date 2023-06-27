@@ -72,7 +72,7 @@ impl Requester {
                 conn.protocol,
                 conn.proxy.italic(),
                 match conn.process {
-                    Some(s) => format!("<{}>", s),
+                    Some(s) => format!("<{}>", s.name),
                     None => "".to_string(),
                 },
                 pretty_size(conn.upload),

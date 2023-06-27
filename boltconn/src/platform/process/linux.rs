@@ -123,12 +123,28 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
 }
 
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
+    let (ppid, path, name, cmdline) = get_process_info_inner(pid)?;
+    let p_name = get_process_info_inner(ppid).map(|(_, _, p_name, _)| p_name);
+    Some(ProcessInfo {
+        pid,
+        ppid,
+        path,
+        name,
+        cmdline,
+        parent_name: p_name,
+    })
+}
+
+fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
+    let proc_object = procfs::process::Process::new(pid).ok()?;
+    let proc_stat = proc_object.stat().ok()?;
     let exe_link = format!("/proc/{}/exe", pid);
     let path = std::fs::read_link(exe_link)
         .ok()?
         .into_os_string()
         .into_string()
         .unwrap();
+
     let name = std::fs::read(format!("/proc/{}/comm", pid)).ok()?;
 
     let mut cmdline = std::fs::read(format!("/proc/{}/cmdline", pid)).ok()?;
@@ -145,12 +161,12 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
         .trim_matches(char::from(0))
         .to_string();
 
-    return Some(ProcessInfo {
-        pid,
-        path: path.replace('\n', ""),
-        name: String::from_utf8_lossy(name.as_slice())
+    Some((
+        proc_stat.ppid,
+        path.replace('\n', ""),
+        String::from_utf8_lossy(name.as_slice())
             .into_owned()
             .replace('\n', ""),
         cmdline,
-    });
+    ))
 }

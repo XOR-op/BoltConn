@@ -1,5 +1,7 @@
 use crate::platform::process::{NetworkType, ProcessInfo};
 use libc::c_int;
+use libproc::libproc::bsd_info::BSDInfo;
+use libproc::libproc::proc_pid::pidinfo;
 use std::ffi::{c_void, CString, OsStr};
 use std::io;
 use std::io::{ErrorKind, Result};
@@ -119,6 +121,19 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
 // from dalance/procs
 // maybe the source is https://gist.github.com/nonowarn/770696
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
+    let (ppid, path, name, cmdline) = get_process_info_inner(pid)?;
+    let p_name = get_process_info_inner(ppid).map(|(_, _, p_name, _)| p_name);
+    Some(ProcessInfo {
+        pid,
+        ppid,
+        path,
+        name,
+        cmdline,
+        parent_name: p_name,
+    })
+}
+
+fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
     let mut size = get_arg_max()?;
     let mut proc_args = Vec::with_capacity(size);
     let ptr: *mut u8 = proc_args.as_mut_slice().as_mut_ptr();
@@ -176,12 +191,9 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
                 cp = cp.offset(1);
             }
 
-            Some(ProcessInfo {
-                pid,
-                path,
-                name,
-                cmdline: cmd.join(" "),
-            })
+            let bsd_info: BSDInfo = pidinfo(pid, 0).ok()?;
+
+            Some((bsd_info.pbi_ppid as i32, path, name, cmd.join(" ")))
         } else {
             None
         }
