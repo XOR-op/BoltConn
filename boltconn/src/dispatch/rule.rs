@@ -1,5 +1,8 @@
+use crate::dispatch::action::{Action, LocalResolve};
 use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
+use crate::external::MmdbReader;
+use crate::network::dns::Dns;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
 use anyhow::anyhow;
@@ -55,8 +58,11 @@ pub enum RuleImpl {
     DomainSuffix(String),
     DomainKeyword(String),
     IpCidr(IpNet),
-    Port(PortRule),
+    SrcPort(PortRule),
+    DstPort(PortRule),
     RuleSet(Arc<RuleSet>),
+    GeoIP(Arc<MmdbReader>, String),
+    Asn(Arc<MmdbReader>, u32),
     And(Vec<RuleImpl>),
     Or(Vec<RuleImpl>),
     Not(Box<RuleImpl>),
@@ -86,14 +92,25 @@ impl RuleImpl {
                     false
                 }
             }
-            RuleImpl::IpCidr(net) => {
-                if let NetworkAddr::Raw(addr) = &info.dst {
-                    net.contains(&addr.ip())
-                } else {
-                    false
+            RuleImpl::IpCidr(net) => info.socketaddr().is_some_and(|s| net.contains(&s.ip())),
+            RuleImpl::GeoIP(mmdb, country) => info
+                .socketaddr()
+                .is_some_and(|s| mmdb.search_country(s.ip()).is_some_and(|c| c == country)),
+            RuleImpl::Asn(mmdb, asn) => info
+                .socketaddr()
+                .is_some_and(|s| mmdb.search_asn(s.ip()).is_some_and(|a| a == *asn)),
+            RuleImpl::SrcPort(port) => match port {
+                PortRule::Tcp(p) => {
+                    info.connection_type == NetworkType::Tcp && info.src.port() == *p
                 }
-            }
-            RuleImpl::Port(port) => match port {
+                PortRule::Udp(p) => {
+                    info.connection_type == NetworkType::Udp && info.src.port() == *p
+                }
+                PortRule::All(p) => info.src.port() == *p,
+                PortRule::AnyTcp => info.connection_type == NetworkType::Tcp,
+                PortRule::AnyUdp => info.connection_type == NetworkType::Udp,
+            },
+            RuleImpl::DstPort(port) => match port {
                 PortRule::Tcp(p) => {
                     info.connection_type == NetworkType::Tcp && info.dst.port() == *p
                 }
@@ -146,11 +163,15 @@ pub(crate) struct RuleBuilder<'a> {
     proxies: &'a HashMap<String, Arc<Proxy>>,
     groups: &'a HashMap<String, Arc<ProxyGroup>>,
     rulesets: HashMap<String, Arc<RuleSet>>,
-    buffer: Vec<(RuleImpl, GeneralProxy)>,
+    buffer: Vec<RuleOrAction>,
+    dns: Arc<Dns>,
+    mmdb: Option<Arc<MmdbReader>>,
 }
 
 impl RuleBuilder<'_> {
     pub fn new<'a>(
+        dns: Arc<Dns>,
+        mmdb: Option<Arc<MmdbReader>>,
         proxies: &'a HashMap<String, Arc<Proxy>>,
         groups: &'a HashMap<String, Arc<ProxyGroup>>,
         rulesets: HashMap<String, Arc<RuleSet>>,
@@ -160,6 +181,8 @@ impl RuleBuilder<'_> {
             groups,
             rulesets,
             buffer: vec![],
+            dns,
+            mmdb,
         }
     }
 
@@ -167,6 +190,18 @@ impl RuleBuilder<'_> {
     pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
         let processed_str = "[".to_string() + s + "]";
         let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
+        if list.is_empty() {
+            return Err(anyhow!("Invalid length"));
+        }
+        // Actions
+        if list.len() == 1 && list.get(0).unwrap() == "ACTION-LOCAL-RESOLVE" {
+            self.buffer.push(RuleOrAction::Action(Action::LocalResolve(
+                LocalResolve::new(self.dns.clone()),
+            )));
+            return Ok(());
+        }
+
+        // Normal rules
         if list.len() < 3 {
             return Err(anyhow!("Invalid length"));
         }
@@ -190,7 +225,8 @@ impl RuleBuilder<'_> {
 
         let rule = self.parse_sub_rule(first)?;
 
-        self.buffer.push((rule, general));
+        self.buffer
+            .push(RuleOrAction::Rule(Rule::new(rule, general)));
         Ok(())
     }
 
@@ -227,7 +263,7 @@ impl RuleBuilder<'_> {
                         _ => {
                             // all other rules
                             let content = retrive_string(list.get(1).unwrap())?;
-                            Self::parse(prefix, content, Some(&self.rulesets))
+                            Self::parse(prefix, content, Some(&self.rulesets), self.mmdb.as_ref())
                                 .ok_or_else(|| anyhow!("Failed to parse"))
                         }
                     },
@@ -241,8 +277,13 @@ impl RuleBuilder<'_> {
                                     return Err(anyhow!("Invalid length"));
                                 }
                                 let content = retrive_string(list.get(1).unwrap())?;
-                                Self::parse(prefix, content, Some(&self.rulesets))
-                                    .ok_or_else(|| anyhow!("Failed to parse"))
+                                Self::parse(
+                                    prefix,
+                                    content,
+                                    Some(&self.rulesets),
+                                    self.mmdb.as_ref(),
+                                )
+                                .ok_or_else(|| anyhow!("Failed to parse"))
                             }
                             _ => Err(anyhow!("Invalid length")),
                         }
@@ -272,7 +313,7 @@ impl RuleBuilder<'_> {
     }
 
     #[allow(clippy::get_first)]
-    pub fn parse_ruleset(s: &str) -> Option<RuleImpl> {
+    pub fn parse_ruleset(s: &str, mmdb: Option<&Arc<MmdbReader>>) -> Option<RuleImpl> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
         // ignore no-resolve
@@ -284,13 +325,14 @@ impl RuleBuilder<'_> {
             String::from(*list.get(0).unwrap()),
             String::from(*list.get(1).unwrap()),
         );
-        Self::parse(prefix, content, None)
+        Self::parse(prefix, content, None, mmdb)
     }
 
     fn parse(
         prefix: String,
         content: String,
         rulesets: Option<&HashMap<String, Arc<RuleSet>>>,
+        mmdb: Option<&Arc<MmdbReader>>,
     ) -> Option<RuleImpl> {
         match prefix.as_str() {
             "DOMAIN-SUFFIX" => Some(RuleImpl::DomainSuffix(content)),
@@ -301,7 +343,12 @@ impl RuleBuilder<'_> {
             "PROC-PATH-KEYWORD" => Some(RuleImpl::ProcPathKeyword(content)),
             "PROC-CMD-REGEX" => Some(RuleImpl::ProcCmdRegex(Regex::new(&content).ok()?)),
             "IP-CIDR" | "IP-CIDR6" => IpNet::from_str(content.as_str()).ok().map(RuleImpl::IpCidr),
-            "DST-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::Port),
+            "GEOIP" => mmdb.map(|x| RuleImpl::GeoIP(x.clone(), content)),
+            "ASN" => {
+                mmdb.and_then(|x| Some(RuleImpl::Asn(x.clone(), content.parse::<u32>().ok()?)))
+            }
+            "SRC-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::SrcPort),
+            "DST-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::DstPort),
             "RULE-SET" => rulesets
                 .and_then(|table| table.get(&content))
                 .map(|rs| RuleImpl::RuleSet(rs.clone())),
@@ -309,11 +356,8 @@ impl RuleBuilder<'_> {
         }
     }
 
-    pub fn build(self) -> Vec<Rule> {
+    pub fn build(self) -> Vec<RuleOrAction> {
         self.buffer
-            .into_iter()
-            .map(|(r, e)| Rule::new(r, e))
-            .collect()
     }
 }
 
@@ -348,4 +392,9 @@ fn retrive_string(val: &serde_yaml::Value) -> anyhow::Result<String> {
         serde_yaml::Value::Number(n) => Ok(n.to_string()),
         _ => Err(anyhow!("Not a valid string")),
     }
+}
+
+pub enum RuleOrAction {
+    Rule(Rule),
+    Action(Action),
 }

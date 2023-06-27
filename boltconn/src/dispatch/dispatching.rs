@@ -3,10 +3,13 @@ use crate::config::{
     LoadedConfig, ProxySchema, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption,
     RawServerAddr, RawServerSockAddr, RawState, RuleSchema,
 };
+use crate::dispatch::action::Action;
 use crate::dispatch::proxy::ProxyImpl;
-use crate::dispatch::rule::{Rule, RuleBuilder};
+use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
 use crate::dispatch::ruleset::RuleSetBuilder;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
+use crate::external::MmdbReader;
+use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
 use crate::transport::trojan::TrojanConfig;
@@ -25,50 +28,72 @@ use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 pub struct ConnInfo {
     pub src: SocketAddr,
     pub dst: NetworkAddr,
+    pub resolved_dst: Option<SocketAddr>,
     pub connection_type: NetworkType,
     pub process_info: Option<ProcessInfo>,
+}
+
+impl ConnInfo {
+    pub fn socketaddr(&self) -> Option<&SocketAddr> {
+        if let NetworkAddr::Raw(s) = &self.dst {
+            Some(s)
+        } else {
+            self.resolved_dst.as_ref()
+        }
+    }
 }
 
 pub struct Dispatching {
     proxies: HashMap<String, Arc<Proxy>>,
     groups: LinkedHashMap<String, Arc<ProxyGroup>>,
-    rules: Vec<Rule>,
+    rules: Vec<RuleOrAction>,
     fallback: GeneralProxy,
 }
 
 impl Dispatching {
-    pub fn matches(&self, info: &ConnInfo, verbose: bool) -> (Arc<ProxyImpl>, Option<String>) {
+    pub async fn matches(
+        &self,
+        info: &mut ConnInfo,
+        verbose: bool,
+    ) -> (Arc<ProxyImpl>, Option<String>) {
         for v in &self.rules {
-            if let Some(proxy) = v.matches(info) {
-                let (proxy_impl, iface) = match &proxy {
-                    GeneralProxy::Single(p) => (p.get_impl(), None),
-                    GeneralProxy::Group(g) => {
-                        let (p, iface) = g.get_proxy_and_interface();
-                        (p.get_impl(), iface)
+            match v {
+                RuleOrAction::Rule(v) => {
+                    if let Some(proxy) = v.matches(info) {
+                        let (proxy_impl, iface) = match &proxy {
+                            GeneralProxy::Single(p) => (p.get_impl(), None),
+                            GeneralProxy::Group(g) => {
+                                let (p, iface) = g.get_proxy_and_interface();
+                                (p.get_impl(), iface)
+                            }
+                        };
+                        if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
+                            if verbose {
+                                tracing::info!(
+                                    "[{:?}]({}) {} => {} failed: UDP disabled",
+                                    v,
+                                    stringfy_process(info),
+                                    info.dst,
+                                    proxy
+                                );
+                            }
+                            return (Arc::new(ProxyImpl::Reject), None);
+                        }
+                        if verbose {
+                            tracing::info!(
+                                "[{:?}]({}) {} => {}",
+                                v,
+                                stringfy_process(info),
+                                info.dst,
+                                proxy
+                            );
+                        }
+                        return (proxy_impl, iface);
                     }
-                };
-                if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-                    if verbose {
-                        tracing::info!(
-                            "[{:?}]({}) {} => {} failed: UDP disabled",
-                            v,
-                            stringfy_process(info),
-                            info.dst,
-                            proxy
-                        );
-                    }
-                    return (Arc::new(ProxyImpl::Reject), None);
                 }
-                if verbose {
-                    tracing::info!(
-                        "[{:?}]({}) {} => {}",
-                        v,
-                        stringfy_process(info),
-                        info.dst,
-                        proxy
-                    );
-                }
-                return (proxy_impl, iface);
+                RuleOrAction::Action(a) => match a {
+                    Action::LocalResolve(r) => r.resolve_to(info).await,
+                },
             }
         }
 
@@ -126,17 +151,21 @@ fn stringfy_process(info: &ConnInfo) -> &str {
 pub struct DispatchingBuilder {
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
-    rules: Vec<Rule>,
+    rules: Vec<RuleOrAction>,
     fallback: Option<GeneralProxy>,
+    dns: Arc<Dns>,
+    mmdb: Option<Arc<MmdbReader>>,
 }
 
 impl DispatchingBuilder {
-    pub fn new() -> Self {
+    pub fn new(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>) -> Self {
         let mut r = Self {
             proxies: Default::default(),
             groups: Default::default(),
             rules: vec![],
             fallback: None,
+            dns,
+            mmdb,
         };
         r.proxies.insert(
             "DIRECT".into(),
@@ -188,7 +217,13 @@ impl DispatchingBuilder {
             };
             ruleset.insert(name.clone(), Arc::new(builder.build()?));
         }
-        let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
+        let mut rule_builder = RuleBuilder::new(
+            self.dns.clone(),
+            self.mmdb.clone(),
+            &self.proxies,
+            &self.groups,
+            ruleset,
+        );
         for (idx, r) in config.rule_local.iter().enumerate() {
             if idx != config.rule_local.len() - 1 {
                 rule_builder
@@ -234,7 +269,13 @@ impl DispatchingBuilder {
             };
             ruleset.insert(name.clone(), Arc::new(builder.build()?));
         }
-        let mut rule_builder = RuleBuilder::new(&self.proxies, &self.groups, ruleset);
+        let mut rule_builder = RuleBuilder::new(
+            self.dns.clone(),
+            self.mmdb.clone(),
+            &self.proxies,
+            &self.groups,
+            ruleset,
+        );
         for r in rules.iter() {
             rule_builder.append_literal((r.clone() + ", DIRECT").as_str())?;
         }

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
 
-fn safe_join_path(root: &Path, file_path: &str) -> io::Result<PathBuf> {
+pub fn safe_join_path(root: &Path, file_path: &str) -> io::Result<PathBuf> {
     let file_path = if file_path.starts_with('/') {
         PathBuf::from_str(file_path).unwrap()
     } else {
