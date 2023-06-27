@@ -18,9 +18,11 @@ impl LocalResolve {
     }
 
     pub async fn resolve_to(&self, info: &mut ConnInfo) {
-        if let NetworkAddr::DomainName { domain_name, port } = &info.dst {
-            if let Some(addr) = self.dns.genuine_lookup(domain_name).await {
-                info.resolved_dst = Some(SocketAddr::new(addr, *port));
+        if info.resolved_dst.is_none() {
+            if let NetworkAddr::DomainName { domain_name, port } = &info.dst {
+                if let Some(addr) = self.dns.genuine_lookup(domain_name).await {
+                    info.resolved_dst = Some(SocketAddr::new(addr, *port));
+                }
             }
         }
     }

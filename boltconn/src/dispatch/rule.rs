@@ -1,6 +1,7 @@
 use crate::dispatch::action::{Action, LocalResolve};
 use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
+use crate::external::MmdbReader;
 use crate::network::dns::Dns;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
@@ -59,6 +60,8 @@ pub enum RuleImpl {
     IpCidr(IpNet),
     Port(PortRule),
     RuleSet(Arc<RuleSet>),
+    GeoIP(Arc<MmdbReader>, String),
+    Asn(Arc<MmdbReader>, u32),
     And(Vec<RuleImpl>),
     Or(Vec<RuleImpl>),
     Not(Box<RuleImpl>),
@@ -88,15 +91,13 @@ impl RuleImpl {
                     false
                 }
             }
-            RuleImpl::IpCidr(net) => {
-                if let NetworkAddr::Raw(addr) = &info.dst {
-                    net.contains(&addr.ip())
-                } else if let Some(dst) = &info.resolved_dst {
-                    net.contains(&dst.ip())
-                } else {
-                    false
-                }
-            }
+            RuleImpl::IpCidr(net) => info.socketaddr().is_some_and(|s| net.contains(&s.ip())),
+            RuleImpl::GeoIP(mmdb, country) => info
+                .socketaddr()
+                .is_some_and(|s| mmdb.search_country(s.ip()).is_some_and(|c| c == country)),
+            RuleImpl::Asn(mmdb, asn) => info
+                .socketaddr()
+                .is_some_and(|s| mmdb.search_asn(s.ip()).is_some_and(|a| a == *asn)),
             RuleImpl::Port(port) => match port {
                 PortRule::Tcp(p) => {
                     info.connection_type == NetworkType::Tcp && info.dst.port() == *p
@@ -152,11 +153,13 @@ pub(crate) struct RuleBuilder<'a> {
     rulesets: HashMap<String, Arc<RuleSet>>,
     buffer: Vec<RuleOrAction>,
     dns: Arc<Dns>,
+    mmdb: Option<Arc<MmdbReader>>,
 }
 
 impl RuleBuilder<'_> {
     pub fn new<'a>(
         dns: Arc<Dns>,
+        mmdb: Option<Arc<MmdbReader>>,
         proxies: &'a HashMap<String, Arc<Proxy>>,
         groups: &'a HashMap<String, Arc<ProxyGroup>>,
         rulesets: HashMap<String, Arc<RuleSet>>,
@@ -167,6 +170,7 @@ impl RuleBuilder<'_> {
             rulesets,
             buffer: vec![],
             dns,
+            mmdb,
         }
     }
 
@@ -247,7 +251,7 @@ impl RuleBuilder<'_> {
                         _ => {
                             // all other rules
                             let content = retrive_string(list.get(1).unwrap())?;
-                            Self::parse(prefix, content, Some(&self.rulesets))
+                            Self::parse(prefix, content, Some(&self.rulesets), self.mmdb.as_ref())
                                 .ok_or_else(|| anyhow!("Failed to parse"))
                         }
                     },
@@ -261,8 +265,13 @@ impl RuleBuilder<'_> {
                                     return Err(anyhow!("Invalid length"));
                                 }
                                 let content = retrive_string(list.get(1).unwrap())?;
-                                Self::parse(prefix, content, Some(&self.rulesets))
-                                    .ok_or_else(|| anyhow!("Failed to parse"))
+                                Self::parse(
+                                    prefix,
+                                    content,
+                                    Some(&self.rulesets),
+                                    self.mmdb.as_ref(),
+                                )
+                                .ok_or_else(|| anyhow!("Failed to parse"))
                             }
                             _ => Err(anyhow!("Invalid length")),
                         }
@@ -292,7 +301,7 @@ impl RuleBuilder<'_> {
     }
 
     #[allow(clippy::get_first)]
-    pub fn parse_ruleset(s: &str) -> Option<RuleImpl> {
+    pub fn parse_ruleset(s: &str, mmdb: Option<&Arc<MmdbReader>>) -> Option<RuleImpl> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
         // ignore no-resolve
@@ -304,13 +313,14 @@ impl RuleBuilder<'_> {
             String::from(*list.get(0).unwrap()),
             String::from(*list.get(1).unwrap()),
         );
-        Self::parse(prefix, content, None)
+        Self::parse(prefix, content, None, mmdb)
     }
 
     fn parse(
         prefix: String,
         content: String,
         rulesets: Option<&HashMap<String, Arc<RuleSet>>>,
+        mmdb: Option<&Arc<MmdbReader>>,
     ) -> Option<RuleImpl> {
         match prefix.as_str() {
             "DOMAIN-SUFFIX" => Some(RuleImpl::DomainSuffix(content)),
@@ -321,6 +331,10 @@ impl RuleBuilder<'_> {
             "PROC-PATH-KEYWORD" => Some(RuleImpl::ProcPathKeyword(content)),
             "PROC-CMD-REGEX" => Some(RuleImpl::ProcCmdRegex(Regex::new(&content).ok()?)),
             "IP-CIDR" | "IP-CIDR6" => IpNet::from_str(content.as_str()).ok().map(RuleImpl::IpCidr),
+            "GEOIP" => mmdb.map(|x| RuleImpl::GeoIP(x.clone(), content)),
+            "ASN" => {
+                mmdb.and_then(|x| Some(RuleImpl::Asn(x.clone(), content.parse::<u32>().ok()?)))
+            }
             "DST-PORT" => content.parse::<PortRule>().ok().map(RuleImpl::Port),
             "RULE-SET" => rulesets
                 .and_then(|table| table.get(&content))

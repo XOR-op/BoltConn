@@ -20,6 +20,8 @@ pub struct RawRootCfg {
     // From now on, all the configs should be reloaded properly
     #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
     pub speedtest_url: String,
+    #[serde(alias = "geoip-db")]
+    pub geoip_db: Option<String>,
     pub dns: RawDnsConfig,
     #[serde(alias = "proxy-local", default = "default_local_proxy")]
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,

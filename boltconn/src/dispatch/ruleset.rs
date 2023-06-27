@@ -2,6 +2,7 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{ProviderBehavior, RuleSchema};
 use crate::dispatch::rule::{PortRule, RuleBuilder, RuleImpl};
 use crate::dispatch::ConnInfo;
+use crate::external::MmdbReader;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
 use aho_corasick::AhoCorasick;
@@ -12,6 +13,7 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// Matcher for rules in the same group
 pub struct RuleSet {
@@ -24,6 +26,7 @@ pub struct RuleSet {
     any_udp: bool,
     domain_keyword: AhoCorasick,
     process_name: HashSet<String>,
+    mmdb: Option<(Arc<MmdbReader>, HashSet<u32>, HashSet<String>)>,
     process_keyword: AhoCorasick,
     procpath_keyword: AhoCorasick,
 }
@@ -77,6 +80,16 @@ impl RuleSet {
                 return true;
             }
         }
+        if let Some((mmdb, asn, countries)) = &self.mmdb {
+            if info.socketaddr().is_some_and(|s| {
+                mmdb.search_asn(s.ip()).is_some_and(|a| asn.contains(&a))
+                    || mmdb
+                        .search_country(s.ip())
+                        .is_some_and(|c| countries.contains(c))
+            }) {
+                return true;
+            }
+        }
         false
     }
 }
@@ -91,8 +104,11 @@ pub struct RuleSetBuilder {
     procpath_keyword: Vec<String>,
     tcp_port: HashSet<u16>,
     udp_port: HashSet<u16>,
+    asn: HashSet<u32>,
+    geoip_country: HashSet<String>,
     any_tcp: bool,
     any_udp: bool,
+    mmdb: Option<Arc<MmdbReader>>,
 }
 
 impl RuleSetBuilder {
@@ -107,8 +123,11 @@ impl RuleSetBuilder {
             procpath_keyword: vec![],
             tcp_port: HashSet::new(),
             udp_port: HashSet::new(),
+            asn: Default::default(),
+            geoip_country: Default::default(),
             any_tcp: false,
             any_udp: false,
+            mmdb: None,
         };
         match payload.behavior {
             ProviderBehavior::Domain => {
@@ -135,7 +154,7 @@ impl RuleSetBuilder {
             }
             ProviderBehavior::Classical => {
                 for str in &payload.payload {
-                    let rule = RuleBuilder::parse_ruleset(str)?;
+                    let rule = RuleBuilder::parse_ruleset(str, retval.mmdb.as_ref())?;
                     match rule {
                         RuleImpl::ProcessName(pn) => {
                             retval.process_name.insert(pn.clone());
@@ -150,6 +169,14 @@ impl RuleSetBuilder {
                                 ip_network::IpNetwork::new_truncate(ip.addr(), ip.prefix_len())
                                     .unwrap();
                             retval.ip_cidr.insert(ip, ());
+                        }
+                        RuleImpl::Asn(mmdb, asn) => {
+                            retval.asn.insert(asn);
+                            retval.mmdb = Some(mmdb)
+                        }
+                        RuleImpl::GeoIP(mmdb, country) => {
+                            retval.geoip_country.insert(country);
+                            retval.mmdb = Some(mmdb)
                         }
                         RuleImpl::Port(p) => match p {
                             PortRule::Tcp(p) => {
@@ -206,6 +233,7 @@ impl RuleSetBuilder {
             any_udp: self.any_udp,
             domain_keyword: AhoCorasick::new(self.domain_keyword.into_iter())?,
             process_name: self.process_name,
+            mmdb: self.mmdb.map(|m| (m, self.asn, self.geoip_country)),
             process_keyword: AhoCorasick::new(self.process_keyword.into_iter())?,
             procpath_keyword: AhoCorasick::new(self.procpath_keyword.into_iter())?,
         })
@@ -226,8 +254,11 @@ impl RuleSetBuilder {
             procpath_keyword: vec![],
             tcp_port: HashSet::new(),
             udp_port: HashSet::new(),
+            asn: Default::default(),
+            geoip_country: Default::default(),
             any_tcp: false,
             any_udp: false,
+            mmdb: None,
         }
     }
 }

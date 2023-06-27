@@ -8,6 +8,7 @@ use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
 use crate::dispatch::ruleset::RuleSetBuilder;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
+use crate::external::MmdbReader;
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
@@ -30,6 +31,16 @@ pub struct ConnInfo {
     pub resolved_dst: Option<SocketAddr>,
     pub connection_type: NetworkType,
     pub process_info: Option<ProcessInfo>,
+}
+
+impl ConnInfo {
+    pub fn socketaddr(&self) -> Option<&SocketAddr> {
+        if let NetworkAddr::Raw(s) = &self.dst {
+            Some(s)
+        } else {
+            self.resolved_dst.as_ref()
+        }
+    }
 }
 
 pub struct Dispatching {
@@ -143,16 +154,18 @@ pub struct DispatchingBuilder {
     rules: Vec<RuleOrAction>,
     fallback: Option<GeneralProxy>,
     dns: Arc<Dns>,
+    mmdb: Option<Arc<MmdbReader>>,
 }
 
 impl DispatchingBuilder {
-    pub fn new(dns: Arc<Dns>) -> Self {
+    pub fn new(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>) -> Self {
         let mut r = Self {
             proxies: Default::default(),
             groups: Default::default(),
             rules: vec![],
             fallback: None,
             dns,
+            mmdb,
         };
         r.proxies.insert(
             "DIRECT".into(),
@@ -204,8 +217,13 @@ impl DispatchingBuilder {
             };
             ruleset.insert(name.clone(), Arc::new(builder.build()?));
         }
-        let mut rule_builder =
-            RuleBuilder::new(self.dns.clone(), &self.proxies, &self.groups, ruleset);
+        let mut rule_builder = RuleBuilder::new(
+            self.dns.clone(),
+            self.mmdb.clone(),
+            &self.proxies,
+            &self.groups,
+            ruleset,
+        );
         for (idx, r) in config.rule_local.iter().enumerate() {
             if idx != config.rule_local.len() - 1 {
                 rule_builder
@@ -251,8 +269,13 @@ impl DispatchingBuilder {
             };
             ruleset.insert(name.clone(), Arc::new(builder.build()?));
         }
-        let mut rule_builder =
-            RuleBuilder::new(self.dns.clone(), &self.proxies, &self.groups, ruleset);
+        let mut rule_builder = RuleBuilder::new(
+            self.dns.clone(),
+            self.mmdb.clone(),
+            &self.proxies,
+            &self.groups,
+            ruleset,
+        );
         for r in rules.iter() {
             rule_builder.append_literal((r.clone() + ", DIRECT").as_str())?;
         }
