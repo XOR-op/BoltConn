@@ -15,6 +15,7 @@ use crate::proxy::{
 };
 use crate::{external, platform};
 use anyhow::anyhow;
+use arc_swap::ArcSwap;
 use ipnet::Ipv4Net;
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -196,7 +197,7 @@ impl App {
         };
 
         // create controller
-        let api_dispatching_handler = Arc::new(tokio::sync::RwLock::new(dispatching));
+        let api_dispatching_handler = Arc::new(ArcSwap::new(dispatching));
         let (reload_sender, reload_receiver) = tokio::sync::mpsc::channel::<()>(1);
         let speedtest_url = Arc::new(std::sync::RwLock::new(config.speedtest_url.clone()));
         let controller = Arc::new(Controller::new(
@@ -326,22 +327,18 @@ impl App {
                 header_rewriter,
                 new_speedtest_url,
             )) => {
-                *self.api_dispatching_handler.write().await = dispatching.clone();
+                self.api_dispatching_handler.store(dispatching.clone());
                 let hcap2 = self.http_capturer.clone();
-                self.dispatcher.replace_dispatching(dispatching).await;
-                self.dispatcher
-                    .replace_intercept_filter(intercept_filter)
-                    .await;
-                self.dispatcher
-                    .replace_modifier(Box::new(move |pi| {
-                        Arc::new(InterceptModifier::new(
-                            hcap2.clone(),
-                            url_rewriter.clone(),
-                            header_rewriter.clone(),
-                            pi,
-                        ))
-                    }))
-                    .await;
+                self.dispatcher.replace_dispatching(dispatching);
+                self.dispatcher.replace_intercept_filter(intercept_filter);
+                self.dispatcher.replace_modifier(Box::new(move |pi| {
+                    Arc::new(InterceptModifier::new(
+                        hcap2.clone(),
+                        url_rewriter.clone(),
+                        header_rewriter.clone(),
+                        pi,
+                    ))
+                }));
                 *self.speedtest_url.write().unwrap() = new_speedtest_url;
                 tracing::info!(
                     "Reloaded config successfully in {}ms",

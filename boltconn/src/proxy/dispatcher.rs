@@ -10,6 +10,7 @@ use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::{ConnAbortHandle, ConnContext, ContextManager, NetworkAddr};
+use arc_swap::ArcSwap;
 use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
@@ -17,16 +18,16 @@ use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 
 pub struct Dispatcher {
     iface_name: String,
     dns: Arc<Dns>,
     stat_center: Arc<ContextManager>,
-    dispatching: RwLock<Arc<Dispatching>>,
+    dispatching: ArcSwap<Dispatching>,
     ca_certificate: Certificate,
-    modifier: RwLock<ModifierClosure>,
-    intercept_filter: RwLock<Arc<Dispatching>>,
+    modifier: ArcSwap<ModifierClosure>,
+    intercept_filter: ArcSwap<Dispatching>,
     wireguard_mgr: Arc<WireguardManager>,
 }
 
@@ -46,24 +47,24 @@ impl Dispatcher {
             iface_name: iface_name.into(),
             dns,
             stat_center,
-            dispatching: RwLock::new(dispatching),
+            dispatching: ArcSwap::new(dispatching),
             ca_certificate,
-            modifier: RwLock::new(modifier),
-            intercept_filter: RwLock::new(intercept_filter),
+            modifier: ArcSwap::new(Arc::new(modifier)),
+            intercept_filter: ArcSwap::new(intercept_filter),
             wireguard_mgr: Arc::new(wg_mgr),
         }
     }
 
-    pub async fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
-        *self.dispatching.write().await = dispatching;
+    pub fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
+        self.dispatching.store(dispatching);
     }
 
-    pub async fn replace_intercept_filter(&self, intercept_filter: Arc<Dispatching>) {
-        *self.intercept_filter.write().await = intercept_filter;
+    pub fn replace_intercept_filter(&self, intercept_filter: Arc<Dispatching>) {
+        self.intercept_filter.store(intercept_filter);
     }
 
-    pub async fn replace_modifier(&self, closure: ModifierClosure) {
-        *self.modifier.write().await = closure;
+    pub fn replace_modifier(&self, closure: ModifierClosure) {
+        self.modifier.store(Arc::new(closure));
     }
 
     pub(super) fn get_iface_name(&self) -> String {
@@ -204,12 +205,7 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let (proxy_config, iface) = self
-            .dispatching
-            .read()
-            .await
-            .matches(&mut conn_info, true)
-            .await;
+        let (proxy_config, iface) = self.dispatching.load().matches(&mut conn_info, true).await;
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
@@ -270,8 +266,7 @@ impl Dispatcher {
             if (port == 80 || port == 443)
                 && matches!(
                     self.intercept_filter
-                        .read()
-                        .await
+                        .load()
                         .matches(&mut conn_info, false)
                         .await
                         .0
@@ -279,7 +274,7 @@ impl Dispatcher {
                     ProxyImpl::Direct
                 )
             {
-                let modifier = (self.modifier.read().await)(process_info);
+                let modifier = (self.modifier.load())(process_info);
                 match port {
                     80 => {
                         // hijack
@@ -357,12 +352,7 @@ impl Dispatcher {
         dst_addr: NetworkAddr,
         mut conn_info: ConnInfo,
     ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), ()> {
-        let (proxy_config, iface) = self
-            .dispatching
-            .read()
-            .await
-            .matches(&mut conn_info, true)
-            .await;
+        let (proxy_config, iface) = self.dispatching.load().matches(&mut conn_info, true).await;
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
@@ -410,8 +400,7 @@ impl Dispatcher {
         };
         !matches!(
             self.dispatching
-                .read()
-                .await
+                .load()
                 .matches(&mut conn_info, false)
                 .await
                 .0

@@ -1,5 +1,6 @@
 use crate::dispatch::Dispatching;
 use crate::external::{Controller, StreamLoggerRecv};
+use arc_swap::ArcSwap;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
 use axum::middleware::map_request;
@@ -13,10 +14,9 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 
-pub type SharedDispatching = Arc<RwLock<Arc<Dispatching>>>;
+pub type SharedDispatching = Arc<ArcSwap<Dispatching>>;
 
 #[derive(Clone)]
 pub struct WebController {
@@ -231,7 +231,7 @@ impl WebController {
     }
 
     async fn get_all_proxies(State(server): State<Self>) -> Json<serde_json::Value> {
-        Json(json!(server.controller.get_all_proxies().await))
+        Json(json!(server.controller.get_all_proxies()))
     }
 
     async fn get_proxy_group(
@@ -242,7 +242,7 @@ impl WebController {
             let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
             group.clone()
         };
-        Json(json!(server.controller.get_proxy_group(group).await))
+        Json(json!(server.controller.get_proxy_group(group)))
     }
 
     async fn set_selection(
@@ -254,9 +254,7 @@ impl WebController {
             let Some(group) = params.get("group") else { return Json(serde_json::Value::Null); };
             group.clone()
         };
-        Json(json!(
-            server.controller.set_selection(group, args.selected).await
-        ))
+        Json(json!(server.controller.set_selection(group, args.selected)))
     }
 
     async fn update_latency(

@@ -230,8 +230,8 @@ impl Controller {
         None
     }
 
-    pub async fn get_all_proxies(&self) -> Vec<GetGroupRespSchema> {
-        let list = self.dispatching.read().await.get_group_list();
+    pub fn get_all_proxies(&self) -> Vec<GetGroupRespSchema> {
+        let list = self.dispatching.load().get_group_list();
         let mut result = Vec::new();
         for g in list.iter() {
             let item = GetGroupRespSchema {
@@ -244,8 +244,8 @@ impl Controller {
         result
     }
 
-    pub async fn get_proxy_group(&self, group: String) -> Vec<GetGroupRespSchema> {
-        let list = self.dispatching.read().await.get_group_list();
+    pub fn get_proxy_group(&self, group: String) -> Vec<GetGroupRespSchema> {
+        let list = self.dispatching.load().get_group_list();
         let mut result = Vec::new();
         for g in list.iter() {
             if g.get_name() == group {
@@ -261,11 +261,10 @@ impl Controller {
         result
     }
 
-    pub async fn set_selection(&self, group: String, selected: String) -> bool {
+    pub fn set_selection(&self, group: String, selected: String) -> bool {
         let r = self
             .dispatching
-            .read()
-            .await
+            .load()
             .set_group_selection(group.as_str(), selected.as_str())
             .is_ok();
         if r {
@@ -297,7 +296,7 @@ impl Controller {
     pub async fn update_latency(&self, group: String) {
         tracing::trace!("Start speedtest for group {}", group);
         let speedtest_url = self.speedtest_url.read().unwrap().clone();
-        let list = self.dispatching.read().await.get_group_list();
+        let list = self.dispatching.load().get_group_list();
         for g in list.iter() {
             if g.get_name() == group {
                 let iface = g.get_direct_interface();

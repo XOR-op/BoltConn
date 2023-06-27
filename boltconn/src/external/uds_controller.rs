@@ -180,15 +180,15 @@ struct UdsRpcServer {
 #[tarpc::server]
 impl ControlService for UdsRpcServer {
     async fn get_all_proxies(self, _ctx: Context) -> Vec<GetGroupRespSchema> {
-        self.controller.get_all_proxies().await
+        self.controller.get_all_proxies()
     }
 
     async fn get_proxy_group(self, _ctx: Context, group: String) -> Vec<GetGroupRespSchema> {
-        self.controller.get_proxy_group(group).await
+        self.controller.get_proxy_group(group)
     }
 
     async fn set_proxy_for(self, _ctx: Context, group: String, proxy: String) -> bool {
-        self.controller.set_selection(group, proxy).await
+        self.controller.set_selection(group, proxy)
     }
 
     async fn update_group_latency(self, _ctx: Context, group: String) -> bool {
