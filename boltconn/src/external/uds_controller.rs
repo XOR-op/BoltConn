@@ -121,9 +121,13 @@ impl UdsRpcBackClient {
             ClientRequests::EnableTraffic(ctx_id) => {
                 // spawn traffic processing coroutine
                 tokio::spawn(async move {
-                    let tra = self.controller.get_traffic();
-                    let mut last_upload = tra.upload;
-                    let mut last_download = tra.download;
+                    let TrafficResp {
+                        upload: mut last_upload,
+                        download: mut last_download,
+                        upload_speed: _,
+                        download_speed: _,
+                    } = self.controller.get_traffic();
+                    let mut interval_ms = 1000;
 
                     loop {
                         let TrafficResp {
@@ -132,11 +136,18 @@ impl UdsRpcBackClient {
                             upload_speed: _,
                             download_speed: _,
                         } = self.controller.get_traffic();
+                        let up_speed = (upload - last_upload) * 1000 / interval_ms;
+                        let down_speed = (download - last_download) * 1000 / interval_ms;
+                        interval_ms = if up_speed > 0 || down_speed > 0 {
+                            500
+                        } else {
+                            1000
+                        };
                         let data = TrafficResp {
                             upload,
                             download,
-                            upload_speed: Some(upload - last_upload),
-                            download_speed: Some(download - last_download),
+                            upload_speed: Some(up_speed),
+                            download_speed: Some(down_speed),
                         };
                         last_upload = upload;
                         last_download = download;
@@ -148,7 +159,7 @@ impl UdsRpcBackClient {
                         {
                             break;
                         }
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        tokio::time::sleep(Duration::from_millis(interval_ms)).await;
                     }
                 });
             }
