@@ -1,3 +1,4 @@
+use crate::config::AuthData;
 use crate::proxy::{Dispatcher, HttpInbound, Socks5Inbound};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -9,15 +10,15 @@ pub struct MixedInbound {
     port: u16,
     server: TcpListener,
     http_auth: Option<String>,
-    socks_auth: Option<(String, String)>,
+    socks_auth: Option<AuthData>,
     dispatcher: Arc<Dispatcher>,
 }
 
 impl MixedInbound {
     pub async fn new(
         port: u16,
-        http_auth: Option<(String, String)>,
-        socks_auth: Option<(String, String)>,
+        http_auth: Option<AuthData>,
+        socks_auth: Option<AuthData>,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
         let server =
@@ -25,7 +26,7 @@ impl MixedInbound {
         Ok(Self {
             port,
             server,
-            http_auth: http_auth.map(|(usr, pwd)| usr + ":" + pwd.as_str()),
+            http_auth: http_auth.map(|d| d.username + ":" + d.password.as_str()),
             socks_auth,
             dispatcher,
         })
@@ -57,7 +58,7 @@ impl MixedInbound {
     async fn serve_connection(
         mut socks_stream: TcpStream,
         http_auth: Option<String>,
-        socks_auth: Option<(String, String)>,
+        socks_auth: Option<AuthData>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
     ) -> anyhow::Result<()> {

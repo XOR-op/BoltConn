@@ -1,3 +1,4 @@
+use crate::config::AuthData;
 use crate::proxy::Dispatcher;
 use anyhow::anyhow;
 use base64::Engine;
@@ -19,7 +20,7 @@ pub struct HttpInbound {
 impl HttpInbound {
     pub async fn new(
         port: u16,
-        auth: Option<(String, String)>,
+        auth: Option<AuthData>,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
         let server =
@@ -27,7 +28,7 @@ impl HttpInbound {
         Ok(Self {
             port,
             server,
-            auth: auth.map(|(usr, pwd)| usr + ":" + pwd.as_str()),
+            auth: auth.map(|auth| auth.username + ":" + auth.password.as_str()),
             dispatcher,
         })
     }

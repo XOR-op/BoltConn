@@ -1,3 +1,4 @@
+use crate::config::AuthData;
 use crate::proxy::Dispatcher;
 use fast_socks5::util::target_addr::read_address;
 use fast_socks5::{consts, read_exact, ReplyError, SocksError};
@@ -12,14 +13,14 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 pub struct Socks5Inbound {
     port: u16,
     server: TcpListener,
-    auth: Option<(String, String)>,
+    auth: Option<AuthData>,
     dispatcher: Arc<Dispatcher>,
 }
 
 impl Socks5Inbound {
     pub async fn new(
         port: u16,
-        auth: Option<(String, String)>,
+        auth: Option<AuthData>,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
         let server =
@@ -54,7 +55,7 @@ impl Socks5Inbound {
 
     pub(super) async fn serve_connection(
         mut socks_stream: TcpStream,
-        auth: Option<(String, String)>,
+        auth: Option<AuthData>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
         first_byte: Option<u8>,
@@ -127,7 +128,7 @@ impl Socks5Inbound {
 
     async fn process_auth(
         socket: &mut TcpStream,
-        auth: Option<(String, String)>,
+        auth: Option<AuthData>,
         first_byte: Option<u8>,
     ) -> Result<(), SocksError> {
         let [version, method_len] = if let Some(byte) = first_byte {
@@ -158,7 +159,7 @@ impl Socks5Inbound {
                 .write_all(&[consts::SOCKS5_VERSION, supported])
                 .await?;
         }
-        if let Some((usr, pwd)) = auth {
+        if let Some(auth) = auth {
             let [version, user_len] = read_exact!(socket, [0u8; 2])?;
             if version != consts::SOCKS5_VERSION {
                 return Err(SocksError::UnsupportedSocksVersion(version));
@@ -178,8 +179,8 @@ impl Socks5Inbound {
             }
             let password = read_exact!(socket, vec![0u8; pass_len as usize])?;
 
-            if String::from_utf8(username).map(|u| u == usr) == Ok(true)
-                && String::from_utf8(password).map(|p| p == pwd) == Ok(true)
+            if String::from_utf8(username).map(|u| u == auth.username) == Ok(true)
+                && String::from_utf8(password).map(|p| p == auth.password) == Ok(true)
             {
                 socket
                     .write_all(&[1, consts::SOCKS5_REPLY_SUCCEEDED])

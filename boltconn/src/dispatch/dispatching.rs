@@ -303,56 +303,26 @@ impl DispatchingBuilder {
                 return Err(anyhow!("Duplicate proxy name:{}", *name));
             }
             let p = match proxy {
-                RawProxyLocalCfg::Http {
-                    server,
-                    port,
-                    username,
-                    password,
-                } => {
-                    let auth = {
-                        if let (Some(username), Some(passwd)) = (username, password) {
-                            Some((username.clone(), passwd.clone()))
-                        } else if let (None, None) = (username, password) {
-                            None
-                        } else {
-                            return Err(anyhow!("Bad Http {}: invalid configuration", *name));
-                        }
-                    };
-
-                    Arc::new(Proxy::new(
-                        name.clone(),
-                        ProxyImpl::Http(HttpConfig {
-                            server_addr: NetworkAddr::from(server, *port),
-                            auth,
-                        }),
-                    ))
-                }
+                RawProxyLocalCfg::Http { server, port, auth } => Arc::new(Proxy::new(
+                    name.clone(),
+                    ProxyImpl::Http(HttpConfig {
+                        server_addr: NetworkAddr::from(server, *port),
+                        auth: auth.clone(),
+                    }),
+                )),
                 RawProxyLocalCfg::Socks5 {
                     server,
                     port,
-                    username,
-                    password,
+                    auth,
                     udp,
-                } => {
-                    let auth = {
-                        if let (Some(username), Some(passwd)) = (username, password) {
-                            Some((username.clone(), passwd.clone()))
-                        } else if let (None, None) = (username, password) {
-                            None
-                        } else {
-                            return Err(anyhow!("Bad Socks5 {}: invalid configuration", *name));
-                        }
-                    };
-
-                    Arc::new(Proxy::new(
-                        name.clone(),
-                        ProxyImpl::Socks5(Socks5Config {
-                            server_addr: NetworkAddr::from(server, *port),
-                            auth,
-                            udp: *udp,
-                        }),
-                    ))
-                }
+                } => Arc::new(Proxy::new(
+                    name.clone(),
+                    ProxyImpl::Socks5(Socks5Config {
+                        server_addr: NetworkAddr::from(server, *port),
+                        auth: auth.clone(),
+                        udp: *udp,
+                    }),
+                )),
                 RawProxyLocalCfg::Shadowsocks {
                     server,
                     port,

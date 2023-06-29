@@ -3,6 +3,7 @@ use crate::adapter::{
 };
 
 use crate::common::{io_err, StreamOutboundTrait};
+use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -17,7 +18,7 @@ use tokio::task::JoinHandle;
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
     pub(crate) server_addr: NetworkAddr,
-    pub(crate) auth: Option<(String, String)>,
+    pub(crate) auth: Option<AuthData>,
 }
 
 #[derive(Clone)]
@@ -54,9 +55,9 @@ impl HttpOutbound {
             Proxy-Connection: Keep-Alive\r\n",
             self.dst
         );
-        if let Some((user, pswd)) = self.config.auth {
+        if let Some(auth) = self.config.auth {
             let b64encoder = base64::engine::general_purpose::STANDARD;
-            let encoded = b64encoder.encode(format!("{user}:{pswd}"));
+            let encoded = b64encoder.encode(format!("{}:{}", auth.username, auth.password));
             req += format!("Proxy-Authorization: basic {encoded}\r\n").as_str();
         }
         req += "\r\n";

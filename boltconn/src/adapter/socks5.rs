@@ -4,6 +4,7 @@ use crate::adapter::{
 };
 
 use crate::common::{as_io_err, io_err, StreamOutboundTrait};
+use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -23,7 +24,7 @@ use tokio::task::JoinHandle;
 #[derive(Debug, Clone)]
 pub struct Socks5Config {
     pub(crate) server_addr: NetworkAddr,
-    pub(crate) auth: Option<(String, String)>,
+    pub(crate) auth: Option<AuthData>,
     pub(crate) udp: bool,
 }
 
@@ -31,9 +32,9 @@ impl Socks5Config {
     fn get_auth(&self) -> AuthenticationMethod {
         match &self.auth {
             None => AuthenticationMethod::None,
-            Some((username, password)) => AuthenticationMethod::Password {
-                username: username.clone(),
-                password: password.clone(),
+            Some(auth) => AuthenticationMethod::Password {
+                username: auth.username.clone(),
+                password: auth.password.clone(),
             },
         }
     }

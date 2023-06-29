@@ -1,5 +1,6 @@
 #[allow(clippy::module_inception)]
 mod config;
+mod inbound;
 mod module;
 mod proxy_group;
 mod proxy_provider;
@@ -9,10 +10,12 @@ mod state;
 use crate::platform::get_user_info;
 use anyhow::anyhow;
 pub use config::*;
+pub use inbound::*;
 pub use module::*;
 pub use proxy_group::*;
 pub use proxy_provider::*;
 pub use rule_provider::*;
+use serde::{Deserialize, Serialize};
 pub use state::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -136,4 +139,10 @@ where
         content
     };
     Ok(content)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AuthData {
+    pub username: String,
+    pub password: String,
 }

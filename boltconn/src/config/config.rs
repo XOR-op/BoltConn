@@ -1,5 +1,6 @@
+use crate::config::inbound::{RawInboundConfig, RawPortConfig};
 use crate::config::proxy_group::RawProxyGroupCfg;
-use crate::config::{ModuleConfig, ProxyProvider, RuleProvider};
+use crate::config::{AuthData, ModuleConfig, ProxyProvider, RuleProvider};
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,10 +10,8 @@ use std::net::{IpAddr, SocketAddr};
 #[serde(deny_unknown_fields)]
 pub struct RawRootCfg {
     pub interface: String,
-    #[serde(alias = "http-port")]
-    pub http_port: Option<u16>,
-    #[serde(alias = "socks5-port")]
-    pub socks5_port: Option<u16>,
+    #[serde(default = "default_inbound_config")]
+    pub inbound: RawInboundConfig,
     #[serde(alias = "web-controller")]
     pub web_controller: Option<RawWebControllerConfig>,
     #[serde(default = "default_false")]
@@ -78,15 +77,13 @@ pub enum RawProxyLocalCfg {
     Http {
         server: RawServerAddr,
         port: u16,
-        username: Option<String>,
-        password: Option<String>,
+        auth: Option<AuthData>,
     },
     #[serde(alias = "socks5")]
     Socks5 {
         server: RawServerAddr,
         port: u16,
-        username: Option<String>,
-        password: Option<String>,
+        auth: Option<AuthData>,
         #[serde(default = "default_true")]
         udp: bool,
     },
@@ -149,6 +146,16 @@ fn default_proxy_provider() -> HashMap<String, ProxyProvider> {
 
 fn default_speedtest_url() -> String {
     "http://www.gstatic.com/generate_204".to_string()
+}
+
+fn default_inbound_config() -> RawInboundConfig {
+    RawInboundConfig {
+        enable_tun: true,
+        service_inbound: RawPortConfig::Simple {
+            http: None,
+            socks5: None,
+        },
+    }
 }
 
 pub(super) fn default_rule_provider() -> HashMap<String, RuleProvider> {
