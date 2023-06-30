@@ -1,7 +1,7 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{ProviderBehavior, RuleSchema};
 use crate::dispatch::rule::{PortRule, RuleBuilder, RuleImpl};
-use crate::dispatch::ConnInfo;
+use crate::dispatch::{ConnInfo, InboundInfo};
 use crate::external::MmdbReader;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
@@ -20,10 +20,13 @@ pub struct RuleSet {
     name: String,
     domain: HostMatcher,
     ip: IpNetworkTable<()>,
-    tcp_port: HashSet<u16>,
-    udp_port: HashSet<u16>,
-    any_tcp: bool,
-    any_udp: bool,
+    src_tcp_port: PortFilter,
+    src_udp_port: PortFilter,
+    dst_tcp_port: PortFilter,
+    dst_udp_port: PortFilter,
+    http_inbound: InboundFilter,
+    socks5_inbound: InboundFilter,
+    tun_inbound: bool,
     domain_keyword: AhoCorasick,
     process_name: HashSet<String>,
     mmdb: Option<(Arc<MmdbReader>, HashSet<u32>, HashSet<String>)>,
@@ -62,12 +65,12 @@ impl RuleSet {
         };
         match info.connection_type {
             NetworkType::Tcp => {
-                if self.any_tcp || self.tcp_port.contains(&port) {
+                if self.dst_tcp_port.contains(port) || self.src_tcp_port.contains(info.src.port()) {
                     return true;
                 }
             }
             NetworkType::Udp => {
-                if self.any_udp || self.udp_port.contains(&port) {
+                if self.dst_udp_port.contains(port) || self.src_udp_port.contains(info.src.port()) {
                     return true;
                 }
             }
@@ -102,16 +105,15 @@ pub struct RuleSetBuilder {
     process_name: HashSet<String>,
     process_keyword: Vec<String>,
     procpath_keyword: Vec<String>,
-    src_tcp_port: HashSet<u16>,
-    src_udp_port: HashSet<u16>,
-    dst_tcp_port: HashSet<u16>,
-    dst_udp_port: HashSet<u16>,
+    src_tcp_port: PortFilter,
+    src_udp_port: PortFilter,
+    dst_tcp_port: PortFilter,
+    dst_udp_port: PortFilter,
+    http_inbound: InboundFilter,
+    socks5_inbound: InboundFilter,
+    tun_inbound: bool,
     asn: HashSet<u32>,
     geoip_country: HashSet<String>,
-    src_any_tcp: bool,
-    src_any_udp: bool,
-    dst_any_tcp: bool,
-    dst_any_udp: bool,
     mmdb: Option<Arc<MmdbReader>>,
 }
 
@@ -129,12 +131,11 @@ impl RuleSetBuilder {
             src_udp_port: Default::default(),
             dst_tcp_port: Default::default(),
             dst_udp_port: Default::default(),
+            http_inbound: Default::default(),
+            socks5_inbound: Default::default(),
+            tun_inbound: false,
             asn: Default::default(),
             geoip_country: Default::default(),
-            src_any_tcp: false,
-            src_any_udp: false,
-            dst_any_tcp: false,
-            dst_any_udp: false,
             mmdb: None,
         };
         match payload.behavior {
@@ -164,6 +165,21 @@ impl RuleSetBuilder {
                 for str in &payload.payload {
                     let rule = RuleBuilder::parse_ruleset(str, retval.mmdb.as_ref())?;
                     match rule {
+                        RuleImpl::Inbound(inbound) => match inbound {
+                            InboundInfo::Tun => retval.tun_inbound = true,
+                            InboundInfo::HttpAny => retval.http_inbound.set_any(),
+                            InboundInfo::Socks5Any => retval.socks5_inbound.set_any(),
+                            InboundInfo::Http(user) => {
+                                if let Some(s) = user {
+                                    retval.http_inbound.insert(s)
+                                }
+                            }
+                            InboundInfo::Socks5(user) => {
+                                if let Some(s) = user {
+                                    retval.socks5_inbound.insert(s)
+                                }
+                            }
+                        },
                         RuleImpl::ProcessName(pn) => {
                             retval.process_name.insert(pn.clone());
                         }
@@ -197,8 +213,8 @@ impl RuleSetBuilder {
                                 retval.src_tcp_port.insert(p);
                                 retval.src_udp_port.insert(p);
                             }
-                            PortRule::AnyTcp => retval.src_any_tcp = true,
-                            PortRule::AnyUdp => retval.src_any_udp = true,
+                            PortRule::AnyTcp => retval.src_tcp_port.set_any(),
+                            PortRule::AnyUdp => retval.src_udp_port.set_any(),
                         },
                         RuleImpl::DstPort(p) => match p {
                             PortRule::Tcp(p) => {
@@ -211,8 +227,8 @@ impl RuleSetBuilder {
                                 retval.dst_tcp_port.insert(p);
                                 retval.dst_udp_port.insert(p);
                             }
-                            PortRule::AnyTcp => retval.dst_any_tcp = true,
-                            PortRule::AnyUdp => retval.dst_any_udp = true,
+                            PortRule::AnyTcp => retval.dst_tcp_port.set_any(),
+                            PortRule::AnyUdp => retval.dst_udp_port.set_any(),
                         },
                         // Slow for ruleset; better to write as a standalone rule
                         RuleImpl::RuleSet(_)
@@ -236,10 +252,10 @@ impl RuleSetBuilder {
         self.process_keyword.extend(rhs.process_keyword.into_iter());
         self.procpath_keyword
             .extend(rhs.procpath_keyword.into_iter());
-        self.dst_tcp_port.extend(rhs.dst_tcp_port.into_iter());
-        self.dst_udp_port.extend(rhs.dst_udp_port.into_iter());
-        self.dst_any_tcp |= rhs.dst_any_tcp;
-        self.dst_any_udp |= rhs.dst_any_udp;
+        self.src_tcp_port.extend(rhs.src_tcp_port);
+        self.src_udp_port.extend(rhs.src_udp_port);
+        self.dst_tcp_port.extend(rhs.dst_tcp_port);
+        self.dst_udp_port.extend(rhs.dst_udp_port);
         self.domain_keyword.extend(rhs.domain_keyword.into_iter());
         self
     }
@@ -249,10 +265,13 @@ impl RuleSetBuilder {
             name: self.name,
             domain: self.domain.build(),
             ip: self.ip_cidr,
-            tcp_port: self.dst_tcp_port,
-            udp_port: self.dst_udp_port,
-            any_tcp: self.dst_any_tcp,
-            any_udp: self.dst_any_udp,
+            src_tcp_port: self.src_tcp_port,
+            src_udp_port: self.src_udp_port,
+            dst_tcp_port: self.dst_tcp_port,
+            dst_udp_port: self.dst_udp_port,
+            http_inbound: self.http_inbound,
+            socks5_inbound: self.socks5_inbound,
+            tun_inbound: self.tun_inbound,
             domain_keyword: AhoCorasick::new(self.domain_keyword.into_iter())?,
             process_name: self.process_name,
             mmdb: self.mmdb.map(|m| (m, self.asn, self.geoip_country)),
@@ -278,14 +297,99 @@ impl RuleSetBuilder {
             src_udp_port: Default::default(),
             dst_tcp_port: Default::default(),
             dst_udp_port: Default::default(),
+            http_inbound: Default::default(),
+            socks5_inbound: Default::default(),
+            tun_inbound: false,
             asn: Default::default(),
             geoip_country: Default::default(),
-            src_any_tcp: false,
-            src_any_udp: false,
-            dst_any_tcp: false,
-            dst_any_udp: false,
             mmdb: None,
         }
+    }
+}
+
+enum PortFilter {
+    Any,
+    Some(HashSet<u16>),
+}
+
+impl PortFilter {
+    pub fn insert(&mut self, port: u16) {
+        match self {
+            PortFilter::Any => {}
+            PortFilter::Some(s) => {
+                s.insert(port);
+            }
+        }
+    }
+
+    pub fn set_any(&mut self) {
+        *self = PortFilter::Any
+    }
+
+    pub fn contains(&self, port: u16) -> bool {
+        match self {
+            PortFilter::Any => true,
+            PortFilter::Some(s) => s.contains(&port),
+        }
+    }
+
+    pub fn extend(&mut self, rhs: Self) {
+        match rhs {
+            PortFilter::Any => self.set_any(),
+            PortFilter::Some(rs) => match self {
+                PortFilter::Any => {}
+                PortFilter::Some(ls) => ls.extend(rs.into_iter()),
+            },
+        }
+    }
+}
+
+impl Default for PortFilter {
+    fn default() -> Self {
+        PortFilter::Some(Default::default())
+    }
+}
+
+enum InboundFilter {
+    Any,
+    Some(HashSet<String>),
+}
+
+impl InboundFilter {
+    pub fn insert(&mut self, user: String) {
+        match self {
+            InboundFilter::Any => {}
+            InboundFilter::Some(s) => {
+                s.insert(user);
+            }
+        }
+    }
+
+    pub fn set_any(&mut self) {
+        *self = InboundFilter::Any
+    }
+
+    pub fn contains(&self, user: &str) -> bool {
+        match self {
+            InboundFilter::Any => true,
+            InboundFilter::Some(s) => s.contains(user),
+        }
+    }
+
+    pub fn extend(&mut self, rhs: Self) {
+        match rhs {
+            InboundFilter::Any => self.set_any(),
+            InboundFilter::Some(rs) => match self {
+                InboundFilter::Any => {}
+                InboundFilter::Some(ls) => ls.extend(rs.into_iter()),
+            },
+        }
+    }
+}
+
+impl Default for InboundFilter {
+    fn default() -> Self {
+        InboundFilter::Some(Default::default())
     }
 }
 
@@ -293,6 +397,7 @@ impl RuleSetBuilder {
 #[test]
 fn test_rule_provider() {
     use crate::config::RawRuleSchema;
+    use crate::dispatch::InboundInfo;
     use crate::platform::process::NetworkType;
     let config_text = std::fs::read_to_string("../examples/Rules/Apple").unwrap();
     let deserialized: RawRuleSchema = serde_yaml::from_str(&config_text).unwrap();
@@ -313,6 +418,7 @@ fn test_rule_provider() {
             domain_name: "kb.apple.com".to_string(),
             port: 1234,
         },
+        inbound: InboundInfo::Tun,
         resolved_dst: None,
         connection_type: NetworkType::Tcp,
         process_info: None,
@@ -324,6 +430,7 @@ fn test_rule_provider() {
             domain_name: "apple.com".to_string(),
             port: 1234,
         },
+        inbound: InboundInfo::Tun,
         resolved_dst: None,
         connection_type: NetworkType::Tcp,
         process_info: None,
@@ -335,6 +442,7 @@ fn test_rule_provider() {
             domain_name: "icloud.com.akadns.net.com".to_string(),
             port: 1234,
         },
+        inbound: InboundInfo::Tun,
         resolved_dst: None,
         connection_type: NetworkType::Tcp,
         process_info: None,
@@ -346,6 +454,7 @@ fn test_rule_provider() {
             domain_name: "apple.io".to_string(),
             port: 1234,
         },
+        inbound: InboundInfo::Tun,
         resolved_dst: None,
         connection_type: NetworkType::Tcp,
         process_info: None,

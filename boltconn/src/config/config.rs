@@ -1,4 +1,4 @@
-use crate::config::inbound::{RawInboundConfig, RawPortConfig};
+use crate::config::inbound::RawInboundConfig;
 use crate::config::proxy_group::RawProxyGroupCfg;
 use crate::config::{AuthData, ModuleConfig, ProxyProvider, RuleProvider};
 use linked_hash_map::LinkedHashMap;
@@ -151,10 +151,8 @@ fn default_speedtest_url() -> String {
 fn default_inbound_config() -> RawInboundConfig {
     RawInboundConfig {
         enable_tun: true,
-        service_inbound: RawPortConfig::Simple {
-            http: None,
-            socks5: None,
-        },
+        http: None,
+        socks5: None,
     }
 }
 

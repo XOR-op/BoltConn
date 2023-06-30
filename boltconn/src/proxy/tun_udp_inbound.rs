@@ -128,7 +128,7 @@ impl TunUdpInbound {
                         // not an encountered dest, query dispatcher
                         let permit = self
                             .dispatcher
-                            .allow_udp(src, dst_addr.clone(), session.proc_info.clone())
+                            .allow_tun_udp(src, dst_addr.clone(), session.proc_info.clone())
                             .await;
                         session.remote_permit.insert(dst_addr.clone(), permit);
                         if permit {

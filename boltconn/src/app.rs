@@ -1,6 +1,4 @@
-use crate::config::{
-    safe_join_path, AuthData, InboundPortNodeConfig, LinkedState, LoadedConfig, RawPortConfig,
-};
+use crate::config::{safe_join_path, LinkedState, LoadedConfig, RawInboundServiceConfig};
 use crate::dispatch::{Dispatching, DispatchingBuilder};
 use crate::external::{
     Controller, DatabaseHandle, MmdbReader, SharedDispatching, StreamLoggerSend, UdsController,
@@ -20,7 +18,6 @@ use anyhow::anyhow;
 use arc_swap::ArcSwap;
 use ipnet::Ipv4Net;
 use rcgen::{Certificate, CertificateParams, KeyPair};
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -242,13 +239,12 @@ impl App {
         tokio::spawn(async move { tun.run(nat_addr).await });
 
         // start http/socks5 inbound
-        for (port, cfg) in generate_inbound_list(&config.inbound.service_inbound)? {
+        for (port, http_auth, socks_auth) in
+            parse_two_inbound_service(&config.inbound.http, &config.inbound.socks5)
+        {
             let dispatcher = dispatcher.clone();
-            match cfg {
-                InboundDetail::Mixed {
-                    http_auth,
-                    socks_auth,
-                } => {
+            match (http_auth, socks_auth) {
+                (Some(http_auth), Some(socks_auth)) => {
                     tokio::spawn(async move {
                         MixedInbound::new(port, http_auth, socks_auth, dispatcher)
                             .await?
@@ -257,13 +253,13 @@ impl App {
                         Ok::<(), io::Error>(())
                     });
                 }
-                InboundDetail::Http(auth) => {
+                (Some(auth), None) => {
                     tokio::spawn(async move {
                         HttpInbound::new(port, auth, dispatcher).await?.run().await;
                         Ok::<(), io::Error>(())
                     });
                 }
-                InboundDetail::Socks(auth) => {
+                (None, Some(auth)) => {
                     tokio::spawn(async move {
                         Socks5Inbound::new(port, auth, dispatcher)
                             .await?
@@ -272,6 +268,7 @@ impl App {
                         Ok::<(), io::Error>(())
                     });
                 }
+                _ => unreachable!(),
             }
         }
 
@@ -448,80 +445,43 @@ async fn reload(
     ))
 }
 
-fn generate_inbound_list(
-    config: &RawPortConfig,
-) -> anyhow::Result<impl IntoIterator<Item = (u16, InboundDetail)>> {
-    Ok(match config {
-        RawPortConfig::Complex { inbounds } => {
-            let mut coll = HashMap::new();
-            for cfg in inbounds.iter() {
-                match cfg {
-                    InboundPortNodeConfig::Http { port, auth } => match coll.entry(*port) {
-                        Entry::Occupied(mut e) => {
-                            if let InboundDetail::Socks(socks_auth) = e.get() {
-                                e.insert(InboundDetail::Mixed {
-                                    http_auth: auth.clone(),
-                                    socks_auth: socks_auth.clone(),
-                                });
-                            } else {
-                                return Err(anyhow!("Duplicate HTTP inbound: {}", port));
-                            }
-                        }
-                        Entry::Vacant(e) => {
-                            e.insert(InboundDetail::Http(auth.clone()));
-                        }
-                    },
-                    InboundPortNodeConfig::Socks5 { port, auth } => match coll.entry(*port) {
-                        Entry::Occupied(mut e) => {
-                            if let InboundDetail::Http(http_auth) = e.get() {
-                                e.insert(InboundDetail::Mixed {
-                                    http_auth: http_auth.clone(),
-                                    socks_auth: auth.clone(),
-                                });
-                            } else {
-                                return Err(anyhow!("Duplicate Socks5 inbound: {}", port));
-                            }
-                        }
-                        Entry::Vacant(e) => {
-                            e.insert(InboundDetail::Socks(auth.clone()));
-                        }
-                    },
-                }
+#[allow(clippy::type_complexity)]
+fn parse_two_inbound_service(
+    http: &Option<RawInboundServiceConfig>,
+    socks5: &Option<RawInboundServiceConfig>,
+) -> Vec<(
+    u16,
+    Option<HashMap<String, String>>,
+    Option<HashMap<String, String>>,
+)> {
+    fn parse_inbound_service(
+        auths: &Option<RawInboundServiceConfig>,
+    ) -> Option<(u16, HashMap<String, String>)> {
+        let Some(config) = auths.as_ref() else {
+            return None
+        };
+        match config {
+            RawInboundServiceConfig::Simple(p) => Some((*p, Default::default())),
+            RawInboundServiceConfig::Complex { port, auth } => {
+                let authmap = auth
+                    .iter()
+                    .map(|a| (a.username.clone(), a.password.clone()))
+                    .collect();
+                Some((*port, authmap))
             }
-            let r: Vec<(u16, InboundDetail)> = coll.into_iter().collect();
-            r.into_iter()
         }
-        RawPortConfig::Simple { http, socks5 } => match (http, socks5) {
-            (Some(h), Some(s)) => {
-                if *h == *s {
-                    vec![(
-                        *h,
-                        InboundDetail::Mixed {
-                            http_auth: None,
-                            socks_auth: None,
-                        },
-                    )]
-                    .into_iter()
-                } else {
-                    vec![
-                        (*h, InboundDetail::Http(None)),
-                        (*s, InboundDetail::Socks(None)),
-                    ]
-                    .into_iter()
-                }
-            }
-            (Some(p), None) => vec![(*p, InboundDetail::Http(None))].into_iter(),
-            (None, Some(p)) => vec![(*p, InboundDetail::Socks(None))].into_iter(),
-            (None, None) => vec![].into_iter(),
-        },
-    })
-}
+    }
 
-enum InboundDetail {
-    Mixed {
-        http_auth: Option<AuthData>,
-        socks_auth: Option<AuthData>,
-    },
-    Http(Option<AuthData>),
-    Socks(Option<AuthData>),
+    match (parse_inbound_service(http), parse_inbound_service(socks5)) {
+        (Some(h), Some(s)) => {
+            if h.0 == s.0 {
+                vec![(h.0, Some(h.1), Some(s.1))]
+            } else {
+                vec![(h.0, Some(h.1), None), (s.0, None, Some(s.1))]
+            }
+        }
+        (Some(h), None) => vec![(h.0, Some(h.1), None)],
+        (None, Some(s)) => vec![(s.0, None, Some(s.1))],
+        (None, None) => vec![],
+    }
 }

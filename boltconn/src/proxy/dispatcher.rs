@@ -4,7 +4,7 @@ use crate::adapter::{
     WireguardHandle, WireguardManager,
 };
 use crate::common::duplex_chan::DuplexChan;
-use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, ProxyImpl};
+use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, InboundInfo, ProxyImpl};
 use crate::intercept::{HttpIntercept, HttpsIntercept, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process;
@@ -190,6 +190,7 @@ impl Dispatcher {
 
     pub async fn submit_tcp(
         &self,
+        inbound: InboundInfo,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         indicator: Arc<AtomicU8>,
@@ -200,6 +201,7 @@ impl Dispatcher {
         let mut conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            inbound,
             resolved_dst: None,
             connection_type: NetworkType::Tcp,
             process_info: process_info.clone(),
@@ -385,7 +387,7 @@ impl Dispatcher {
         Ok((outbounding, info, abort_handle))
     }
 
-    pub async fn allow_udp(
+    pub async fn allow_tun_udp(
         &self,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
@@ -394,6 +396,7 @@ impl Dispatcher {
         let mut conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr,
+            inbound: InboundInfo::Tun,
             resolved_dst: None,
             connection_type: NetworkType::Udp,
             process_info: proc_info,
@@ -421,6 +424,7 @@ impl Dispatcher {
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            inbound: InboundInfo::Tun,
             resolved_dst: None,
             connection_type: NetworkType::Udp,
             process_info: proc_info,
@@ -460,6 +464,7 @@ impl Dispatcher {
 
     pub async fn submit_socks_udp_pkt(
         &self,
+        user: Option<String>,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         indicator: Arc<AtomicBool>,
@@ -470,6 +475,7 @@ impl Dispatcher {
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            inbound: InboundInfo::Socks5(user),
             resolved_dst: None,
             connection_type: NetworkType::Udp,
             process_info: process_info.clone(),

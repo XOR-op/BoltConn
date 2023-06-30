@@ -1,6 +1,6 @@
 use crate::dispatch::action::{Action, LocalResolve};
 use crate::dispatch::ruleset::RuleSet;
-use crate::dispatch::{ConnInfo, GeneralProxy, Proxy, ProxyGroup};
+use crate::dispatch::{ConnInfo, GeneralProxy, InboundInfo, Proxy, ProxyGroup};
 use crate::external::MmdbReader;
 use crate::network::dns::Dns;
 use crate::platform::process::NetworkType;
@@ -50,6 +50,7 @@ impl FromStr for PortRule {
 
 #[derive(Debug, Clone)]
 pub enum RuleImpl {
+    Inbound(InboundInfo),
     ProcessName(String),
     ProcessKeyword(String),
     ProcPathKeyword(String),
@@ -121,6 +122,7 @@ impl RuleImpl {
                 PortRule::AnyTcp => info.connection_type == NetworkType::Tcp,
                 PortRule::AnyUdp => info.connection_type == NetworkType::Udp,
             },
+            RuleImpl::Inbound(inbound) => info.inbound == *inbound,
             RuleImpl::ProcessName(proc) => info
                 .process_info
                 .as_ref()
@@ -335,6 +337,7 @@ impl RuleBuilder<'_> {
         mmdb: Option<&Arc<MmdbReader>>,
     ) -> Option<RuleImpl> {
         match prefix.as_str() {
+            "INBOUND" => Some(RuleImpl::Inbound(InboundInfo::from_str(&content).ok()?)),
             "DOMAIN-SUFFIX" => Some(RuleImpl::DomainSuffix(content)),
             "DOMAIN-KEYWORD" => Some(RuleImpl::DomainKeyword(content)),
             "DOMAIN" => Some(RuleImpl::Domain(content)),

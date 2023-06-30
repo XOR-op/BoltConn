@@ -1,7 +1,8 @@
-use crate::config::AuthData;
+use crate::dispatch::InboundInfo;
 use crate::proxy::Dispatcher;
 use fast_socks5::util::target_addr::read_address;
 use fast_socks5::{consts, read_exact, ReplyError, SocksError};
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -13,14 +14,14 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 pub struct Socks5Inbound {
     port: u16,
     server: TcpListener,
-    auth: Option<AuthData>,
+    auth: Arc<HashMap<String, String>>,
     dispatcher: Arc<Dispatcher>,
 }
 
 impl Socks5Inbound {
     pub async fn new(
         port: u16,
-        auth: Option<AuthData>,
+        auth: HashMap<String, String>,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
         let server =
@@ -28,7 +29,7 @@ impl Socks5Inbound {
         Ok(Self {
             port,
             server,
-            auth,
+            auth: Arc::new(auth),
             dispatcher,
         })
     }
@@ -55,12 +56,12 @@ impl Socks5Inbound {
 
     pub(super) async fn serve_connection(
         mut socks_stream: TcpStream,
-        auth: Option<AuthData>,
+        auth: Arc<HashMap<String, String>>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
         first_byte: Option<u8>,
     ) -> anyhow::Result<()> {
-        Self::process_auth(&mut socks_stream, auth, first_byte).await?;
+        let incoming_user = Self::process_auth(&mut socks_stream, &auth, first_byte).await?;
         let [version, cmd, _rsv, address_type] = read_exact!(socks_stream, [0u8; 4])?;
 
         if version != consts::SOCKS5_VERSION {
@@ -80,6 +81,7 @@ impl Socks5Inbound {
                     .await?;
                 let _ = dispatcher
                     .submit_tcp(
+                        InboundInfo::Socks5(incoming_user),
                         src_addr,
                         target_addr.into(),
                         Arc::new(AtomicU8::new(2)),
@@ -110,6 +112,7 @@ impl Socks5Inbound {
                 });
                 if dispatcher
                     .submit_socks_udp_pkt(
+                        incoming_user,
                         src_addr,
                         target_addr.into(),
                         indicator.clone(),
@@ -128,19 +131,19 @@ impl Socks5Inbound {
 
     async fn process_auth(
         socket: &mut TcpStream,
-        auth: Option<AuthData>,
+        auth: &HashMap<String, String>,
         first_byte: Option<u8>,
-    ) -> Result<(), SocksError> {
+    ) -> anyhow::Result<Option<String>> {
         let [version, method_len] = if let Some(byte) = first_byte {
             [byte, read_exact!(socket, [0u8; 1])?[0]]
         } else {
             read_exact!(socket, [0u8; 2])?
         };
         if version != consts::SOCKS5_VERSION {
-            return Err(SocksError::UnsupportedSocksVersion(version));
+            Err(SocksError::UnsupportedSocksVersion(version))?;
         }
         let methods = read_exact!(socket, vec![0u8; method_len as usize])?;
-        let supported = if auth.is_some() {
+        let supported = if !auth.is_empty() {
             consts::SOCKS5_AUTH_METHOD_PASSWORD
         } else {
             consts::SOCKS5_AUTH_METHOD_NONE
@@ -153,48 +156,50 @@ impl Socks5Inbound {
                     consts::SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE,
                 ])
                 .await?;
-            return Err(SocksError::AuthMethodUnacceptable(methods));
+            Err(SocksError::AuthMethodUnacceptable(methods))?;
         } else {
             socket
                 .write_all(&[consts::SOCKS5_VERSION, supported])
                 .await?;
         }
-        if let Some(auth) = auth {
+        if auth.is_empty() {
+            Ok(None)
+        } else {
             let [version, user_len] = read_exact!(socket, [0u8; 2])?;
             if version != consts::SOCKS5_VERSION {
-                return Err(SocksError::UnsupportedSocksVersion(version));
+                Err(SocksError::UnsupportedSocksVersion(version))?;
             }
             if user_len < 1 {
-                return Err(SocksError::AuthenticationFailed(
+                Err(SocksError::AuthenticationFailed(
                     "username.len == 0".to_string(),
-                ));
+                ))?;
             }
             let username = read_exact!(socket, vec![0u8; user_len as usize])?;
 
             let [pass_len] = read_exact!(socket, [0u8; 1])?;
             if pass_len < 1 {
-                return Err(SocksError::AuthenticationFailed(
+                Err(SocksError::AuthenticationFailed(
                     "password.len == 0".to_string(),
-                ));
+                ))?;
             }
             let password = read_exact!(socket, vec![0u8; pass_len as usize])?;
 
-            if String::from_utf8(username).map(|u| u == auth.username) == Ok(true)
-                && String::from_utf8(password).map(|p| p == auth.password) == Ok(true)
-            {
+            let parsed_usr = String::from_utf8(username)?;
+            let parsed_pwd = String::from_utf8(password)?;
+            if auth.get(&parsed_usr).is_some_and(|pwd| *pwd == parsed_pwd) {
                 socket
                     .write_all(&[1, consts::SOCKS5_REPLY_SUCCEEDED])
                     .await?;
+                Ok(Some(parsed_usr))
             } else {
                 socket
                     .write_all(&[1, consts::SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE])
                     .await?;
-                return Err(SocksError::AuthenticationRejected(
+                Err(SocksError::AuthenticationRejected(
                     "Authentication mismatched".to_string(),
-                ));
+                ))?
             }
         }
-        Ok(())
     }
 
     fn new_reply(error: &ReplyError, sock_addr: SocketAddr) -> Vec<u8> {

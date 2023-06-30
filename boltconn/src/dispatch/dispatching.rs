@@ -22,12 +22,61 @@ use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum InboundInfo {
+    Tun,
+    HttpAny,
+    Socks5Any,
+    Http(Option<String>),
+    Socks5(Option<String>),
+}
+
+impl InboundInfo {
+    pub fn is_subset_of(&self, rhs: &InboundInfo) -> bool {
+        self == rhs
+            || match self {
+                InboundInfo::Http(_) => matches!(rhs, InboundInfo::HttpAny),
+                InboundInfo::Socks5(_) => matches!(rhs, InboundInfo::Socks5Any),
+                _ => false,
+            }
+    }
+}
+
+impl FromStr for InboundInfo {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "tun" => Ok(Self::Tun),
+            "http" => Ok(Self::HttpAny),
+            "socks5" => Ok(Self::Socks5Any),
+            s => {
+                if s.ends_with("/http") {
+                    s.split_once("/http")
+                        .map(|(p, _)| Some(p.to_string()))
+                        .map(Self::Http)
+                        .ok_or(())
+                } else if s.ends_with("/socks5") {
+                    s.split_once("/socks5")
+                        .map(|(p, _)| Some(p.to_string()))
+                        .map(Self::Socks5)
+                        .ok_or(())
+                } else {
+                    Err(())
+                }
+            }
+        }
+    }
+}
 
 pub struct ConnInfo {
     pub src: SocketAddr,
     pub dst: NetworkAddr,
+    pub inbound: InboundInfo,
     pub resolved_dst: Option<SocketAddr>,
     pub connection_type: NetworkType,
     pub process_info: Option<ProcessInfo>,

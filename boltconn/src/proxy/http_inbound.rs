@@ -1,8 +1,9 @@
-use crate::config::AuthData;
+use crate::dispatch::InboundInfo;
 use crate::proxy::Dispatcher;
 use anyhow::anyhow;
 use base64::Engine;
 use httparse::Request;
+use std::collections::HashMap;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::AtomicU8;
@@ -13,14 +14,14 @@ use tokio::net::{TcpListener, TcpStream};
 pub struct HttpInbound {
     port: u16,
     server: TcpListener,
-    auth: Option<String>,
+    auth: Arc<HashMap<String, String>>,
     dispatcher: Arc<Dispatcher>,
 }
 
 impl HttpInbound {
     pub async fn new(
         port: u16,
-        auth: Option<AuthData>,
+        auth: HashMap<String, String>,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
         let server =
@@ -28,7 +29,7 @@ impl HttpInbound {
         Ok(Self {
             port,
             server,
-            auth: auth.map(|auth| auth.username + ":" + auth.password.as_str()),
+            auth: Arc::new(auth),
             dispatcher,
         })
     }
@@ -52,7 +53,7 @@ impl HttpInbound {
 
     pub(super) async fn serve_connection(
         socket: TcpStream,
-        auth: Option<String>,
+        auth: Arc<HashMap<String, String>>,
         addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
         first_byte: Option<String>,
@@ -81,9 +82,13 @@ impl HttpInbound {
             && req_struct.version.map_or(false, |v| v == 1)
         {
             if let Some(Ok(dest)) = req_struct.path.map(|p| p.parse()) {
-                let authorized = if let Some(auth) = auth {
+                // None: invalid
+                // Some(None): valid but empty auth
+                let authorized = if auth.is_empty() {
+                    Some(None)
+                } else {
                     // let's verify the auth
-                    let mut r = false;
+                    let mut r = None;
                     for hdr in req_struct.headers.iter() {
                         if hdr.name.eq_ignore_ascii_case("proxy-authorization") {
                             let Ok(value) = std::str::from_utf8(hdr.value)else{
@@ -94,29 +99,39 @@ impl HttpInbound {
                                 let (left, right) = value.split_at(6);
                                 if left.eq_ignore_ascii_case("basic ") {
                                     let b64decoder = base64::engine::general_purpose::STANDARD;
-                                    if let Ok(code) = b64decoder.decode(right) {
-                                        if std::str::from_utf8(code.as_slice())
-                                            .map(|s| s == auth.as_str())
-                                            == Ok(true)
-                                        {
-                                            r = true;
-                                        }
+                                    let code = b64decoder.decode(right)?;
+                                    let text = std::str::from_utf8(code.as_slice())?;
+                                    let v: Vec<String> =
+                                        text.split(':').map(|s| s.to_string()).collect();
+                                    if v.len() == 2
+                                        && auth
+                                            .get(v.first().unwrap())
+                                            .is_some_and(|pwd| pwd == v.get(1).unwrap())
+                                    {
+                                        r = Some(Some(v.first().unwrap().clone()));
+                                    } else {
+                                        r = None;
                                     }
+                                    break;
                                 }
                             }
                         }
                     }
                     r
-                } else {
-                    true
                 };
-                if !authorized {
+                if authorized.is_none() {
                     socket.write_all(Self::response403().as_bytes()).await?;
                     return Err(anyhow!("Invalid CONNECT request"));
                 }
                 socket.write_all(Self::response200().as_bytes()).await?;
                 let _ = dispatcher
-                    .submit_tcp(addr, dest, Arc::new(AtomicU8::new(2)), socket)
+                    .submit_tcp(
+                        InboundInfo::Http(authorized.unwrap()),
+                        addr,
+                        dest,
+                        Arc::new(AtomicU8::new(2)),
+                        socket,
+                    )
                     .await;
                 return Ok(());
             }

@@ -1,3 +1,4 @@
+use crate::dispatch::InboundInfo;
 use crate::proxy::manager::SessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use crate::Dns;
@@ -59,7 +60,13 @@ impl TunTcpInbound {
                 // tracing::debug!("[NAT] received new connection {}->{}", src_addr, dst_addr);
                 if self
                     .dispatcher
-                    .submit_tcp(src_addr, dst_addr, indicator.clone(), socket)
+                    .submit_tcp(
+                        InboundInfo::Tun,
+                        src_addr,
+                        dst_addr,
+                        indicator.clone(),
+                        socket,
+                    )
                     .await
                     .is_err()
                 {

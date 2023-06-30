@@ -2,47 +2,26 @@ use crate::config::AuthData;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields, tag = "type")]
-pub enum InboundPortNodeConfig {
-    #[serde(alias = "http")]
-    Http {
-        port: u16,
-        #[serde(flatten)]
-        auth: Option<AuthData>,
-    },
-    #[serde(alias = "socks5")]
-    Socks5 {
-        port: u16,
-        #[serde(flatten)]
-        auth: Option<AuthData>,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
-pub enum RawPortConfig {
-    Complex {
-        inbounds: Vec<InboundPortNodeConfig>,
-    },
-    Simple {
-        http: Option<u16>,
-        socks5: Option<u16>,
-    },
+pub enum RawInboundServiceConfig {
+    Simple(u16),
+    Complex { port: u16, auth: Vec<AuthData> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawInboundConfig {
     #[serde(alias = "enable-tun", default = "default_true")]
     pub enable_tun: bool,
-    #[serde(flatten)]
-    pub service_inbound: RawPortConfig,
+    pub http: Option<RawInboundServiceConfig>,
+    pub socks5: Option<RawInboundServiceConfig>,
 }
 
 fn default_true() -> bool {
     true
 }
 
-fn main() {
+#[test]
+fn test_inbound() {
     let nothing = "\
 enable-tun: true
     ";
@@ -55,22 +34,24 @@ socks: 8901
     ";
     let complex = "\
 enable-tun: false
-inbounds:
-    - type: http
-      port: 1080
-    - type: socks5
-      port: 8080
-      username: alice
-      password: bob
+http:
+    port: 1080
+socks5:
+    port: 8080
+    auth: - username: alice
+            password: bob
+          - username: browser
+            password: none
     ";
     let fail = "\
-    enable-tun: false
-    inbounds:
-        - type: http
-          port: 1080
-        - type: socks5
-          port: 8080
-          username: alice
+enable-tun: false
+http:
+    port: 1080
+socks5:
+    port: 8080
+    auth: - username: alice
+            password: bob
+          - username: browser
         ";
     let n: RawInboundConfig = serde_yaml::from_str(nothing).unwrap();
     let s1: RawInboundConfig = serde_yaml::from_str(simple1).unwrap();
