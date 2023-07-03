@@ -4,6 +4,7 @@ mod inbound;
 mod module;
 mod proxy_group;
 mod proxy_provider;
+mod rule;
 mod rule_provider;
 mod state;
 
@@ -14,6 +15,7 @@ pub use inbound::*;
 pub use module::*;
 pub use proxy_group::*;
 pub use proxy_provider::*;
+pub use rule::*;
 pub use rule_provider::*;
 use serde::{Deserialize, Serialize};
 pub use state::*;

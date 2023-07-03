@@ -1,6 +1,6 @@
 use crate::config::inbound::RawInboundConfig;
 use crate::config::proxy_group::RawProxyGroupCfg;
-use crate::config::{AuthData, ModuleConfig, ProxyProvider, RuleProvider};
+use crate::config::{AuthData, ModuleConfig, ProxyProvider, RawRulesConfig, RuleProvider};
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
