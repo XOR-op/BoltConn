@@ -196,7 +196,7 @@ impl RuleBuilder<'_> {
             return Err(anyhow!("Invalid length"));
         }
         // Actions
-        if list.len() == 1 && list.get(0).unwrap() == "ACTION-LOCAL-RESOLVE" {
+        if list.len() == 1 && list.get(0).unwrap() == ".LOCAL-RESOLVE" {
             self.buffer.push(RuleOrAction::Action(Action::LocalResolve(
                 LocalResolve::new(self.dns.clone()),
             )));
