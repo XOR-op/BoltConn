@@ -34,24 +34,24 @@ socks: 8901
     ";
     let complex = "\
 enable-tun: false
-http:
-    port: 1080
+http: 1080
 socks5:
     port: 8080
-    auth: - username: alice
-            password: bob
-          - username: browser
-            password: none
+    auth:
+    - username: alice
+      password: bob
+    - username: browser
+      password: none
     ";
     let fail = "\
 enable-tun: false
-http:
-    port: 1080
+http: 1080
 socks5:
     port: 8080
-    auth: - username: alice
-            password: bob
-          - username: browser
+    auth:
+    - username: alice
+      password: bob
+    - username: browser
         ";
     let n: RawInboundConfig = serde_yaml::from_str(nothing).unwrap();
     let s1: RawInboundConfig = serde_yaml::from_str(simple1).unwrap();
