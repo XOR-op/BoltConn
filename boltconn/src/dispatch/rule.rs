@@ -164,7 +164,7 @@ impl RuleImpl {
 pub(crate) struct RuleBuilder<'a> {
     proxies: &'a HashMap<String, Arc<Proxy>>,
     groups: &'a HashMap<String, Arc<ProxyGroup>>,
-    rulesets: HashMap<String, Arc<RuleSet>>,
+    rulesets: &'a HashMap<String, Arc<RuleSet>>,
     buffer: Vec<RuleOrAction>,
     dns: Arc<Dns>,
     mmdb: Option<Arc<MmdbReader>>,
@@ -176,7 +176,7 @@ impl RuleBuilder<'_> {
         mmdb: Option<Arc<MmdbReader>>,
         proxies: &'a HashMap<String, Arc<Proxy>>,
         groups: &'a HashMap<String, Arc<ProxyGroup>>,
-        rulesets: HashMap<String, Arc<RuleSet>>,
+        rulesets: &'a HashMap<String, Arc<RuleSet>>,
     ) -> RuleBuilder<'a> {
         RuleBuilder {
             proxies,
@@ -188,19 +188,22 @@ impl RuleBuilder<'_> {
         }
     }
 
+    pub fn append_local_resolve(&mut self) {
+        self.buffer.push(RuleOrAction::Action(Action::LocalResolve(
+            LocalResolve::new(self.dns.clone()),
+        )));
+    }
+
+    pub fn append(&mut self, rule_or_action: RuleOrAction) {
+        self.buffer.push(rule_or_action)
+    }
+
     #[allow(clippy::get_first)]
     pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
         let processed_str = "[".to_string() + s + "]";
         let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
         if list.is_empty() {
             return Err(anyhow!("Invalid length"));
-        }
-        // Actions
-        if list.len() == 1 && list.get(0).unwrap() == "ACTION-LOCAL-RESOLVE" {
-            self.buffer.push(RuleOrAction::Action(Action::LocalResolve(
-                LocalResolve::new(self.dns.clone()),
-            )));
-            return Ok(());
         }
 
         // Normal rules
@@ -265,7 +268,7 @@ impl RuleBuilder<'_> {
                         _ => {
                             // all other rules
                             let content = retrive_string(list.get(1).unwrap())?;
-                            Self::parse(prefix, content, Some(&self.rulesets), self.mmdb.as_ref())
+                            Self::parse(prefix, content, Some(self.rulesets), self.mmdb.as_ref())
                                 .ok_or_else(|| anyhow!("Failed to parse"))
                         }
                     },
@@ -282,7 +285,7 @@ impl RuleBuilder<'_> {
                                 Self::parse(
                                     prefix,
                                     content,
-                                    Some(&self.rulesets),
+                                    Some(self.rulesets),
                                     self.mmdb.as_ref(),
                                 )
                                 .ok_or_else(|| anyhow!("Failed to parse"))
@@ -315,7 +318,11 @@ impl RuleBuilder<'_> {
     }
 
     #[allow(clippy::get_first)]
-    pub fn parse_ruleset(s: &str, mmdb: Option<&Arc<MmdbReader>>) -> Option<RuleImpl> {
+    pub fn parse_incomplete(
+        s: &str,
+        mmdb: Option<&Arc<MmdbReader>>,
+        rulesets: Option<&HashMap<String, Arc<RuleSet>>>,
+    ) -> Option<RuleImpl> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
         // ignore no-resolve
@@ -327,7 +334,7 @@ impl RuleBuilder<'_> {
             String::from(*list.get(0).unwrap()),
             String::from(*list.get(1).unwrap()),
         );
-        Self::parse(prefix, content, None, mmdb)
+        Self::parse(prefix, content, rulesets, mmdb)
     }
 
     fn parse(

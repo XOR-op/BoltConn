@@ -1,11 +1,14 @@
-use crate::dispatch::ConnInfo;
+use crate::dispatch::rule::RuleImpl;
+use crate::dispatch::{ConnInfo, DispatchingSnippet, ProxyImpl};
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
+use async_recursion::async_recursion;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 pub enum Action {
     LocalResolve(LocalResolve),
+    SubDispatch(SubDispatch),
 }
 
 pub struct LocalResolve {
@@ -24,6 +27,30 @@ impl LocalResolve {
                     info.resolved_dst = Some(SocketAddr::new(addr, *port));
                 }
             }
+        }
+    }
+}
+
+pub struct SubDispatch {
+    rule: RuleImpl,
+    snippet: DispatchingSnippet,
+}
+
+impl SubDispatch {
+    pub fn new(rule: RuleImpl, snippet: DispatchingSnippet) -> Self {
+        Self { rule, snippet }
+    }
+
+    #[async_recursion]
+    pub async fn matches(
+        &self,
+        info: &mut ConnInfo,
+        verbose: bool,
+    ) -> Option<(Arc<ProxyImpl>, Option<String>)> {
+        if self.rule.matches(info) {
+            Some(self.snippet.matches(info, verbose).await)
+        } else {
+            None
         }
     }
 }

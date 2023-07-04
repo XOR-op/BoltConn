@@ -10,6 +10,7 @@ aho-corasick = "1.0.2"
 anyhow = "1.0.66"
 arc-swap = "1.6.0"
 arrayref = "0.3.6"
+async-recursion = "1.0.4"
 async-trait = "0.1.58"
 axum = { version = "0.6.18", features = ["ws"] }
 base64 = "0.21.0"

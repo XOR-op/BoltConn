@@ -166,10 +166,12 @@ impl Socks5Inbound {
             Ok(None)
         } else {
             let [version, user_len] = read_exact!(socket, [0u8; 2])?;
-            if version != consts::SOCKS5_VERSION {
+            if version != 0x01 {
+                Self::response_auth_error(socket).await?;
                 Err(SocksError::UnsupportedSocksVersion(version))?;
             }
             if user_len < 1 {
+                Self::response_auth_error(socket).await?;
                 Err(SocksError::AuthenticationFailed(
                     "username.len == 0".to_string(),
                 ))?;
@@ -178,6 +180,7 @@ impl Socks5Inbound {
 
             let [pass_len] = read_exact!(socket, [0u8; 1])?;
             if pass_len < 1 {
+                Self::response_auth_error(socket).await?;
                 Err(SocksError::AuthenticationFailed(
                     "password.len == 0".to_string(),
                 ))?;
@@ -192,14 +195,19 @@ impl Socks5Inbound {
                     .await?;
                 Ok(Some(parsed_usr))
             } else {
-                socket
-                    .write_all(&[1, consts::SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE])
-                    .await?;
+                Self::response_auth_error(socket).await?;
                 Err(SocksError::AuthenticationRejected(
                     "Authentication mismatched".to_string(),
                 ))?
             }
         }
+    }
+
+    async fn response_auth_error(socket: &mut TcpStream) -> anyhow::Result<()> {
+        socket
+            .write_all(&[1, consts::SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE])
+            .await?;
+        Ok(())
     }
 
     fn new_reply(error: &ReplyError, sock_addr: SocketAddr) -> Vec<u8> {

@@ -1,6 +1,6 @@
 use crate::config::{
     config::{default_rule_provider, default_str_vec},
-    safe_join_path, RuleProvider,
+    safe_join_path, RuleConfigLine, RuleProvider,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 #[serde(deny_unknown_fields)]
 pub struct ModuleSchema {
     #[serde(alias = "rule-local")]
-    pub rule_local: Vec<String>,
+    pub rule_local: Vec<RuleConfigLine>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
     #[serde(alias = "intercept-rule", default = "default_str_vec")]

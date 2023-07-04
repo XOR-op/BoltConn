@@ -1,6 +1,6 @@
 use crate::config::inbound::RawInboundConfig;
 use crate::config::proxy_group::RawProxyGroupCfg;
-use crate::config::{AuthData, ModuleConfig, ProxyProvider, RuleProvider};
+use crate::config::{AuthData, ModuleConfig, ProxyProvider, RuleConfigLine, RuleProvider};
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ pub struct RawRootCfg {
     #[serde(alias = "proxy-group")]
     pub proxy_group: LinkedHashMap<String, RawProxyGroupCfg>,
     #[serde(alias = "rule-local")]
-    pub rule_local: Vec<String>,
+    pub rule_local: Vec<RuleConfigLine>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
     #[serde(alias = "intercept-rule", default = "default_str_vec")]
