@@ -1,12 +1,12 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
     LoadedConfig, ProxySchema, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption,
-    RawServerAddr, RawServerSockAddr, RawState, RuleSchema,
+    RawServerAddr, RawServerSockAddr, RawState, RuleAction, RuleConfigLine, RuleSchema,
 };
-use crate::dispatch::action::Action;
+use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
-use crate::dispatch::ruleset::RuleSetBuilder;
+use crate::dispatch::ruleset::{RuleSet, RuleSetBuilder};
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::external::MmdbReader;
 use crate::network::dns::Dns;
@@ -95,8 +95,7 @@ impl ConnInfo {
 pub struct Dispatching {
     proxies: HashMap<String, Arc<Proxy>>,
     groups: LinkedHashMap<String, Arc<ProxyGroup>>,
-    rules: Vec<RuleOrAction>,
-    fallback: GeneralProxy,
+    snippet: DispatchingSnippet,
 }
 
 impl Dispatching {
@@ -105,75 +104,7 @@ impl Dispatching {
         info: &mut ConnInfo,
         verbose: bool,
     ) -> (Arc<ProxyImpl>, Option<String>) {
-        for v in &self.rules {
-            match v {
-                RuleOrAction::Rule(v) => {
-                    if let Some(proxy) = v.matches(info) {
-                        let (proxy_impl, iface) = match &proxy {
-                            GeneralProxy::Single(p) => (p.get_impl(), None),
-                            GeneralProxy::Group(g) => {
-                                let (p, iface) = g.get_proxy_and_interface();
-                                (p.get_impl(), iface)
-                            }
-                        };
-                        if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-                            if verbose {
-                                tracing::info!(
-                                    "[{:?}]({}) {} => {} failed: UDP disabled",
-                                    v,
-                                    stringfy_process(info),
-                                    info.dst,
-                                    proxy
-                                );
-                            }
-                            return (Arc::new(ProxyImpl::Reject), None);
-                        }
-                        if verbose {
-                            tracing::info!(
-                                "[{:?}]({}) {} => {}",
-                                v,
-                                stringfy_process(info),
-                                info.dst,
-                                proxy
-                            );
-                        }
-                        return (proxy_impl, iface);
-                    }
-                }
-                RuleOrAction::Action(a) => match a {
-                    Action::LocalResolve(r) => r.resolve_to(info).await,
-                },
-            }
-        }
-
-        // fallback proxy
-        let (proxy_impl, iface) = match &self.fallback {
-            GeneralProxy::Single(p) => (p.get_impl(), None),
-            GeneralProxy::Group(g) => {
-                let (p, iface) = g.get_proxy_and_interface();
-                (p.get_impl(), iface)
-            }
-        };
-        if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-            if verbose {
-                tracing::info!(
-                    "[Fallback]({}) {} => {} failed: UDP disabled",
-                    stringfy_process(info),
-                    info.dst,
-                    self.fallback
-                );
-            }
-            return (Arc::new(ProxyImpl::Reject), None);
-        }
-        if verbose {
-            tracing::info!(
-                "[Fallback]({}) {} => {}",
-                stringfy_process(info),
-                info.dst,
-                self.fallback
-            );
-        }
-        (proxy_impl, iface)
+        self.snippet.matches(info, verbose).await
     }
 
     pub fn set_group_selection(&self, group: &str, proxy: &str) -> anyhow::Result<()> {
@@ -201,7 +132,6 @@ pub struct DispatchingBuilder {
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
     rules: Vec<RuleOrAction>,
-    fallback: Option<GeneralProxy>,
     dns: Arc<Dns>,
     mmdb: Option<Arc<MmdbReader>>,
 }
@@ -212,7 +142,6 @@ impl DispatchingBuilder {
             proxies: Default::default(),
             groups: Default::default(),
             rules: vec![],
-            fallback: None,
             dns,
             mmdb,
         };
@@ -259,34 +188,17 @@ impl DispatchingBuilder {
         }
 
         // read rules
-        let mut ruleset = HashMap::new();
+        let mut rulesets = HashMap::new();
         for (name, schema) in rule_schema {
             let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Failed to parse provider {}",name));
             };
-            ruleset.insert(name.clone(), Arc::new(builder.build()?));
+            rulesets.insert(name.clone(), Arc::new(builder.build()?));
         }
-        let mut rule_builder = RuleBuilder::new(
-            self.dns.clone(),
-            self.mmdb.clone(),
-            &self.proxies,
-            &self.groups,
-            ruleset,
-        );
-        for (idx, r) in config.rule_local.iter().enumerate() {
-            if idx != config.rule_local.len() - 1 {
-                rule_builder
-                    .append_literal(r.as_str())
-                    .map_err(|e| anyhow!("{} ({:?})", r, e))?;
-            } else {
-                // check Fallback
-                self.fallback = Some(rule_builder.parse_fallback(r.as_str())?);
-            }
-        }
-        self.rules.extend(rule_builder.build());
-        if self.fallback.is_none() {
-            return Err(anyhow!("Bad rules: missing fallback"));
-        }
+
+        let (rules, fallback) = self.build_rules(config.rule_local.as_slice(), &rulesets)?;
+        self.rules.extend(rules);
+
         let group = {
             let mut g = LinkedHashMap::new();
             for name in group_order {
@@ -300,9 +212,65 @@ impl DispatchingBuilder {
         Ok(Dispatching {
             proxies: self.proxies,
             groups: group,
-            rules: self.rules,
-            fallback: self.fallback.unwrap(),
+            snippet: DispatchingSnippet {
+                rules: self.rules,
+                fallback,
+            },
         })
+    }
+
+    fn build_rules(
+        &self,
+        rules: &[RuleConfigLine],
+        rulesets: &HashMap<String, Arc<RuleSet>>,
+    ) -> anyhow::Result<(Vec<RuleOrAction>, GeneralProxy)> {
+        let mut rule_builder = RuleBuilder::new(
+            self.dns.clone(),
+            self.mmdb.clone(),
+            &self.proxies,
+            &self.groups,
+            rulesets,
+        );
+        for (idx, line) in rules.iter().enumerate() {
+            match line {
+                RuleConfigLine::Complex(action) => match action {
+                    RuleAction::LocalResolve => rule_builder.append_local_resolve(),
+                    RuleAction::SubDispatch(sub) => {
+                        let Some(matches) = RuleBuilder::parse_incomplete(
+                            sub.matches.as_str(),
+                            self.mmdb.as_ref(),
+                            Some(rulesets),
+                        )
+                         else {
+                            return Err(anyhow!("Invalid matches {}",sub.matches))
+                        };
+                        let (sub_rules, sub_fallback) =
+                            self.build_rules(sub.subrules.as_slice(), rulesets)?;
+                        rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
+                            SubDispatch::new(
+                                matches,
+                                DispatchingSnippet {
+                                    rules: sub_rules,
+                                    fallback: sub_fallback,
+                                },
+                            ),
+                        )))
+                    }
+                },
+                RuleConfigLine::Simple(r) => {
+                    if idx != rules.len() - 1 {
+                        rule_builder
+                            .append_literal(r.as_str())
+                            .map_err(|e| anyhow!("{} ({:?})", r, e))?;
+                    } else {
+                        // check Fallback
+                        let fallback = rule_builder.parse_fallback(r.as_str())?;
+                        return Ok((rule_builder.build(), fallback));
+                    }
+                }
+            }
+        }
+        Err(anyhow::anyhow!("Bad ruless: missing fallback"))
     }
 
     /// Build a filter dispatching: for all encountered rule, return DIRECT; otherwise REJECT
@@ -323,22 +291,20 @@ impl DispatchingBuilder {
             self.mmdb.clone(),
             &self.proxies,
             &self.groups,
-            ruleset,
+            &ruleset,
         );
         for r in rules.iter() {
             rule_builder.append_literal((r.clone() + ", DIRECT").as_str())?;
         }
         self.rules.extend(rule_builder.build());
-        self.fallback = Some(GeneralProxy::Single(Arc::new(Proxy::new(
-            "REJECT",
-            ProxyImpl::Reject,
-        ))));
 
         Ok(Dispatching {
             proxies: self.proxies,
             groups: self.groups.into_iter().collect(),
-            rules: self.rules,
-            fallback: self.fallback.unwrap(),
+            snippet: DispatchingSnippet {
+                rules: self.rules,
+                fallback: GeneralProxy::Single(Arc::new(Proxy::new("REJECT", ProxyImpl::Reject))),
+            },
         })
     }
 
@@ -694,5 +660,93 @@ impl DispatchingBuilder {
                 GeneralProxy::Single(self.proxies.get(p).unwrap().clone())
             }
         })
+    }
+}
+
+pub struct DispatchingSnippet {
+    rules: Vec<RuleOrAction>,
+    fallback: GeneralProxy,
+}
+
+impl DispatchingSnippet {
+    pub async fn matches(
+        &self,
+        info: &mut ConnInfo,
+        verbose: bool,
+    ) -> (Arc<ProxyImpl>, Option<String>) {
+        for v in &self.rules {
+            match v {
+                RuleOrAction::Rule(v) => {
+                    if let Some(proxy) = v.matches(info) {
+                        let (proxy_impl, iface) = match &proxy {
+                            GeneralProxy::Single(p) => (p.get_impl(), None),
+                            GeneralProxy::Group(g) => {
+                                let (p, iface) = g.get_proxy_and_interface();
+                                (p.get_impl(), iface)
+                            }
+                        };
+                        if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
+                            if verbose {
+                                tracing::info!(
+                                    "[{:?}]({}) {} => {} failed: UDP disabled",
+                                    v,
+                                    stringfy_process(info),
+                                    info.dst,
+                                    proxy
+                                );
+                            }
+                            return (Arc::new(ProxyImpl::Reject), None);
+                        }
+                        if verbose {
+                            tracing::info!(
+                                "[{:?}]({}) {} => {}",
+                                v,
+                                stringfy_process(info),
+                                info.dst,
+                                proxy
+                            );
+                        }
+                        return (proxy_impl, iface);
+                    }
+                }
+                RuleOrAction::Action(a) => match a {
+                    Action::LocalResolve(r) => r.resolve_to(info).await,
+                    Action::SubDispatch(sub) => {
+                        if let Some(r) = sub.matches(info, verbose).await {
+                            return r;
+                        }
+                    }
+                },
+            }
+        }
+
+        // fallback proxy
+        let (proxy_impl, iface) = match &self.fallback {
+            GeneralProxy::Single(p) => (p.get_impl(), None),
+            GeneralProxy::Group(g) => {
+                let (p, iface) = g.get_proxy_and_interface();
+                (p.get_impl(), iface)
+            }
+        };
+        if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
+            if verbose {
+                tracing::info!(
+                    "[Fallback]({}) {} => {} failed: UDP disabled",
+                    stringfy_process(info),
+                    info.dst,
+                    self.fallback
+                );
+            }
+            return (Arc::new(ProxyImpl::Reject), None);
+        }
+        if verbose {
+            tracing::info!(
+                "[Fallback]({}) {} => {}",
+                stringfy_process(info),
+                info.dst,
+                self.fallback
+            );
+        }
+        (proxy_impl, iface)
     }
 }
