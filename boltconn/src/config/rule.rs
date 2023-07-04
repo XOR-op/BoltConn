@@ -37,7 +37,16 @@ fn test_rule_config() {
 ";
     let s: Vec<RuleConfigLine> = serde_yaml::from_str(config).unwrap();
     assert!(matches!(
-        s.rules.get(1).unwrap(),
+        s.get(1).unwrap(),
         RuleConfigLine::Complex(RuleAction::LocalResolve)
+    ));
+    let r = s.get(2).unwrap();
+    match r {
+        RuleConfigLine::Complex(_) => panic!(),
+        RuleConfigLine::Simple(l) => assert_eq!("IP-CIDR, 1.0.0.0/8, REJECT", l),
+    }
+    assert!(matches!(
+        s.get(3).unwrap(),
+        RuleConfigLine::Complex(RuleAction::SubDispatch(_))
     ))
 }
