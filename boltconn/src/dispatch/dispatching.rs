@@ -236,25 +236,24 @@ impl DispatchingBuilder {
                 RuleConfigLine::Complex(action) => match action {
                     RuleAction::LocalResolve => rule_builder.append_local_resolve(),
                     RuleAction::SubDispatch(sub) => {
-                        let Some(matches) = RuleBuilder::parse_incomplete(
-                            sub.matches.as_str(),
-                            self.mmdb.as_ref(),
-                            Some(rulesets),
-                        )
-                         else {
-                            return Err(anyhow!("Invalid matches {}",sub.matches))
-                        };
-                        let (sub_rules, sub_fallback) =
-                            self.build_rules(sub.subrules.as_slice(), rulesets)?;
-                        rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
-                            SubDispatch::new(
-                                matches,
-                                DispatchingSnippet {
-                                    rules: sub_rules,
-                                    fallback: sub_fallback,
-                                },
-                            ),
-                        )))
+                        match rule_builder.parse_incomplete(sub.matches.as_str()) {
+                            Ok(matches) => {
+                                let (sub_rules, sub_fallback) =
+                                    self.build_rules(sub.subrules.as_slice(), rulesets)?;
+                                rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
+                                    SubDispatch::new(
+                                        matches,
+                                        DispatchingSnippet {
+                                            rules: sub_rules,
+                                            fallback: sub_fallback,
+                                        },
+                                    ),
+                                )))
+                            }
+                            Err(err) => {
+                                return Err(anyhow!("Invalid matches {}:{}", sub.matches, err))
+                            }
+                        }
                     }
                 },
                 RuleConfigLine::Simple(r) => {

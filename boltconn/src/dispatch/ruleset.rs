@@ -163,7 +163,7 @@ impl RuleSetBuilder {
             }
             ProviderBehavior::Classical => {
                 for str in &payload.payload {
-                    let rule = RuleBuilder::parse_incomplete(str, retval.mmdb.as_ref(), None)?;
+                    let rule = RuleBuilder::parse_rulesets(str, retval.mmdb.as_ref(), None)?;
                     match rule {
                         RuleImpl::Inbound(inbound) => match inbound {
                             InboundInfo::Tun => retval.tun_inbound = true,

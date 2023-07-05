@@ -202,9 +202,6 @@ impl RuleBuilder<'_> {
     pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
         let processed_str = "[".to_string() + s + "]";
         let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
-        if list.is_empty() {
-            return Err(anyhow!("Invalid length"));
-        }
 
         // Normal rules
         if list.len() < 3 {
@@ -233,6 +230,15 @@ impl RuleBuilder<'_> {
         self.buffer
             .push(RuleOrAction::Rule(Rule::new(rule, general)));
         Ok(())
+    }
+
+    pub fn parse_incomplete(&mut self, s: &str) -> anyhow::Result<RuleImpl> {
+        let processed_str = "[".to_string() + s + "]";
+        let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
+        if list.len() < 2 {
+            return Err(anyhow!("Invalid length"));
+        }
+        self.parse_sub_rule(list.as_slice())
     }
 
     fn parse_sub_rule(&self, list: &[serde_yaml::Value]) -> anyhow::Result<RuleImpl> {
@@ -318,7 +324,7 @@ impl RuleBuilder<'_> {
     }
 
     #[allow(clippy::get_first)]
-    pub fn parse_incomplete(
+    pub fn parse_rulesets(
         s: &str,
         mmdb: Option<&Arc<MmdbReader>>,
         rulesets: Option<&HashMap<String, Arc<RuleSet>>>,
