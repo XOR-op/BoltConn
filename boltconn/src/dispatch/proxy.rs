@@ -189,8 +189,8 @@ pub enum GeneralProxy {
     Group(Arc<ProxyGroup>),
 }
 
-impl GeneralProxy{
-    pub fn get_impl(&self)->(Arc<ProxyImpl>,Option<String>){
+impl GeneralProxy {
+    pub fn get_impl(&self) -> (Arc<ProxyImpl>, Option<String>) {
         match &self {
             GeneralProxy::Single(p) => (p.get_impl(), None),
             GeneralProxy::Group(g) => {

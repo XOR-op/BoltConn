@@ -1,6 +1,10 @@
 use crate::dispatch::action::Action;
 use crate::dispatch::rule::RuleOrAction;
-use crate::dispatch::{ConnInfo, DispatchingSnippet, ProxyImpl};
+use crate::dispatch::ruleset::RuleSet;
+use crate::dispatch::{ConnInfo, DispatchingSnippet, Proxy, ProxyGroup, ProxyImpl};
+use crate::external::MmdbReader;
+use crate::network::dns::Dns;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct TemporaryList {
@@ -40,5 +44,31 @@ impl TemporaryList {
             }
         }
         None
+    }
+}
+
+pub struct TemporaryListBuilder {
+    proxies: HashMap<String, Arc<Proxy>>,
+    groups: HashMap<String, Arc<ProxyGroup>>,
+    rulesets: HashMap<String, Arc<RuleSet>>,
+    dns: Arc<Dns>,
+    mmdb: Option<Arc<MmdbReader>>,
+}
+
+impl TemporaryListBuilder {
+    pub fn new(
+        proxies: HashMap<String, Arc<Proxy>>,
+        groups: HashMap<String, Arc<ProxyGroup>>,
+        rulesets: HashMap<String, Arc<RuleSet>>,
+        dns: Arc<Dns>,
+        mmdb: Option<Arc<MmdbReader>>,
+    ) -> Self {
+        Self {
+            proxies,
+            groups,
+            rulesets,
+            dns,
+            mmdb,
+        }
     }
 }

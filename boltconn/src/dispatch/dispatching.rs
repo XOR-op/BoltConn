@@ -7,7 +7,7 @@ use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
 use crate::dispatch::ruleset::{RuleSet, RuleSetBuilder};
-use crate::dispatch::temporary::TemporaryList;
+use crate::dispatch::temporary::{TemporaryList, TemporaryListBuilder};
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::external::MmdbReader;
 use crate::network::dns::Dns;
@@ -138,32 +138,42 @@ fn stringfy_process(info: &ConnInfo) -> &str {
 pub struct DispatchingBuilder {
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
+    rulesets: HashMap<String, Arc<RuleSet>>,
+    group_order: Vec<String>,
     rules: Vec<RuleOrAction>,
     dns: Arc<Dns>,
     mmdb: Option<Arc<MmdbReader>>,
 }
 
 impl DispatchingBuilder {
-    pub fn new(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>) -> Self {
-        let mut r = Self {
+    pub fn empty(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>) -> Self {
+        let mut builder = Self {
             proxies: Default::default(),
             groups: Default::default(),
+            rulesets: Default::default(),
+            group_order: Default::default(),
             rules: vec![],
             dns,
             mmdb,
         };
-        r.proxies.insert(
+        builder.proxies.insert(
             "DIRECT".into(),
             Arc::new(Proxy::new("DIRECT", ProxyImpl::Direct)),
         );
-        r.proxies.insert(
+        builder.proxies.insert(
             "REJECT".into(),
             Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)),
         );
-        r
+        builder
     }
 
-    pub fn build(mut self, loaded_config: &LoadedConfig) -> anyhow::Result<Dispatching> {
+    pub fn new(
+        dns: Arc<Dns>,
+        mmdb: Option<Arc<MmdbReader>>,
+        loaded_config: &LoadedConfig,
+    ) -> anyhow::Result<Self> {
+        let mut builder = Self::empty(dns, mmdb);
+        // start init
         let LoadedConfig {
             config,
             state,
@@ -172,17 +182,17 @@ impl DispatchingBuilder {
             ..
         } = loaded_config;
         // read all proxies
-        self.parse_proxies(config.proxy_local.iter())?;
+        builder.parse_proxies(config.proxy_local.iter())?;
         for proxies in proxy_schema.values() {
-            self.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
+            builder.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
         }
 
         // read proxy groups
         let mut wg_history = HashMap::new();
         let mut queued_groups = HashSet::new();
-        let group_order: Vec<String> = loaded_config.config.proxy_group.keys().cloned().collect();
+        builder.group_order = loaded_config.config.proxy_group.keys().cloned().collect();
         for (name, group) in &config.proxy_group {
-            self.parse_group(
+            builder.parse_group(
                 name,
                 state,
                 group,
@@ -193,22 +203,34 @@ impl DispatchingBuilder {
                 false,
             )?;
         }
-
-        // read rules
-        let mut rulesets = HashMap::new();
         for (name, schema) in rule_schema {
-            let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
+            let Some(ruleset_builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Failed to parse provider {}",name));
             };
-            rulesets.insert(name.clone(), Arc::new(builder.build()?));
+            builder
+                .rulesets
+                .insert(name.clone(), Arc::new(ruleset_builder.build()?));
         }
+        Ok(builder)
+    }
 
-        let (rules, fallback) = self.build_rules(config.rule_local.as_slice(), &rulesets)?;
+    pub fn create_templist_builder(&self) -> TemporaryListBuilder {
+        TemporaryListBuilder::new(
+            self.proxies.clone(),
+            self.groups.clone(),
+            self.rulesets.clone(),
+            self.dns.clone(),
+            self.mmdb.clone(),
+        )
+    }
+
+    pub fn build(mut self, loaded_config: &LoadedConfig) -> anyhow::Result<Dispatching> {
+        let (rules, fallback) = self.build_rules(loaded_config.config.rule_local.as_slice())?;
         self.rules.extend(rules);
 
         let group = {
             let mut g = LinkedHashMap::new();
-            for name in group_order {
+            for name in self.group_order {
                 // Chain will not be included
                 if let Some(val) = self.groups.get(&name) {
                     g.insert(name, val.clone());
@@ -230,14 +252,13 @@ impl DispatchingBuilder {
     fn build_rules(
         &self,
         rules: &[RuleConfigLine],
-        rulesets: &HashMap<String, Arc<RuleSet>>,
     ) -> anyhow::Result<(Vec<RuleOrAction>, GeneralProxy)> {
         let mut rule_builder = RuleBuilder::new(
             self.dns.clone(),
             self.mmdb.clone(),
             &self.proxies,
             &self.groups,
-            rulesets,
+            &self.rulesets,
         );
         for (idx, line) in rules.iter().enumerate() {
             match line {
@@ -247,7 +268,7 @@ impl DispatchingBuilder {
                         match rule_builder.parse_incomplete(sub.matches.as_str()) {
                             Ok(matches) => {
                                 let (sub_rules, sub_fallback) =
-                                    self.build_rules(sub.subrules.as_slice(), rulesets)?;
+                                    self.build_rules(sub.subrules.as_slice())?;
                                 rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
                                     SubDispatch::new(
                                         matches,
@@ -728,7 +749,7 @@ impl DispatchingSnippet {
         }
         if verbose {
             tracing::info!(
-                "[{:?}]({}) {} => {}",
+                "[{}]({}) {} => {}",
                 rule_str,
                 stringfy_process(info),
                 info.dst,
