@@ -9,7 +9,8 @@ use anyhow::anyhow;
 use ipnet::IpNet;
 use regex::Regex;
 use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
+use std::mem;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -198,8 +199,14 @@ impl RuleBuilder<'_> {
         self.buffer.push(rule_or_action)
     }
 
-    #[allow(clippy::get_first)]
     pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
+        let r = self.parse_literal(s)?;
+        self.buffer.push(RuleOrAction::Rule(r));
+        Ok(())
+    }
+
+    #[allow(clippy::get_first)]
+    pub fn parse_literal(&mut self, s: &str) -> anyhow::Result<Rule> {
         let processed_str = "[".to_string() + s + "]";
         let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
 
@@ -226,10 +233,7 @@ impl RuleBuilder<'_> {
         };
 
         let rule = self.parse_sub_rule(first)?;
-
-        self.buffer
-            .push(RuleOrAction::Rule(Rule::new(rule, general)));
-        Ok(())
+        Ok(Rule::new(rule, general))
     }
 
     pub fn parse_incomplete(&mut self, s: &str) -> anyhow::Result<RuleImpl> {
@@ -372,8 +376,8 @@ impl RuleBuilder<'_> {
         }
     }
 
-    pub fn build(self) -> Vec<RuleOrAction> {
-        self.buffer
+    pub fn emit_all(&mut self) -> Vec<RuleOrAction> {
+        mem::take(&mut self.buffer)
     }
 }
 
@@ -397,6 +401,12 @@ impl Rule {
 }
 
 impl Debug for Rule {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.rule.fmt(f)
+    }
+}
+
+impl Display for Rule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.rule.fmt(f)
     }

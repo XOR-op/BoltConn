@@ -7,6 +7,7 @@ use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
 use crate::dispatch::ruleset::{RuleSet, RuleSetBuilder};
+use crate::dispatch::temporary::TemporaryList;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::external::MmdbReader;
 use crate::network::dns::Dns;
@@ -15,6 +16,7 @@ use crate::proxy::NetworkAddr;
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
+use arc_swap::ArcSwap;
 use base64::Engine;
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
@@ -93,6 +95,7 @@ impl ConnInfo {
 }
 
 pub struct Dispatching {
+    temporary_list: ArcSwap<TemporaryList>,
     proxies: HashMap<String, Arc<Proxy>>,
     groups: LinkedHashMap<String, Arc<ProxyGroup>>,
     snippet: DispatchingSnippet,
@@ -104,7 +107,11 @@ impl Dispatching {
         info: &mut ConnInfo,
         verbose: bool,
     ) -> (Arc<ProxyImpl>, Option<String>) {
-        self.snippet.matches(info, verbose).await
+        if let Some(r) = self.temporary_list.load().matches(info, verbose).await {
+            r
+        } else {
+            self.snippet.matches(info, verbose).await
+        }
     }
 
     pub fn set_group_selection(&self, group: &str, proxy: &str) -> anyhow::Result<()> {
@@ -210,6 +217,7 @@ impl DispatchingBuilder {
             g
         };
         Ok(Dispatching {
+            temporary_list: ArcSwap::new(Arc::new(TemporaryList::empty())),
             proxies: self.proxies,
             groups: group,
             snippet: DispatchingSnippet {
@@ -264,7 +272,7 @@ impl DispatchingBuilder {
                     } else {
                         // check Fallback
                         let fallback = rule_builder.parse_fallback(r.as_str())?;
-                        return Ok((rule_builder.build(), fallback));
+                        return Ok((rule_builder.emit_all(), fallback));
                     }
                 }
             }
@@ -295,9 +303,10 @@ impl DispatchingBuilder {
         for r in rules.iter() {
             rule_builder.append_literal((r.clone() + ", DIRECT").as_str())?;
         }
-        self.rules.extend(rule_builder.build());
+        self.rules.extend(rule_builder.emit_all());
 
         Ok(Dispatching {
+            temporary_list: ArcSwap::new(Arc::new(TemporaryList::empty())),
             proxies: self.proxies,
             groups: self.groups.into_iter().collect(),
             snippet: DispatchingSnippet {
@@ -677,35 +686,12 @@ impl DispatchingSnippet {
             match v {
                 RuleOrAction::Rule(v) => {
                     if let Some(proxy) = v.matches(info) {
-                        let (proxy_impl, iface) = match &proxy {
-                            GeneralProxy::Single(p) => (p.get_impl(), None),
-                            GeneralProxy::Group(g) => {
-                                let (p, iface) = g.get_proxy_and_interface();
-                                (p.get_impl(), iface)
-                            }
-                        };
-                        if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-                            if verbose {
-                                tracing::info!(
-                                    "[{:?}]({}) {} => {} failed: UDP disabled",
-                                    v,
-                                    stringfy_process(info),
-                                    info.dst,
-                                    proxy
-                                );
-                            }
-                            return (Arc::new(ProxyImpl::Reject), None);
-                        }
-                        if verbose {
-                            tracing::info!(
-                                "[{:?}]({}) {} => {}",
-                                v,
-                                stringfy_process(info),
-                                info.dst,
-                                proxy
-                            );
-                        }
-                        return (proxy_impl, iface);
+                        return Self::proxy_filtering(
+                            &proxy,
+                            info,
+                            v.to_string().as_str(),
+                            verbose,
+                        );
                     }
                 }
                 RuleOrAction::Action(a) => match a {
@@ -718,32 +704,35 @@ impl DispatchingSnippet {
                 },
             }
         }
+        Self::proxy_filtering(&self.fallback, info, "Fallback", verbose)
+    }
 
-        // fallback proxy
-        let (proxy_impl, iface) = match &self.fallback {
-            GeneralProxy::Single(p) => (p.get_impl(), None),
-            GeneralProxy::Group(g) => {
-                let (p, iface) = g.get_proxy_and_interface();
-                (p.get_impl(), iface)
-            }
-        };
+    pub fn proxy_filtering(
+        proxy: &GeneralProxy,
+        info: &ConnInfo,
+        rule_str: &str,
+        verbose: bool,
+    ) -> (Arc<ProxyImpl>, Option<String>) {
+        let (proxy_impl, iface) = proxy.get_impl();
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
             if verbose {
                 tracing::info!(
-                    "[Fallback]({}) {} => {} failed: UDP disabled",
+                    "[{}]({}) {} => {}: Failed(UDP disabled)",
+                    rule_str,
                     stringfy_process(info),
                     info.dst,
-                    self.fallback
+                    proxy
                 );
             }
             return (Arc::new(ProxyImpl::Reject), None);
         }
         if verbose {
             tracing::info!(
-                "[Fallback]({}) {} => {}",
+                "[{:?}]({}) {} => {}",
+                rule_str,
                 stringfy_process(info),
                 info.dst,
-                self.fallback
+                proxy
             );
         }
         (proxy_impl, iface)
