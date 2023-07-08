@@ -7,7 +7,7 @@ use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
 use crate::dispatch::ruleset::{RuleSet, RuleSetBuilder};
-use crate::dispatch::temporary::{TemporaryList, TemporaryListBuilder};
+use crate::dispatch::temporary::TemporaryList;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::external::MmdbReader;
 use crate::network::dns::Dns;
@@ -96,6 +96,7 @@ impl ConnInfo {
 
 pub struct Dispatching {
     temporary_list: ArcSwap<TemporaryList>,
+    templist_builder: DispatchingBuilder,
     proxies: HashMap<String, Arc<Proxy>>,
     groups: LinkedHashMap<String, Arc<ProxyGroup>>,
     snippet: DispatchingSnippet,
@@ -112,6 +113,12 @@ impl Dispatching {
         } else {
             self.snippet.matches(info, verbose).await
         }
+    }
+
+    pub fn update_temporary_list(&self, list: &[RuleConfigLine]) -> anyhow::Result<()> {
+        let list = self.templist_builder.build_temporary_list(list)?;
+        self.temporary_list.store(Arc::new(list));
+        Ok(())
     }
 
     pub fn set_group_selection(&self, group: &str, proxy: &str) -> anyhow::Result<()> {
@@ -135,12 +142,12 @@ fn stringfy_process(info: &ConnInfo) -> &str {
     }
 }
 
+#[derive(Clone)]
 pub struct DispatchingBuilder {
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
     rulesets: HashMap<String, Arc<RuleSet>>,
     group_order: Vec<String>,
-    rules: Vec<RuleOrAction>,
     dns: Arc<Dns>,
     mmdb: Option<Arc<MmdbReader>>,
 }
@@ -152,7 +159,6 @@ impl DispatchingBuilder {
             groups: Default::default(),
             rulesets: Default::default(),
             group_order: Default::default(),
-            rules: vec![],
             dns,
             mmdb,
         };
@@ -214,45 +220,47 @@ impl DispatchingBuilder {
         Ok(builder)
     }
 
-    pub fn create_templist_builder(&self) -> TemporaryListBuilder {
-        TemporaryListBuilder::new(
-            self.proxies.clone(),
-            self.groups.clone(),
-            self.rulesets.clone(),
-            self.dns.clone(),
-            self.mmdb.clone(),
-        )
+    pub fn build_temporary_list(&self, list: &[RuleConfigLine]) -> anyhow::Result<TemporaryList> {
+        let (list, fallback) = self.build_rules_loosely(list)?;
+        if fallback.is_none() {
+            Ok(TemporaryList::new(list))
+        } else {
+            Err(anyhow::anyhow!("Unexpected Fallback"))
+        }
     }
 
-    pub fn build(mut self, loaded_config: &LoadedConfig) -> anyhow::Result<Dispatching> {
+    pub fn build(self, loaded_config: &LoadedConfig) -> anyhow::Result<Dispatching> {
         let (rules, fallback) = self.build_rules(loaded_config.config.rule_local.as_slice())?;
-        self.rules.extend(rules);
 
-        let group = {
+        let groups = {
             let mut g = LinkedHashMap::new();
-            for name in self.group_order {
+            for name in &self.group_order {
                 // Chain will not be included
-                if let Some(val) = self.groups.get(&name) {
-                    g.insert(name, val.clone());
+                if let Some(val) = self.groups.get(name) {
+                    g.insert(name.clone(), val.clone());
                 }
             }
             g
         };
+        let temporary_list = if let Some(list) = &loaded_config.state.temporary_list {
+            self.build_temporary_list(list)?
+        } else {
+            TemporaryList::empty()
+        };
+        let proxies = self.proxies.clone();
         Ok(Dispatching {
-            temporary_list: ArcSwap::new(Arc::new(TemporaryList::empty())),
-            proxies: self.proxies,
-            groups: group,
-            snippet: DispatchingSnippet {
-                rules: self.rules,
-                fallback,
-            },
+            temporary_list: ArcSwap::new(Arc::new(temporary_list)),
+            templist_builder: self,
+            proxies,
+            groups,
+            snippet: DispatchingSnippet { rules, fallback },
         })
     }
 
-    fn build_rules(
+    fn build_rules_loosely(
         &self,
         rules: &[RuleConfigLine],
-    ) -> anyhow::Result<(Vec<RuleOrAction>, GeneralProxy)> {
+    ) -> anyhow::Result<(Vec<RuleOrAction>, Option<GeneralProxy>)> {
         let mut rule_builder = RuleBuilder::new(
             self.dns.clone(),
             self.mmdb.clone(),
@@ -293,17 +301,29 @@ impl DispatchingBuilder {
                     } else {
                         // check Fallback
                         let fallback = rule_builder.parse_fallback(r.as_str())?;
-                        return Ok((rule_builder.emit_all(), fallback));
+                        return Ok((rule_builder.emit_all(), Some(fallback)));
                     }
                 }
             }
         }
-        Err(anyhow::anyhow!("Bad ruless: missing fallback"))
+        Ok((rule_builder.emit_all(), None))
+    }
+
+    fn build_rules(
+        &self,
+        rules: &[RuleConfigLine],
+    ) -> anyhow::Result<(Vec<RuleOrAction>, GeneralProxy)> {
+        let (list, fallback) = self.build_rules_loosely(rules)?;
+        if let Some(fallback) = fallback {
+            Ok((list, fallback))
+        } else {
+            Err(anyhow::anyhow!("Bad ruless: missing fallback"))
+        }
     }
 
     /// Build a filter dispatching: for all encountered rule, return DIRECT; otherwise REJECT
     pub fn build_filter(
-        mut self,
+        self,
         rules: &[String],
         rule_schema: &HashMap<String, RuleSchema>,
     ) -> anyhow::Result<Dispatching> {
@@ -324,14 +344,20 @@ impl DispatchingBuilder {
         for r in rules.iter() {
             rule_builder.append_literal((r.clone() + ", DIRECT").as_str())?;
         }
-        self.rules.extend(rule_builder.emit_all());
-
+        let rules = rule_builder.emit_all();
+        let groups = self
+            .groups
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let proxies = self.proxies.clone();
         Ok(Dispatching {
             temporary_list: ArcSwap::new(Arc::new(TemporaryList::empty())),
-            proxies: self.proxies,
-            groups: self.groups.into_iter().collect(),
+            templist_builder: self,
+            proxies,
+            groups,
             snippet: DispatchingSnippet {
-                rules: self.rules,
+                rules,
                 fallback: GeneralProxy::Single(Arc::new(Proxy::new("REJECT", ProxyImpl::Reject))),
             },
         })

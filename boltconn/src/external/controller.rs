@@ -1,4 +1,4 @@
-use crate::config::LinkedState;
+use crate::config::{LinkedState, RuleConfigLine};
 use crate::dispatch::{GeneralProxy, Latency};
 use crate::external::{SharedDispatching, StreamLoggerRecv, StreamLoggerSend};
 use crate::network::configure::TunConfigure;
@@ -262,35 +262,96 @@ impl Controller {
     }
 
     pub fn set_selection(&self, group: String, selected: String) -> bool {
-        let r = self
+        let mut state = self.state.lock().unwrap();
+        if self
             .dispatching
             .load()
             .set_group_selection(group.as_str(), selected.as_str())
-            .is_ok();
-        if r {
-            let mut state = self.state.lock().unwrap();
+            .is_ok()
+        {
             if let Some(val) = state.state.group_selection.get_mut(&group) {
                 *val = selected;
             } else {
                 state.state.group_selection.insert(group, selected);
             }
-            if let Ok(content) = serde_yaml::to_string(&state.state) {
-                let content = "# This file is managed by BoltConn. Do not edit unless you know what you are doing.\n".to_string() + content.as_str();
-                fn inner(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-                    let mut file = std::fs::File::create(path)?;
-                    file.write_all(contents)?;
-                    file.flush()
-                }
-                if let Err(e) = inner(&state.state_path, content.as_bytes()) {
-                    tracing::error!(
-                        "Write state to {} failed: {}",
-                        state.state_path.to_string_lossy(),
-                        e
-                    );
+            Self::flush_state(&state);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn add_temporary_rule(&self, rule_literal: String) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let old = state.state.temporary_list.clone().unwrap_or_else(Vec::new);
+        let mut list = vec![RuleConfigLine::Simple(rule_literal)];
+        list.extend(old.into_iter());
+
+        if self.dispatching.load().update_temporary_list(&list).is_ok() {
+            state.state.temporary_list = Some(list);
+            Self::flush_state(&state);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn delete_temporary_rule(&self, rule_literal_prefix: String) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let mut list = state.state.temporary_list.clone().unwrap_or_else(Vec::new);
+        let Ok(new_rule) = serde_yaml::from_str::<serde_yaml::Sequence>(&rule_literal_prefix) else {
+            return false;
+        };
+        let mut has_changed = false;
+        list.retain(|line| {
+            if let RuleConfigLine::Simple(line) = &line {
+                let Ok(parsed_line) = serde_yaml::from_str::<serde_yaml::Sequence>(line) else {
+                    has_changed=true;
+                    return false;
+                };
+                if (parsed_line.len() == new_rule.len() && parsed_line == new_rule)
+                    || (parsed_line.len() == new_rule.len() + 1
+                        && parsed_line.as_slice()[..parsed_line.len() - 1] == new_rule)
+                {
+                    has_changed = true;
+                    return false;
                 }
             }
+            true
+        });
+
+        if self.dispatching.load().update_temporary_list(&list).is_ok() {
+            state.state.temporary_list = if list.is_empty() { None } else { Some(list) };
+            Self::flush_state(&state);
+            true
+        } else {
+            false
         }
-        r
+    }
+
+    pub fn clear_temporary_rule(&self) {
+        let mut state = self.state.lock().unwrap();
+        let _ = self.dispatching.load().update_temporary_list(&[]);
+        state.state.temporary_list = None;
+        Self::flush_state(&state);
+    }
+
+    fn flush_state(state: &LinkedState) {
+        if let Ok(content) = serde_yaml::to_string(&state.state) {
+            let content = "# This file is managed by BoltConn. Do not edit unless you know what you are doing.\n".to_string() + content.as_str();
+            fn inner(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+                let mut file = std::fs::File::create(path)?;
+                file.write_all(contents)?;
+                file.flush()
+            }
+            if let Err(e) = inner(&state.state_path, content.as_bytes()) {
+                tracing::error!(
+                    "Write state to {} failed: {}",
+                    state.state_path.to_string_lossy(),
+                    e
+                );
+            }
+        }
     }
 
     pub async fn update_latency(&self, group: String) {

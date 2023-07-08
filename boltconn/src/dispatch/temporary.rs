@@ -1,10 +1,6 @@
 use crate::dispatch::action::Action;
 use crate::dispatch::rule::RuleOrAction;
-use crate::dispatch::ruleset::RuleSet;
-use crate::dispatch::{ConnInfo, DispatchingSnippet, Proxy, ProxyGroup, ProxyImpl};
-use crate::external::MmdbReader;
-use crate::network::dns::Dns;
-use std::collections::HashMap;
+use crate::dispatch::{ConnInfo, DispatchingSnippet, ProxyImpl};
 use std::sync::Arc;
 
 pub struct TemporaryList {
@@ -14,6 +10,10 @@ pub struct TemporaryList {
 impl TemporaryList {
     pub fn empty() -> Self {
         Self { list: vec![] }
+    }
+
+    pub fn new(list: Vec<RuleOrAction>) -> Self {
+        Self { list }
     }
 
     pub async fn matches(
@@ -44,31 +44,5 @@ impl TemporaryList {
             }
         }
         None
-    }
-}
-
-pub struct TemporaryListBuilder {
-    proxies: HashMap<String, Arc<Proxy>>,
-    groups: HashMap<String, Arc<ProxyGroup>>,
-    rulesets: HashMap<String, Arc<RuleSet>>,
-    dns: Arc<Dns>,
-    mmdb: Option<Arc<MmdbReader>>,
-}
-
-impl TemporaryListBuilder {
-    pub fn new(
-        proxies: HashMap<String, Arc<Proxy>>,
-        groups: HashMap<String, Arc<ProxyGroup>>,
-        rulesets: HashMap<String, Arc<RuleSet>>,
-        dns: Arc<Dns>,
-        mmdb: Option<Arc<MmdbReader>>,
-    ) -> Self {
-        Self {
-            proxies,
-            groups,
-            rulesets,
-            dns,
-            mmdb,
-        }
     }
 }
