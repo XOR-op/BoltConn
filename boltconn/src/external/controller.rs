@@ -284,29 +284,34 @@ impl Controller {
     pub fn add_temporary_rule(&self, rule_literal: String) -> bool {
         let mut state = self.state.lock().unwrap();
         let old = state.state.temporary_list.clone().unwrap_or_default();
-        let mut list = vec![RuleConfigLine::Simple(rule_literal)];
+        let mut list = vec![RuleConfigLine::Simple(rule_literal.clone())];
         list.extend(old.into_iter());
 
-        if self.dispatching.load().update_temporary_list(&list).is_ok() {
+        if let Err(e) = self.dispatching.load().update_temporary_list(&list) {
+            tracing::trace!("Adding rule {} failed: {}", rule_literal, e);
+            false
+        } else {
             state.state.temporary_list = Some(list);
             Self::flush_state(&state);
             true
-        } else {
-            false
         }
     }
 
     pub fn delete_temporary_rule(&self, rule_literal_prefix: String) -> bool {
         let mut state = self.state.lock().unwrap();
         let mut list = state.state.temporary_list.clone().unwrap_or_default();
-        let Ok(new_rule) = serde_yaml::from_str::<serde_yaml::Sequence>(&rule_literal_prefix) else {
+        let Ok(new_rule) = serde_yaml::from_str::<serde_yaml::Sequence>(
+            (String::from("[") + rule_literal_prefix.as_str() + "]").as_str(),
+        ) else {
             return false;
         };
         let mut has_changed = false;
         list.retain(|line| {
             if let RuleConfigLine::Simple(line) = &line {
-                let Ok(parsed_line) = serde_yaml::from_str::<serde_yaml::Sequence>(line) else {
-                    has_changed=true;
+                let Ok(parsed_line) = serde_yaml::from_str::<serde_yaml::Sequence>(
+                    (String::from("[") + line + "]").as_str(),
+                ) else {
+                    has_changed = true;
                     return false;
                 };
                 if (parsed_line.len() == new_rule.len() && parsed_line == new_rule)

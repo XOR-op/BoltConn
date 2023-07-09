@@ -294,15 +294,15 @@ impl DispatchingBuilder {
                     }
                 },
                 RuleConfigLine::Simple(r) => {
-                    if idx != rules.len() - 1 {
-                        rule_builder
-                            .append_literal(r.as_str())
-                            .map_err(|e| anyhow!("{} ({:?})", r, e))?;
-                    } else {
+                    if idx == rules.len() - 1 {
                         // check Fallback
-                        let fallback = rule_builder.parse_fallback(r.as_str())?;
-                        return Ok((rule_builder.emit_all(), Some(fallback)));
+                        if let Ok(fallback) = rule_builder.parse_fallback(r.as_str()) {
+                            return Ok((rule_builder.emit_all(), Some(fallback)));
+                        }
                     }
+                    rule_builder
+                        .append_literal(r.as_str())
+                        .map_err(|e| anyhow!("{} ({:?})", r, e))?;
                 }
             }
         }
@@ -317,7 +317,7 @@ impl DispatchingBuilder {
         if let Some(fallback) = fallback {
             Ok((list, fallback))
         } else {
-            Err(anyhow::anyhow!("Bad ruless: missing fallback"))
+            Err(anyhow::anyhow!("Bad rules: missing fallback"))
         }
     }
 
