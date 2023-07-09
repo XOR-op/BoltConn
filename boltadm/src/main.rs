@@ -65,6 +65,16 @@ struct CertOptions {
 }
 
 #[derive(Debug, StructOpt)]
+enum TempRuleOptions {
+    /// Add a temporary rule to the head of rule list
+    Add { literal: String },
+    /// Delete temporary rules matching this prefix
+    Delete { literal: String },
+    /// Delete all temporary rules
+    Clear,
+}
+
+#[derive(Debug, StructOpt)]
 enum InterceptOptions {
     /// List all captured data
     List,
@@ -88,6 +98,8 @@ enum SubCommand {
     Intercept(InterceptOptions),
     /// Adjust TUN status
     Tun(TunOptions),
+    /// Modify Temporary Rules
+    Rule(TempRuleOptions),
     /// Clean unexpected shutdown
     Clean,
     /// Reload Configuration
@@ -171,6 +183,11 @@ async fn main() {
         },
         SubCommand::Clean => unreachable!(),
         SubCommand::Reload => requestor.reload_config().await,
+        SubCommand::Rule(opt) => match opt {
+            TempRuleOptions::Add { literal } => requestor.add_temporary_rule(literal).await,
+            TempRuleOptions::Delete { literal } => requestor.delete_temporary_rule(literal).await,
+            TempRuleOptions::Clear => requestor.clear_temporary_rule().await,
+        },
     };
     match result {
         Ok(_) => exit(0),
