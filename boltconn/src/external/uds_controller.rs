@@ -237,6 +237,18 @@ impl ControlService for UdsRpcServer {
         self.controller.stop_conn(id as usize).await
     }
 
+    async fn add_temporary_rule(self, _ctx: Context, rule_literal: String) -> bool {
+        self.controller.add_temporary_rule(rule_literal)
+    }
+
+    async fn delete_temporary_rule(self, _ctx: Context, rule_literal_prefix: String) -> bool {
+        self.controller.delete_temporary_rule(rule_literal_prefix)
+    }
+
+    async fn clear_temporary_rule(self, _ctx: Context) {
+        self.controller.clear_temporary_rule()
+    }
+
     async fn get_tun(self, _ctx: Context) -> TunStatusSchema {
         self.controller.get_tun()
     }

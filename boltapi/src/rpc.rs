@@ -28,6 +28,13 @@ pub trait ControlService {
 
     async fn stop_conn(id: u32) -> bool;
 
+    // Temporary rules
+    async fn add_temporary_rule(rule_literal: String) -> bool;
+
+    async fn delete_temporary_rule(rule_literal_prefix: String) -> bool;
+
+    async fn clear_temporary_rule();
+
     // General
     async fn get_tun() -> TunStatusSchema;
 

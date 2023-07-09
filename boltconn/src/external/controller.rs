@@ -283,7 +283,7 @@ impl Controller {
 
     pub fn add_temporary_rule(&self, rule_literal: String) -> bool {
         let mut state = self.state.lock().unwrap();
-        let old = state.state.temporary_list.clone().unwrap_or_else(Vec::new);
+        let old = state.state.temporary_list.clone().unwrap_or_default();
         let mut list = vec![RuleConfigLine::Simple(rule_literal)];
         list.extend(old.into_iter());
 
@@ -298,7 +298,7 @@ impl Controller {
 
     pub fn delete_temporary_rule(&self, rule_literal_prefix: String) -> bool {
         let mut state = self.state.lock().unwrap();
-        let mut list = state.state.temporary_list.clone().unwrap_or_else(Vec::new);
+        let mut list = state.state.temporary_list.clone().unwrap_or_default();
         let Ok(new_rule) = serde_yaml::from_str::<serde_yaml::Sequence>(&rule_literal_prefix) else {
             return false;
         };
@@ -319,6 +319,9 @@ impl Controller {
             }
             true
         });
+        if !has_changed {
+            return false;
+        }
 
         if self.dispatching.load().update_temporary_list(&list).is_ok() {
             state.state.temporary_list = if list.is_empty() { None } else { Some(list) };
