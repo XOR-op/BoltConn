@@ -1,5 +1,5 @@
 use crate::config::{safe_join_path, LinkedState, LoadedConfig, RawInboundServiceConfig};
-use crate::dispatch::{Dispatching, DispatchingBuilder};
+use crate::dispatch::DispatchingBuilder;
 use crate::external::{
     Controller, DatabaseHandle, MmdbReader, SharedDispatching, StreamLoggerSend, UdsController,
     UnixListenerGuard, WebController,
@@ -156,8 +156,8 @@ impl App {
 
         // dispatch
         let dispatching = Arc::new(
-            DispatchingBuilder::new(dns.clone(), mmdb.clone())
-                .build(&loaded_config)
+            DispatchingBuilder::new(dns.clone(), mmdb.clone(), &loaded_config)
+                .and_then(|b| b.build(&loaded_config))
                 .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
         );
         let dispatcher = {
@@ -165,7 +165,7 @@ impl App {
             let cert = load_cert_and_key(&cert_path)
                 .map_err(|e| anyhow!("Load certs from path {:?} failed: {}", cert_path, e))?;
             let rule_schema = &loaded_config.rule_schema;
-            let intercept_filter = DispatchingBuilder::new(dns.clone(), mmdb.clone())
+            let intercept_filter = DispatchingBuilder::empty(dns.clone(), mmdb.clone())
                 .build_filter(config.intercept_rule.as_slice(), rule_schema)
                 .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
             let (url_modifier, hdr_modifier) = {
@@ -320,34 +320,8 @@ impl App {
 
     async fn reload(&self) {
         let start = Instant::now();
-        match reload(
-            &self.config_path,
-            &self.data_path,
-            self.outbound_iface.as_str(),
-            self.dns.clone(),
-        )
-        .await
-        {
-            Ok((
-                dispatching,
-                intercept_filter,
-                url_rewriter,
-                header_rewriter,
-                new_speedtest_url,
-            )) => {
-                self.api_dispatching_handler.store(dispatching.clone());
-                let hcap2 = self.http_capturer.clone();
-                self.dispatcher.replace_dispatching(dispatching);
-                self.dispatcher.replace_intercept_filter(intercept_filter);
-                self.dispatcher.replace_modifier(Box::new(move |pi| {
-                    Arc::new(InterceptModifier::new(
-                        hcap2.clone(),
-                        url_rewriter.clone(),
-                        header_rewriter.clone(),
-                        pi,
-                    ))
-                }));
-                *self.speedtest_url.write().unwrap() = new_speedtest_url;
+        match self.reload_inner().await {
+            Ok(_) => {
                 tracing::info!(
                     "Reloaded config successfully in {}ms",
                     start.elapsed().as_millis()
@@ -357,6 +331,57 @@ impl App {
                 tracing::error!("Reloading config failed: {}", err);
             }
         }
+    }
+
+    async fn reload_inner(&self) -> anyhow::Result<()> {
+        // reload parsing
+        let loaded_config = LoadedConfig::load_config(&self.config_path, &self.data_path).await?;
+        let config = &loaded_config.config;
+        let mmdb = match config.geoip_db.as_ref() {
+            None => None,
+            Some(p) => {
+                let path = safe_join_path(&self.config_path, p)?;
+                Some(Arc::new(MmdbReader::read_from_file(path)?))
+            }
+        };
+        let (url_mod, hdr_mod) = {
+            let (url, hdr) = mapping_rewrite(config.rewrite.as_slice())?;
+            (
+                Arc::new(UrlModManager::new(url.as_slice())?),
+                Arc::new(HeaderModManager::new(hdr.as_slice())?),
+            )
+        };
+        let bootstrap =
+            new_bootstrap_resolver(&self.outbound_iface, config.dns.bootstrap.as_slice())?;
+        let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
+        let dispatching = {
+            let builder = DispatchingBuilder::new(self.dns.clone(), mmdb.clone(), &loaded_config)?;
+            Arc::new(builder.build(&loaded_config)?)
+        };
+        let intercept_filter = {
+            let builder = DispatchingBuilder::empty(self.dns.clone(), mmdb);
+            let rule_schema = &loaded_config.rule_schema;
+            Arc::new(builder.build_filter(config.intercept_rule.as_slice(), rule_schema)?)
+        };
+        self.dns
+            .replace_resolvers(&self.outbound_iface, group)
+            .await?;
+
+        // start atomic replacing
+        self.api_dispatching_handler.store(dispatching.clone());
+        let hcap2 = self.http_capturer.clone();
+        self.dispatcher.replace_dispatching(dispatching);
+        self.dispatcher.replace_intercept_filter(intercept_filter);
+        self.dispatcher.replace_modifier(Box::new(move |pi| {
+            Arc::new(InterceptModifier::new(
+                hcap2.clone(),
+                url_mod.clone(),
+                hdr_mod.clone(),
+                pi,
+            ))
+        }));
+        *self.speedtest_url.write().unwrap() = config.speedtest_url.clone();
+        Ok(())
     }
 }
 
@@ -394,55 +419,6 @@ fn open_database_handle(data_path: &Path) -> anyhow::Result<DatabaseHandle> {
             e
         )),
     }
-}
-
-async fn reload(
-    config_path: &Path,
-    data_path: &Path,
-    iface_name: &str,
-    dns: Arc<Dns>,
-) -> anyhow::Result<(
-    Arc<Dispatching>,
-    Arc<Dispatching>,
-    Arc<UrlModManager>,
-    Arc<HeaderModManager>,
-    String,
-)> {
-    let loaded_config = LoadedConfig::load_config(config_path, data_path).await?;
-    let config = &loaded_config.config;
-    let mmdb = match config.geoip_db.as_ref() {
-        None => None,
-        Some(p) => {
-            let path = safe_join_path(config_path, p)?;
-            Some(Arc::new(MmdbReader::read_from_file(path)?))
-        }
-    };
-    let (url_mod, hdr_mod) = {
-        let (url, hdr) = mapping_rewrite(config.rewrite.as_slice())?;
-        (
-            Arc::new(UrlModManager::new(url.as_slice())?),
-            Arc::new(HeaderModManager::new(hdr.as_slice())?),
-        )
-    };
-    let bootstrap = new_bootstrap_resolver(iface_name, config.dns.bootstrap.as_slice())?;
-    let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
-    let dispatching = {
-        let builder = DispatchingBuilder::new(dns.clone(), mmdb.clone());
-        Arc::new(builder.build(&loaded_config)?)
-    };
-    let intercept_filter = {
-        let builder = DispatchingBuilder::new(dns.clone(), mmdb);
-        let rule_schema = &loaded_config.rule_schema;
-        Arc::new(builder.build_filter(config.intercept_rule.as_slice(), rule_schema)?)
-    };
-    dns.replace_resolvers(iface_name, group).await?;
-    Ok((
-        dispatching,
-        intercept_filter,
-        url_mod,
-        hdr_mod,
-        config.speedtest_url.clone(),
-    ))
 }
 
 #[allow(clippy::type_complexity)]

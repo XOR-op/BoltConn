@@ -94,6 +94,24 @@ impl UdsConnector {
             .ok_or(anyhow::anyhow!("No response"))
     }
 
+    pub async fn add_temporary_rule(&self, rule_literal: String) -> Result<bool> {
+        Ok(self
+            .client
+            .add_temporary_rule(Context::current(), rule_literal)
+            .await?)
+    }
+
+    pub async fn delete_temporary_rule(&self, rule_literal_prefix: String) -> Result<bool> {
+        Ok(self
+            .client
+            .delete_temporary_rule(Context::current(), rule_literal_prefix)
+            .await?)
+    }
+
+    pub async fn clear_temporary_rule(&self) -> Result<()> {
+        Ok(self.client.clear_temporary_rule(Context::current()).await?)
+    }
+
     pub async fn reload_config(&self) -> Result<()> {
         Ok(self.client.reload(Context::current()).await?)
     }

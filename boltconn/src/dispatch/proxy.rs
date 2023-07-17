@@ -189,6 +189,18 @@ pub enum GeneralProxy {
     Group(Arc<ProxyGroup>),
 }
 
+impl GeneralProxy {
+    pub fn get_impl(&self) -> (Arc<ProxyImpl>, Option<String>) {
+        match &self {
+            GeneralProxy::Single(p) => (p.get_impl(), None),
+            GeneralProxy::Group(g) => {
+                let (p, iface) = g.get_proxy_and_interface();
+                (p.get_impl(), iface)
+            }
+        }
+    }
+}
+
 impl Display for GeneralProxy {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

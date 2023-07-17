@@ -7,6 +7,7 @@ use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
 use crate::dispatch::ruleset::{RuleSet, RuleSetBuilder};
+use crate::dispatch::temporary::TemporaryList;
 use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
 use crate::external::MmdbReader;
 use crate::network::dns::Dns;
@@ -15,6 +16,7 @@ use crate::proxy::NetworkAddr;
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
+use arc_swap::ArcSwap;
 use base64::Engine;
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
@@ -93,6 +95,8 @@ impl ConnInfo {
 }
 
 pub struct Dispatching {
+    temporary_list: ArcSwap<TemporaryList>,
+    templist_builder: DispatchingBuilder,
     proxies: HashMap<String, Arc<Proxy>>,
     groups: LinkedHashMap<String, Arc<ProxyGroup>>,
     snippet: DispatchingSnippet,
@@ -104,7 +108,17 @@ impl Dispatching {
         info: &mut ConnInfo,
         verbose: bool,
     ) -> (Arc<ProxyImpl>, Option<String>) {
-        self.snippet.matches(info, verbose).await
+        if let Some(r) = self.temporary_list.load().matches(info, verbose).await {
+            r
+        } else {
+            self.snippet.matches(info, verbose).await
+        }
+    }
+
+    pub fn update_temporary_list(&self, list: &[RuleConfigLine]) -> anyhow::Result<()> {
+        let list = self.templist_builder.build_temporary_list(list)?;
+        self.temporary_list.store(Arc::new(list));
+        Ok(())
     }
 
     pub fn set_group_selection(&self, group: &str, proxy: &str) -> anyhow::Result<()> {
@@ -128,35 +142,44 @@ fn stringfy_process(info: &ConnInfo) -> &str {
     }
 }
 
+#[derive(Clone)]
 pub struct DispatchingBuilder {
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
-    rules: Vec<RuleOrAction>,
+    rulesets: HashMap<String, Arc<RuleSet>>,
+    group_order: Vec<String>,
     dns: Arc<Dns>,
     mmdb: Option<Arc<MmdbReader>>,
 }
 
 impl DispatchingBuilder {
-    pub fn new(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>) -> Self {
-        let mut r = Self {
+    pub fn empty(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>) -> Self {
+        let mut builder = Self {
             proxies: Default::default(),
             groups: Default::default(),
-            rules: vec![],
+            rulesets: Default::default(),
+            group_order: Default::default(),
             dns,
             mmdb,
         };
-        r.proxies.insert(
+        builder.proxies.insert(
             "DIRECT".into(),
             Arc::new(Proxy::new("DIRECT", ProxyImpl::Direct)),
         );
-        r.proxies.insert(
+        builder.proxies.insert(
             "REJECT".into(),
             Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)),
         );
-        r
+        builder
     }
 
-    pub fn build(mut self, loaded_config: &LoadedConfig) -> anyhow::Result<Dispatching> {
+    pub fn new(
+        dns: Arc<Dns>,
+        mmdb: Option<Arc<MmdbReader>>,
+        loaded_config: &LoadedConfig,
+    ) -> anyhow::Result<Self> {
+        let mut builder = Self::empty(dns, mmdb);
+        // start init
         let LoadedConfig {
             config,
             state,
@@ -165,17 +188,17 @@ impl DispatchingBuilder {
             ..
         } = loaded_config;
         // read all proxies
-        self.parse_proxies(config.proxy_local.iter())?;
+        builder.parse_proxies(config.proxy_local.iter())?;
         for proxies in proxy_schema.values() {
-            self.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
+            builder.parse_proxies(proxies.proxies.iter().map(|c| (&c.name, &c.cfg)))?;
         }
 
         // read proxy groups
         let mut wg_history = HashMap::new();
         let mut queued_groups = HashSet::new();
-        let group_order: Vec<String> = loaded_config.config.proxy_group.keys().cloned().collect();
+        builder.group_order = loaded_config.config.proxy_group.keys().cloned().collect();
         for (name, group) in &config.proxy_group {
-            self.parse_group(
+            builder.parse_group(
                 name,
                 state,
                 group,
@@ -186,50 +209,64 @@ impl DispatchingBuilder {
                 false,
             )?;
         }
-
-        // read rules
-        let mut rulesets = HashMap::new();
         for (name, schema) in rule_schema {
-            let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
+            let Some(ruleset_builder) = RuleSetBuilder::new(name.as_str(),schema)else {
                 return Err(anyhow!("Failed to parse provider {}",name));
             };
-            rulesets.insert(name.clone(), Arc::new(builder.build()?));
+            builder
+                .rulesets
+                .insert(name.clone(), Arc::new(ruleset_builder.build()?));
         }
+        Ok(builder)
+    }
 
-        let (rules, fallback) = self.build_rules(config.rule_local.as_slice(), &rulesets)?;
-        self.rules.extend(rules);
+    pub fn build_temporary_list(&self, list: &[RuleConfigLine]) -> anyhow::Result<TemporaryList> {
+        let (list, fallback) = self.build_rules_loosely(list)?;
+        if fallback.is_none() {
+            Ok(TemporaryList::new(list))
+        } else {
+            Err(anyhow::anyhow!("Unexpected Fallback"))
+        }
+    }
 
-        let group = {
+    pub fn build(self, loaded_config: &LoadedConfig) -> anyhow::Result<Dispatching> {
+        let (rules, fallback) = self.build_rules(loaded_config.config.rule_local.as_slice())?;
+
+        let groups = {
             let mut g = LinkedHashMap::new();
-            for name in group_order {
+            for name in &self.group_order {
                 // Chain will not be included
-                if let Some(val) = self.groups.get(&name) {
-                    g.insert(name, val.clone());
+                if let Some(val) = self.groups.get(name) {
+                    g.insert(name.clone(), val.clone());
                 }
             }
             g
         };
+        let temporary_list = if let Some(list) = &loaded_config.state.temporary_list {
+            self.build_temporary_list(list)?
+        } else {
+            TemporaryList::empty()
+        };
+        let proxies = self.proxies.clone();
         Ok(Dispatching {
-            proxies: self.proxies,
-            groups: group,
-            snippet: DispatchingSnippet {
-                rules: self.rules,
-                fallback,
-            },
+            temporary_list: ArcSwap::new(Arc::new(temporary_list)),
+            templist_builder: self,
+            proxies,
+            groups,
+            snippet: DispatchingSnippet { rules, fallback },
         })
     }
 
-    fn build_rules(
+    fn build_rules_loosely(
         &self,
         rules: &[RuleConfigLine],
-        rulesets: &HashMap<String, Arc<RuleSet>>,
-    ) -> anyhow::Result<(Vec<RuleOrAction>, GeneralProxy)> {
+    ) -> anyhow::Result<(Vec<RuleOrAction>, Option<GeneralProxy>)> {
         let mut rule_builder = RuleBuilder::new(
             self.dns.clone(),
             self.mmdb.clone(),
             &self.proxies,
             &self.groups,
-            rulesets,
+            &self.rulesets,
         );
         for (idx, line) in rules.iter().enumerate() {
             match line {
@@ -239,7 +276,7 @@ impl DispatchingBuilder {
                         match rule_builder.parse_incomplete(sub.matches.as_str()) {
                             Ok(matches) => {
                                 let (sub_rules, sub_fallback) =
-                                    self.build_rules(sub.subrules.as_slice(), rulesets)?;
+                                    self.build_rules(sub.subrules.as_slice())?;
                                 rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
                                     SubDispatch::new(
                                         matches,
@@ -257,24 +294,36 @@ impl DispatchingBuilder {
                     }
                 },
                 RuleConfigLine::Simple(r) => {
-                    if idx != rules.len() - 1 {
-                        rule_builder
-                            .append_literal(r.as_str())
-                            .map_err(|e| anyhow!("{} ({:?})", r, e))?;
-                    } else {
+                    if idx == rules.len() - 1 {
                         // check Fallback
-                        let fallback = rule_builder.parse_fallback(r.as_str())?;
-                        return Ok((rule_builder.build(), fallback));
+                        if let Ok(fallback) = rule_builder.parse_fallback(r.as_str()) {
+                            return Ok((rule_builder.emit_all(), Some(fallback)));
+                        }
                     }
+                    rule_builder
+                        .append_literal(r.as_str())
+                        .map_err(|e| anyhow!("{} ({:?})", r, e))?;
                 }
             }
         }
-        Err(anyhow::anyhow!("Bad ruless: missing fallback"))
+        Ok((rule_builder.emit_all(), None))
+    }
+
+    fn build_rules(
+        &self,
+        rules: &[RuleConfigLine],
+    ) -> anyhow::Result<(Vec<RuleOrAction>, GeneralProxy)> {
+        let (list, fallback) = self.build_rules_loosely(rules)?;
+        if let Some(fallback) = fallback {
+            Ok((list, fallback))
+        } else {
+            Err(anyhow::anyhow!("Bad rules: missing fallback"))
+        }
     }
 
     /// Build a filter dispatching: for all encountered rule, return DIRECT; otherwise REJECT
     pub fn build_filter(
-        mut self,
+        self,
         rules: &[String],
         rule_schema: &HashMap<String, RuleSchema>,
     ) -> anyhow::Result<Dispatching> {
@@ -295,13 +344,20 @@ impl DispatchingBuilder {
         for r in rules.iter() {
             rule_builder.append_literal((r.clone() + ", DIRECT").as_str())?;
         }
-        self.rules.extend(rule_builder.build());
-
+        let rules = rule_builder.emit_all();
+        let groups = self
+            .groups
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let proxies = self.proxies.clone();
         Ok(Dispatching {
-            proxies: self.proxies,
-            groups: self.groups.into_iter().collect(),
+            temporary_list: ArcSwap::new(Arc::new(TemporaryList::empty())),
+            templist_builder: self,
+            proxies,
+            groups,
             snippet: DispatchingSnippet {
-                rules: self.rules,
+                rules,
                 fallback: GeneralProxy::Single(Arc::new(Proxy::new("REJECT", ProxyImpl::Reject))),
             },
         })
@@ -677,35 +733,12 @@ impl DispatchingSnippet {
             match v {
                 RuleOrAction::Rule(v) => {
                     if let Some(proxy) = v.matches(info) {
-                        let (proxy_impl, iface) = match &proxy {
-                            GeneralProxy::Single(p) => (p.get_impl(), None),
-                            GeneralProxy::Group(g) => {
-                                let (p, iface) = g.get_proxy_and_interface();
-                                (p.get_impl(), iface)
-                            }
-                        };
-                        if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
-                            if verbose {
-                                tracing::info!(
-                                    "[{:?}]({}) {} => {} failed: UDP disabled",
-                                    v,
-                                    stringfy_process(info),
-                                    info.dst,
-                                    proxy
-                                );
-                            }
-                            return (Arc::new(ProxyImpl::Reject), None);
-                        }
-                        if verbose {
-                            tracing::info!(
-                                "[{:?}]({}) {} => {}",
-                                v,
-                                stringfy_process(info),
-                                info.dst,
-                                proxy
-                            );
-                        }
-                        return (proxy_impl, iface);
+                        return Self::proxy_filtering(
+                            &proxy,
+                            info,
+                            v.to_string().as_str(),
+                            verbose,
+                        );
                     }
                 }
                 RuleOrAction::Action(a) => match a {
@@ -718,32 +751,35 @@ impl DispatchingSnippet {
                 },
             }
         }
+        Self::proxy_filtering(&self.fallback, info, "Fallback", verbose)
+    }
 
-        // fallback proxy
-        let (proxy_impl, iface) = match &self.fallback {
-            GeneralProxy::Single(p) => (p.get_impl(), None),
-            GeneralProxy::Group(g) => {
-                let (p, iface) = g.get_proxy_and_interface();
-                (p.get_impl(), iface)
-            }
-        };
+    pub fn proxy_filtering(
+        proxy: &GeneralProxy,
+        info: &ConnInfo,
+        rule_str: &str,
+        verbose: bool,
+    ) -> (Arc<ProxyImpl>, Option<String>) {
+        let (proxy_impl, iface) = proxy.get_impl();
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
             if verbose {
                 tracing::info!(
-                    "[Fallback]({}) {} => {} failed: UDP disabled",
+                    "[{}]({}) {} => {}: Failed(UDP disabled)",
+                    rule_str,
                     stringfy_process(info),
                     info.dst,
-                    self.fallback
+                    proxy
                 );
             }
             return (Arc::new(ProxyImpl::Reject), None);
         }
         if verbose {
             tracing::info!(
-                "[Fallback]({}) {} => {}",
+                "[{}]({}) {} => {}",
+                rule_str,
                 stringfy_process(info),
                 info.dst,
-                self.fallback
+                proxy
             );
         }
         (proxy_impl, iface)

@@ -181,6 +181,45 @@ impl Requester {
         Ok(())
     }
 
+    pub async fn add_temporary_rule(&self, rule_literal: String) -> Result<()> {
+        if match &self.inner {
+            Inner::Web(_) => Err(anyhow::anyhow!(
+                "Add-Temporary-Rule: Not supported by RESTful API"
+            )),
+            Inner::Uds(c) => c.add_temporary_rule(rule_literal).await,
+        }? {
+            println!("{}", "Success".green());
+            Ok(())
+        } else {
+            println!("{}", "Failed".red());
+            Err(anyhow!("Failed to add temporary rule"))
+        }
+    }
+
+    pub async fn delete_temporary_rule(&self, rule_literal_prefix: String) -> Result<()> {
+        if match &self.inner {
+            Inner::Web(_) => Err(anyhow::anyhow!(
+                "Delete-Temporary-Rule: Not supported by RESTful API"
+            )),
+            Inner::Uds(c) => c.delete_temporary_rule(rule_literal_prefix).await,
+        }? {
+            println!("{}", "Success".green());
+            Ok(())
+        } else {
+            println!("{}", "Failed".red());
+            Err(anyhow!("Failed to delete rule prefix"))
+        }
+    }
+
+    pub async fn clear_temporary_rule(&self) -> Result<()> {
+        match &self.inner {
+            Inner::Web(_) => Err(anyhow::anyhow!(
+                "Clear-Temporary-Rule: Not supported by RESTful API"
+            )),
+            Inner::Uds(c) => c.clear_temporary_rule().await,
+        }
+    }
+
     pub async fn reload_config(&self) -> Result<()> {
         match &self.inner {
             Inner::Web(c) => c.reload_config().await,
