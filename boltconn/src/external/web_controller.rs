@@ -187,7 +187,9 @@ impl WebController {
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
         let id = {
-            let Some(id) = params.get("id")else { return Json(serde_json::Value::Bool(false)); };
+            let Some(id) = params.get("id") else {
+                return Json(serde_json::Value::Bool(false));
+            };
             if let Ok(s) = id.parse::<usize>() {
                 s
             } else {
@@ -217,7 +219,9 @@ impl WebController {
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
         let id = {
-            let Some(start) = params.get("id")else { return Json(serde_json::Value::Null); };
+            let Some(start) = params.get("id") else {
+                return Json(serde_json::Value::Null);
+            };
             if let Ok(s) = start.parse::<usize>() {
                 s
             } else {
@@ -239,7 +243,9 @@ impl WebController {
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
         let group = {
-            let Some(group) = params.get("group")else { return Json(serde_json::Value::Null); };
+            let Some(group) = params.get("group") else {
+                return Json(serde_json::Value::Null);
+            };
             group.clone()
         };
         Json(json!(server.controller.get_proxy_group(group)))
@@ -251,7 +257,9 @@ impl WebController {
         Json(args): Json<SetGroupReqSchema>,
     ) -> Json<serde_json::Value> {
         let group = {
-            let Some(group) = params.get("group") else { return Json(serde_json::Value::Null); };
+            let Some(group) = params.get("group") else {
+                return Json(serde_json::Value::Null);
+            };
             group.clone()
         };
         Json(json!(server.controller.set_selection(group, args.selected)))
@@ -262,7 +270,9 @@ impl WebController {
         Path(params): Path<HashMap<String, String>>,
     ) -> Json<serde_json::Value> {
         let group = {
-            let Some(group) = params.get("group") else { return Json(serde_json::Value::Bool(false)); };
+            let Some(group) = params.get("group") else {
+                return Json(serde_json::Value::Bool(false));
+            };
             group.clone()
         };
         server.controller.update_latency(group).await;

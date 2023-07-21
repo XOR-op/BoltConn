@@ -210,8 +210,8 @@ impl DispatchingBuilder {
             )?;
         }
         for (name, schema) in rule_schema {
-            let Some(ruleset_builder) = RuleSetBuilder::new(name.as_str(),schema)else {
-                return Err(anyhow!("Failed to parse provider {}",name));
+            let Some(ruleset_builder) = RuleSetBuilder::new(name.as_str(), schema) else {
+                return Err(anyhow!("Failed to parse provider {}", name));
             };
             builder
                 .rulesets
@@ -329,8 +329,8 @@ impl DispatchingBuilder {
     ) -> anyhow::Result<Dispatching> {
         let mut ruleset = HashMap::new();
         for (name, schema) in rule_schema {
-            let Some(builder) = RuleSetBuilder::new(name.as_str(),schema)else {
-                return Err(anyhow!("Filter: failed to parse provider {}",name));
+            let Some(builder) = RuleSetBuilder::new(name.as_str(), schema) else {
+                return Err(anyhow!("Filter: failed to parse provider {}", name));
             };
             ruleset.insert(name.clone(), Arc::new(builder.build()?));
         }
@@ -467,7 +467,7 @@ impl DispatchingBuilder {
                         RawServerSockAddr::Ip(addr) => NetworkAddr::Raw(*addr),
                         RawServerSockAddr::Domain(a) => {
                             let parts = a.split(':').collect::<Vec<&str>>();
-                            let Some(port_str) = parts.get(1)else {
+                            let Some(port_str) = parts.get(1) else {
                                 return Err(anyhow!("No port"));
                             };
                             let port = port_str.parse::<u16>()?;

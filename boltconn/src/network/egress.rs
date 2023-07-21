@@ -38,7 +38,7 @@ impl Egress {
     }
 
     pub async fn udpv4_socket(&self) -> Result<UdpSocket> {
-        let IpAddr::V4(local_addr) = get_iface_address(self.iface_name.as_str())?else {
+        let IpAddr::V4(local_addr) = get_iface_address(self.iface_name.as_str())? else {
             return Err(io_err("not ipv4"));
         };
         let std_udp_sock = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
@@ -50,7 +50,7 @@ impl Egress {
     }
 
     pub async fn udpv6_socket(&self) -> Result<UdpSocket> {
-        let IpAddr::V6(local_addr) = get_iface_address(self.iface_name.as_str())?else {
+        let IpAddr::V6(local_addr) = get_iface_address(self.iface_name.as_str())? else {
             return Err(io_err("not ipv4"));
         };
         let std_udp_sock = Socket::new(Domain::IPV6, Type::DGRAM, None)?;

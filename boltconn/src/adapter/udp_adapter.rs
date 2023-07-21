@@ -57,10 +57,9 @@ impl TunUdpAdapter {
         // recv from inbound and send to outbound
         let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
             while available2.load(Ordering::Relaxed) {
-                let Ok(result_with_ddl) = timeout(
-                    UDP_ALIVE_PROBE_INTERVAL,
-                    inbound_read.recv(),
-                ).await else {
+                let Ok(result_with_ddl) =
+                    timeout(UDP_ALIVE_PROBE_INTERVAL, inbound_read.recv()).await
+                else {
                     continue;
                 };
                 match result_with_ddl {
@@ -158,7 +157,11 @@ impl StandardUdpAdapter {
                         let buf = buf.freeze();
 
                         // decapsule udp header
-                        let Ok((frag, addr, payload)) = fast_socks5::parse_udp_request(buf.as_ref()).await else{ continue; };
+                        let Ok((frag, addr, payload)) =
+                            fast_socks5::parse_udp_request(buf.as_ref()).await
+                        else {
+                            continue;
+                        };
                         if frag != 0 {
                             // cannot handle, drop
                             continue;
@@ -196,8 +199,12 @@ impl StandardUdpAdapter {
             // encapsule
             let Ok(data) = (match src {
                 NetworkAddr::Raw(s) => fast_socks5::new_udp_header(s),
-                NetworkAddr::DomainName { domain_name,port} => fast_socks5::new_udp_header((domain_name.as_str(),port))
-            }) else { continue };
+                NetworkAddr::DomainName { domain_name, port } => {
+                    fast_socks5::new_udp_header((domain_name.as_str(), port))
+                }
+            }) else {
+                continue;
+            };
 
             if let Err(err) = inbound_write.send_to(data.as_slice(), self.src).await {
                 tracing::warn!("StandardUdpAdapter write to inbound failed: {}", err);

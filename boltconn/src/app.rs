@@ -434,7 +434,7 @@ fn parse_two_inbound_service(
         auths: &Option<RawInboundServiceConfig>,
     ) -> Option<(u16, HashMap<String, String>)> {
         let Some(config) = auths.as_ref() else {
-            return None
+            return None;
         };
         match config {
             RawInboundServiceConfig::Simple(p) => Some((*p, Default::default())),

@@ -91,7 +91,7 @@ impl HttpInbound {
                     let mut r = None;
                     for hdr in req_struct.headers.iter() {
                         if hdr.name.eq_ignore_ascii_case("proxy-authorization") {
-                            let Ok(value) = std::str::from_utf8(hdr.value)else{
+                            let Ok(value) = std::str::from_utf8(hdr.value) else {
                                 break;
                             };
                             // manually split

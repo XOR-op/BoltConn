@@ -212,46 +212,48 @@ fn parse_rules(
 
         let rule = match *list.get(2).unwrap() {
             "add" => {
-                let Some(v) = deserialize_values::<[String;2]>(line.as_str()) else{
+                let Some(v) = deserialize_values::<[String; 2]>(line.as_str()) else {
                     return Err(line.clone());
                 };
-                let Some(rule) = HeaderRule::new_add(v[0].as_str(),v[1].as_str())else {
+                let Some(rule) = HeaderRule::new_add(v[0].as_str(), v[1].as_str()) else {
                     return Err(line.clone());
                 };
                 rule
             }
             "del" => {
-                let Some(v) = deserialize_values::<[String;1]>(line.as_str()) else{
+                let Some(v) = deserialize_values::<[String; 1]>(line.as_str()) else {
                     return Err(line.clone());
                 };
-                let Some(rule) = HeaderRule::new_del(v[0].as_str())else {
+                let Some(rule) = HeaderRule::new_del(v[0].as_str()) else {
                     return Err(line.clone());
                 };
                 rule
             }
             "set" => {
-                let Some(v) = deserialize_values::<[String;2]>(line.as_str()) else{
+                let Some(v) = deserialize_values::<[String; 2]>(line.as_str()) else {
                     return Err(line.clone());
                 };
-                let Some(rule) = HeaderRule::new_set(v[0].as_str(),v[1].as_str())else {
+                let Some(rule) = HeaderRule::new_set(v[0].as_str(), v[1].as_str()) else {
                     return Err(line.clone());
                 };
                 rule
             }
             "replace" => {
-                let Some(v) = deserialize_values::<[String;2]>(line.as_str()) else{
+                let Some(v) = deserialize_values::<[String; 2]>(line.as_str()) else {
                     return Err(line.clone());
                 };
-                let Some(rule) = HeaderRule::new_replace(v[0].as_str(),v[1].as_str())else {
+                let Some(rule) = HeaderRule::new_replace(v[0].as_str(), v[1].as_str()) else {
                     return Err(line.clone());
                 };
                 rule
             }
             "replace-with" => {
-                let Some(v) = deserialize_values::<[String;3]>(line.as_str()) else{
+                let Some(v) = deserialize_values::<[String; 3]>(line.as_str()) else {
                     return Err(line.clone());
                 };
-                let Some(rule) = HeaderRule::new_replace_with(v[0].as_str(),v[1].as_str(),v[2].as_str())else {
+                let Some(rule) =
+                    HeaderRule::new_replace_with(v[0].as_str(), v[1].as_str(), v[2].as_str())
+                else {
                     return Err(line.clone());
                 };
                 rule

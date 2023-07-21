@@ -31,7 +31,7 @@ impl UrlModRule {
         }
         replaced_url?;
 
-        let Some(chunks) = ReplacedChunk::parse_chunks(&regex,replaced_url.unwrap()) else{
+        let Some(chunks) = ReplacedChunk::parse_chunks(&regex, replaced_url.unwrap()) else {
             return None;
         };
         Some(Self {

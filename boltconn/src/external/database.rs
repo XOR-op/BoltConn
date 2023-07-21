@@ -50,7 +50,9 @@ impl DatabaseHandle {
                     c
                 }
                 Err(err) => {
-                    let Error::SqliteFailure(e, _) = err else{Err(err)?};
+                    let Error::SqliteFailure(e, _) = err else {
+                        Err(err)?
+                    };
                     if e.code == ErrorCode::CannotOpen {
                         // create with open
                         let conn = rusqlite::Connection::open_with_flags(

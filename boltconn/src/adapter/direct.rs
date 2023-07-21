@@ -120,7 +120,7 @@ impl UdpSocketAdapter for DirectUdpAdapter {
             NetworkAddr::DomainName { domain_name, port } => {
                 let Some(ip) = self.1.genuine_lookup(domain_name.as_str()).await else {
                     // drop
-                    return Ok(())
+                    return Ok(());
                 };
                 SocketAddr::new(ip, port)
             }

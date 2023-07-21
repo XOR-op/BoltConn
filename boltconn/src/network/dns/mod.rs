@@ -37,7 +37,10 @@ async fn resolve_dns(
     dn: &str,
 ) -> anyhow::Result<Vec<IpAddr>> {
     let Some(resolver) = bootstrap else {
-        return Err(anyhow::anyhow!("DoT requires bootstrap udp DNS nameserver {}", dn));
+        return Err(anyhow::anyhow!(
+            "DoT requires bootstrap udp DNS nameserver {}",
+            dn
+        ));
     };
     let Ok(ips) = resolver.lookup_ip(dn).await else {
         return Err(anyhow::anyhow!("Failed to resolve DNS {}", dn));

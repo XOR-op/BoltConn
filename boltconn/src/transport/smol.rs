@@ -163,7 +163,8 @@ impl UdpConnTask {
                     let remote_addr = match addr {
                         NetworkAddr::Raw(s) => IpEndpoint::from(s),
                         NetworkAddr::DomainName { domain_name, port } => {
-                            let Some(ip) = self.dns.genuine_lookup(domain_name.as_str()).await else{
+                            let Some(ip) = self.dns.genuine_lookup(domain_name.as_str()).await
+                            else {
                                 // lookup failed, just drop
                                 return Ok(false);
                             };
