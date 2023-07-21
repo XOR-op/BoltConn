@@ -98,13 +98,13 @@ pub fn init_tracing(logger: &StreamLoggerSend) {
     let stdout_layer = fmt::layer()
         .compact()
         .with_writer(std::io::stdout)
-        .with_timer(SystemTime::default());
+        .with_timer(SystemTime);
     let stream_layer = fmt::layer()
         .json()
         .with_writer(LoggerMaker {
             logger: logger.clone(),
         })
-        .with_timer(SystemTime::default());
+        .with_timer(SystemTime);
     tracing_subscriber::registry()
         .with(stdout_layer)
         .with(stream_layer)
