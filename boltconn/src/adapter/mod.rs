@@ -213,7 +213,7 @@ where
                 }
                 Err(err) => {
                     tracing::trace!("outbound read error: {}", err);
-                    abort_handle.cancel().await;
+                    abort_handle.cancel();
                     break;
                 }
             }
@@ -261,13 +261,13 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                 }
                 if tx.send((buf.freeze(), addr)).await.is_err() {
                     tracing::trace!("write to inbound failed");
-                    abort_handle.cancel().await;
+                    abort_handle.cancel();
                     break;
                 }
             }
             Err(err) => {
                 tracing::trace!("outbound read error: {}", err);
-                abort_handle.cancel().await;
+                abort_handle.cancel();
                 break;
             }
         }

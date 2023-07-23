@@ -73,7 +73,7 @@ impl TcpAdapter {
                     }
                     Err(err) => {
                         tracing::warn!("TunAdapter encounter error: {}", err);
-                        abort_handle.cancel().await;
+                        abort_handle.cancel();
                         break;
                     }
                 }
@@ -88,7 +88,7 @@ impl TcpAdapter {
             self.info.more_download(buf.len());
             if let Err(err) = in_write.write_all(buf.as_ref()).await {
                 tracing::warn!("TunAdapter write to inbound failed: {}", err);
-                self.abort_handle.cancel().await;
+                self.abort_handle.cancel();
                 duplex_guard.set_err_exit();
                 break;
             }

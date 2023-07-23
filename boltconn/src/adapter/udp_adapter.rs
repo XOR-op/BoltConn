@@ -75,7 +75,7 @@ impl TunUdpAdapter {
                         if tx.send((buf, addr)).await.is_err() {
                             tracing::warn!("TunUdpAdapter tx send err");
                             available2.store(false, Ordering::Relaxed);
-                            abort_handle2.cancel().await;
+                            abort_handle2.cancel();
                             break;
                         }
                     }
@@ -95,7 +95,7 @@ impl TunUdpAdapter {
             };
             if let Err(err) = self.recv_tx.send((data, src_addr)).await {
                 tracing::warn!("TunUdpAdapter write to inbound failed: {}", err);
-                abort_handle.cancel().await;
+                abort_handle.cancel();
                 break;
             }
         }
@@ -178,7 +178,7 @@ impl StandardUdpAdapter {
                             .is_err()
                         {
                             available2.store(false, Ordering::Relaxed);
-                            abort_handle2.cancel().await;
+                            abort_handle2.cancel();
                             break;
                         }
                     } else {
@@ -208,7 +208,7 @@ impl StandardUdpAdapter {
 
             if let Err(err) = inbound_write.send_to(data.as_slice(), self.src).await {
                 tracing::warn!("StandardUdpAdapter write to inbound failed: {}", err);
-                abort_handle.cancel().await;
+                abort_handle.cancel();
                 break;
             }
         }

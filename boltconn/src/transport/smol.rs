@@ -395,7 +395,7 @@ impl SmolStack {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();
-                        item.abort_handle.cancel().await;
+                        item.abort_handle.cancel();
                     }
                 }
                 has_activity |= item.try_recv(socket).await;
@@ -413,7 +413,7 @@ impl SmolStack {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();
-                        item.abort_handle.cancel().await;
+                        item.abort_handle.cancel();
                     }
                 }
                 has_activity |= item.try_recv(socket).await;
@@ -428,8 +428,7 @@ impl SmolStack {
             if socket.state() == TcpState::Closed {
                 self.socket_set.remove(task.handle);
                 // Here we only abort normally closed sockets. Maybe unnecessary?
-                let c = task.abort_handle.clone();
-                tokio::spawn(async move { c.cancel().await });
+                task.abort_handle.cancel();
                 false
             } else {
                 true
@@ -441,8 +440,7 @@ impl SmolStack {
         self.udp_conn.retain(|_port, task| {
             if task.last_active.elapsed() > self.udp_timeout {
                 self.socket_set.remove(task.handle);
-                let c = task.abort_handle.clone();
-                tokio::spawn(async move { c.cancel().await });
+                task.abort_handle.cancel();
                 false
             } else {
                 true

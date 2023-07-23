@@ -295,7 +295,7 @@ impl Dispatcher {
                                 }
                             })
                         };
-                        abort_handle.fulfill(handles).await;
+                        abort_handle.fulfill(handles);
                         self.stat_center.push(info);
                         return Ok(());
                     }
@@ -326,7 +326,7 @@ impl Dispatcher {
                                 }
                             })
                         };
-                        abort_handle.fulfill(handles).await;
+                        abort_handle.fulfill(handles);
                         self.stat_center.push(info);
                         return Ok(());
                     }
@@ -342,7 +342,7 @@ impl Dispatcher {
                 tracing::error!("[Dispatcher] create failed: {}", err)
             }
         }));
-        abort_handle.fulfill(handles).await;
+        abort_handle.fulfill(handles);
         self.stat_center.push(info);
         Ok(())
     }
@@ -457,7 +457,7 @@ impl Dispatcher {
                 tracing::error!("[Dispatcher] create failed: {}", err)
             }
         }));
-        abort_handle.fulfill(handles).await;
+        abort_handle.fulfill(handles);
         self.stat_center.push(info.clone());
         Ok(())
     }
@@ -506,7 +506,7 @@ impl Dispatcher {
                 tracing::error!("[Dispatcher] create failed: {}", err)
             }
         }));
-        abort_handle.fulfill(handles).await;
+        abort_handle.fulfill(handles);
         self.stat_center.push(info.clone());
         Ok(())
     }

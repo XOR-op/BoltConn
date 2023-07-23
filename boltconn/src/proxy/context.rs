@@ -3,13 +3,14 @@ use crate::common::evictable_vec::EvictableVec;
 use crate::config::RawServerAddr;
 use crate::external::DatabaseHandle;
 use crate::platform::process::{NetworkType, ProcessInfo};
+use arc_swap::ArcSwap;
 use fast_socks5::util::target_addr::TargetAddr;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Instant, SystemTime};
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,7 +136,7 @@ impl FromStr for NetworkAddr {
 
 // Abort Handle
 #[derive(Clone, Debug)]
-pub struct ConnAbortHandle(Arc<tokio::sync::RwLock<AbortHandle>>);
+pub struct ConnAbortHandle(Arc<AbortHandle>);
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum CancelState {
@@ -146,48 +147,108 @@ enum CancelState {
 
 #[derive(Debug)]
 struct AbortHandle {
-    handles: Vec<JoinHandle<()>>,
-    state: CancelState,
+    handles: ArcSwap<Vec<JoinHandle<()>>>,
+    state: AtomicU8,
 }
+
+const INIT: u8 = 0;
+const EARLY_CANCELLED: u8 = 1;
+const FULFILL_CHANGING: u8 = 2;
+const READY: u8 = 3;
+const CANCELLING: u8 = 4;
+const CANCELLED: u8 = 5;
 
 impl ConnAbortHandle {
     pub fn new() -> Self {
-        Self(Arc::new(tokio::sync::RwLock::new(AbortHandle {
-            handles: vec![],
-            state: CancelState::NotReady,
-        })))
+        Self(Arc::new(AbortHandle {
+            handles: ArcSwap::new(Arc::new(vec![])),
+            state: AtomicU8::new(INIT),
+        }))
     }
 
-    pub async fn cancel(&self) {
-        let mut timer = tokio::time::interval(Duration::from_micros(100));
+    pub fn cancel(&self) {
         loop {
-            let mut got = self.0.write().await;
-            match got.state {
-                CancelState::NotReady => {
-                    drop(got);
-                    timer.tick().await;
-                    continue;
-                }
-                CancelState::Ready => {
-                    got.state = CancelState::Cancelled;
-                    for h in &got.handles {
-                        h.abort();
+            let state = self.0.state.load(Ordering::Acquire);
+            match state {
+                INIT => {
+                    if self
+                        .0
+                        .state
+                        .compare_exchange(
+                            INIT,
+                            EARLY_CANCELLED,
+                            Ordering::AcqRel,
+                            Ordering::Relaxed,
+                        )
+                        .is_err()
+                    {
+                        // maybe it's fulfilling
+                        continue;
                     }
-                    got.handles.clear();
                     return;
                 }
-                CancelState::Cancelled => return,
+                READY => {
+                    if self
+                        .0
+                        .state
+                        .compare_exchange(READY, CANCELLING, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_err()
+                    {
+                        // other thread is cancelling
+                        return;
+                    }
+                    for i in self.0.handles.load().iter() {
+                        i.abort()
+                    }
+                    self.0
+                        .state
+                        .compare_exchange(
+                            CANCELLING,
+                            CANCELLED,
+                            Ordering::AcqRel,
+                            Ordering::Relaxed,
+                        )
+                        .unwrap();
+                    return;
+                }
+                FULFILL_CHANGING => continue,
+                EARLY_CANCELLED | CANCELLING | CANCELLED => return,
+                _ => unreachable!(),
             }
         }
     }
 
-    pub async fn fulfill(&self, handles: Vec<JoinHandle<()>>) {
-        let mut got = self.0.write().await;
-        if got.state != CancelState::NotReady {
-            tracing::warn!("Fulfill a cancel handle twice");
+    pub fn fulfill(&self, handles: Vec<JoinHandle<()>>) {
+        if self
+            .0
+            .state
+            .compare_exchange(INIT, FULFILL_CHANGING, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            if let Err(err) = self.0.state.compare_exchange(
+                EARLY_CANCELLED,
+                CANCELLING,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                tracing::error!("Fulfill a cancel handle twice from state{}!", err);
+            } else {
+                for i in handles.iter() {
+                    i.abort()
+                }
+                self.0
+                    .state
+                    .compare_exchange(CANCELLING, CANCELLED, Ordering::AcqRel, Ordering::Relaxed)
+                    .unwrap();
+            }
+        } else {
+            self.0.handles.store(Arc::new(handles));
+            // should not fail
+            self.0
+                .state
+                .compare_exchange(FULFILL_CHANGING, READY, Ordering::AcqRel, Ordering::Relaxed)
+                .unwrap();
         }
-        got.handles = handles;
-        got.state = CancelState::Ready;
     }
 }
 
@@ -261,8 +322,8 @@ impl ConnContext {
         self.done.store(true, Ordering::Relaxed);
     }
 
-    pub async fn abort(&self) {
-        self.abort_handle.cancel().await;
+    pub fn abort(&self) {
+        self.abort_handle.cancel();
         self.mark_fin();
     }
 }

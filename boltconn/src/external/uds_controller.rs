@@ -230,7 +230,7 @@ impl ControlService for UdsRpcServer {
     }
 
     async fn stop_all_conns(self, _ctx: Context) {
-        self.controller.stop_all_conn().await
+        self.controller.stop_all_conn()
     }
 
     async fn stop_conn(self, _ctx: Context, id: u32) -> bool {

@@ -115,16 +115,16 @@ impl Controller {
         result
     }
 
-    pub async fn stop_all_conn(&self) {
+    pub fn stop_all_conn(&self) {
         let (list, _) = self.stat_center.get_copy();
         for entry in list {
-            entry.abort().await;
+            entry.abort();
         }
     }
 
     pub async fn stop_conn(&self, id: usize) -> bool {
         if let Some(ele) = self.stat_center.get_nth(id).await {
-            ele.abort().await;
+            ele.abort();
             true
         } else {
             false
