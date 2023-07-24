@@ -238,48 +238,47 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     let outbound2 = outbound.clone();
     let tunnel_addr2 = tunnel_addr.clone();
     let AddrConnector { tx, mut rx } = inbound;
-    // recv from inbound and send to outbound
     let abort_handle2 = abort_handle.clone();
     let _guard = UdpDropGuard(tokio::spawn(async move {
-        while let Some((buf, addr)) = rx.recv().await {
-            let addr = tunnel_addr2.clone().unwrap_or(addr);
-            let res = outbound2.send_to(buf.as_ref(), addr).await;
-            if let Err(err) = res {
-                tracing::trace!("write to outbound failed: {}", err);
-                abort_handle2.cancel();
-                break;
-            }
-        }
-    }));
-    // recv from outbound and send to inbound
-    loop {
-        let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
-        let res = outbound.recv_from(unsafe { mut_buf(&mut buf) }).await;
-        match res {
-            Ok((0, _)) => {
-                break;
-            }
-            Ok((n, addr)) => {
-                unsafe { buf.advance_mut(n) };
-                if let Some(t_addr) = &tunnel_addr {
-                    if addr.definitely_not_equal(t_addr) {
-                        // drop definitely unequal packets; for domain name & socket address pair, only compare ports
+        // recv from outbound and send to inbound
+        loop {
+            let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+            let res = outbound.recv_from(unsafe { mut_buf(&mut buf) }).await;
+            match res {
+                Ok((0, _)) => {
+                    break;
+                }
+                Ok((n, addr)) => {
+                    unsafe { buf.advance_mut(n) };
+                    if let Some(t_addr) = &tunnel_addr {
+                        if addr.definitely_not_equal(t_addr) {
+                            // drop definitely unequal packets; for domain name & socket address pair, only compare ports
+                            break;
+                        }
+                    }
+                    if tx.send((buf.freeze(), addr)).await.is_err() {
+                        tracing::trace!("write to inbound failed");
                         break;
                     }
                 }
-                if tx.send((buf.freeze(), addr)).await.is_err() {
-                    tracing::trace!("write to inbound failed");
-                    abort_handle.cancel();
+                Err(err) => {
+                    tracing::trace!("outbound read error: {}", err);
                     break;
                 }
             }
-            Err(err) => {
-                tracing::trace!("outbound read error: {}", err);
-                abort_handle.cancel();
-                break;
-            }
+        }
+        abort_handle.cancel();
+    }));
+    // recv from inbound and send to outbound
+    while let Some((buf, addr)) = rx.recv().await {
+        let addr = tunnel_addr2.clone().unwrap_or(addr);
+        let res = outbound2.send_to(buf.as_ref(), addr).await;
+        if let Err(err) = res {
+            tracing::trace!("write to outbound failed: {}", err);
+            break;
         }
     }
+    abort_handle2.cancel();
 }
 
 #[async_trait]

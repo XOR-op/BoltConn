@@ -76,13 +76,13 @@ impl TunUdpAdapter {
                             if tx.send((buf, addr)).await.is_err() {
                                 tracing::warn!("TunUdpAdapter tx send err");
                                 available2.store(false, Ordering::Relaxed);
-                                abort_handle2.cancel();
                                 break;
                             }
                         }
                     }
                 }
                 outgoing_info_arc.mark_fin();
+                abort_handle2.cancel();
             }),
             abort_handle.clone(),
         );
@@ -103,6 +103,7 @@ impl TunUdpAdapter {
             }
         }
         self.info.mark_fin();
+        abort_handle.cancel();
         Ok(())
     }
 }
@@ -182,7 +183,6 @@ impl StandardUdpAdapter {
                                 .is_err()
                             {
                                 available2.store(false, Ordering::Relaxed);
-                                abort_handle2.cancel();
                                 break;
                             }
                         } else {
@@ -194,6 +194,7 @@ impl StandardUdpAdapter {
                     }
                 }
                 outgoing_info_arc.mark_fin();
+                abort_handle2.cancel();
             }),
             abort_handle.clone(),
         );
@@ -214,11 +215,11 @@ impl StandardUdpAdapter {
 
             if let Err(err) = inbound_write.send_to(data.as_slice(), self.src).await {
                 tracing::warn!("StandardUdpAdapter write to inbound failed: {}", err);
-                abort_handle.cancel();
                 break;
             }
         }
         self.info.mark_fin();
+        abort_handle.cancel();
         Ok(())
     }
 }
