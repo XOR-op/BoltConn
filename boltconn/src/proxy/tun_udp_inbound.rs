@@ -21,13 +21,6 @@ struct UdpSession {
     probe: Arc<AtomicBool>,
 }
 
-impl Drop for UdpSession {
-    fn drop(&mut self) {
-        // when dropped, close all associated "connections"
-        self.probe.store(false, Ordering::Relaxed)
-    }
-}
-
 pub struct TunUdpInbound {
     pkt_chan: flume::Receiver<Bytes>,
     tun_tx: flume::Sender<Bytes>,

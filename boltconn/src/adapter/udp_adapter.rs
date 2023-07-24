@@ -55,34 +55,37 @@ impl TunUdpAdapter {
         let abort_handle2 = abort_handle.clone();
         let available2 = self.available.clone();
         // recv from inbound and send to outbound
-        let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
-            while available2.load(Ordering::Relaxed) {
-                let Ok(result_with_ddl) =
-                    timeout(UDP_ALIVE_PROBE_INTERVAL, inbound_read.recv()).await
-                else {
-                    continue;
-                };
-                match result_with_ddl {
-                    None => {
-                        break;
-                    }
-                    Some((buf, addr)) => {
-                        if first_packet {
-                            first_packet = false;
-                            outgoing_info_arc.update_proto(buf.as_ref());
-                        }
-                        outgoing_info_arc.more_upload(buf.len());
-                        if tx.send((buf, addr)).await.is_err() {
-                            tracing::warn!("TunUdpAdapter tx send err");
-                            available2.store(false, Ordering::Relaxed);
-                            abort_handle2.cancel().await;
+        let mut duplex_guard = DuplexCloseGuard::new(
+            tokio::spawn(async move {
+                while available2.load(Ordering::Relaxed) {
+                    let Ok(result_with_ddl) =
+                        timeout(UDP_ALIVE_PROBE_INTERVAL, inbound_read.recv()).await
+                    else {
+                        continue;
+                    };
+                    match result_with_ddl {
+                        None => {
                             break;
+                        }
+                        Some((buf, addr)) => {
+                            if first_packet {
+                                first_packet = false;
+                                outgoing_info_arc.update_proto(buf.as_ref());
+                            }
+                            outgoing_info_arc.more_upload(buf.len());
+                            if tx.send((buf, addr)).await.is_err() {
+                                tracing::warn!("TunUdpAdapter tx send err");
+                                available2.store(false, Ordering::Relaxed);
+                                break;
+                            }
                         }
                     }
                 }
-            }
-            outgoing_info_arc.mark_fin();
-        }));
+                outgoing_info_arc.mark_fin();
+                abort_handle2.cancel();
+            }),
+            abort_handle.clone(),
+        );
         duplex_guard.set_err_exit();
         // recv from outbound and send to inbound
         while let Some((data, addr)) = rx.recv().await {
@@ -95,11 +98,12 @@ impl TunUdpAdapter {
             };
             if let Err(err) = self.recv_tx.send((data, src_addr)).await {
                 tracing::warn!("TunUdpAdapter write to inbound failed: {}", err);
-                abort_handle.cancel().await;
+                abort_handle.cancel();
                 break;
             }
         }
         self.info.mark_fin();
+        abort_handle.cancel();
         Ok(())
     }
 }
@@ -139,58 +143,61 @@ impl StandardUdpAdapter {
         let abort_handle2 = abort_handle.clone();
         let available2 = self.available.clone();
         // recv from inbound and send to outbound
-        let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
-            while available2.load(Ordering::Relaxed) {
-                let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
-                let result_with_ddl = timeout(
-                    UDP_ALIVE_PROBE_INTERVAL,
-                    inbound_read.recv_from(unsafe { mut_buf(&mut buf) }),
-                )
-                .await;
-                let Ok(result) = result_with_ddl else {
-                    continue;
-                };
-                if let Ok((len, pkt_src)) = result {
-                    // check if packet is from the valid socks client
-                    if src_addr == pkt_src {
-                        unsafe { buf.advance_mut(len) }
-                        let buf = buf.freeze();
+        let mut duplex_guard = DuplexCloseGuard::new(
+            tokio::spawn(async move {
+                while available2.load(Ordering::Relaxed) {
+                    let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+                    let result_with_ddl = timeout(
+                        UDP_ALIVE_PROBE_INTERVAL,
+                        inbound_read.recv_from(unsafe { mut_buf(&mut buf) }),
+                    )
+                    .await;
+                    let Ok(result) = result_with_ddl else {
+                        continue;
+                    };
+                    if let Ok((len, pkt_src)) = result {
+                        // check if packet is from the valid socks client
+                        if src_addr == pkt_src {
+                            unsafe { buf.advance_mut(len) }
+                            let buf = buf.freeze();
 
-                        // decapsule udp header
-                        let Ok((frag, addr, payload)) =
-                            fast_socks5::parse_udp_request(buf.as_ref()).await
-                        else {
-                            continue;
-                        };
-                        if frag != 0 {
-                            // cannot handle, drop
-                            continue;
-                        }
+                            // decapsule udp header
+                            let Ok((frag, addr, payload)) =
+                                fast_socks5::parse_udp_request(buf.as_ref()).await
+                            else {
+                                continue;
+                            };
+                            if frag != 0 {
+                                // cannot handle, drop
+                                continue;
+                            }
 
-                        if first_packet {
-                            first_packet = false;
-                            outgoing_info_arc.update_proto(payload);
-                        }
-                        outgoing_info_arc.more_upload(buf.len());
-                        if tx
-                            .send((buf.slice_ref(payload), addr.into()))
-                            .await
-                            .is_err()
-                        {
-                            available2.store(false, Ordering::Relaxed);
-                            abort_handle2.cancel().await;
-                            break;
+                            if first_packet {
+                                first_packet = false;
+                                outgoing_info_arc.update_proto(payload);
+                            }
+                            outgoing_info_arc.more_upload(buf.len());
+                            if tx
+                                .send((buf.slice_ref(payload), addr.into()))
+                                .await
+                                .is_err()
+                            {
+                                available2.store(false, Ordering::Relaxed);
+                                break;
+                            }
+                        } else {
+                            // drop silently
                         }
                     } else {
-                        // drop silently
+                        // udp socket err
+                        break;
                     }
-                } else {
-                    // udp socket err
-                    break;
                 }
-            }
-            outgoing_info_arc.mark_fin();
-        }));
+                outgoing_info_arc.mark_fin();
+                abort_handle2.cancel();
+            }),
+            abort_handle.clone(),
+        );
         duplex_guard.set_err_exit();
 
         // recv from outbound and send to inbound
@@ -208,11 +215,11 @@ impl StandardUdpAdapter {
 
             if let Err(err) = inbound_write.send_to(data.as_slice(), self.src).await {
                 tracing::warn!("StandardUdpAdapter write to inbound failed: {}", err);
-                abort_handle.cancel().await;
                 break;
             }
         }
         self.info.mark_fin();
+        abort_handle.cancel();
         Ok(())
     }
 }

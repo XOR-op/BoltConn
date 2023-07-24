@@ -179,7 +179,7 @@ impl WebController {
     }
 
     async fn stop_all_conn(State(server): State<Self>) {
-        server.controller.stop_all_conn().await
+        server.controller.stop_all_conn()
     }
 
     async fn stop_conn(

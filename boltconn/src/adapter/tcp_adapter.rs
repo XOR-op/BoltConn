@@ -48,49 +48,54 @@ impl TcpAdapter {
         let outgoing_info_arc = self.info.clone();
         let Connector { tx, mut rx } = self.connector;
         let abort_handle = self.abort_handle.clone();
-        // recv from inbound and send to outbound
-        let mut duplex_guard = DuplexCloseGuard::new(tokio::spawn(async move {
-            let _guard = TcpIndicatorGuard {
-                indicator: outgoing_indicator,
-                info: outgoing_info_arc.clone(),
-            };
-            loop {
-                let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
-                match read_to_bytes_mut(&mut buf, &mut in_read).await {
-                    Ok(0) => {
-                        break;
-                    }
-                    Ok(size) => {
-                        if first_packet {
-                            first_packet = false;
-                            outgoing_info_arc.update_proto(buf.as_ref());
-                        }
-                        outgoing_info_arc.more_upload(size);
-                        if tx.send(buf.freeze()).await.is_err() {
-                            tracing::warn!("TunAdapter tx send err");
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!("TunAdapter encounter error: {}", err);
-                        abort_handle.cancel().await;
+        let _duplex_guard = DuplexCloseGuard::new(
+            tokio::spawn(async move {
+                // recv from outbound and send to inbound
+                let _guard = TcpIndicatorGuard {
+                    indicator: ingoing_indicator,
+                    info: self.info.clone(),
+                };
+                while let Some(buf) = rx.recv().await {
+                    self.info.more_download(buf.len());
+                    if let Err(err) = in_write.write_all(buf.as_ref()).await {
+                        tracing::warn!("TunAdapter write to inbound failed: {}", err);
+                        self.abort_handle.cancel();
                         break;
                     }
                 }
-            }
-        }));
-        // recv from outbound and send to inbound
+            }),
+            abort_handle.clone(),
+        );
+
+        // recv from inbound and send to outbound
         let _guard = TcpIndicatorGuard {
-            indicator: ingoing_indicator,
-            info: self.info.clone(),
+            indicator: outgoing_indicator,
+            info: outgoing_info_arc.clone(),
         };
-        while let Some(buf) = rx.recv().await {
-            self.info.more_download(buf.len());
-            if let Err(err) = in_write.write_all(buf.as_ref()).await {
-                tracing::warn!("TunAdapter write to inbound failed: {}", err);
-                self.abort_handle.cancel().await;
-                duplex_guard.set_err_exit();
-                break;
+        loop {
+            let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+            match read_to_bytes_mut(&mut buf, &mut in_read).await {
+                Ok(0) => {
+                    // CLOSE_WAIT
+                    break;
+                }
+                Ok(size) => {
+                    if first_packet {
+                        first_packet = false;
+                        outgoing_info_arc.update_proto(buf.as_ref());
+                    }
+                    outgoing_info_arc.more_upload(size);
+                    if tx.send(buf.freeze()).await.is_err() {
+                        tracing::warn!("TunAdapter tx send err");
+                        abort_handle.cancel();
+                        break;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("TunAdapter read error: {}", err);
+                    abort_handle.cancel();
+                    break;
+                }
             }
         }
         Ok(())

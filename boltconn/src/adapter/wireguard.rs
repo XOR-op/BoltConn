@@ -287,7 +287,7 @@ impl WireguardHandle {
             NetworkAddr::Raw(s) => s,
             NetworkAddr::DomainName { domain_name, port } => {
                 let abort_h = ConnAbortHandle::new();
-                abort_h.fulfill(vec![]).await;
+                abort_h.fulfill(vec![]);
                 let resolver = AsyncResolver::new(
                     self.dns_config.as_ref().clone(),
                     ResolverOpts::default(),

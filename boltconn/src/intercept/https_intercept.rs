@@ -55,7 +55,7 @@ impl HttpsIntercept {
         ctx: ModifierContext,
     ) -> anyhow::Result<Response<Body>> {
         let abort_handle = ConnAbortHandle::new();
-        abort_handle.fulfill(vec![]).await;
+        abort_handle.fulfill(vec![]);
         let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
         if let Some(resp) = fake_resp {
             return Ok(resp);
