@@ -194,15 +194,10 @@ impl TunDevice {
         let _ = fd_write.write_all(packet.as_ref()).await;
         #[cfg(target_os = "macos")]
         {
-            use std::io::IoSlice;
-            let arr = [
-                0u8,
-                0u8,
-                ETH_P_IP.to_ne_bytes()[0],
-                ETH_P_IP.to_ne_bytes()[1],
-            ];
-            let slices = &[IoSlice::new(&arr), IoSlice::new(packet.as_ref())];
-            let _ = fd_write.write_vectored(slices).await;
+            // Warning: cannot use vectored write here
+            let mut unified_buf = vec![0, 0, 0, libc::AF_INET as u8];
+            unified_buf.extend_from_slice(packet.as_ref());
+            let _ = fd_write.write_all(unified_buf.as_ref()).await;
         }
     }
 
