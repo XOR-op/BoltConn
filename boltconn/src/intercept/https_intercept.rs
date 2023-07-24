@@ -106,6 +106,8 @@ impl HttpsIntercept {
         let inbound = acceptor.accept(self.inbound).await?;
         if let Err(http_err) = Http::new()
             .http1_only(true)
+            .http1_preserve_header_case(true)
+            .http1_title_case_headers(true)
             .serve_connection(inbound, service)
             .await
         {

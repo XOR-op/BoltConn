@@ -69,7 +69,13 @@ impl HttpIntercept {
                 },
             )
         });
-        if let Err(http_err) = Http::new().serve_connection(self.inbound, service).await {
+        if let Err(http_err) = Http::new()
+            .http1_only(true)
+            .http1_preserve_header_case(true)
+            .http1_title_case_headers(true)
+            .serve_connection(self.inbound, service)
+            .await
+        {
             tracing::warn!("Sniff err {}", http_err);
         }
         Ok(())

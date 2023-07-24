@@ -150,6 +150,10 @@ impl Modifier for InterceptModifier {
                 self.header_rewriter
                     .try_rewrite_request(url.as_str(), &mut parts.headers)
                     .await;
+
+                // re-generate CONTENT-LENGTH by hyper
+                parts.headers.remove(header::CONTENT_LENGTH);
+
                 if let Some((mod_type, new_url)) = self.url_rewriter.try_rewrite(url.as_str()).await
                 {
                     // no real connection
