@@ -188,16 +188,19 @@ where
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let abort_handle2 = abort_handle.clone();
-    let _guard = DuplexCloseGuard::new(tokio::spawn(async move {
-        while let Some(buf) = rx.recv().await {
-            let res = out_write.write_all(buf.as_ref()).await;
-            if let Err(err) = res {
-                tracing::trace!("write to outbound failed: {}", err);
-                abort_handle2.cancel();
-                break;
+    let _guard = DuplexCloseGuard::new(
+        tokio::spawn(async move {
+            while let Some(buf) = rx.recv().await {
+                let res = out_write.write_all(buf.as_ref()).await;
+                if let Err(err) = res {
+                    tracing::trace!("write to outbound failed: {}", err);
+                    abort_handle2.cancel();
+                    break;
+                }
             }
-        }
-    }));
+        }),
+        abort_handle.clone(),
+    );
     // recv from outbound and send to inbound
     loop {
         let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
@@ -324,13 +327,15 @@ impl Drop for TcpIndicatorGuard {
 
 pub(crate) struct DuplexCloseGuard {
     handle: Option<JoinHandle<()>>,
+    abort_handle: ConnAbortHandle,
     err_exit: bool,
 }
 
 impl DuplexCloseGuard {
-    pub fn new(handle: JoinHandle<()>) -> Self {
+    pub fn new(handle: JoinHandle<()>, abort_handle: ConnAbortHandle) -> Self {
         Self {
             handle: Some(handle),
+            abort_handle,
             err_exit: false,
         }
     }
@@ -358,6 +363,7 @@ impl Drop for DuplexCloseGuard {
                     });
                 }
             }
+            self.abort_handle.cancel();
         }
     }
 }
