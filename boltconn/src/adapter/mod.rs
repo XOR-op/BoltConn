@@ -187,11 +187,13 @@ where
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
+    let abort_handle2 = abort_handle.clone();
     let _guard = DuplexCloseGuard::new(tokio::spawn(async move {
         while let Some(buf) = rx.recv().await {
             let res = out_write.write_all(buf.as_ref()).await;
             if let Err(err) = res {
                 tracing::trace!("write to outbound failed: {}", err);
+                abort_handle2.cancel();
                 break;
             }
         }
@@ -208,6 +210,7 @@ where
                 }
                 Ok(_) => {
                     if tx.send(buf.freeze()).await.is_err() {
+                        abort_handle.cancel();
                         break;
                     }
                 }
@@ -233,12 +236,14 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     let tunnel_addr2 = tunnel_addr.clone();
     let AddrConnector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
+    let abort_handle2 = abort_handle.clone();
     let _guard = UdpDropGuard(tokio::spawn(async move {
         while let Some((buf, addr)) = rx.recv().await {
             let addr = tunnel_addr2.clone().unwrap_or(addr);
             let res = outbound2.send_to(buf.as_ref(), addr).await;
             if let Err(err) = res {
                 tracing::trace!("write to outbound failed: {}", err);
+                abort_handle2.cancel();
                 break;
             }
         }

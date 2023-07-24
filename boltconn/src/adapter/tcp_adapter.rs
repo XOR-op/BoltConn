@@ -68,11 +68,12 @@ impl TcpAdapter {
                         outgoing_info_arc.more_upload(size);
                         if tx.send(buf.freeze()).await.is_err() {
                             tracing::warn!("TunAdapter tx send err");
+                            abort_handle.cancel();
                             break;
                         }
                     }
                     Err(err) => {
-                        tracing::warn!("TunAdapter encounter error: {}", err);
+                        tracing::warn!("TunAdapter read error: {}", err);
                         abort_handle.cancel();
                         break;
                     }
