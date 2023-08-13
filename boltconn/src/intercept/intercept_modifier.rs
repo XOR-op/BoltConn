@@ -1,3 +1,4 @@
+use crate::intercept::intercept_manager::InterceptionManager;
 use crate::intercept::url_rewrite::{UrlModManager, UrlModType};
 use crate::intercept::{HeaderModManager, Modifier, ModifierContext};
 use crate::platform::process::ProcessInfo;
@@ -40,8 +41,7 @@ impl futures::Stream for PartialReadStream {
 pub struct InterceptModifier {
     client: Option<ProcessInfo>,
     contents: Arc<HttpCapturer>,
-    url_rewriter: Arc<UrlModManager>,
-    header_rewriter: Arc<HeaderModManager>,
+    manager: Arc<InterceptionManager>,
     pending: DashMap<u64, DumpedRequest>,
     size_limit: usize,
 }
@@ -49,15 +49,13 @@ pub struct InterceptModifier {
 impl InterceptModifier {
     pub fn new(
         contents: Arc<HttpCapturer>,
-        url_rewriter: Arc<UrlModManager>,
-        header_rewriter: Arc<HeaderModManager>,
+        manager: Arc<InterceptionManager>,
         proc: Option<ProcessInfo>,
     ) -> Self {
         Self {
             client: proc,
             contents,
-            url_rewriter,
-            header_rewriter,
+            manager,
             pending: Default::default(),
             size_limit: 2 * 1024 * 1024,
         }

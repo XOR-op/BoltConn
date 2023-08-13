@@ -1,6 +1,7 @@
+use crate::config::interception::InterceptionConfig;
 use crate::config::{
-    config::{default_rule_provider, default_str_vec},
-    safe_join_path, RuleConfigLine, RuleProvider,
+    config::default_interception_vec, config::default_rule_provider, safe_join_path,
+    RuleConfigLine, RuleProvider,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,10 +16,8 @@ pub struct ModuleSchema {
     pub rule_local: Vec<RuleConfigLine>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(alias = "intercept-rule", default = "default_str_vec")]
-    pub intercept_rule: Vec<String>,
-    #[serde(alias = "rewrite-rule", default = "default_str_vec")]
-    pub rewrite: Vec<String>,
+    #[serde(alias = "intercept-rule", default = "default_interception_vec")]
+    pub intercept_rule: Vec<InterceptionConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

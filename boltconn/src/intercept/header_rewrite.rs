@@ -112,6 +112,22 @@ impl HeaderRule {
 }
 
 #[derive(Debug)]
+pub struct HeaderRewrite {
+    pattern: Regex,
+    rule: HeaderRule,
+}
+
+impl HeaderRewrite {
+    pub fn try_rewrite(&self, url: &str, headers: &mut HeaderMap) -> bool {
+        if self.pattern.is_match(url) {
+            self.rule.rewrite_request(headers)
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct HeaderModManager {
     req_rules: Vec<HeaderRule>,
     resp_rules: Vec<HeaderRule>,

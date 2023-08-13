@@ -1,4 +1,5 @@
 use crate::config::inbound::RawInboundConfig;
+use crate::config::interception::InterceptionConfig;
 use crate::config::proxy_group::RawProxyGroupCfg;
 use crate::config::{AuthData, ModuleConfig, ProxyProvider, RuleConfigLine, RuleProvider};
 use linked_hash_map::LinkedHashMap;
@@ -32,10 +33,8 @@ pub struct RawRootCfg {
     pub rule_local: Vec<RuleConfigLine>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(alias = "intercept-rule", default = "default_str_vec")]
-    pub intercept_rule: Vec<String>,
-    #[serde(alias = "rewrite-rule", default = "default_str_vec")]
-    pub rewrite: Vec<String>,
+    #[serde(default = "default_interception_vec")]
+    pub interception: Vec<InterceptionConfig>,
     #[serde(default = "default_module")]
     pub module: Vec<ModuleConfig>,
 }
@@ -165,6 +164,10 @@ fn default_module() -> Vec<ModuleConfig> {
 }
 
 pub(super) fn default_str_vec() -> Vec<String> {
+    Default::default()
+}
+
+pub(super) fn default_interception_vec() -> Vec<InterceptionConfig> {
     Default::default()
 }
 

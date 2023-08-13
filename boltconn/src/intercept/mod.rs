@@ -1,6 +1,7 @@
 mod header_rewrite;
 mod http_intercept;
 mod https_intercept;
+mod intercept_manager;
 mod intercept_modifier;
 mod modifier;
 mod url_rewrite;

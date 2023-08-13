@@ -166,7 +166,7 @@ impl App {
                 .map_err(|e| anyhow!("Load certs from path {:?} failed: {}", cert_path, e))?;
             let rule_schema = &loaded_config.rule_schema;
             let intercept_filter = DispatchingBuilder::empty(dns.clone(), mmdb.clone())
-                .build_filter(config.intercept_rule.as_slice(), rule_schema)
+                .build_filter(config.interception.as_slice(), rule_schema)
                 .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
             let (url_modifier, hdr_modifier) = {
                 let (url_mod, hdr_mod) = mapping_rewrite(config.rewrite.as_slice())
