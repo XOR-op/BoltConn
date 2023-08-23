@@ -1,6 +1,7 @@
 #[allow(clippy::module_inception)]
 mod config;
 mod inbound;
+mod interception;
 mod module;
 mod proxy_group;
 mod proxy_provider;
@@ -12,6 +13,7 @@ use crate::platform::get_user_info;
 use anyhow::anyhow;
 pub use config::*;
 pub use inbound::*;
+pub use interception::*;
 pub use module::*;
 pub use proxy_group::*;
 pub use proxy_provider::*;
@@ -100,18 +102,14 @@ impl LoadedConfig {
     pub fn apply_module(&mut self) {
         let mut rule_local = vec![];
         let mut intercept_rule = vec![];
-        let mut rewrite = vec![];
         for i in self.module_schema.drain(..) {
             rule_local.extend(i.rule_local.into_iter());
-            intercept_rule.extend(i.intercept_rule.into_iter());
-            rewrite.extend(i.rewrite.into_iter());
+            intercept_rule.extend(i.interception.into_iter());
         }
         rule_local.append(&mut self.config.rule_local);
-        intercept_rule.append(&mut self.config.intercept_rule);
-        rewrite.append(&mut self.config.rewrite);
+        intercept_rule.append(&mut self.config.interception);
         self.config.rule_local = rule_local;
-        self.config.intercept_rule = intercept_rule;
-        self.config.rewrite = rewrite;
+        self.config.interception = intercept_rule;
     }
 }
 

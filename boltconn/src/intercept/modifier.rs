@@ -1,3 +1,4 @@
+use crate::intercept::InterceptionResult;
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{
     BodyOrWarning, ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr,
@@ -9,7 +10,8 @@ use hyper::{Body, Request, Response};
 use std::sync::Arc;
 use std::time::Instant;
 
-pub type ModifierClosure = Box<dyn Fn(Option<ProcessInfo>) -> Arc<dyn Modifier> + Send + Sync>;
+pub type ModifierClosure =
+    Box<dyn Fn(InterceptionResult, Option<ProcessInfo>) -> Arc<dyn Modifier> + Send + Sync>;
 
 pub struct ModifierContext {
     pub tag: u64,

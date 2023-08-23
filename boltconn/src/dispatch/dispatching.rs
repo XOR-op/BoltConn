@@ -1,14 +1,14 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
     LoadedConfig, ProxySchema, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption,
-    RawServerAddr, RawServerSockAddr, RawState, RuleAction, RuleConfigLine, RuleSchema,
+    RawServerAddr, RawServerSockAddr, RawState, RuleAction, RuleConfigLine,
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
-use crate::dispatch::ruleset::{RuleSet, RuleSetBuilder};
+use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::temporary::TemporaryList;
-use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup};
+use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup, RuleSetTable};
 use crate::external::MmdbReader;
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -177,6 +177,7 @@ impl DispatchingBuilder {
         dns: Arc<Dns>,
         mmdb: Option<Arc<MmdbReader>>,
         loaded_config: &LoadedConfig,
+        ruleset: &RuleSetTable,
     ) -> anyhow::Result<Self> {
         let mut builder = Self::empty(dns, mmdb);
         // start init
@@ -184,7 +185,6 @@ impl DispatchingBuilder {
             config,
             state,
             proxy_schema,
-            rule_schema,
             ..
         } = loaded_config;
         // read all proxies
@@ -209,14 +209,7 @@ impl DispatchingBuilder {
                 false,
             )?;
         }
-        for (name, schema) in rule_schema {
-            let Some(ruleset_builder) = RuleSetBuilder::new(name.as_str(), schema) else {
-                return Err(anyhow!("Failed to parse provider {}", name));
-            };
-            builder
-                .rulesets
-                .insert(name.clone(), Arc::new(ruleset_builder.build()?));
-        }
+        builder.rulesets = ruleset.clone();
         Ok(builder)
     }
 
@@ -325,21 +318,14 @@ impl DispatchingBuilder {
     pub fn build_filter(
         self,
         rules: &[String],
-        rule_schema: &HashMap<String, RuleSchema>,
+        ruleset: &RuleSetTable,
     ) -> anyhow::Result<Dispatching> {
-        let mut ruleset = HashMap::new();
-        for (name, schema) in rule_schema {
-            let Some(builder) = RuleSetBuilder::new(name.as_str(), schema) else {
-                return Err(anyhow!("Filter: failed to parse provider {}", name));
-            };
-            ruleset.insert(name.clone(), Arc::new(builder.build()?));
-        }
         let mut rule_builder = RuleBuilder::new(
             self.dns.clone(),
             self.mmdb.clone(),
             &self.proxies,
             &self.groups,
-            &ruleset,
+            ruleset,
         );
         for r in rules.iter() {
             rule_builder.append_literal((r.clone() + ", DIRECT").as_str())?;

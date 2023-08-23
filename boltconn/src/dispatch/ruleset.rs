@@ -9,11 +9,13 @@ use aho_corasick::AhoCorasick;
 use ip_network_table::IpNetworkTable;
 use ipnet::IpNet;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+
+pub type RuleSetTable = HashMap<String, Arc<RuleSet>>;
 
 /// Matcher for rules in the same group
 pub struct RuleSet {

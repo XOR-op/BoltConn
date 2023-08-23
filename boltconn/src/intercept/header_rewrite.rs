@@ -112,6 +112,22 @@ impl HeaderRule {
 }
 
 #[derive(Debug)]
+pub struct HeaderRewrite {
+    pattern: Regex,
+    rule: HeaderRule,
+}
+
+impl HeaderRewrite {
+    pub fn try_rewrite(&self, url: &str, headers: &mut HeaderMap) -> bool {
+        if self.pattern.is_match(url) {
+            self.rule.rewrite_request(headers)
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct HeaderModManager {
     req_rules: Vec<HeaderRule>,
     resp_rules: Vec<HeaderRule>,
@@ -122,7 +138,7 @@ pub struct HeaderModManager {
 impl HeaderModManager {
     pub fn new(cfg: &[String]) -> anyhow::Result<Self> {
         let (req_rules, resp_rules, req_regexes, resp_regexes) =
-            parse_rules(cfg).map_err(|s| anyhow::anyhow!(s))?;
+            parse_header_actions(cfg).map_err(|s| anyhow::anyhow!(s))?;
         debug_assert_eq!(req_rules.len(), req_regexes.len());
         debug_assert_eq!(resp_rules.len(), resp_regexes.len());
         Ok(Self {
@@ -187,7 +203,7 @@ fn deserialize_values<T: DeserializeOwned>(raw: &str) -> Option<T> {
 }
 
 #[allow(clippy::type_complexity)]
-fn parse_rules(
+fn parse_header_actions(
     cfg: &[String],
 ) -> Result<(Vec<HeaderRule>, Vec<HeaderRule>, Vec<String>, Vec<String>), String> {
     let mut req_coll = vec![];
