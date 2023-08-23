@@ -5,7 +5,7 @@ use crate::adapter::{
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, InboundInfo, ProxyImpl};
-use crate::intercept::{HttpIntercept, HttpsIntercept, ModifierClosure};
+use crate::intercept::{HttpIntercept, HttpsIntercept, InterceptionManager, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -27,7 +27,7 @@ pub struct Dispatcher {
     dispatching: ArcSwap<Dispatching>,
     ca_certificate: Certificate,
     modifier: ArcSwap<ModifierClosure>,
-    intercept_filter: ArcSwap<Dispatching>,
+    intercept_mgr: ArcSwap<InterceptionManager>,
     wireguard_mgr: Arc<WireguardManager>,
 }
 
@@ -40,7 +40,7 @@ impl Dispatcher {
         dispatching: Arc<Dispatching>,
         ca_certificate: Certificate,
         modifier: ModifierClosure,
-        intercept_filter: Arc<Dispatching>,
+        intercept_mgr: Arc<InterceptionManager>,
     ) -> Self {
         let wg_mgr = WireguardManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         Self {
@@ -50,7 +50,7 @@ impl Dispatcher {
             dispatching: ArcSwap::new(dispatching),
             ca_certificate,
             modifier: ArcSwap::new(Arc::new(modifier)),
-            intercept_filter: ArcSwap::new(intercept_filter),
+            intercept_mgr: ArcSwap::new(intercept_mgr),
             wireguard_mgr: Arc::new(wg_mgr),
         }
     }
@@ -59,8 +59,8 @@ impl Dispatcher {
         self.dispatching.store(dispatching);
     }
 
-    pub fn replace_intercept_filter(&self, intercept_filter: Arc<Dispatching>) {
-        self.intercept_filter.store(intercept_filter);
+    pub fn replace_intercept_filter(&self, intercept_mgr: Arc<InterceptionManager>) {
+        self.intercept_mgr.store(intercept_mgr);
     }
 
     pub fn replace_modifier(&self, closure: ModifierClosure) {
@@ -265,73 +265,66 @@ impl Dispatcher {
 
         // mitm for 80/443
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
-            if (port == 80 || port == 443)
-                && matches!(
-                    self.intercept_filter
-                        .load()
-                        .matches(&mut conn_info, false)
-                        .await
-                        .0
-                        .as_ref(),
-                    ProxyImpl::Direct
-                )
-            {
-                let modifier = (self.modifier.load())(process_info);
-                match port {
-                    80 => {
-                        // hijack
-                        tracing::trace!("HTTP intercept for {}", domain_name);
-                        {
-                            let info = info.clone();
-                            tokio::spawn(async move {
-                                let mocker = HttpIntercept::new(
+            if port == 80 || port == 443 {
+                let result = self.intercept_mgr.load().matches(&mut conn_info).await;
+                if result.should_capture() {
+                    let modifier = (self.modifier.load())(result, process_info);
+                    match port {
+                        80 => {
+                            // hijack
+                            tracing::trace!("HTTP intercept for {}", domain_name);
+                            {
+                                let info = info.clone();
+                                tokio::spawn(async move {
+                                    let mocker = HttpIntercept::new(
+                                        DuplexChan::new(tun_next),
+                                        modifier,
+                                        outbounding,
+                                        info,
+                                    );
+                                    if let Err(err) = mocker.run().await {
+                                        tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+                                    }
+                                })
+                            };
+                            abort_handle.fulfill(handles);
+                            self.stat_center.push(info);
+                            return Ok(());
+                        }
+                        443 => {
+                            tracing::trace!("HTTPS intercept for {}", domain_name);
+                            {
+                                let info = info.clone();
+                                let mocker = match HttpsIntercept::new(
+                                    &self.ca_certificate,
+                                    domain_name,
                                     DuplexChan::new(tun_next),
                                     modifier,
                                     outbounding,
                                     info,
-                                );
-                                if let Err(err) = mocker.run().await {
-                                    tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
-                                }
-                            })
-                        };
-                        abort_handle.fulfill(handles);
-                        self.stat_center.push(info);
-                        return Ok(());
-                    }
-                    443 => {
-                        tracing::trace!("HTTPS intercept for {}", domain_name);
-                        {
-                            let info = info.clone();
-                            let mocker = match HttpsIntercept::new(
-                                &self.ca_certificate,
-                                domain_name,
-                                DuplexChan::new(tun_next),
-                                modifier,
-                                outbounding,
-                                info,
-                            ) {
-                                Ok(v) => v,
-                                Err(err) => {
-                                    tracing::error!(
-                                        "[Dispatcher] sign certificate failed: {}",
-                                        err
-                                    );
-                                    return Err(());
-                                }
+                                ) {
+                                    Ok(v) => v,
+                                    Err(err) => {
+                                        tracing::error!(
+                                            "[Dispatcher] sign certificate failed: {}",
+                                            err
+                                        );
+                                        return Err(());
+                                    }
+                                };
+                                tokio::spawn(async move {
+                                    if let Err(err) = mocker.run().await {
+                                        tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
+                                    }
+                                })
                             };
-                            tokio::spawn(async move {
-                                if let Err(err) = mocker.run().await {
-                                    tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
-                                }
-                            })
-                        };
-                        abort_handle.fulfill(handles);
-                        self.stat_center.push(info);
-                        return Ok(());
-                    }
-                    _ => {
-                        // fallback
+                            abort_handle.fulfill(handles);
+                            self.stat_center.push(info);
+                            return Ok(());
+                        }
+                        _ => {
+                            // fallback
+                        }
                     }
                 }
             }

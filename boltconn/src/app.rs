@@ -1,10 +1,10 @@
 use crate::config::{safe_join_path, LinkedState, LoadedConfig, RawInboundServiceConfig};
-use crate::dispatch::DispatchingBuilder;
+use crate::dispatch::{DispatchingBuilder, RuleSetBuilder};
 use crate::external::{
     Controller, DatabaseHandle, MmdbReader, SharedDispatching, StreamLoggerSend, UdsController,
     UnixListenerGuard, WebController,
 };
-use crate::intercept::{HeaderModManager, InterceptModifier, UrlModManager};
+use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns};
 use crate::network::tun_device::TunDevice;
@@ -155,8 +155,15 @@ impl App {
         );
 
         // dispatch
+        let mut ruleset = HashMap::new();
+        for (name, schema) in &loaded_config.rule_schema {
+            let Some(builder) = RuleSetBuilder::new(name.as_str(), schema) else {
+                return Err(anyhow!("Filter: failed to parse provider {}", name));
+            };
+            ruleset.insert(name.clone(), Arc::new(builder.build()?));
+        }
         let dispatching = Arc::new(
-            DispatchingBuilder::new(dns.clone(), mmdb.clone(), &loaded_config)
+            DispatchingBuilder::new(dns.clone(), mmdb.clone(), &loaded_config, &ruleset)
                 .and_then(|b| b.build(&loaded_config))
                 .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
         );
@@ -164,22 +171,15 @@ impl App {
             // tls mitm
             let cert = load_cert_and_key(&cert_path)
                 .map_err(|e| anyhow!("Load certs from path {:?} failed: {}", cert_path, e))?;
-            let rule_schema = &loaded_config.rule_schema;
-            let intercept_filter = DispatchingBuilder::empty(dns.clone(), mmdb.clone())
-                .build_filter(config.interception.as_slice(), rule_schema)
-                .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
-            let (url_modifier, hdr_modifier) = {
-                let (url_mod, hdr_mod) = mapping_rewrite(config.rewrite.as_slice())
-                    .map_err(|e| anyhow!("Parse url modifier rules, syntax failed: {}", e))?;
-                (
-                    Arc::new(UrlModManager::new(url_mod.as_slice()).map_err(|e| {
-                        anyhow!("Parse url modifier rules, invalid regexes: {}", e)
-                    })?),
-                    Arc::new(HeaderModManager::new(hdr_mod.as_slice()).map_err(|e| {
-                        anyhow!("Parse header modifier rules, invalid regexes: {}", e)
-                    })?),
+            let interception_mgr = Arc::new(
+                InterceptionManager::new(
+                    config.interception.as_slice(),
+                    dns.clone(),
+                    mmdb.clone(),
+                    &ruleset,
                 )
-            };
+                .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
+            );
             let hcap_copy = http_capturer.clone();
             Arc::new(Dispatcher::new(
                 outbound_iface.as_str(),
@@ -187,15 +187,10 @@ impl App {
                 stat_center.clone(),
                 dispatching.clone(),
                 cert,
-                Box::new(move |pi| {
-                    Arc::new(InterceptModifier::new(
-                        hcap_copy.clone(),
-                        url_modifier.clone(),
-                        hdr_modifier.clone(),
-                        pi,
-                    ))
+                Box::new(move |result, proc_info| {
+                    Arc::new(InterceptModifier::new(hcap_copy.clone(), result, proc_info))
                 }),
-                Arc::new(intercept_filter),
+                interception_mgr,
             ))
         };
 
@@ -344,25 +339,33 @@ impl App {
                 Some(Arc::new(MmdbReader::read_from_file(path)?))
             }
         };
-        let (url_mod, hdr_mod) = {
-            let (url, hdr) = mapping_rewrite(config.rewrite.as_slice())?;
-            (
-                Arc::new(UrlModManager::new(url.as_slice())?),
-                Arc::new(HeaderModManager::new(hdr.as_slice())?),
-            )
-        };
+        let mut ruleset = HashMap::new();
+        for (name, schema) in &loaded_config.rule_schema {
+            let Some(builder) = RuleSetBuilder::new(name.as_str(), schema) else {
+                return Err(anyhow!("Filter: failed to parse provider {}", name));
+            };
+            ruleset.insert(name.clone(), Arc::new(builder.build()?));
+        }
+
         let bootstrap =
             new_bootstrap_resolver(&self.outbound_iface, config.dns.bootstrap.as_slice())?;
         let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
         let dispatching = {
-            let builder = DispatchingBuilder::new(self.dns.clone(), mmdb.clone(), &loaded_config)?;
+            let builder =
+                DispatchingBuilder::new(self.dns.clone(), mmdb.clone(), &loaded_config, &ruleset)?;
             Arc::new(builder.build(&loaded_config)?)
         };
-        let intercept_filter = {
-            let builder = DispatchingBuilder::empty(self.dns.clone(), mmdb);
-            let rule_schema = &loaded_config.rule_schema;
-            Arc::new(builder.build_filter(config.intercept_rule.as_slice(), rule_schema)?)
-        };
+
+        let interception_mgr = Arc::new(
+            InterceptionManager::new(
+                config.interception.as_slice(),
+                self.dns.clone(),
+                mmdb.clone(),
+                &ruleset,
+            )
+            .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
+        );
+
         self.dns
             .replace_resolvers(&self.outbound_iface, group)
             .await?;
@@ -371,15 +374,11 @@ impl App {
         self.api_dispatching_handler.store(dispatching.clone());
         let hcap2 = self.http_capturer.clone();
         self.dispatcher.replace_dispatching(dispatching);
-        self.dispatcher.replace_intercept_filter(intercept_filter);
-        self.dispatcher.replace_modifier(Box::new(move |pi| {
-            Arc::new(InterceptModifier::new(
-                hcap2.clone(),
-                url_mod.clone(),
-                hdr_mod.clone(),
-                pi,
-            ))
-        }));
+        self.dispatcher.replace_intercept_filter(interception_mgr);
+        self.dispatcher
+            .replace_modifier(Box::new(move |result, proc_info| {
+                Arc::new(InterceptModifier::new(hcap2.clone(), result, proc_info))
+            }));
         *self.speedtest_url.write().unwrap() = config.speedtest_url.clone();
         Ok(())
     }
@@ -392,21 +391,6 @@ fn load_cert_and_key(cert_path: &Path) -> anyhow::Result<Certificate> {
     let params = CertificateParams::from_ca_cert_pem(cert_str.as_str(), key_pair)?;
     let cert = Certificate::from_params(params)?;
     Ok(cert)
-}
-
-fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>)> {
-    let mut url_list = vec![];
-    let mut header_list = vec![];
-    for s in list.iter() {
-        if s.starts_with("url,") {
-            url_list.push(s.clone());
-        } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
-            header_list.push(s.clone());
-        } else {
-            return Err(anyhow::anyhow!("Unexpected: {}", s));
-        }
-    }
-    Ok((url_list, header_list))
 }
 
 fn open_database_handle(data_path: &Path) -> anyhow::Result<DatabaseHandle> {

@@ -10,6 +10,7 @@ use chrono::Datelike;
 pub use header_rewrite::*;
 pub use http_intercept::HttpIntercept;
 pub use https_intercept::HttpsIntercept;
+pub use intercept_manager::*;
 pub use intercept_modifier::*;
 pub use modifier::*;
 use rcgen::{

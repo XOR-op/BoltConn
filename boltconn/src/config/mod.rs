@@ -13,6 +13,7 @@ use crate::platform::get_user_info;
 use anyhow::anyhow;
 pub use config::*;
 pub use inbound::*;
+pub use interception::*;
 pub use module::*;
 pub use proxy_group::*;
 pub use proxy_provider::*;
