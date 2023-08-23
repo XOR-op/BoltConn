@@ -104,7 +104,7 @@ impl LoadedConfig {
         let mut intercept_rule = vec![];
         for i in self.module_schema.drain(..) {
             rule_local.extend(i.rule_local.into_iter());
-            intercept_rule.extend(i.intercept_rule.into_iter());
+            intercept_rule.extend(i.interception.into_iter());
         }
         rule_local.append(&mut self.config.rule_local);
         intercept_rule.append(&mut self.config.interception);

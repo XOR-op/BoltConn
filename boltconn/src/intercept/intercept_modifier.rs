@@ -167,19 +167,19 @@ impl Modifier for InterceptModifier {
                         // record request and fake resp
                         let (resp_parts, body) = resp.into_parts();
                         let resp_body = hyper::body::to_bytes(body).await?;
-                        let resp_copy = DumpedResponse {
-                            status: resp_parts.status,
-                            version: resp_parts.version,
-                            headers: resp_parts.headers.clone(),
-                            body: BodyOrWarning::Body(resp_body.clone()),
-                            time: Instant::now(),
-                        };
-                        let host = match &ctx.conn_info.dest {
-                            NetworkAddr::Raw(addr) => addr.ip().to_string(),
-                            NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
-                        };
 
                         if self.result.should_capture() {
+                            let resp_copy = DumpedResponse {
+                                status: resp_parts.status,
+                                version: resp_parts.version,
+                                headers: resp_parts.headers.clone(),
+                                body: BodyOrWarning::Body(resp_body.clone()),
+                                time: Instant::now(),
+                            };
+                            let host = match &ctx.conn_info.dest {
+                                NetworkAddr::Raw(addr) => addr.ip().to_string(),
+                                NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
+                            };
                             // store copy
                             let mut req_copy = DumpedRequest::from_parts(&parts, &whole_body);
                             if let Ok(uri) = http::Uri::from_str(url.as_str()) {

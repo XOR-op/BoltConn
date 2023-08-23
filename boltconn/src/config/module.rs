@@ -16,8 +16,8 @@ pub struct ModuleSchema {
     pub rule_local: Vec<RuleConfigLine>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(alias = "intercept-rule", default = "default_interception_vec")]
-    pub intercept_rule: Vec<InterceptionConfig>,
+    #[serde(default = "default_interception_vec")]
+    pub interception: Vec<InterceptionConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
