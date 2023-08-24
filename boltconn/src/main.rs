@@ -3,6 +3,7 @@
 extern crate core;
 
 use crate::app::App;
+use crate::cli::SubCommand;
 use crate::platform::set_maximum_opened_files;
 use is_root::is_root;
 use network::{
@@ -16,6 +17,7 @@ use structopt::StructOpt;
 
 mod adapter;
 mod app;
+mod cli;
 mod common;
 mod config;
 mod dispatch;
@@ -27,20 +29,23 @@ mod proxy;
 mod transport;
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "boltconn", about = "BoltConn core binary")]
+#[structopt(name = "boltconn", about = "Cli interface of BoltConn")]
 struct Args {
-    /// Path of configutation. Default to $HOME/.config/boltconn
+    /// RESTful API URL; if not set, the controller will use unix domain socket as default.
     #[structopt(short, long)]
-    pub config: Option<PathBuf>,
-    /// Path of application data. Default to $HOME/.local/share/boltconn
-    #[structopt(short = "d", long = "data")]
-    pub app_data: Option<PathBuf>,
-    /// Path of certificate. Default to ${app_data}/cert
-    #[structopt(long)]
-    pub cert: Option<PathBuf>,
+    pub url: Option<String>,
+    #[structopt(subcommand)]
+    pub cmd: SubCommand,
 }
 
 fn main() -> ExitCode {
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let _guard = rt.enter();
+    let args: Args = Args::from_args();
+    let cmds = match args.cmd {
+        SubCommand::Start(sub) => sub,
+        _ => rt.block_on(cli::controller_main(args)),
+    };
     if !is_root() {
         eprintln!("BoltConn must be run with root privilege");
         return ExitCode::FAILURE;
@@ -64,17 +69,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    let args: Args = Args::from_args();
     let (config_path, data_path, cert_path) =
-        match parse_paths(&args.config, &args.app_data, &args.cert) {
+        match parse_paths(&cmds.config, &cmds.app_data, &cmds.cert) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Failed to load config and app data: {}", e);
                 return ExitCode::FAILURE;
             }
         };
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    let _guard = rt.enter();
     let app = match rt.block_on(App::create(config_path, data_path, cert_path)) {
         Ok(app) => app,
         Err(e) => {

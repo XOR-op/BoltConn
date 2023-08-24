@@ -1,5 +1,5 @@
-use crate::request_uds::UdsConnector;
-use crate::request_web::WebConnector;
+use crate::cli::request_uds::UdsConnector;
+use crate::cli::request_web::WebConnector;
 use anyhow::{anyhow, Result};
 use colored::Colorize;
 use std::ops::Add;

@@ -4,7 +4,7 @@ mod request;
 mod request_uds;
 mod request_web;
 
-use crate::request::Requester;
+use crate::Args;
 use anyhow::anyhow;
 use is_root::is_root;
 use std::path::PathBuf;
@@ -12,17 +12,7 @@ use std::process::exit;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "boltadm", about = "Controller for BoltConn")]
-struct Args {
-    /// RESTful API URL; if not set, BoltAdm will use unix domain socket as default.
-    #[structopt(short, long)]
-    pub url: Option<String>,
-    #[structopt(subcommand)]
-    pub cmd: SubCommand,
-}
-
-#[derive(Debug, StructOpt)]
-enum ProxyOptions {
+pub(crate) enum ProxyOptions {
     /// Set group's proxy
     Set { group: String, proxy: String },
     /// List all groups
@@ -30,7 +20,7 @@ enum ProxyOptions {
 }
 
 #[derive(Debug, StructOpt)]
-enum ConnOptions {
+pub(crate) enum ConnOptions {
     /// List all active connections
     List,
     Stop {
@@ -39,19 +29,19 @@ enum ConnOptions {
 }
 
 #[derive(Debug, StructOpt)]
-enum LogOptions {
+pub(crate) enum LogOptions {
     /// List all logs
     List,
 }
 
 #[derive(Debug, StructOpt)]
-enum DebugOptions {
+pub(crate) enum DebugOptions {
     /// List all sessions
     Session,
 }
 
 #[derive(Debug, StructOpt)]
-enum TunOptions {
+pub(crate) enum TunOptions {
     /// Set TUN
     Set { s: String },
     /// Get TUN status
@@ -59,13 +49,13 @@ enum TunOptions {
 }
 
 #[derive(Debug, StructOpt)]
-struct CertOptions {
+pub(crate) struct CertOptions {
     #[structopt(short, long)]
     path: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
-enum TempRuleOptions {
+pub(crate) enum TempRuleOptions {
     /// Add a temporary rule to the head of rule list
     Add { literal: String },
     /// Delete temporary rules matching this prefix
@@ -75,7 +65,7 @@ enum TempRuleOptions {
 }
 
 #[derive(Debug, StructOpt)]
-enum InterceptOptions {
+pub(crate) enum InterceptOptions {
     /// List all captured data
     List,
     /// List data ranged from *start* to *end*
@@ -85,7 +75,22 @@ enum InterceptOptions {
 }
 
 #[derive(Debug, StructOpt)]
-enum SubCommand {
+pub(crate) struct StartOptions {
+    /// Path of configutation. Default to $HOME/.config/boltconn
+    #[structopt(short, long)]
+    pub config: Option<PathBuf>,
+    /// Path of application data. Default to $HOME/.local/share/boltconn
+    #[structopt(short = "d", long = "data")]
+    pub app_data: Option<PathBuf>,
+    /// Path of certificate. Default to ${app_data}/cert
+    #[structopt(long)]
+    pub cert: Option<PathBuf>,
+}
+
+#[derive(Debug, StructOpt)]
+pub(crate) enum SubCommand {
+    /// Start Main Program
+    Start(StartOptions),
     /// Proxy Settings
     Proxy(ProxyOptions),
     /// Connection Settings
@@ -94,21 +99,19 @@ enum SubCommand {
     Log(LogOptions),
     /// Generate Certificates
     Cert(CertOptions),
-    /// Captured HTTP data
+    /// Captured HTTP Data
     Intercept(InterceptOptions),
-    /// Adjust TUN status
+    /// Adjust TUN Status
     Tun(TunOptions),
     /// Modify Temporary Rules
     Rule(TempRuleOptions),
-    /// Clean unexpected shutdown
+    /// Clean Unexpected Shutdown
     Clean,
     /// Reload Configuration
     Reload,
 }
 
-#[tokio::main]
-async fn main() {
-    let args: Args = Args::from_args();
+pub(crate) async fn controller_main(args: Args) -> ! {
     let default_uds_path = "/var/run/boltconn.sock";
     if matches!(args.cmd, SubCommand::Clean) {
         if !is_root() {
@@ -121,8 +124,8 @@ async fn main() {
         }
     }
     let requestor = match match args.url {
-        None => Requester::new_uds(PathBuf::from(default_uds_path)).await,
-        Some(url) => Requester::new_web(url),
+        None => request::Requester::new_uds(PathBuf::from(default_uds_path)).await,
+        Some(url) => request::Requester::new_web(url),
     } {
         Ok(r) => r,
         Err(err) => {
@@ -153,7 +156,7 @@ async fn main() {
                 fn fetch_path() -> anyhow::Result<String> {
                     let p = PathBuf::from(std::env::var("HOME")?)
                         .join(".config")
-                        .join("boltconn");
+                        .join("../..");
                     if !p.exists() {
                         Err(anyhow!("${{HOME}}/.config/boltconn does not exist"))?;
                     }
@@ -188,6 +191,7 @@ async fn main() {
             TempRuleOptions::Delete { literal } => requestor.delete_temporary_rule(literal).await,
             TempRuleOptions::Clear => requestor.clear_temporary_rule().await,
         },
+        SubCommand::Start(_) => unreachable!(),
     };
     match result {
         Ok(_) => exit(0),
