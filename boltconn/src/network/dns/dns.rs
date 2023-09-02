@@ -132,7 +132,7 @@ impl Dns {
                     .set_rr_type(RecordType::A)
                     .set_dns_class(DNSClass::IN)
                     .set_ttl(60)
-                    .set_data(Some(RData::A(fake_ip)));
+                    .set_data(Some(RData::A(trust_dns_proto::rr::rdata::A(fake_ip))));
                 resp.add_answer(ans);
                 Ok(resp.to_vec()?)
             }
