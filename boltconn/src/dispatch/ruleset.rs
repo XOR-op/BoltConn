@@ -250,15 +250,14 @@ impl RuleSetBuilder {
         rhs.ip_cidr.iter().for_each(|(ip, _)| {
             let _ = self.ip_cidr.insert(ip, ());
         });
-        self.process_name.extend(rhs.process_name.into_iter());
-        self.process_keyword.extend(rhs.process_keyword.into_iter());
-        self.procpath_keyword
-            .extend(rhs.procpath_keyword.into_iter());
+        self.process_name.extend(rhs.process_name);
+        self.process_keyword.extend(rhs.process_keyword);
+        self.procpath_keyword.extend(rhs.procpath_keyword);
         self.src_tcp_port.extend(rhs.src_tcp_port);
         self.src_udp_port.extend(rhs.src_udp_port);
         self.dst_tcp_port.extend(rhs.dst_tcp_port);
         self.dst_udp_port.extend(rhs.dst_udp_port);
-        self.domain_keyword.extend(rhs.domain_keyword.into_iter());
+        self.domain_keyword.extend(rhs.domain_keyword);
         self
     }
 
@@ -340,7 +339,7 @@ impl PortFilter {
             PortFilter::Any => self.set_any(),
             PortFilter::Some(rs) => match self {
                 PortFilter::Any => {}
-                PortFilter::Some(ls) => ls.extend(rs.into_iter()),
+                PortFilter::Some(ls) => ls.extend(rs),
             },
         }
     }
@@ -383,7 +382,7 @@ impl InboundFilter {
             InboundFilter::Any => self.set_any(),
             InboundFilter::Some(rs) => match self {
                 InboundFilter::Any => {}
-                InboundFilter::Some(ls) => ls.extend(rs.into_iter()),
+                InboundFilter::Some(ls) => ls.extend(rs),
             },
         }
     }

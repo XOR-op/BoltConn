@@ -54,11 +54,11 @@ impl HostMatcherBuilder {
     }
 
     pub fn build(self) -> HostMatcher {
-        HostMatcher(Trie::from_iter(self.0.into_iter()))
+        HostMatcher(Trie::from_iter(self.0))
     }
 
     pub fn merge(&mut self, rhs: Self) {
-        self.0.extend(rhs.0.into_iter());
+        self.0.extend(rhs.0);
     }
 }
 

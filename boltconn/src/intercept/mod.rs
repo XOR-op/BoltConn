@@ -56,7 +56,7 @@ fn sign_site_cert(
 }
 
 #[derive(Clone, Debug)]
-pub(self) enum ReplacedChunk {
+enum ReplacedChunk {
     Literal(String),
     Captured(u8),
 }
@@ -91,7 +91,7 @@ impl ReplacedChunk {
 }
 
 #[derive(Clone, Debug)]
-pub(self) struct Replacement {
+struct Replacement {
     reg: Regex,
     chunks: Vec<ReplacedChunk>,
 }

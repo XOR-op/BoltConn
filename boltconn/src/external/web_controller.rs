@@ -294,7 +294,7 @@ fn parse_api_cors_origin(cors_allowed_list: &[String]) -> Option<AllowOrigin> {
                 list.push(HeaderValue::from_str(i.as_str()).ok()?)
             }
         }
-        Some(AllowOrigin::list(list.into_iter()))
+        Some(AllowOrigin::list(list))
     } else {
         None
     }

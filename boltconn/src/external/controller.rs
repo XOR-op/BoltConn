@@ -285,7 +285,7 @@ impl Controller {
         let mut state = self.state.lock().unwrap();
         let old = state.state.temporary_list.clone().unwrap_or_default();
         let mut list = vec![RuleConfigLine::Simple(rule_literal.clone())];
-        list.extend(old.into_iter());
+        list.extend(old);
 
         if let Err(e) = self.dispatching.load().update_temporary_list(&list) {
             tracing::trace!("Adding rule {} failed: {}", rule_literal, e);
