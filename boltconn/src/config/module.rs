@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ModuleSchema {
-    #[serde(alias = "rule-local")]
+    #[serde(alias = "rule-local", default = "default_rule_local")]
     pub rule_local: Vec<RuleConfigLine>,
     #[serde(alias = "rule-provider", default = "default_rule_provider")]
     pub rule_provider: HashMap<String, RuleProvider>,
@@ -92,4 +92,8 @@ pub async fn read_module_schema(
         list.push(content);
     }
     Ok(list)
+}
+
+fn default_rule_local() -> Vec<RuleConfigLine> {
+    Default::default()
 }
