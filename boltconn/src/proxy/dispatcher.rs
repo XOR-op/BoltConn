@@ -267,7 +267,7 @@ impl Dispatcher {
         if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
             if port == 80 || port == 443 {
                 let result = self.intercept_mgr.load().matches(&mut conn_info).await;
-                if result.should_capture() {
+                if result.should_intercept() {
                     let modifier = (self.modifier.load())(result, process_info);
                     match port {
                         80 => {

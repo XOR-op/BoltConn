@@ -71,7 +71,7 @@ pub struct InterceptionResult {
 }
 
 impl InterceptionResult {
-    pub fn is_some(&self) -> bool {
+    pub fn should_intercept(&self) -> bool {
         !self.payloads.is_empty() || self.will_capture
     }
 
