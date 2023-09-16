@@ -366,9 +366,7 @@ impl App {
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );
 
-        self.dns
-            .replace_resolvers(&self.outbound_iface, group)
-            .await?;
+        self.dns.replace_resolvers(&self.outbound_iface, group)?;
 
         // start atomic replacing
         self.api_dispatching_handler.store(dispatching.clone());

@@ -216,7 +216,7 @@ impl WireguardManager {
         config: &WireguardConfig,
         adapter: Option<AdapterOrSocket>,
     ) -> anyhow::Result<Arc<Endpoint>> {
-        loop {
+        for _ in 0..10 {
             // get an existing conn, or create
             return match self.active_conn.entry(config.clone()) {
                 Entry::Occupied(conn) => {
@@ -247,6 +247,7 @@ impl WireguardManager {
                 }
             };
         }
+        Err(anyhow::anyhow!("get_wg_conn: unexpected loop time"))
     }
 }
 

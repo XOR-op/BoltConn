@@ -108,7 +108,7 @@ pub fn init_tracing(logger: &StreamLoggerSend) {
                 logger: logger.clone(),
             })
             .with_timer(SystemTime);
-        let subscriber = tracing_subscriber::registry()
+        tracing_subscriber::registry()
             .with(stdout_layer)
             .with(stream_layer)
             .with(EnvFilter::new("boltconn=trace"))

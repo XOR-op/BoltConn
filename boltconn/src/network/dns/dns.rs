@@ -1,9 +1,10 @@
 use crate::network::dns::dns_table::DnsTable;
 use crate::network::dns::provider::IfaceProvider;
+use arc_swap::ArcSwap;
 use std::io;
 use std::io::Result;
 use std::net::IpAddr;
-use tokio::sync::RwLock;
+use std::sync::Arc;
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
@@ -12,7 +13,7 @@ use trust_dns_resolver::AsyncResolver;
 
 pub struct Dns {
     table: DnsTable,
-    resolvers: RwLock<Vec<AsyncResolver<GenericConnector<IfaceProvider>>>>,
+    resolvers: ArcSwap<Vec<AsyncResolver<GenericConnector<IfaceProvider>>>>,
 }
 
 impl Dns {
@@ -31,18 +32,18 @@ impl Dns {
         }
         Ok(Dns {
             table: DnsTable::new(),
-            resolvers: RwLock::new(resolvers),
+            resolvers: ArcSwap::new(Arc::new(resolvers)),
         })
     }
 
     pub fn new() -> Dns {
         Dns {
             table: DnsTable::new(),
-            resolvers: RwLock::new(vec![]),
+            resolvers: ArcSwap::new(Arc::new(vec![])),
         }
     }
 
-    pub async fn replace_resolvers(
+    pub fn replace_resolvers(
         &self,
         iface_name: &str,
         configs: Vec<NameServerConfigGroup>,
@@ -56,7 +57,7 @@ impl Dns {
                 GenericConnector::new(IfaceProvider::new(iface_name)),
             ));
         }
-        *self.resolvers.write().await = resolvers;
+        self.resolvers.store(Arc::new(resolvers));
         Ok(())
     }
 
@@ -78,7 +79,7 @@ impl Dns {
     }
 
     pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
-        for r in self.resolvers.read().await.iter() {
+        for r in self.resolvers.load().iter() {
             if let Ok(result) = r.ipv4_lookup(domain_name).await {
                 if let Some(i) = result.iter().next() {
                     return Some(IpAddr::V4(i.0));
