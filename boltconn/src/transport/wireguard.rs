@@ -62,8 +62,12 @@ impl Hash for WireguardConfig {
 
 /// Wireguard Tunnel, with only one peer.
 pub struct WireguardTunnel {
-    outbound: AdapterOrSocket,
     tunnel: tokio::sync::Mutex<Tunn>,
+    inner: WireguardTunnelInner,
+}
+
+struct WireguardTunnelInner {
+    outbound: AdapterOrSocket,
     /// remote address on the genuine Internet
     endpoint: SocketAddr,
     smol_notify: Arc<Notify>,
@@ -100,24 +104,110 @@ impl WireguardTunnel {
         )
         .map_err(|e| anyhow::anyhow!(e))?;
         Ok(Self {
-            outbound,
             tunnel: tokio::sync::Mutex::new(tunnel),
-            endpoint,
-            smol_notify,
-            reserved: config.reserved,
+            inner: WireguardTunnelInner {
+                outbound,
+                endpoint,
+                smol_notify,
+                reserved: config.reserved,
+            },
         })
     }
 
-    async fn flush_pending_queue(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> anyhow::Result<()> {
-        // flush pending queue
-        while let TunnResult::WriteToNetwork(data) =
-            self.tunnel.lock().await.decapsulate(None, &[], buf)
-        {
-            self.outbound_send(data).await?;
+    /// Receive wg packet from Internet
+    pub async fn receive_incoming_packet(
+        &self,
+        smol_tx: &mut flume::Sender<BytesMut>,
+        buf: &mut [u8; MAX_PKT_SIZE],
+        wg_buf: &mut [u8; MAX_PKT_SIZE],
+    ) -> anyhow::Result<bool> {
+        let len = self.inner.outbound_recv(buf).await?;
+        // Indeed we can achieve zero-copy with the implementation of ring,
+        // but there is no hard guarantee for that, so we just manually copy buffer.
+        let mut guard = self.tunnel.lock().await;
+        Ok(match guard.decapsulate(None, &buf[..len], wg_buf) {
+            TunnResult::WriteToTunnelV4(data, _addr) => {
+                let data = BytesMut::from_iter(data.iter());
+                smol_tx.send_async(data).await?;
+                self.inner.smol_notify.notify_one();
+                true
+            }
+            TunnResult::WriteToTunnelV6(data, _addr) => {
+                let data = BytesMut::from_iter(data.iter());
+                smol_tx.send_async(data).await?;
+                self.inner.smol_notify.notify_one();
+                true
+            }
+            TunnResult::WriteToNetwork(data) => {
+                self.inner.outbound_send(data).await?;
+                // flush pending queue
+                while let TunnResult::WriteToNetwork(data) = guard.decapsulate(None, &[], buf) {
+                    self.inner.outbound_send(data).await?;
+                }
+                false
+            }
+            _ => false,
+        })
+    }
+
+    pub async fn send_outgoing_packet(
+        &self,
+        smol_rx: &mut flume::Receiver<BytesMut>,
+        wg_buf: &mut [u8; MAX_PKT_SIZE],
+    ) -> anyhow::Result<()> {
+        let data = smol_rx
+            .recv_async()
+            .await
+            .map_err(|_| io::Error::from(ErrorKind::ConnectionAborted))?;
+        match self.tunnel.lock().await.encapsulate(data.as_ref(), wg_buf) {
+            TunnResult::WriteToNetwork(packet) => {
+                if self.inner.outbound_send(packet).await? != packet.len() {
+                    // size exceeded
+                    Err(io::Error::from(ErrorKind::WouldBlock))?;
+                }
+            }
+            TunnResult::Done => {}
+            other => {
+                tracing::warn!("Sent failed: {:?}", other);
+                Err(io::Error::from(ErrorKind::InvalidData))?
+            }
         }
         Ok(())
     }
 
+    /// Used for ticking tunnel, keeping internal state healthy.
+    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) {
+        let mut guard = self.tunnel.lock().await;
+        match guard.update_timers(buf) {
+            TunnResult::Done => {
+                // do nothing
+            }
+            TunnResult::Err(WireGuardError::ConnectionExpired) => {
+                match guard.format_handshake_initiation(buf, false) {
+                    TunnResult::Done => {
+                        // handshake ongoing, ignore
+                    }
+                    TunnResult::WriteToNetwork(data) => {
+                        let _ = self.inner.outbound_send(data).await;
+                    }
+                    other => {
+                        tracing::warn!("Unexpected wireguard timer message: {:?}", other);
+                    }
+                }
+            }
+            TunnResult::WriteToNetwork(packet) => {
+                if let Err(e) = self.inner.outbound_send(packet).await {
+                    tracing::warn!("Failed to send timer message: {}", e);
+                }
+            }
+            other => {
+                tracing::warn!("Unexpected wireguard timer message: {:?}", other);
+            }
+        }
+    }
+}
+
+impl WireguardTunnelInner {
     async fn outbound_send(&self, data: &mut [u8]) -> anyhow::Result<usize> {
         if data.len() >= 4 {
             if let Some(r) = &self.reserved {
@@ -139,105 +229,6 @@ impl WireguardTunnel {
         match &self.outbound {
             AdapterOrSocket::Adapter(a) => Ok(a.recv_from(data).await?.0),
             AdapterOrSocket::Socket(s) => Ok(s.recv(data).await?),
-        }
-    }
-
-    /// Receive wg packet from Internet
-    pub async fn receive_incoming_packet(
-        &self,
-        smol_tx: &mut flume::Sender<BytesMut>,
-        buf: &mut [u8; MAX_PKT_SIZE],
-        wg_buf: &mut [u8; MAX_PKT_SIZE],
-    ) -> anyhow::Result<bool> {
-        let len = self.outbound_recv(buf).await?;
-        // Indeed we can achieve zero-copy with the implementation of ring,
-        // but there is no hard guarantee for that, so we just manually copy buffer.
-        Ok(
-            match self
-                .tunnel
-                .lock()
-                .await
-                .decapsulate(None, &buf[..len], wg_buf)
-            {
-                TunnResult::WriteToTunnelV4(data, _addr) => {
-                    let data = BytesMut::from_iter(data.iter());
-                    smol_tx.send_async(data).await?;
-                    self.smol_notify.notify_one();
-                    true
-                }
-                TunnResult::WriteToTunnelV6(data, _addr) => {
-                    let data = BytesMut::from_iter(data.iter());
-                    smol_tx.send_async(data).await?;
-                    self.smol_notify.notify_one();
-                    true
-                }
-                TunnResult::WriteToNetwork(data) => {
-                    self.outbound_send(data).await?;
-                    self.flush_pending_queue(wg_buf).await?;
-                    false
-                }
-                _ => false,
-            },
-        )
-    }
-
-    pub async fn send_outgoing_packet(
-        &self,
-        smol_rx: &mut flume::Receiver<BytesMut>,
-        wg_buf: &mut [u8; MAX_PKT_SIZE],
-    ) -> anyhow::Result<()> {
-        let data = smol_rx
-            .recv_async()
-            .await
-            .map_err(|_| io::Error::from(ErrorKind::ConnectionAborted))?;
-        match self.tunnel.lock().await.encapsulate(data.as_ref(), wg_buf) {
-            TunnResult::WriteToNetwork(packet) => {
-                if self.outbound_send(packet).await? != packet.len() {
-                    // size exceeded
-                    Err(io::Error::from(ErrorKind::WouldBlock))?;
-                }
-            }
-            TunnResult::Done => {}
-            other => {
-                tracing::warn!("Sent failed: {:?}", other);
-                Err(io::Error::from(ErrorKind::InvalidData))?
-            }
-        }
-        Ok(())
-    }
-
-    /// Used for ticking tunnel, keeping internal state healthy.
-    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) {
-        match self.tunnel.lock().await.update_timers(buf) {
-            TunnResult::Done => {
-                // do nothing
-            }
-            TunnResult::Err(WireGuardError::ConnectionExpired) => {
-                match self
-                    .tunnel
-                    .lock()
-                    .await
-                    .format_handshake_initiation(buf, false)
-                {
-                    TunnResult::Done => {
-                        // handshake ongoing, ignore
-                    }
-                    TunnResult::WriteToNetwork(data) => {
-                        let _ = self.outbound_send(data).await;
-                    }
-                    other => {
-                        tracing::warn!("Unexpected wireguard timer message: {:?}", other);
-                    }
-                }
-            }
-            TunnResult::WriteToNetwork(packet) => {
-                if let Err(e) = self.outbound_send(packet).await {
-                    tracing::warn!("Failed to send timer message: {}", e);
-                }
-            }
-            other => {
-                tracing::warn!("Unexpected wireguard timer message: {:?}", other);
-            }
         }
     }
 }
