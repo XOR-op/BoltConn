@@ -58,7 +58,7 @@ impl TcpAdapter {
                 while let Some(buf) = rx.recv().await {
                     self.info.more_download(buf.len());
                     if let Err(err) = in_write.write_all(buf.as_ref()).await {
-                        tracing::warn!("TunAdapter write to inbound failed: {}", err);
+                        tracing::warn!("TcpAdapter write to inbound failed: {}", err);
                         self.abort_handle.cancel();
                         break;
                     }
@@ -86,13 +86,13 @@ impl TcpAdapter {
                     }
                     outgoing_info_arc.more_upload(size);
                     if tx.send(buf.freeze()).await.is_err() {
-                        tracing::warn!("TunAdapter tx send err");
+                        tracing::warn!("TcpAdapter tx send err");
                         abort_handle.cancel();
                         break;
                     }
                 }
                 Err(err) => {
-                    tracing::warn!("TunAdapter read error: {}", err);
+                    tracing::warn!("TcpAdapter read error: {}", err);
                     abort_handle.cancel();
                     break;
                 }

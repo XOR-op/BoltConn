@@ -242,7 +242,6 @@ impl Dispatcher {
         let (tun_conn, tun_next) = Connector::new_pair(10);
         let mut handles = Vec::new();
 
-        // tun adapter
         handles.push({
             let info = info.clone();
             let dst_addr = dst_addr.clone();
@@ -258,7 +257,7 @@ impl Dispatcher {
                     abort_handle,
                 );
                 if let Err(err) = tun.run().await {
-                    tracing::error!("[Dispatcher] run TunAdapter failed: {}", err)
+                    tracing::error!("[Dispatcher] run TcpAdapter failed: {}", err)
                 }
             })
         });
