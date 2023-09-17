@@ -63,7 +63,7 @@ impl Hash for WireguardConfig {
 /// Wireguard Tunnel, with only one peer.
 pub struct WireguardTunnel {
     outbound: AdapterOrSocket,
-    tunnel: Box<Tunn>,
+    tunnel: tokio::sync::Mutex<Tunn>,
     /// remote address on the genuine Internet
     endpoint: SocketAddr,
     smol_notify: Arc<Notify>,
@@ -101,7 +101,7 @@ impl WireguardTunnel {
         .map_err(|e| anyhow::anyhow!(e))?;
         Ok(Self {
             outbound,
-            tunnel,
+            tunnel: tokio::sync::Mutex::new(tunnel),
             endpoint,
             smol_notify,
             reserved: config.reserved,
@@ -110,7 +110,9 @@ impl WireguardTunnel {
 
     async fn flush_pending_queue(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> anyhow::Result<()> {
         // flush pending queue
-        while let TunnResult::WriteToNetwork(data) = self.tunnel.decapsulate(None, &[], buf) {
+        while let TunnResult::WriteToNetwork(data) =
+            self.tunnel.lock().await.decapsulate(None, &[], buf)
+        {
             self.outbound_send(data).await?;
         }
         Ok(())
@@ -150,26 +152,33 @@ impl WireguardTunnel {
         let len = self.outbound_recv(buf).await?;
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
-        Ok(match self.tunnel.decapsulate(None, &buf[..len], wg_buf) {
-            TunnResult::WriteToTunnelV4(data, _addr) => {
-                let data = BytesMut::from_iter(data.iter());
-                smol_tx.send_async(data).await?;
-                self.smol_notify.notify_one();
-                true
-            }
-            TunnResult::WriteToTunnelV6(data, _addr) => {
-                let data = BytesMut::from_iter(data.iter());
-                smol_tx.send_async(data).await?;
-                self.smol_notify.notify_one();
-                true
-            }
-            TunnResult::WriteToNetwork(data) => {
-                self.outbound_send(data).await?;
-                self.flush_pending_queue(wg_buf).await?;
-                false
-            }
-            _ => false,
-        })
+        Ok(
+            match self
+                .tunnel
+                .lock()
+                .await
+                .decapsulate(None, &buf[..len], wg_buf)
+            {
+                TunnResult::WriteToTunnelV4(data, _addr) => {
+                    let data = BytesMut::from_iter(data.iter());
+                    smol_tx.send_async(data).await?;
+                    self.smol_notify.notify_one();
+                    true
+                }
+                TunnResult::WriteToTunnelV6(data, _addr) => {
+                    let data = BytesMut::from_iter(data.iter());
+                    smol_tx.send_async(data).await?;
+                    self.smol_notify.notify_one();
+                    true
+                }
+                TunnResult::WriteToNetwork(data) => {
+                    self.outbound_send(data).await?;
+                    self.flush_pending_queue(wg_buf).await?;
+                    false
+                }
+                _ => false,
+            },
+        )
     }
 
     pub async fn send_outgoing_packet(
@@ -181,7 +190,7 @@ impl WireguardTunnel {
             .recv_async()
             .await
             .map_err(|_| io::Error::from(ErrorKind::ConnectionAborted))?;
-        match self.tunnel.encapsulate(data.as_ref(), wg_buf) {
+        match self.tunnel.lock().await.encapsulate(data.as_ref(), wg_buf) {
             TunnResult::WriteToNetwork(packet) => {
                 if self.outbound_send(packet).await? != packet.len() {
                     // size exceeded
@@ -199,12 +208,17 @@ impl WireguardTunnel {
 
     /// Used for ticking tunnel, keeping internal state healthy.
     pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) {
-        match self.tunnel.update_timers(buf) {
+        match self.tunnel.lock().await.update_timers(buf) {
             TunnResult::Done => {
                 // do nothing
             }
             TunnResult::Err(WireGuardError::ConnectionExpired) => {
-                match self.tunnel.format_handshake_initiation(buf, false) {
+                match self
+                    .tunnel
+                    .lock()
+                    .await
+                    .format_handshake_initiation(buf, false)
+                {
                     TunnResult::Done => {
                         // handshake ongoing, ignore
                     }
