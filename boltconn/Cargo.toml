@@ -24,9 +24,9 @@ bytes = "1.2.1"
 chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
 colored = "2.0.0"
 dashmap = "5.4.0"
-fast-socks5 = "0.8.1"
+fast-socks5 = "0.9.1"
 fastrand = "2.0.0"
-flume = "0.10.14"
+flume = "0.11.0"
 futures = "0.3.25"
 http = "0.2.8"
 httparse = "1.8.0"
@@ -59,9 +59,9 @@ structopt = "0.3.26"
 tabular = "0.2.0"
 tarpc = { version = "0.33.0", features = ["serde-transport", "unix", "serde-transport-bincode"] }
 thiserror = "1.0.37"
-tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
+tokio = { version = "1.32.0", features = ["rt", "rt-multi-thread", "net", "sync", "io-util", "macros", "signal", "time"] }
 tokio-rustls = { version = "0.24.0", features = ["dangerous_configuration"] }
-tokio-tungstenite = "0.19.0"
+tokio-tungstenite = "0.20.0"
 tower-http = { version = "0.4.0", features = ["cors"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std", "fmt", "json"] }
