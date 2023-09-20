@@ -5,6 +5,7 @@ use std::io;
 use std::io::Result;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
@@ -80,10 +81,16 @@ impl Dns {
 
     pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
         for r in self.resolvers.load().iter() {
-            if let Ok(result) = r.ipv4_lookup(domain_name).await {
-                if let Some(i) = result.iter().next() {
-                    return Some(IpAddr::V4(i.0));
+            if let Ok(r) =
+                tokio::time::timeout(Duration::from_secs(10), r.ipv4_lookup(domain_name)).await
+            {
+                if let Ok(result) = r {
+                    if let Some(i) = result.iter().next() {
+                        return Some(IpAddr::V4(i.0));
+                    }
                 }
+            } else {
+                tracing::trace!("DNS lookup for {domain_name} timeout");
             }
         }
         None

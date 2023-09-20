@@ -344,7 +344,11 @@ impl Outbound for WireguardHandle {
         inbound: Connector,
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
-        tokio::spawn(self.clone().attach_tcp(inbound, abort_handle, None))
+        tokio::spawn(wireguard_timeout(self.clone().attach_tcp(
+            inbound,
+            abort_handle,
+            None,
+        )))
     }
 
     fn spawn_tcp_with_outbound(
@@ -359,11 +363,11 @@ impl Outbound for WireguardHandle {
             return tokio::spawn(async move { Ok(()) });
         }
         let udp_outbound = udp_outbound.unwrap();
-        tokio::spawn(self.clone().attach_tcp(
+        tokio::spawn(wireguard_timeout(self.clone().attach_tcp(
             inbound,
             abort_handle,
             Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-        ))
+        )))
     }
 
     fn spawn_udp(
@@ -372,7 +376,11 @@ impl Outbound for WireguardHandle {
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
-        tokio::spawn(self.clone().attach_udp(inbound, abort_handle, None))
+        tokio::spawn(wireguard_timeout(self.clone().attach_udp(
+            inbound,
+            abort_handle,
+            None,
+        )))
     }
 
     fn spawn_udp_with_outbound(
@@ -388,11 +396,11 @@ impl Outbound for WireguardHandle {
             return tokio::spawn(async move { Ok(()) });
         }
         let udp_outbound = udp_outbound.unwrap();
-        tokio::spawn(self.clone().attach_udp(
+        tokio::spawn(wireguard_timeout(self.clone().attach_udp(
             inbound,
             abort_handle,
             Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-        ))
+        )))
     }
 }
 
@@ -517,6 +525,16 @@ impl DnsUdpSocket for AddrConnectorWrapper {
         {
             Ok(_) => Poll::Ready(Ok(len)),
             Err(_) => Poll::Pending,
+        }
+    }
+}
+
+async fn wireguard_timeout<F: Future<Output = io::Result<()>>>(future: F) -> io::Result<()> {
+    match tokio::time::timeout(Duration::from_secs(10), future).await {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::trace!("WireGuard timeout after 10s");
+            Err(ErrorKind::TimedOut.into())
         }
     }
 }
