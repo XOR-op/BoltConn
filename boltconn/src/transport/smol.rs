@@ -60,7 +60,7 @@ impl TcpConnTask {
         }
     }
 
-    pub async fn try_send(&mut self, socket: &mut SmolTcpSocket<'_>) -> io::Result<bool> {
+    pub fn try_send(&mut self, socket: &mut SmolTcpSocket<'_>) -> io::Result<bool> {
         let mut has_activity = false;
         // Send data
         if socket.can_send() {
@@ -388,10 +388,11 @@ impl SmolStack {
 
     pub async fn poll_all_tcp(&mut self) -> bool {
         let mut has_activity = false;
+        // no double entry here, so theoretically there is no deadlock related to DashMap
         for mut item in self.tcp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(item.handle);
             if socket.state() != TcpState::Closed {
-                match item.try_send(socket).await {
+                match item.try_send(socket) {
                     Ok(v) => has_activity |= v,
                     Err(_) => {
                         socket.close();

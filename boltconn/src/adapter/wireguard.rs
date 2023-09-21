@@ -1,4 +1,5 @@
 use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, OutboundType};
+use std::collections::HashMap;
 use std::future::Future;
 
 use crate::common::duplex_chan::DuplexChan;
@@ -10,8 +11,6 @@ use crate::transport::smol::{SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
 use bytes::Bytes;
-use dashmap::mapref::entry::Entry;
-use dashmap::DashMap;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
@@ -196,7 +195,8 @@ impl Endpoint {
 
 pub struct WireguardManager {
     iface: String,
-    active_conn: DashMap<WireguardConfig, Arc<Endpoint>>,
+    // We use an async wrapper to avoid deadlock in DashMap
+    active_conn: tokio::sync::Mutex<HashMap<WireguardConfig, Arc<Endpoint>>>,
     dns: Arc<Dns>,
     timeout: Duration,
 }
@@ -218,34 +218,32 @@ impl WireguardManager {
     ) -> anyhow::Result<Arc<Endpoint>> {
         for _ in 0..10 {
             // get an existing conn, or create
-            return match self.active_conn.entry(config.clone()) {
-                Entry::Occupied(conn) => {
-                    if !conn.get().is_active.load(Ordering::Relaxed) {
-                        conn.remove_entry();
-                        continue;
+            let mut guard = self.active_conn.lock().await;
+            if let Some(endpoint) = guard.get(config) {
+                if endpoint.is_active.load(Ordering::Relaxed) {
+                    return Ok(endpoint.clone());
+                } else {
+                    guard.remove(config);
+                    continue;
+                }
+            } else {
+                let server_addr = get_dst(&self.dns, &config.endpoint).await?;
+                let outbound = adapter.unwrap_or(AdapterOrSocket::Socket(match server_addr {
+                    SocketAddr::V4(_) => {
+                        let socket = Egress::new(&self.iface).udpv4_socket().await?;
+                        socket.connect(server_addr).await?;
+                        socket
                     }
-                    Ok(conn.get().clone())
-                }
-                Entry::Vacant(entry) => {
-                    let server_addr = get_dst(&self.dns, &config.endpoint).await?;
-                    let outbound = adapter.unwrap_or(AdapterOrSocket::Socket(match server_addr {
-                        SocketAddr::V4(_) => {
-                            let socket = Egress::new(&self.iface).udpv4_socket().await?;
-                            socket.connect(server_addr).await?;
-                            socket
-                        }
-                        SocketAddr::V6(_) => {
-                            let socket = Egress::new(&self.iface).udpv6_socket().await?;
-                            socket.connect(server_addr).await?;
-                            socket
-                        }
-                    }));
-                    let ep =
-                        Endpoint::new(outbound, config, self.dns.clone(), self.timeout).await?;
-                    entry.insert(ep.clone());
-                    Ok(ep)
-                }
-            };
+                    SocketAddr::V6(_) => {
+                        let socket = Egress::new(&self.iface).udpv6_socket().await?;
+                        socket.connect(server_addr).await?;
+                        socket
+                    }
+                }));
+                let ep = Endpoint::new(outbound, config, self.dns.clone(), self.timeout).await?;
+                guard.insert(config.clone(), ep.clone());
+                return Ok(ep);
+            }
         }
         Err(anyhow::anyhow!("get_wg_conn: unexpected loop time"))
     }
