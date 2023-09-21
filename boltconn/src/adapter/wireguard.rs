@@ -111,13 +111,26 @@ impl Endpoint {
 
         let wg_tick = {
             let tunnel = tunnel.clone();
+            let stop_send = stop_send.clone();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
+                let mut continuous_err_cnt = 0;
                 loop {
-                    tunnel.tick(&mut buf).await;
-                    // <del>From boringtun, the recommended interval is 100ms.</del>
-                    // Comments from Tunn::update_timers says one second interval is enough.
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
+                    if let Err(e) = tunnel.tick(&mut buf).await {
+                        continuous_err_cnt += 1;
+                        if continuous_err_cnt >= 3 {
+                            // Stop the current WireGuard connection
+                            let _ = stop_send.send(());
+                            tracing::warn!("[WireGuard] Close connection for {}", e);
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    } else {
+                        continuous_err_cnt = 0;
+                        // <del>From boringtun, the recommended interval is 100ms.</del>
+                        // Comments from Tunn::update_timers says one second interval is enough.
+                        tokio::time::sleep(Duration::from_millis(1000)).await;
+                    }
                 }
             })
         };
@@ -159,7 +172,7 @@ impl Endpoint {
                         indi_write.store(false, Ordering::Relaxed);
                         let _ = stop_send.send(());
                         tracing::trace!(
-                            "[Wireguard] Stop inactive tunnel after for {}s.",
+                            "[WireGuard] Stop inactive tunnel after for {}s.",
                             timeout.as_secs()
                         );
                         break;
