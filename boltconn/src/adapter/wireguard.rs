@@ -116,20 +116,25 @@ impl Endpoint {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 let mut continuous_err_cnt = 0;
                 loop {
-                    if let Err(e) = tunnel.tick(&mut buf).await {
-                        continuous_err_cnt += 1;
-                        if continuous_err_cnt >= 3 {
-                            // Stop the current WireGuard connection
-                            let _ = stop_send.send(());
-                            tracing::warn!("[WireGuard] Close connection for {}", e);
-                            return;
+                    match tunnel.tick(&mut buf).await {
+                        Err(e) => {
+                            continuous_err_cnt += 1;
+                            if continuous_err_cnt >= 2 {
+                                // Stop the current WireGuard connection
+                                let _ = stop_send.send(());
+                                tracing::warn!("[WireGuard] Close connection for {}", e);
+                                return;
+                            }
+                            tokio::time::sleep(Duration::from_millis(300)).await;
                         }
-                        tokio::time::sleep(Duration::from_millis(300)).await;
-                    } else {
-                        continuous_err_cnt = 0;
-                        // <del>From boringtun, the recommended interval is 100ms.</del>
-                        // Comments from Tunn::update_timers says one second interval is enough.
-                        tokio::time::sleep(Duration::from_millis(1000)).await;
+                        Ok(has_sent) => {
+                            if has_sent {
+                                continuous_err_cnt = 0;
+                            }
+                            // <del>From boringtun, the recommended interval is 100ms.</del>
+                            // Comments from Tunn::update_timers says one second interval is enough.
+                            tokio::time::sleep(Duration::from_millis(1000)).await;
+                        }
                     }
                 }
             })

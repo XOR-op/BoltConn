@@ -176,39 +176,47 @@ impl WireguardTunnel {
     }
 
     /// Used for ticking tunnel, keeping internal state healthy.
-    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> anyhow::Result<()> {
+    /// Return whether sending any message
+    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> anyhow::Result<bool> {
         let mut guard = self.tunnel.lock().await;
         match guard.update_timers(buf) {
             TunnResult::Done => {
                 // do nothing
+                Ok(false)
             }
             TunnResult::Err(WireGuardError::ConnectionExpired) => {
                 match guard.format_handshake_initiation(buf, false) {
                     TunnResult::Done => {
                         // handshake ongoing, ignore
+                        Ok(false)
                     }
                     TunnResult::WriteToNetwork(data) => {
                         if let Err(e) = self.inner.outbound_send(data).await {
                             tracing::warn!("Failed to write to network: {}", e);
-                            return Err(e);
+                            Err(e)
+                        } else {
+                            Ok(true)
                         }
                     }
                     other => {
                         tracing::warn!("Unexpected WireGuard timer message: {:?}", other);
+                        Ok(false)
                     }
                 }
             }
             TunnResult::WriteToNetwork(packet) => {
                 if let Err(e) = self.inner.outbound_send(packet).await {
                     tracing::warn!("Failed to send timer message: {}", e);
-                    return Err(e);
+                    Err(e)
+                } else {
+                    Ok(true)
                 }
             }
             other => {
                 tracing::warn!("Unexpected WireGuard timer message: {:?}", other);
+                Ok(false)
             }
         }
-        Ok(())
     }
 }
 
