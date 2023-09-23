@@ -91,6 +91,7 @@ impl Controller {
         for (idx, info) in list.iter().enumerate() {
             let conn = ConnectionSchema {
                 conn_id: (idx + offset) as u64,
+                inbound: info.inbound_info.to_string(),
                 destination: info.dest.to_string(),
                 protocol: info.session_proto.write().unwrap().to_string(),
                 proxy: format!("{:?}", info.rule).to_ascii_lowercase(),

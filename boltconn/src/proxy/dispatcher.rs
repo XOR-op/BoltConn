@@ -201,7 +201,7 @@ impl Dispatcher {
         let mut conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
-            inbound,
+            inbound: inbound.clone(),
             resolved_dst: None,
             connection_type: NetworkType::Tcp,
             process_info: process_info.clone(),
@@ -232,6 +232,7 @@ impl Dispatcher {
         let info = Arc::new(ConnContext::new(
             dst_addr.clone(),
             process_info.clone(),
+            inbound,
             proxy_type,
             NetworkType::Tcp,
             abort_handle.clone(),
@@ -370,6 +371,7 @@ impl Dispatcher {
         let info = Arc::new(ConnContext::new(
             dst_addr,
             conn_info.process_info,
+            conn_info.inbound,
             proxy_type,
             NetworkType::Udp,
             abort_handle.clone(),

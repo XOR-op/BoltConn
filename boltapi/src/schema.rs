@@ -15,6 +15,7 @@ pub struct ProcessSchema {
 #[serde(deny_unknown_fields)]
 pub struct ConnectionSchema {
     pub conn_id: u64,
+    pub inbound: String,
     pub destination: String,
     pub protocol: String,
     pub proxy: String,

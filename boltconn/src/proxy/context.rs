@@ -1,6 +1,7 @@
 use crate::adapter::OutboundType;
 use crate::common::evictable_vec::EvictableVec;
 use crate::config::RawServerAddr;
+use crate::dispatch::InboundInfo;
 use crate::external::DatabaseHandle;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use arc_swap::ArcSwap;
@@ -258,6 +259,9 @@ pub struct ConnContext {
     pub start_time: SystemTime,
     pub dest: NetworkAddr,
     pub process_info: Option<ProcessInfo>,
+    pub inbound_info: InboundInfo,
+
+    // Will change
     pub session_proto: RwLock<SessionProtocol>,
     pub rule: OutboundType,
     pub upload_traffic: AtomicU64,
@@ -269,11 +273,15 @@ pub struct ConnContext {
 }
 
 impl ConnContext {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        // static info
         dst: NetworkAddr,
         process_info: Option<ProcessInfo>,
+        inbound_info: InboundInfo,
         rule: OutboundType,
         network_type: NetworkType,
+        // runtime handle
         abort_handle: ConnAbortHandle,
         global_upload: Arc<AtomicU64>,
         global_download: Arc<AtomicU64>,
@@ -281,6 +289,7 @@ impl ConnContext {
         Self {
             start_time: SystemTime::now(),
             dest: dst,
+            inbound_info,
             process_info,
             session_proto: std::sync::RwLock::new(match network_type {
                 NetworkType::Tcp => SessionProtocol::Tcp,

@@ -23,6 +23,7 @@ use regex::Regex;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -35,6 +36,25 @@ pub enum InboundInfo {
     Socks5Any,
     Http(Option<String>),
     Socks5(Option<String>),
+}
+
+impl Display for InboundInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            match self {
+                InboundInfo::Tun => "TUN".to_string(),
+                InboundInfo::HttpAny => "HTTP".to_string(),
+                InboundInfo::Socks5Any => "SOCKS5".to_string(),
+                InboundInfo::Http(user) => user
+                    .clone()
+                    .map_or("HTTP".to_string(), |x| format!("HTTP({x})")),
+                InboundInfo::Socks5(user) => user
+                    .clone()
+                    .map_or("SOCKS5".to_string(), |x| format!("SOCKS5({x})")),
+            }
+            .as_str(),
+        )
+    }
 }
 
 impl InboundInfo {
@@ -391,7 +411,7 @@ impl DispatchingBuilder {
                         "aes-256-gcm" => CipherKind::AES_256_GCM,
                         "aes-128-gcm" => CipherKind::AES_128_GCM,
                         _ => {
-                            return Err(anyhow!("Bad Shadowsocks {}: unsupported cipher", *name));
+                            return Err(anyhow!("Bad ShadowSocks {}: unsupported cipher", *name));
                         }
                     };
                     let addr = match server {
@@ -560,7 +580,7 @@ impl DispatchingBuilder {
                     if px.get_impl().simple_description() == "wireguard"
                         && wg_history.insert(p.clone(), true).is_some()
                     {
-                        tracing::warn!("Wireguard {} should not appear in different chains", p);
+                        tracing::warn!("WireGuard {} should not appear in different chains", p);
                     }
                 }
                 contents.push(proxy);
@@ -589,7 +609,7 @@ impl DispatchingBuilder {
                     if px.get_impl().simple_description() == "wireguard"
                         && wg_history.insert(p.clone(), false) == Some(true)
                     {
-                        tracing::warn!("Wireguard {} should not appear in different chains", p);
+                        tracing::warn!("WireGuard {} should not appear in different chains", p);
                     }
                 }
                 if p == state.group_selection.get(name).unwrap_or(&String::new()) {
@@ -750,22 +770,24 @@ impl DispatchingSnippet {
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
             if verbose {
                 tracing::info!(
-                    "[{}]({}) {} => {}: Failed(UDP disabled)",
+                    "[{}]({},{}) {} => {}: Failed(UDP disabled)",
                     rule_str,
                     stringfy_process(info),
+                    info.inbound,
                     info.dst,
-                    proxy
+                    proxy,
                 );
             }
             return (Arc::new(ProxyImpl::Reject), None);
         }
         if verbose {
             tracing::info!(
-                "[{}]({}) {} => {}",
+                "[{}]({},{}) {} => {}",
                 rule_str,
                 stringfy_process(info),
+                info.inbound,
                 info.dst,
-                proxy
+                proxy,
             );
         }
         (proxy_impl, iface)
