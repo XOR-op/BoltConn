@@ -1,3 +1,4 @@
+mod bootstrap;
 #[allow(clippy::module_inception)]
 mod config;
 mod inbound;
@@ -133,9 +134,7 @@ where
         // security: `full_path` should be (layers of) subdir of `root_path`,
         //           so arbitrary write should not happen
         fs::write(full_path.as_path(), text)?;
-        if let Some((_, uid, gid)) = get_user_info() {
-            nix::unistd::chown(&full_path, Some(uid.into()), Some(gid.into()))?;
-        }
+        set_real_ownership(&full_path)?;
         content
     };
     Ok(content)
@@ -145,4 +144,11 @@ where
 pub struct AuthData {
     pub username: String,
     pub password: String,
+}
+
+pub(super) fn set_real_ownership(path: &Path) -> io::Result<()> {
+    if let Some((_, uid, gid)) = get_user_info() {
+        nix::unistd::chown(path, Some(uid.into()), Some(gid.into()))?;
+    }
+    Ok(())
 }

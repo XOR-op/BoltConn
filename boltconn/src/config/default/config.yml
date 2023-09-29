@@ -1,0 +1,16 @@
+interface: auto
+inbound:
+  http: 9961
+dns:
+  bootstrap:
+    - 1.1.1.1
+  nameserver:
+    - doh, 1.1.1.1
+
+proxy-group:
+  Default:
+    proxies:
+      - DIRECT
+
+rule-local:
+  - FALLBACK, Default
