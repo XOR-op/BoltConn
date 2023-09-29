@@ -20,8 +20,20 @@ impl Egress {
 
     pub async fn tcp_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         match addr {
-            SocketAddr::V4(_) => self.tcpv4_stream(addr).await,
-            SocketAddr::V6(_) => self.tcpv6_stream(addr).await,
+            SocketAddr::V4(v4addr) => {
+                if v4addr.ip().is_loopback() {
+                    TcpStream::connect(SocketAddr::V4(v4addr)).await
+                } else {
+                    self.tcpv4_stream(SocketAddr::V4(v4addr)).await
+                }
+            }
+            SocketAddr::V6(v6addr) => {
+                if v6addr.ip().is_loopback() {
+                    TcpStream::connect(SocketAddr::V6(v6addr)).await
+                } else {
+                    self.tcpv6_stream(SocketAddr::V6(v6addr)).await
+                }
+            }
         }
     }
 
