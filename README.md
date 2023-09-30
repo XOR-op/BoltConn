@@ -20,34 +20,35 @@
 </p>
 
 A go-to solution for transparent application proxy & firewall with tunneling and MitM, designed with privacy and security in mind. 
-All efforts made to make you fully control your network.
+All efforts made to make you fully control your network. Experimental webui & desktop client is available in [XOR-op/BoltBoard](https://github.com/XOR-op/BoltBoard).
+
 
 ## Features
-- **Block Anything You Dislike**: Block annoying ads, ubiquitous telemetry or any traffic you don't want this app send.
-- **Secure Your Traffic with Tunneling**: Prevent your traffic sniffed by ISP or third-party with Wireguard, Shadowsocks and more.
-You can also chain them at client side, without support from proxy server.
-- **Audit Your Traffic**: Audit traffic history to make sure apps behave trustworthy.
-- **Modify in the Way You Want**: Manipulate requests and responses inside HTTPS traffic. Examine if the app secretly sends your data to their server, and block them once you find it.
-- **Flexible Configuration**: Combine all above features with highly-customizable rule system. Directly include components from community, and compose your unique configuration.
+- **Fine-grained Traffic Control**: Allow VPN-style global control, or dedicated http/socks5 per-inbound control.
+- **Rule-based Blocking**: Block ad/tracking traffic on a per-process/per-website/flexible way.
+- **Rule-based Tunneling**: Flexible way to tunnel traffic through http/socks5/shadowsocks/trojan/wireguard outbounds.
+- **Audit Traffic**: Audit traffic history by accessing API or dumping into SQLite.
+- **Modify HTTPS Data**: Manipulate requests and responses inside HTTPS traffic to redirect, block or modify them. Able to use compatible rules from Clash community.
 
 For the full features, see [features.md](./docs/features.md).
 
 ## Getting Started
 
+*Note: more friendly getting-started instructions and relevant codebase are coming soon.*
 
 To get started with BoltConn, follow these simple steps:
 
 1. Download pre-built binaries from [release](https://github.com/XOR-op/BoltConn/releases) or build yourself.
 2. Add the path of the binary to `$PATH`.
-3. Run BoltConn by typing `boltconn` in your terminal.
+3. Run BoltConn by typing `sudo boltconn start` in your terminal.
 
 To generate CA certificate:
 
 ```bash
-boltadm cert -p <your_desired_path>
+boltconn cert -p <your_desired_path>
 ```
 
-To control a running BoltConn service, use `boltadm`.  For more information, use `boltadm --help`.
+For more information, use `boltconn --help`.
 
 ## Documentations
 Learn more about BoltConn's architecture, RESTful API, and how it compares to other related projects:
@@ -58,7 +59,6 @@ Learn more about BoltConn's architecture, RESTful API, and how it compares to ot
 - [features.md](./docs/features.md) lists full features of BoltConn.
 
 ## Future Plan
-- Improve and release web dashboard and desktop GUI client
 - More rules
   - Wi-Fi SSID
 - More MitM configurations
