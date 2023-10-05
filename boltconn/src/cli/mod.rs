@@ -51,7 +51,7 @@ pub(crate) enum TunOptions {
 #[derive(Debug, StructOpt)]
 pub(crate) struct CertOptions {
     #[structopt(short, long)]
-    path: Option<String>,
+    path: Option<PathBuf>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -76,7 +76,7 @@ pub(crate) enum InterceptOptions {
 
 #[derive(Debug, StructOpt)]
 pub(crate) struct StartOptions {
-    /// Path of configutation. Default to $HOME/.config/boltconn
+    /// Path of configuration. Default to $HOME/.config/boltconn
     #[structopt(short, long)]
     pub config: Option<PathBuf>,
     /// Path of application data. Default to $HOME/.local/share/boltconn
@@ -88,9 +88,21 @@ pub(crate) struct StartOptions {
 }
 
 #[derive(Debug, StructOpt)]
+pub(crate) struct InitOptions {
+    /// Path of configuration. Default to $HOME/.config/boltconn
+    #[structopt(short, long)]
+    pub config: Option<PathBuf>,
+    /// Path of application data. Default to $HOME/.local/share/boltconn
+    #[structopt(short = "d", long = "data")]
+    pub app_data: Option<PathBuf>,
+}
+
+#[derive(Debug, StructOpt)]
 pub(crate) enum SubCommand {
     /// Start Main Program
     Start(StartOptions),
+    /// Create Configurations
+    Init(InitOptions),
     /// Proxy Settings
     Proxy(ProxyOptions),
     /// Connection Settings
@@ -148,12 +160,26 @@ pub(crate) async fn controller_main(args: Args) -> ! {
                 Ok(())
             }
         },
+        SubCommand::Init(init) => {
+            fn create(init: InitOptions) -> anyhow::Result<()> {
+                if let Some(path) = init.config {
+                    crate::config::test_or_create_config(&path)?;
+                    tracing::info!("Successfully created config at {}", path.to_string_lossy());
+                }
+                if let Some(path) = init.app_data {
+                    crate::config::test_or_create_state(&path)?;
+                    tracing::info!("Successfully created state at {}", path.to_string_lossy());
+                }
+                Ok(())
+            }
+            create(init)
+        }
         SubCommand::Cert(opt) => {
             if !is_root() {
                 eprintln!("Must be run with root/admin privilege");
                 exit(-1)
             } else {
-                fn fetch_path() -> anyhow::Result<String> {
+                fn fetch_path() -> anyhow::Result<PathBuf> {
                     let p = PathBuf::from(std::env::var("HOME")?)
                         .join(".config")
                         .join("../..");
@@ -162,9 +188,9 @@ pub(crate) async fn controller_main(args: Args) -> ! {
                     }
                     let p = p.join("cert");
                     if !p.exists() {
-                        std::fs::create_dir(p.clone())?;
+                        crate::config::test_or_create_path(&p)?;
                     }
-                    Ok(p.to_string_lossy().to_string())
+                    Ok(p)
                 }
                 match match opt.path {
                     None => fetch_path(),

@@ -3,7 +3,7 @@ use anyhow::Context;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn test_or_create_path(path: &Path) -> anyhow::Result<()> {
+pub(crate) fn test_or_create_path(path: &Path) -> anyhow::Result<()> {
     let mut current_path = PathBuf::new();
     for comp in path.components() {
         current_path.push(comp);
