@@ -125,54 +125,27 @@ pub(crate) enum SubCommand {
 
 pub(crate) async fn controller_main(args: Args) -> ! {
     let default_uds_path = "/var/run/boltconn.sock";
-    if matches!(args.cmd, SubCommand::Clean) {
-        if !is_root() {
-            eprintln!("Must be run with root/admin privilege");
-            exit(-1)
-        } else {
-            clean::clean_route_table();
-            clean::remove_unix_socket(default_uds_path);
-            exit(0)
-        }
-    }
-    let requestor = match match args.url {
-        None => request::Requester::new_uds(PathBuf::from(default_uds_path)).await,
-        Some(url) => request::Requester::new_web(url),
-    } {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("{}", err);
-            exit(-1)
-        }
-    };
-    let result = match args.cmd {
-        SubCommand::Proxy(opt) => match opt {
-            ProxyOptions::Set { group, proxy } => requestor.set_group_proxy(group, proxy).await,
-            ProxyOptions::List => requestor.get_group_list().await,
-        },
-        SubCommand::Conn(opt) => match opt {
-            ConnOptions::List => requestor.get_connections().await,
-            ConnOptions::Stop { nth } => requestor.stop_connections(nth).await,
-        },
-        SubCommand::Log(opt) => match opt {
-            LogOptions::List => {
-                // todo
-                Ok(())
-            }
-        },
+    match args.cmd {
         SubCommand::Init(init) => {
             fn create(init: InitOptions) -> anyhow::Result<()> {
-                if let Some(path) = init.config {
-                    crate::config::test_or_create_config(&path)?;
-                    tracing::info!("Successfully created config at {}", path.to_string_lossy());
-                }
-                if let Some(path) = init.app_data {
-                    crate::config::test_or_create_state(&path)?;
-                    tracing::info!("Successfully created state at {}", path.to_string_lossy());
-                }
+                let (config, data, _) =
+                    crate::config::parse_paths(&init.config, &init.app_data, &None)?;
+                crate::config::test_or_create_config(&config)?;
+                println!(
+                    "Successfully created config at {}",
+                    config.to_string_lossy()
+                );
+                crate::config::test_or_create_state(&data)?;
+                println!("Successfully created state at {}", data.to_string_lossy());
                 Ok(())
             }
-            create(init)
+            match create(init) {
+                Ok(_) => exit(0),
+                Err(err) => {
+                    eprintln!("{}", err);
+                    exit(-1)
+                }
+            }
         }
         SubCommand::Cert(opt) => {
             if !is_root() {
@@ -192,32 +165,76 @@ pub(crate) async fn controller_main(args: Args) -> ! {
                     }
                     Ok(p)
                 }
-                match match opt.path {
+                match match match opt.path {
                     None => fetch_path(),
                     Some(p) => Ok(p),
                 } {
                     Ok(path) => cert::generate_cert(path),
                     Err(e) => Err(e),
+                } {
+                    Ok(_) => exit(0),
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        exit(-1)
+                    }
                 }
             }
         }
+        SubCommand::Clean => {
+            if !is_root() {
+                eprintln!("Must be run with root/admin privilege");
+                exit(-1)
+            } else {
+                clean::clean_route_table();
+                clean::remove_unix_socket(default_uds_path);
+                exit(0)
+            }
+        }
+        _ => (),
+    }
+    let requester = match match args.url {
+        None => request::Requester::new_uds(PathBuf::from(default_uds_path)).await,
+        Some(url) => request::Requester::new_web(url),
+    } {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("{}", err);
+            exit(-1)
+        }
+    };
+    let result = match args.cmd {
+        SubCommand::Proxy(opt) => match opt {
+            ProxyOptions::Set { group, proxy } => requester.set_group_proxy(group, proxy).await,
+            ProxyOptions::List => requester.get_group_list().await,
+        },
+        SubCommand::Conn(opt) => match opt {
+            ConnOptions::List => requester.get_connections().await,
+            ConnOptions::Stop { nth } => requester.stop_connections(nth).await,
+        },
+        SubCommand::Log(opt) => match opt {
+            LogOptions::List => {
+                // todo
+                Ok(())
+            }
+        },
         SubCommand::Tun(opt) => match opt {
-            TunOptions::Get => requestor.get_tun().await,
-            TunOptions::Set { s } => requestor.set_tun(s.as_str()).await,
+            TunOptions::Get => requester.get_tun().await,
+            TunOptions::Set { s } => requester.set_tun(s.as_str()).await,
         },
         SubCommand::Intercept(opt) => match opt {
-            InterceptOptions::List => requestor.intercept(None).await,
-            InterceptOptions::Range { start, end } => requestor.intercept(Some((start, end))).await,
-            InterceptOptions::Get { id } => requestor.get_intercept_payload(id).await,
+            InterceptOptions::List => requester.intercept(None).await,
+            InterceptOptions::Range { start, end } => requester.intercept(Some((start, end))).await,
+            InterceptOptions::Get { id } => requester.get_intercept_payload(id).await,
         },
-        SubCommand::Clean => unreachable!(),
-        SubCommand::Reload => requestor.reload_config().await,
+        SubCommand::Reload => requester.reload_config().await,
         SubCommand::Rule(opt) => match opt {
-            TempRuleOptions::Add { literal } => requestor.add_temporary_rule(literal).await,
-            TempRuleOptions::Delete { literal } => requestor.delete_temporary_rule(literal).await,
-            TempRuleOptions::Clear => requestor.clear_temporary_rule().await,
+            TempRuleOptions::Add { literal } => requester.add_temporary_rule(literal).await,
+            TempRuleOptions::Delete { literal } => requester.delete_temporary_rule(literal).await,
+            TempRuleOptions::Clear => requester.clear_temporary_rule().await,
         },
-        SubCommand::Start(_) => unreachable!(),
+        SubCommand::Start(_) | SubCommand::Init(_) | SubCommand::Cert(_) | SubCommand::Clean => {
+            unreachable!()
+        }
     };
     match result {
         Ok(_) => exit(0),

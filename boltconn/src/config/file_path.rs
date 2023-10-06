@@ -41,3 +41,29 @@ fn test_or_create_file(path: &Path, file_name: &str, file_content: &str) -> anyh
     }
     Ok(())
 }
+
+pub(crate) fn parse_paths(
+    config: &Option<PathBuf>,
+    app_data: &Option<PathBuf>,
+    cert: &Option<PathBuf>,
+) -> anyhow::Result<(PathBuf, PathBuf, PathBuf)> {
+    let config_path = match config {
+        None => {
+            let home = PathBuf::from(std::env::var("HOME")?);
+            home.join(".config").join("boltconn")
+        }
+        Some(p) => p.clone(),
+    };
+    let data_path = match app_data {
+        None => {
+            let home = PathBuf::from(std::env::var("HOME")?);
+            home.join(".local").join("share").join("boltconn")
+        }
+        Some(p) => p.clone(),
+    };
+    let cert_path = match cert {
+        None => data_path.join("cert"),
+        Some(p) => p.clone(),
+    };
+    Ok((config_path, data_path, cert_path))
+}
