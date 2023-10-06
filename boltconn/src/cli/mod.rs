@@ -130,13 +130,15 @@ pub(crate) async fn controller_main(args: Args) -> ! {
             fn create(init: InitOptions) -> anyhow::Result<()> {
                 let (config, data, _) =
                     crate::config::parse_paths(&init.config, &init.app_data, &None)?;
-                crate::config::test_or_create_config(&config)?;
-                println!(
-                    "Successfully created config at {}",
-                    config.to_string_lossy()
-                );
-                crate::config::test_or_create_state(&data)?;
-                println!("Successfully created state at {}", data.to_string_lossy());
+                if crate::config::test_or_create_config(&config)? {
+                    println!(
+                        "Successfully created config at {}",
+                        config.to_string_lossy()
+                    );
+                }
+                if crate::config::test_or_create_state(&data)? {
+                    println!("Successfully created state at {}", data.to_string_lossy());
+                }
                 Ok(())
             }
             match create(init) {
@@ -153,11 +155,9 @@ pub(crate) async fn controller_main(args: Args) -> ! {
                 exit(-1)
             } else {
                 fn fetch_path() -> anyhow::Result<PathBuf> {
-                    let p = PathBuf::from(std::env::var("HOME")?)
-                        .join(".config")
-                        .join("../..");
+                    let p = PathBuf::from(std::env::var("HOME")?).join(".local/share/boltconn");
                     if !p.exists() {
-                        Err(anyhow!("${{HOME}}/.config/boltconn does not exist"))?;
+                        Err(anyhow!("${{HOME}}/.local/share/boltconn does not exist"))?;
                     }
                     let p = p.join("cert");
                     if !p.exists() {

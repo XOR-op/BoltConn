@@ -1,7 +1,7 @@
 #[allow(clippy::module_inception)]
 mod config;
-mod inbound;
 mod file_path;
+mod inbound;
 mod interception;
 mod module;
 mod proxy_group;
@@ -13,8 +13,8 @@ mod state;
 use crate::platform::get_user_info;
 use anyhow::anyhow;
 pub use config::*;
-pub use inbound::*;
 pub(crate) use file_path::*;
+pub use inbound::*;
 pub use interception::*;
 pub use module::*;
 pub use proxy_group::*;
