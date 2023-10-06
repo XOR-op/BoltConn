@@ -34,21 +34,36 @@ For the full features, see [features.md](./docs/features.md).
 
 ## Getting Started
 
-*Note: more friendly getting-started instructions and relevant codebase are coming soon.*
-
-To get started with BoltConn, follow these simple steps:
-
-1. Download pre-built binaries from [release](https://github.com/XOR-op/BoltConn/releases) or build yourself.
-2. Add the path of the binary to `$PATH`.
-3. Run BoltConn by typing `sudo boltconn start` in your terminal.
-
-To generate CA certificate:
-
+### Installation
+#### Pre-built binaries
+- Download pre-built binaries from [release](https://github.com/XOR-op/BoltConn/releases) and add the path of the binary to `$PATH`.
+#### Install latest git version with cargo
 ```bash
-boltconn cert -p <your_desired_path>
+cargo install --locked --git https://github.com/XOR-op/BoltConn
 ```
 
-For more information, use `boltconn --help`.
+### Configuration
+Before running BoltConn, you should run these two commands first:
+1. Create necessary configuration and runtime files. The default configuration path is `$HOME/.config/boltconn`, and the
+default runtime path is `$HOME/.local/share/boltconn`:
+```bash
+boltconn init
+```
+2. Generate root certificates with proper permissions for MitM:
+```bash
+sudo -E boltconn cert
+```
+
+### Run BoltConn
+```bash
+sudo -E boltconn start
+```
+
+### CLI Tools for Management
+```bash
+boltconn [conn/proxy/rule/tun/reload/...]
+```
+See `boltconn --help` for more help.
 
 ## Documentations
 Learn more about BoltConn's architecture, RESTful API, and how it compares to other related projects:
