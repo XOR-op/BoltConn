@@ -10,7 +10,6 @@ use network::{
     dns::Dns,
     packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt},
 };
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 use structopt::StructOpt;
@@ -70,13 +69,35 @@ fn main() -> ExitCode {
         }
     }
     let (config_path, data_path, cert_path) =
-        match parse_paths(&cmds.config, &cmds.app_data, &cmds.cert) {
+        match config::parse_paths(&cmds.config, &cmds.app_data, &cmds.cert) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Failed to load config and app data: {}", e);
                 return ExitCode::FAILURE;
             }
         };
+    // test if the paths exist
+    if !config_path.try_exists().is_ok_and(|x| x) {
+        eprintln!(
+            "Config path {} not found.\nDo you forget to run `boltconn init` first?",
+            config_path.to_string_lossy()
+        );
+        return ExitCode::FAILURE;
+    }
+    if !data_path.try_exists().is_ok_and(|x| x) {
+        eprintln!(
+            "Data path {} not found.\nDo you forget to run `boltconn init` first?",
+            data_path.to_string_lossy()
+        );
+        return ExitCode::FAILURE;
+    }
+    if !cert_path.try_exists().is_ok_and(|x| x) {
+        eprintln!(
+            "Certificate path {} not found.\nDo you forget to run `sudo boltconn init` first?",
+            cert_path.to_string_lossy()
+        );
+        return ExitCode::FAILURE;
+    }
     let app = match rt.block_on(App::create(config_path, data_path, cert_path)) {
         Ok(app) => app,
         Err(e) => {
@@ -88,30 +109,4 @@ fn main() -> ExitCode {
     tracing::info!("Exiting...");
     rt.shutdown_timeout(Duration::from_millis(300));
     ExitCode::SUCCESS
-}
-
-fn parse_paths(
-    config: &Option<PathBuf>,
-    app_data: &Option<PathBuf>,
-    cert: &Option<PathBuf>,
-) -> anyhow::Result<(PathBuf, PathBuf, PathBuf)> {
-    let config_path = match config {
-        None => {
-            let home = PathBuf::from(std::env::var("HOME")?);
-            home.join(".config").join("boltconn")
-        }
-        Some(p) => p.clone(),
-    };
-    let data_path = match app_data {
-        None => {
-            let home = PathBuf::from(std::env::var("HOME")?);
-            home.join(".local").join("share").join("boltconn")
-        }
-        Some(p) => p.clone(),
-    };
-    let cert_path = match cert {
-        None => data_path.join("cert"),
-        Some(p) => p.clone(),
-    };
-    Ok((config_path, data_path, cert_path))
 }

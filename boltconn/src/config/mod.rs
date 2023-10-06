@@ -1,5 +1,6 @@
 #[allow(clippy::module_inception)]
 mod config;
+mod file_path;
 mod inbound;
 mod interception;
 mod module;
@@ -12,6 +13,7 @@ mod state;
 use crate::platform::get_user_info;
 use anyhow::anyhow;
 pub use config::*;
+pub(crate) use file_path::*;
 pub use inbound::*;
 pub use interception::*;
 pub use module::*;
@@ -133,9 +135,7 @@ where
         // security: `full_path` should be (layers of) subdir of `root_path`,
         //           so arbitrary write should not happen
         fs::write(full_path.as_path(), text)?;
-        if let Some((_, uid, gid)) = get_user_info() {
-            nix::unistd::chown(&full_path, Some(uid.into()), Some(gid.into()))?;
-        }
+        set_real_ownership(&full_path)?;
         content
     };
     Ok(content)
@@ -145,4 +145,11 @@ where
 pub struct AuthData {
     pub username: String,
     pub password: String,
+}
+
+pub(super) fn set_real_ownership(path: &Path) -> io::Result<()> {
+    if let Some((_, uid, gid)) = get_user_info() {
+        nix::unistd::chown(path, Some(uid.into()), Some(gid.into()))?;
+    }
+    Ok(())
 }
