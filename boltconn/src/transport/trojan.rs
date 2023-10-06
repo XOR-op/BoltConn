@@ -123,12 +123,15 @@ const CRLF: u16 = 0x0D0A;
 
 impl TrojanRequest {
     pub fn serialize(&self) -> Vec<u8> {
+        use std::fmt::Write;
         let mut data = Vec::with_capacity(56 + 2 + self.request.len() + 2 + self.payload.len());
         data.extend(
             Sha224::digest(self.password.as_bytes())
                 .iter()
-                .map(|x| format!("{:02x}", x))
-                .collect::<String>()
+                .fold(String::new(), |mut output, x| {
+                    let _ = write!(output, "{:02x}", x);
+                    output
+                })
                 .as_bytes()
                 .iter(),
         );

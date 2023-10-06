@@ -16,7 +16,6 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::fd::IntoRawFd;
-use std::os::raw::c_char;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use tokio::io::split;
@@ -48,9 +47,6 @@ impl TunDevice {
         udp_tx: flume::Sender<Bytes>,
         udp_rx: flume::Receiver<Bytes>,
     ) -> io::Result<TunDevice> {
-        let mut name_buffer: Vec<c_char> = Vec::new();
-        name_buffer.resize(36, 0);
-
         let (fd, name) = unsafe { platform::open_tun()? };
         let ctl_fd = {
             let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
