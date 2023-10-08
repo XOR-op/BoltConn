@@ -1,4 +1,4 @@
-use crate::intercept::url_rewrite::UrlModType;
+use crate::intercept::url_engine::UrlModType;
 use crate::intercept::{InterceptionResult, Modifier, ModifierContext};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{BodyOrWarning, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
@@ -144,16 +144,17 @@ impl Modifier for InterceptModifier {
                 Ok((Request::from_parts(parts, Body::from(whole_body)), None))
             }
             Some(url) => {
-                for mgr in self.result.each_payload().map(|(_, hdr)| hdr) {
-                    mgr.try_rewrite_request(url.as_str(), &mut parts.headers)
+                for header_engine in self.result.each_payload().map(|(_, hdr)| hdr) {
+                    header_engine
+                        .try_rewrite_request(url.as_str(), &mut parts.headers)
                         .await;
                 }
 
                 // re-generate CONTENT-LENGTH by hyper
                 parts.headers.remove(header::CONTENT_LENGTH);
 
-                for mgr in self.result.each_payload().map(|(url, _)| url) {
-                    if let Some((mod_type, new_url)) = mgr.try_rewrite(url.as_str()).await {
+                for url_engine in self.result.each_payload().map(|(url, _)| url) {
+                    if let Some((mod_type, new_url)) = url_engine.try_rewrite(url.as_str()).await {
                         // no real connection
                         let resp = match mod_type {
                             UrlModType::R404 => generate_404(&parts),
@@ -215,8 +216,9 @@ impl Modifier for InterceptModifier {
             .ok_or_else(|| anyhow!("no id"))?
             .1;
 
-        for mgr in self.result.each_payload().map(|(_, hdr)| hdr) {
-            mgr.try_rewrite_response(req.uri.to_string().as_str(), &mut parts.headers)
+        for header_engine in self.result.each_payload().map(|(_, hdr)| hdr) {
+            header_engine
+                .try_rewrite_response(req.uri.to_string().as_str(), &mut parts.headers)
                 .await;
         }
         let host = match &ctx.conn_info.dest {

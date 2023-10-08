@@ -75,12 +75,12 @@ impl UrlModRule {
 }
 
 #[derive(Debug)]
-pub struct UrlModManager {
+pub struct UrlEngine {
     rules: Vec<UrlModRule>,
     regex_set: RegexSet,
 }
 
-impl UrlModManager {
+impl UrlEngine {
     pub fn new(cfg: &[String]) -> anyhow::Result<Self> {
         let (rules, regexes) = parse_rules(cfg).map_err(|s| anyhow::anyhow!(s))?;
         Ok(Self {

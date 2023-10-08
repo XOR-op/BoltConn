@@ -49,7 +49,7 @@ impl App {
     ) -> anyhow::Result<Self> {
         // tracing
         let stream_logger = StreamLoggerSend::new();
-        external::init_tracing(&stream_logger);
+        external::init_tracing(&stream_logger)?;
 
         // interface
         let (_, real_iface_name) =

@@ -128,14 +128,14 @@ impl HeaderRewrite {
 }
 
 #[derive(Debug)]
-pub struct HeaderModManager {
+pub struct HeaderEngine {
     req_rules: Vec<HeaderRule>,
     resp_rules: Vec<HeaderRule>,
     req_regex_set: RegexSet,
     resp_regex_set: RegexSet,
 }
 
-impl HeaderModManager {
+impl HeaderEngine {
     pub fn new(cfg: &[String]) -> anyhow::Result<Self> {
         let (req_rules, resp_rules, req_regexes, resp_regexes) =
             parse_header_actions(cfg).map_err(|s| anyhow::anyhow!(s))?;

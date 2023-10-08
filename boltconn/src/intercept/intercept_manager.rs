@@ -1,33 +1,33 @@
 use crate::config::InterceptionConfig;
 use crate::dispatch::{ConnInfo, Dispatching, DispatchingBuilder, ProxyImpl, RuleSetTable};
 use crate::external::MmdbReader;
-use crate::intercept::{HeaderModManager, UrlModManager};
+use crate::intercept::{HeaderEngine, UrlEngine};
 use crate::network::dns::Dns;
 use std::sync::Arc;
 
 #[derive(Debug)]
 struct InterceptionPayload {
-    pub url_mgr: UrlModManager,
-    pub header_mgr: HeaderModManager,
+    pub url_engine: UrlEngine,
+    pub header_engine: HeaderEngine,
     pub capture: bool,
 }
 
 impl InterceptionPayload {
     fn parse_actions(actions: &[String]) -> anyhow::Result<Self> {
         let (url_list, header_list, capture) = mapping_rewrite(actions)?;
-        let (url_mgr, header_mgr) = {
+        let (url_engine, header_engine) = {
             (
-                UrlModManager::new(url_list.as_slice()).map_err(|e| {
+                UrlEngine::new(url_list.as_slice()).map_err(|e| {
                     anyhow::anyhow!("Parse url modifier rules, invalid regexes: {}", e)
                 })?,
-                HeaderModManager::new(header_list.as_slice()).map_err(|e| {
+                HeaderEngine::new(header_list.as_slice()).map_err(|e| {
                     anyhow::anyhow!("Parse header modifier rules, invalid regexes: {}", e)
                 })?,
             )
         };
         Ok(Self {
-            url_mgr,
-            header_mgr,
+            url_engine,
+            header_engine,
             capture,
         })
     }
@@ -75,8 +75,10 @@ impl InterceptionResult {
         !self.payloads.is_empty() || self.will_capture
     }
 
-    pub fn each_payload(&self) -> impl Iterator<Item = (&UrlModManager, &HeaderModManager)> {
-        self.payloads.iter().map(|x| (&x.url_mgr, &x.header_mgr))
+    pub fn each_payload(&self) -> impl Iterator<Item = (&UrlEngine, &HeaderEngine)> {
+        self.payloads
+            .iter()
+            .map(|x| (&x.url_engine, &x.header_engine))
     }
 
     pub fn should_capture(&self) -> bool {
