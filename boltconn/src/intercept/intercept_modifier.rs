@@ -2,7 +2,7 @@ use crate::intercept::intercept_manager::PayloadEntry;
 use crate::intercept::url_engine::UrlModType;
 use crate::intercept::{InterceptionResult, Modifier, ModifierContext};
 use crate::platform::process::ProcessInfo;
-use crate::proxy::{BodyOrWarning, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
+use crate::proxy::{CapturedBody, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -19,6 +19,30 @@ use std::time::Instant;
 enum ReadData {
     Full(Bytes),
     Partial(Bytes, Body),
+    NotRead(Body),
+}
+
+impl ReadData {
+    fn into_body(self) -> Body {
+        match self {
+            ReadData::Full(bytes) => Body::from(bytes),
+            ReadData::Partial(bytes, stream) => Body::wrap_stream(PartialReadStream {
+                has_read: Some(bytes),
+                inner_body: stream,
+            }),
+            ReadData::NotRead(body) => body,
+        }
+    }
+
+    fn to_captured_body(&self, limit: usize) -> CapturedBody {
+        match self {
+            ReadData::Full(b) => CapturedBody::FullCapture(b.clone()),
+            ReadData::Partial(_, _) => {
+                CapturedBody::ExceedLimit(format!("Too large data: exceeded limit {} bytes", limit))
+            }
+            ReadData::NotRead(_) => CapturedBody::NoCapture,
+        }
+    }
 }
 
 struct PartialReadStream {
@@ -118,7 +142,6 @@ impl Modifier for InterceptModifier {
         ctx: &ModifierContext,
     ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
         let (mut parts, body) = req.into_parts();
-        let whole_body = hyper::body::to_bytes(body).await?;
 
         let url = match parts.version {
             Version::HTTP_11 => {
@@ -138,11 +161,19 @@ impl Modifier for InterceptModifier {
             Version::HTTP_2 => Some(parts.uri.to_string()),
             _ => None,
         };
+
+        let whole_data = if self.result.capture_request || self.result.contains_script {
+            Self::read_at_most(body, self.size_limit).await?
+        } else {
+            ReadData::NotRead(body)
+        };
+
         match url {
             None => {
-                let req_copy = DumpedRequest::from_parts(&parts, &whole_body);
+                let req_copy =
+                    DumpedRequest::from_parts(&parts, whole_data.to_captured_body(self.size_limit));
                 self.pending.insert(ctx.tag, req_copy);
-                Ok((Request::from_parts(parts, Body::from(whole_body)), None))
+                Ok((Request::from_parts(parts, whole_data.into_body()), None))
             }
             Some(url) => {
                 // re-generate CONTENT-LENGTH by hyper
@@ -173,7 +204,7 @@ impl Modifier for InterceptModifier {
                                         status: resp_parts.status,
                                         version: resp_parts.version,
                                         headers: resp_parts.headers.clone(),
-                                        body: BodyOrWarning::Body(resp_body.clone()),
+                                        body: CapturedBody::FullCapture(resp_body.clone()),
                                         time: Instant::now(),
                                     };
                                     let host = match &ctx.conn_info.dest {
@@ -183,8 +214,10 @@ impl Modifier for InterceptModifier {
                                         }
                                     };
                                     // store copy
-                                    let mut req_copy =
-                                        DumpedRequest::from_parts(&parts, &whole_body);
+                                    let mut req_copy = DumpedRequest::from_parts(
+                                        &parts,
+                                        whole_data.to_captured_body(self.size_limit),
+                                    );
                                     if let Ok(uri) = http::Uri::from_str(url.as_str()) {
                                         req_copy.uri = uri;
                                     }
@@ -195,7 +228,7 @@ impl Modifier for InterceptModifier {
                                     );
                                 }
                                 return Ok((
-                                    Request::from_parts(parts, Body::from(whole_body)),
+                                    Request::from_parts(parts, whole_data.into_body()),
                                     Some(Response::from_parts(resp_parts, Body::from(resp_body))),
                                 ));
                             }
@@ -208,9 +241,10 @@ impl Modifier for InterceptModifier {
                 }
 
                 // no fake response, just send plainly
-                let req_copy = DumpedRequest::from_parts(&parts, &whole_body);
+                let req_copy =
+                    DumpedRequest::from_parts(&parts, whole_data.to_captured_body(self.size_limit));
                 self.pending.insert(ctx.tag, req_copy);
-                Ok((Request::from_parts(parts, Body::from(whole_body)), None))
+                Ok((Request::from_parts(parts, whole_data.into_body()), None))
             }
         }
     }
@@ -221,11 +255,18 @@ impl Modifier for InterceptModifier {
         ctx: &ModifierContext,
     ) -> anyhow::Result<Response<Body>> {
         let (mut parts, body) = resp.into_parts();
+        // FIXME: self.pending may leak if the connection is interrupted before getting a response
         let req = self
             .pending
             .remove(&ctx.tag)
             .ok_or_else(|| anyhow!("no id"))?
             .1;
+
+        let whole_data = if self.result.capture_response || self.result.contains_script {
+            Self::read_at_most(body, self.size_limit).await?
+        } else {
+            ReadData::NotRead(body)
+        };
 
         for payload in &self.result.payloads {
             match payload.as_ref() {
@@ -242,32 +283,15 @@ impl Modifier for InterceptModifier {
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
         };
         // For large body, we skip the manipulation
-        match Self::read_at_most(body, self.size_limit).await? {
-            ReadData::Full(whole_body) => {
-                if self.result.capture_response {
-                    let resp_copy =
-                        DumpedResponse::from_parts(&parts, BodyOrWarning::Body(whole_body.clone()));
-                    self.contents
-                        .push((req, resp_copy), host, self.client.clone());
-                }
-                Ok(Response::from_parts(parts, Body::from(whole_body)))
-            }
-            ReadData::Partial(partial_body, remaining) => {
-                let stream = PartialReadStream {
-                    has_read: Some(partial_body),
-                    inner_body: remaining,
-                };
-                if self.result.capture_response {
-                    let warning =
-                        format!("Too large data: exceeded limit {} bytes", self.size_limit);
-                    let stored_resp =
-                        DumpedResponse::from_parts(&parts, BodyOrWarning::Warning(warning));
-                    self.contents
-                        .push((req, stored_resp), host, self.client.clone());
-                }
-                Ok(Response::from_parts(parts, Body::wrap_stream(stream)))
-            }
-        }
+        self.contents.push(
+            (
+                req,
+                DumpedResponse::from_parts(&parts, whole_data.to_captured_body(self.size_limit)),
+            ),
+            host,
+            self.client.clone(),
+        );
+        Ok(Response::from_parts(parts, whole_data.into_body()))
     }
 }
 

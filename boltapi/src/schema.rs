@@ -82,15 +82,26 @@ pub struct GetInterceptDataReq {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, tag = "type")]
+pub enum CapturedBodySchema {
+    #[serde(rename = "empty")]
+    Empty,
+    #[serde(rename = "warning")]
+    Warning { content: String },
+    #[serde(rename = "body")]
+    Body {
+        #[serde(with = "base64ext")]
+        content: Vec<u8>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct GetInterceptDataResp {
     pub req_header: Vec<String>,
-    #[serde(with = "base64ext")]
-    pub req_body: Vec<u8>,
+    pub req_body: CapturedBodySchema,
     pub resp_header: Vec<String>,
-    #[serde(with = "base64ext")]
-    pub resp_body: Vec<u8>,
-    pub warning: Option<String>,
+    pub resp_body: CapturedBodySchema,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

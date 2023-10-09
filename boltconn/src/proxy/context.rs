@@ -5,6 +5,7 @@ use crate::dispatch::InboundInfo;
 use crate::external::DatabaseHandle;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use arc_swap::ArcSwap;
+use boltapi::CapturedBodySchema;
 use fast_socks5::util::target_addr::TargetAddr;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
@@ -459,23 +460,42 @@ impl Drop for ContextManagerInner {
 }
 
 #[derive(Clone, Debug)]
+pub enum CapturedBody {
+    FullCapture(hyper::body::Bytes),
+    ExceedLimit(String),
+    NoCapture,
+}
+
+impl CapturedBody {
+    pub fn to_captured_schema(&self) -> CapturedBodySchema {
+        match self {
+            CapturedBody::FullCapture(bytes) => CapturedBodySchema::Body {
+                content: bytes.to_vec(),
+            },
+            CapturedBody::ExceedLimit(s) => CapturedBodySchema::Warning { content: s.clone() },
+            CapturedBody::NoCapture => CapturedBodySchema::Empty,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct DumpedRequest {
     pub uri: http::Uri,
     pub method: http::Method,
     pub version: http::Version,
     pub headers: http::HeaderMap<http::HeaderValue>,
-    pub body: hyper::body::Bytes,
+    pub body: CapturedBody,
     pub time: Instant,
 }
 
 impl DumpedRequest {
-    pub fn from_parts(parts: &http::request::Parts, body: &hyper::body::Bytes) -> Self {
+    pub fn from_parts(parts: &http::request::Parts, body: CapturedBody) -> Self {
         Self {
             uri: parts.uri.clone(),
             method: parts.method.clone(),
             version: parts.version,
             headers: parts.headers.clone(),
-            body: body.clone(),
+            body,
             time: Instant::now(),
         }
     }
@@ -489,22 +509,16 @@ impl DumpedRequest {
 }
 
 #[derive(Clone, Debug)]
-pub enum BodyOrWarning {
-    Body(hyper::body::Bytes),
-    Warning(String),
-}
-
-#[derive(Clone, Debug)]
 pub struct DumpedResponse {
     pub status: http::StatusCode,
     pub version: http::Version,
     pub headers: http::HeaderMap<http::HeaderValue>,
-    pub body: BodyOrWarning,
+    pub body: CapturedBody,
     pub time: Instant,
 }
 
 impl DumpedResponse {
-    pub fn from_parts(parts: &http::response::Parts, body: BodyOrWarning) -> Self {
+    pub fn from_parts(parts: &http::response::Parts, body: CapturedBody) -> Self {
         Self {
             status: parts.status,
             version: parts.version,
@@ -523,8 +537,8 @@ impl DumpedResponse {
 
     pub fn body_len(&self) -> Option<u64> {
         match &self.body {
-            BodyOrWarning::Body(b) => Some(b.len() as u64),
-            BodyOrWarning::Warning(_) => None,
+            CapturedBody::FullCapture(b) => Some(b.len() as u64),
+            CapturedBody::ExceedLimit(_) | CapturedBody::NoCapture => None,
         }
     }
 }

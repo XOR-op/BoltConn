@@ -1,6 +1,7 @@
 use crate::cli::request_uds::UdsConnector;
 use crate::cli::request_web::WebConnector;
 use anyhow::{anyhow, Result};
+use boltapi::CapturedBodySchema;
 use colored::Colorize;
 use std::ops::Add;
 use std::path::PathBuf;
@@ -161,23 +162,25 @@ impl Requester {
         println!("Header:");
         result.req_header.iter().for_each(|l| println!("{}", l));
         println!();
-        if let Ok(data) = std::str::from_utf8(result.req_body.as_slice()) {
-            println!("Body:");
-            println!("{}", data);
-        } else {
-            println!("Body is not UTF-8 encoded");
+        fn get_text_body(body: &CapturedBodySchema) {
+            if let CapturedBodySchema::Body { content } = body {
+                if let Ok(data) = std::str::from_utf8(content.as_slice()) {
+                    println!("Body:");
+                    println!("{}", data);
+                } else {
+                    println!("Body is not UTF-8 encoded");
+                }
+            } else {
+                println!("Body is not fully captured");
+            }
         }
+        get_text_body(&result.req_body);
         println!();
         println!("==================  Response ==================");
         println!("Header:");
         result.resp_header.iter().for_each(|l| println!("{}", l));
         println!();
-        if let Ok(data) = std::str::from_utf8(result.resp_body.as_slice()) {
-            println!("Body:");
-            println!("{}", data);
-        } else {
-            println!("Body is not UTF-8 encoded");
-        }
+        get_text_body(&result.resp_body);
         Ok(())
     }
 

@@ -71,6 +71,7 @@ pub struct InterceptionResult {
     pub payloads: Vec<Arc<PayloadEntry>>,
     pub capture_request: bool,
     pub capture_response: bool,
+    pub contains_script: bool,
 }
 
 impl InterceptionResult {
@@ -107,10 +108,15 @@ impl InterceptionManager {
         let mut result = vec![];
         let mut capture_request = false;
         let mut capture_response = false;
+        let mut contains_script = false;
         for i in self.entries.iter() {
             if let Some(payload) = i.matches(conn_info).await {
                 capture_request |= payload.capture_request;
                 capture_response |= payload.capture_response;
+                contains_script |= payload
+                    .payloads
+                    .iter()
+                    .any(|x| matches!(x.as_ref(), PayloadEntry::Script(_)));
                 result.extend_from_slice(payload.payloads.as_slice());
             }
         }
@@ -118,6 +124,7 @@ impl InterceptionManager {
             payloads: result,
             capture_request,
             capture_response,
+            contains_script,
         }
     }
 }
