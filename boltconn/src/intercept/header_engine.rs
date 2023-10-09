@@ -1,7 +1,7 @@
 use crate::intercept::Replacement;
 use http::header::HeaderName;
 use http::{HeaderMap, HeaderValue};
-use regex::{Regex, RegexSet};
+use regex::Regex;
 use serde::de::DeserializeOwned;
 
 #[derive(Copy, Clone, Debug)]
@@ -15,7 +15,7 @@ enum HeaderModType {
 }
 
 #[derive(Clone, Debug)]
-enum HeaderOperand {
+pub(super) enum HeaderOperand {
     Add(HeaderName, HeaderValue),
     Del(HeaderName),
     Set(HeaderName, HeaderValue),
@@ -24,31 +24,28 @@ enum HeaderOperand {
     ReplaceWith(HeaderName, Replacement),
 }
 
-#[derive(Clone, Debug)]
-pub struct HeaderRule(HeaderOperand);
-
-impl HeaderRule {
+impl HeaderOperand {
     pub fn new_add(key: &str, value: &str) -> Option<Self> {
         match (key.parse().ok(), HeaderValue::from_str(value).ok()) {
-            (Some(k), Some(v)) => Some(Self(HeaderOperand::Add(k, v))),
+            (Some(k), Some(v)) => Some(HeaderOperand::Add(k, v)),
             _ => None,
         }
     }
 
     pub fn new_del(key: &str) -> Option<Self> {
-        key.parse().ok().map(|k| Self(HeaderOperand::Del(k)))
+        key.parse().ok().map(HeaderOperand::Del)
     }
 
     pub fn new_set(key: &str, value: &str) -> Option<Self> {
         match (key.parse().ok(), HeaderValue::from_str(value).ok()) {
-            (Some(k), Some(v)) => Some(Self(HeaderOperand::Set(k, v))),
+            (Some(k), Some(v)) => Some(HeaderOperand::Set(k, v)),
             _ => None,
         }
     }
 
     pub fn new_replace(key: &str, value: &str) -> Option<Self> {
         match (key.parse().ok(), HeaderValue::from_str(value).ok()) {
-            (Some(k), Some(v)) => Some(Self(HeaderOperand::Replace(k, v))),
+            (Some(k), Some(v)) => Some(HeaderOperand::Replace(k, v)),
             _ => None,
         }
     }
@@ -56,14 +53,36 @@ impl HeaderRule {
     pub fn new_replace_with(key: &str, pattern: &str, target: &str) -> Option<Self> {
         match (key.parse().ok(), Regex::new(pattern).ok()) {
             (Some(k), Some(patt)) => {
-                Replacement::new(patt, target).map(|r| Self(HeaderOperand::ReplaceWith(k, r)))
+                Replacement::new(patt, target).map(|r| HeaderOperand::ReplaceWith(k, r))
             }
             _ => None,
         }
     }
+}
 
+#[derive(Clone, Debug)]
+pub(super) enum HeaderRule {
+    Req(HeaderOperand),
+    Resp(HeaderOperand),
+}
+
+impl HeaderRule {
     pub fn rewrite_request(&self, header: &mut HeaderMap) -> bool {
-        match &self.0 {
+        match self {
+            HeaderRule::Req(op) => Self::rewrite(op, header),
+            HeaderRule::Resp(_) => false,
+        }
+    }
+
+    pub fn rewrite_response(&self, header: &mut HeaderMap) -> bool {
+        match self {
+            HeaderRule::Resp(op) => Self::rewrite(op, header),
+            HeaderRule::Req(_) => false,
+        }
+    }
+
+    fn rewrite(op: &HeaderOperand, header: &mut HeaderMap) -> bool {
+        match op {
             HeaderOperand::Add(k, v) => header.append(k, v.clone()),
             HeaderOperand::Del(k) => header.remove(k).is_some(),
             HeaderOperand::Set(k, v) => {
@@ -112,73 +131,74 @@ impl HeaderRule {
 }
 
 #[derive(Debug)]
-pub struct HeaderRewrite {
+pub struct HeaderEngine {
     pattern: Regex,
     rule: HeaderRule,
 }
 
-impl HeaderRewrite {
-    pub fn try_rewrite(&self, url: &str, headers: &mut HeaderMap) -> bool {
+impl HeaderEngine {
+    pub fn from_line(line: &str) -> Option<Self> {
+        // <header>, <Rewrite_type>, <original_url>, <modified_url>
+        // Example: header-req, ^https://twitter.com(.*), set, User-Agent, curl 1.1
+        let processed_str: String = line.chars().filter(|c| *c != ' ').collect();
+        let list: Vec<&str> = processed_str.split(',').collect();
+        if list.len() < 3 {
+            return None;
+        }
+        // determine where to add rule
+        #[allow(clippy::get_first)]
+        let is_req = match *list.get(0).unwrap() {
+            "header-req" => true,
+            "header-resp" => false,
+            _ => return None,
+        };
+
+        let operand = match *list.get(2).unwrap() {
+            "add" => {
+                let v = deserialize_values::<[String; 2]>(line)?;
+                HeaderOperand::new_add(v[0].as_str(), v[1].as_str())?
+            }
+            "del" => {
+                let v = deserialize_values::<[String; 1]>(line)?;
+                HeaderOperand::new_del(v[0].as_str())?
+            }
+            "set" => {
+                let v = deserialize_values::<[String; 2]>(line)?;
+                HeaderOperand::new_set(v[0].as_str(), v[1].as_str())?
+            }
+            "replace" => {
+                let v = deserialize_values::<[String; 2]>(line)?;
+                HeaderOperand::new_replace(v[0].as_str(), v[1].as_str())?
+            }
+            "replace-with" => {
+                let v = deserialize_values::<[String; 3]>(line)?;
+                HeaderOperand::new_replace_with(v[0].as_str(), v[1].as_str(), v[2].as_str())?
+            }
+            _ => {
+                return None;
+            }
+        };
+        Some(Self {
+            pattern: Regex::new(list.get(1).unwrap()).ok()?,
+            rule: if is_req {
+                HeaderRule::Req(operand)
+            } else {
+                HeaderRule::Resp(operand)
+            },
+        })
+    }
+
+    pub fn try_rewrite_request(&self, url: &str, headers: &mut HeaderMap) -> bool {
         if self.pattern.is_match(url) {
             self.rule.rewrite_request(headers)
         } else {
             false
         }
     }
-}
 
-#[derive(Debug)]
-pub struct HeaderEngine {
-    req_rules: Vec<HeaderRule>,
-    resp_rules: Vec<HeaderRule>,
-    req_regex_set: RegexSet,
-    resp_regex_set: RegexSet,
-}
-
-impl HeaderEngine {
-    pub fn new(cfg: &[String]) -> anyhow::Result<Self> {
-        let (req_rules, resp_rules, req_regexes, resp_regexes) =
-            parse_header_actions(cfg).map_err(|s| anyhow::anyhow!(s))?;
-        debug_assert_eq!(req_rules.len(), req_regexes.len());
-        debug_assert_eq!(resp_rules.len(), resp_regexes.len());
-        Ok(Self {
-            req_rules,
-            resp_rules,
-            req_regex_set: RegexSet::new(req_regexes)?,
-            resp_regex_set: RegexSet::new(resp_regexes)?,
-        })
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            req_rules: vec![],
-            resp_rules: vec![],
-            req_regex_set: RegexSet::empty(),
-            resp_regex_set: RegexSet::empty(),
-        }
-    }
-
-    pub async fn try_rewrite_request(&self, url: &str, headers: &mut HeaderMap) -> bool {
-        let matches = self.req_regex_set.matches(url);
-        if matches.matched_any() {
-            let mut result = false;
-            for i in matches.iter() {
-                result |= self.req_rules.get(i).unwrap().rewrite_request(headers);
-            }
-            result
-        } else {
-            false
-        }
-    }
-
-    pub async fn try_rewrite_response(&self, url: &str, headers: &mut HeaderMap) -> bool {
-        let matches = self.resp_regex_set.matches(url);
-        if matches.matched_any() {
-            let mut result = false;
-            for i in matches.iter() {
-                result |= self.resp_rules.get(i).unwrap().rewrite_request(headers);
-            }
-            result
+    pub fn try_rewrite_response(&self, url: &str, headers: &mut HeaderMap) -> bool {
+        if self.pattern.is_match(url) {
+            self.rule.rewrite_response(headers)
         } else {
             false
         }
@@ -200,86 +220,4 @@ fn deserialize_values<T: DeserializeOwned>(raw: &str) -> Option<T> {
     // construct yaml string
     let part = "[".to_string() + part.split_at(1).1 + "]";
     serde_yaml::from_str(part.as_str()).ok()
-}
-
-#[allow(clippy::type_complexity)]
-fn parse_header_actions(
-    cfg: &[String],
-) -> Result<(Vec<HeaderRule>, Vec<HeaderRule>, Vec<String>, Vec<String>), String> {
-    let mut req_coll = vec![];
-    let mut resp_coll = vec![];
-    let mut req_str_coll = vec![];
-    let mut resp_str_coll = vec![];
-    for line in cfg {
-        // <header>, <Rewrite_type>, <original_url>, <modified_url>
-        // Example: header-req, ^https://twitter.com(.*), set, User-Agent, curl 1.1
-        let processed_str: String = line.chars().filter(|c| *c != ' ').collect();
-        let list: Vec<&str> = processed_str.split(',').collect();
-        if list.len() < 3 {
-            return Err(line.clone());
-        }
-        // determine where to add rule
-        #[allow(clippy::get_first)]
-        let (coll, str_coll) = match *list.get(0).unwrap() {
-            "header-req" => (&mut req_coll, &mut req_str_coll),
-            "header-resp" => (&mut resp_coll, &mut resp_str_coll),
-            _ => return Err(line.clone()),
-        };
-
-        let rule = match *list.get(2).unwrap() {
-            "add" => {
-                let Some(v) = deserialize_values::<[String; 2]>(line.as_str()) else {
-                    return Err(line.clone());
-                };
-                let Some(rule) = HeaderRule::new_add(v[0].as_str(), v[1].as_str()) else {
-                    return Err(line.clone());
-                };
-                rule
-            }
-            "del" => {
-                let Some(v) = deserialize_values::<[String; 1]>(line.as_str()) else {
-                    return Err(line.clone());
-                };
-                let Some(rule) = HeaderRule::new_del(v[0].as_str()) else {
-                    return Err(line.clone());
-                };
-                rule
-            }
-            "set" => {
-                let Some(v) = deserialize_values::<[String; 2]>(line.as_str()) else {
-                    return Err(line.clone());
-                };
-                let Some(rule) = HeaderRule::new_set(v[0].as_str(), v[1].as_str()) else {
-                    return Err(line.clone());
-                };
-                rule
-            }
-            "replace" => {
-                let Some(v) = deserialize_values::<[String; 2]>(line.as_str()) else {
-                    return Err(line.clone());
-                };
-                let Some(rule) = HeaderRule::new_replace(v[0].as_str(), v[1].as_str()) else {
-                    return Err(line.clone());
-                };
-                rule
-            }
-            "replace-with" => {
-                let Some(v) = deserialize_values::<[String; 3]>(line.as_str()) else {
-                    return Err(line.clone());
-                };
-                let Some(rule) =
-                    HeaderRule::new_replace_with(v[0].as_str(), v[1].as_str(), v[2].as_str())
-                else {
-                    return Err(line.clone());
-                };
-                rule
-            }
-            _ => {
-                return Err(line.clone());
-            }
-        };
-        coll.push(rule);
-        str_coll.push(list.get(1).unwrap().to_string());
-    }
-    Ok((req_coll, resp_coll, req_str_coll, resp_str_coll))
 }

@@ -3,8 +3,8 @@ mod http_intercept;
 mod https_intercept;
 mod intercept_manager;
 mod intercept_modifier;
-mod js_engine;
 mod modifier;
+mod script_engine;
 mod url_engine;
 
 use chrono::Datelike;
@@ -19,6 +19,7 @@ use rcgen::{
     KeyUsagePurpose, SanType,
 };
 use regex::Regex;
+pub use script_engine::*;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
 use tokio_rustls::rustls::{Certificate as RustlsCertificate, PrivateKey as RustlsPrivateKey};
@@ -92,7 +93,7 @@ impl ReplacedChunk {
 }
 
 #[derive(Clone, Debug)]
-struct Replacement {
+pub(super) struct Replacement {
     reg: Regex,
     chunks: Vec<ReplacedChunk>,
 }

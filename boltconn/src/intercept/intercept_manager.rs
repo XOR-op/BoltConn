@@ -1,54 +1,56 @@
 use crate::config::InterceptionConfig;
 use crate::dispatch::{ConnInfo, Dispatching, DispatchingBuilder, ProxyImpl, RuleSetTable};
 use crate::external::MmdbReader;
-use crate::intercept::{HeaderEngine, UrlEngine};
+use crate::intercept::{HeaderEngine, ScriptEngine, UrlEngine};
 use crate::network::dns::Dns;
 use std::sync::Arc;
 
 #[derive(Debug)]
+pub enum PayloadEntry {
+    Url(UrlEngine),
+    Header(HeaderEngine),
+    Script(ScriptEngine),
+}
+
+#[derive(Debug)]
 struct InterceptionPayload {
-    pub url_engine: UrlEngine,
-    pub header_engine: HeaderEngine,
-    pub capture: bool,
+    pub payloads: Vec<Arc<PayloadEntry>>,
+    pub capture_request: bool,
+    pub capture_response: bool,
 }
 
 impl InterceptionPayload {
     fn parse_actions(actions: &[String]) -> anyhow::Result<Self> {
-        let (url_list, header_list, capture) = mapping_rewrite(actions)?;
-        let (url_engine, header_engine) = {
-            (
-                UrlEngine::new(url_list.as_slice()).map_err(|e| {
-                    anyhow::anyhow!("Parse url modifier rules, invalid regexes: {}", e)
-                })?,
-                HeaderEngine::new(header_list.as_slice()).map_err(|e| {
-                    anyhow::anyhow!("Parse header modifier rules, invalid regexes: {}", e)
-                })?,
-            )
-        };
+        let mut capture_request = false;
+        let mut capture_response = false;
+        let mut payloads = vec![];
+        for s in actions.iter() {
+            if s.starts_with("url,") {
+                payloads.push(Arc::new(PayloadEntry::Url(
+                    UrlEngine::from_line(s).ok_or_else(|| {
+                        anyhow::anyhow!("Parse invalid url modifier rules: {}", s)
+                    })?,
+                )));
+            } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
+                payloads.push(Arc::new(PayloadEntry::Header(
+                    HeaderEngine::from_line(s).ok_or_else(|| {
+                        anyhow::anyhow!("Parse invalid header modifier rules: {}", s)
+                    })?,
+                )));
+            } else if s == "capture-request" {
+                capture_request = true;
+            } else if s == "capture-response" {
+                capture_response = true;
+            } else {
+                return Err(anyhow::anyhow!("Unexpected: {}", s));
+            }
+        }
         Ok(Self {
-            url_engine,
-            header_engine,
-            capture,
+            payloads,
+            capture_request,
+            capture_response,
         })
     }
-}
-
-fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>, bool)> {
-    let mut url_list = vec![];
-    let mut header_list = vec![];
-    let mut capture = false;
-    for s in list.iter() {
-        if s.starts_with("url,") {
-            url_list.push(s.clone());
-        } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
-            header_list.push(s.clone());
-        } else if s == "capture" {
-            capture = true;
-        } else {
-            return Err(anyhow::anyhow!("Unexpected: {}", s));
-        }
-    }
-    Ok((url_list, header_list, capture))
 }
 
 struct InterceptionEntry {
@@ -66,23 +68,14 @@ impl InterceptionEntry {
 }
 
 pub struct InterceptionResult {
-    payloads: Vec<Arc<InterceptionPayload>>,
-    will_capture: bool,
+    pub payloads: Vec<Arc<PayloadEntry>>,
+    pub capture_request: bool,
+    pub capture_response: bool,
 }
 
 impl InterceptionResult {
     pub fn should_intercept(&self) -> bool {
-        !self.payloads.is_empty() || self.will_capture
-    }
-
-    pub fn each_payload(&self) -> impl Iterator<Item = (&UrlEngine, &HeaderEngine)> {
-        self.payloads
-            .iter()
-            .map(|x| (&x.url_engine, &x.header_engine))
-    }
-
-    pub fn should_capture(&self) -> bool {
-        self.will_capture
+        !self.payloads.is_empty() || self.capture_request || self.capture_response
     }
 }
 
@@ -112,16 +105,19 @@ impl InterceptionManager {
 
     pub async fn matches(&self, conn_info: &mut ConnInfo) -> InterceptionResult {
         let mut result = vec![];
-        let mut capture = false;
+        let mut capture_request = false;
+        let mut capture_response = false;
         for i in self.entries.iter() {
             if let Some(payload) = i.matches(conn_info).await {
-                capture |= payload.capture;
-                result.push(payload);
+                capture_request |= payload.capture_request;
+                capture_response |= payload.capture_response;
+                result.extend_from_slice(payload.payloads.as_slice());
             }
         }
         InterceptionResult {
             payloads: result,
-            will_capture: capture,
+            capture_request,
+            capture_response,
         }
     }
 }

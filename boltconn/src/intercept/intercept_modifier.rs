@@ -1,3 +1,4 @@
+use crate::intercept::intercept_manager::PayloadEntry;
 use crate::intercept::url_engine::UrlModType;
 use crate::intercept::{InterceptionResult, Modifier, ModifierContext};
 use crate::platform::process::ProcessInfo;
@@ -144,55 +145,65 @@ impl Modifier for InterceptModifier {
                 Ok((Request::from_parts(parts, Body::from(whole_body)), None))
             }
             Some(url) => {
-                for header_engine in self.result.each_payload().map(|(_, hdr)| hdr) {
-                    header_engine
-                        .try_rewrite_request(url.as_str(), &mut parts.headers)
-                        .await;
-                }
-
                 // re-generate CONTENT-LENGTH by hyper
                 parts.headers.remove(header::CONTENT_LENGTH);
 
-                for url_engine in self.result.each_payload().map(|(url, _)| url) {
-                    if let Some((mod_type, new_url)) = url_engine.try_rewrite(url.as_str()).await {
-                        // no real connection
-                        let resp = match mod_type {
-                            UrlModType::R404 => generate_404(&parts),
-                            UrlModType::R301
-                            | UrlModType::R302
-                            | UrlModType::R307
-                            | UrlModType::R308 => {
-                                generate_redirect(&parts, mod_type, new_url.unwrap().as_str())
-                            }
-                        };
-                        // record request and fake resp
-                        let (resp_parts, body) = resp.into_parts();
-                        let resp_body = hyper::body::to_bytes(body).await?;
+                for payload in &self.result.payloads {
+                    match payload.as_ref() {
+                        PayloadEntry::Url(engine) => {
+                            if let Some((mod_type, new_url)) = engine.try_rewrite(url.as_str()) {
+                                // no real connection
+                                let resp = match mod_type {
+                                    UrlModType::R404 => generate_404(&parts),
+                                    UrlModType::R301
+                                    | UrlModType::R302
+                                    | UrlModType::R307
+                                    | UrlModType::R308 => generate_redirect(
+                                        &parts,
+                                        mod_type,
+                                        new_url.unwrap().as_str(),
+                                    ),
+                                };
+                                // record request and fake resp
+                                let (resp_parts, body) = resp.into_parts();
+                                let resp_body = hyper::body::to_bytes(body).await?;
 
-                        if self.result.should_capture() {
-                            let resp_copy = DumpedResponse {
-                                status: resp_parts.status,
-                                version: resp_parts.version,
-                                headers: resp_parts.headers.clone(),
-                                body: BodyOrWarning::Body(resp_body.clone()),
-                                time: Instant::now(),
-                            };
-                            let host = match &ctx.conn_info.dest {
-                                NetworkAddr::Raw(addr) => addr.ip().to_string(),
-                                NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
-                            };
-                            // store copy
-                            let mut req_copy = DumpedRequest::from_parts(&parts, &whole_body);
-                            if let Ok(uri) = http::Uri::from_str(url.as_str()) {
-                                req_copy.uri = uri;
+                                if self.result.capture_response {
+                                    let resp_copy = DumpedResponse {
+                                        status: resp_parts.status,
+                                        version: resp_parts.version,
+                                        headers: resp_parts.headers.clone(),
+                                        body: BodyOrWarning::Body(resp_body.clone()),
+                                        time: Instant::now(),
+                                    };
+                                    let host = match &ctx.conn_info.dest {
+                                        NetworkAddr::Raw(addr) => addr.ip().to_string(),
+                                        NetworkAddr::DomainName { domain_name, .. } => {
+                                            domain_name.clone()
+                                        }
+                                    };
+                                    // store copy
+                                    let mut req_copy =
+                                        DumpedRequest::from_parts(&parts, &whole_body);
+                                    if let Ok(uri) = http::Uri::from_str(url.as_str()) {
+                                        req_copy.uri = uri;
+                                    }
+                                    self.contents.push(
+                                        (req_copy, resp_copy),
+                                        host,
+                                        self.client.clone(),
+                                    );
+                                }
+                                return Ok((
+                                    Request::from_parts(parts, Body::from(whole_body)),
+                                    Some(Response::from_parts(resp_parts, Body::from(resp_body))),
+                                ));
                             }
-                            self.contents
-                                .push((req_copy, resp_copy), host, self.client.clone());
                         }
-                        return Ok((
-                            Request::from_parts(parts, Body::from(whole_body)),
-                            Some(Response::from_parts(resp_parts, Body::from(resp_body))),
-                        ));
+                        PayloadEntry::Header(engine) => {
+                            engine.try_rewrite_request(url.as_str(), &mut parts.headers);
+                        }
+                        PayloadEntry::Script(engine) => {}
                     }
                 }
 
@@ -216,11 +227,16 @@ impl Modifier for InterceptModifier {
             .ok_or_else(|| anyhow!("no id"))?
             .1;
 
-        for header_engine in self.result.each_payload().map(|(_, hdr)| hdr) {
-            header_engine
-                .try_rewrite_response(req.uri.to_string().as_str(), &mut parts.headers)
-                .await;
+        for payload in &self.result.payloads {
+            match payload.as_ref() {
+                PayloadEntry::Url(_) => {}
+                PayloadEntry::Header(engine) => {
+                    engine.try_rewrite_response(req.uri.to_string().as_str(), &mut parts.headers);
+                }
+                PayloadEntry::Script(engine) => {}
+            }
         }
+
         let host = match &ctx.conn_info.dest {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
@@ -228,7 +244,7 @@ impl Modifier for InterceptModifier {
         // For large body, we skip the manipulation
         match Self::read_at_most(body, self.size_limit).await? {
             ReadData::Full(whole_body) => {
-                if self.result.should_capture() {
+                if self.result.capture_response {
                     let resp_copy =
                         DumpedResponse::from_parts(&parts, BodyOrWarning::Body(whole_body.clone()));
                     self.contents
@@ -241,7 +257,7 @@ impl Modifier for InterceptModifier {
                     has_read: Some(partial_body),
                     inner_body: remaining,
                 };
-                if self.result.should_capture() {
+                if self.result.capture_response {
                     let warning =
                         format!("Too large data: exceeded limit {} bytes", self.size_limit);
                     let stored_resp =
