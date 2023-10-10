@@ -113,7 +113,6 @@ pub fn init_tracing(logger: &StreamLoggerSend) -> anyhow::Result<()> {
             .with(stream_layer)
             .with(EnvFilter::new("boltconn=trace"))
             .init();
-        tracing_log::LogTracer::init()?;
         Ok(())
     }
     #[cfg(feature = "tokio-console")]

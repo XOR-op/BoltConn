@@ -134,6 +134,28 @@ impl InterceptModifier {
     }
 }
 
+fn get_full_uri(
+    version: http::Version,
+    headers: &http::HeaderMap,
+    uri: &http::Uri,
+    port: u16,
+) -> Option<String> {
+    match version {
+        Version::HTTP_11 => {
+            let prefix = if port == 443 { "https://" } else { "http://" };
+            match headers.get(header::HOST) {
+                None => None,
+                Some(host) => match host.to_str() {
+                    Ok(s) => Some(prefix.to_string() + s + uri.to_string().as_str()),
+                    Err(_) => None,
+                },
+            }
+        }
+        Version::HTTP_2 => Some(uri.to_string()),
+        _ => None,
+    }
+}
+
 #[async_trait]
 impl Modifier for InterceptModifier {
     async fn modify_request(
@@ -143,26 +165,14 @@ impl Modifier for InterceptModifier {
     ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
         let (mut parts, body) = req.into_parts();
 
-        let url = match parts.version {
-            Version::HTTP_11 => {
-                let prefix = if ctx.conn_info.dest.port() == 443 {
-                    "https://"
-                } else {
-                    "http://"
-                };
-                match parts.headers.get(header::HOST) {
-                    None => None,
-                    Some(host) => match host.to_str() {
-                        Ok(s) => Some(prefix.to_string() + s + parts.uri.to_string().as_str()),
-                        Err(_) => None,
-                    },
-                }
-            }
-            Version::HTTP_2 => Some(parts.uri.to_string()),
-            _ => None,
-        };
+        let url = get_full_uri(
+            parts.version,
+            &parts.headers,
+            &parts.uri,
+            ctx.conn_info.dest.port(),
+        );
 
-        let whole_data = if self.result.capture_request || self.result.contains_script {
+        let mut whole_data = if self.result.capture_request || self.result.contains_script {
             Self::read_at_most(body, self.size_limit).await?
         } else {
             ReadData::NotRead(body)
@@ -236,7 +246,17 @@ impl Modifier for InterceptModifier {
                         PayloadEntry::Header(engine) => {
                             engine.try_rewrite_request(url.as_str(), &mut parts.headers);
                         }
-                        PayloadEntry::Script(engine) => {}
+                        PayloadEntry::Script(engine) => {
+                            if let ReadData::Full(bytes) = whole_data {
+                                whole_data = ReadData::Full(
+                                    engine
+                                        .try_rewrite_req(&url, &mut parts, Some(bytes.clone()))
+                                        .unwrap_or(bytes),
+                                );
+                            } else {
+                                engine.try_rewrite_req(&url, &mut parts, None);
+                            }
+                        }
                     }
                 }
 
@@ -262,11 +282,18 @@ impl Modifier for InterceptModifier {
             .ok_or_else(|| anyhow!("no id"))?
             .1;
 
-        let whole_data = if self.result.capture_response || self.result.contains_script {
+        let mut whole_data = if self.result.capture_response || self.result.contains_script {
             Self::read_at_most(body, self.size_limit).await?
         } else {
             ReadData::NotRead(body)
         };
+
+        let url = get_full_uri(
+            req.version,
+            &req.headers,
+            &req.uri,
+            ctx.conn_info.dest.port(),
+        );
 
         for payload in &self.result.payloads {
             match payload.as_ref() {
@@ -274,7 +301,24 @@ impl Modifier for InterceptModifier {
                 PayloadEntry::Header(engine) => {
                     engine.try_rewrite_response(req.uri.to_string().as_str(), &mut parts.headers);
                 }
-                PayloadEntry::Script(engine) => {}
+                PayloadEntry::Script(engine) => {
+                    if let Some(url) = &url {
+                        if let ReadData::Full(bytes) = whole_data {
+                            whole_data = ReadData::Full(
+                                engine
+                                    .try_rewrite_resp(
+                                        url,
+                                        &req.method,
+                                        &mut parts,
+                                        Some(bytes.clone()),
+                                    )
+                                    .unwrap_or(bytes),
+                            );
+                        } else {
+                            engine.try_rewrite_resp(url, &req.method, &mut parts, None);
+                        }
+                    }
+                }
             }
         }
 
