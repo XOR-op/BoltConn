@@ -22,6 +22,7 @@ boringtun = "0.6.0"
 byteorder = "1.4.3"
 bytes = "1.2.1"
 chrono = { version = "0.4.31", default-features = false, features = ["clock", "std"] }
+clap = {version = "4.4.6", features = ["derive"]}
 colored = "2.0.0"
 dashmap = "5.5.3"
 fast-socks5 = "0.9.1"
@@ -55,7 +56,6 @@ sha2 = "0.10.6"
 shadowsocks = { version = "1.16.0", default-features = false }
 socket2 = { version = "0.5.1", features = ["all"] }
 smoltcp = "0.9.0"
-structopt = "0.3.26"
 tabular = "0.2.0"
 tarpc = { version = "0.33.0", features = ["serde-transport", "unix", "serde-transport-bincode"] }
 thiserror = "1.0.37"

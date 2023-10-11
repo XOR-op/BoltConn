@@ -4,14 +4,14 @@ mod request;
 mod request_uds;
 mod request_web;
 
-use crate::Args;
+use crate::ProgramArgs;
 use anyhow::anyhow;
+use clap::{Args, Subcommand};
 use is_root::is_root;
 use std::path::PathBuf;
 use std::process::exit;
-use structopt::StructOpt;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Subcommand)]
 pub(crate) enum ProxyOptions {
     /// Set group's proxy
     Set { group: String, proxy: String },
@@ -19,7 +19,7 @@ pub(crate) enum ProxyOptions {
     List,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Subcommand)]
 pub(crate) enum ConnOptions {
     /// List all active connections
     List,
@@ -28,19 +28,7 @@ pub(crate) enum ConnOptions {
     },
 }
 
-#[derive(Debug, StructOpt)]
-pub(crate) enum LogOptions {
-    /// List all logs
-    List,
-}
-
-#[derive(Debug, StructOpt)]
-pub(crate) enum DebugOptions {
-    /// List all sessions
-    Session,
-}
-
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Subcommand)]
 pub(crate) enum TunOptions {
     /// Set TUN
     Set { s: String },
@@ -48,13 +36,13 @@ pub(crate) enum TunOptions {
     Get,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub(crate) struct CertOptions {
-    #[structopt(short, long)]
+    #[arg(short, long)]
     path: Option<PathBuf>,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Subcommand)]
 pub(crate) enum TempRuleOptions {
     /// Add a temporary rule to the head of rule list
     Add { literal: String },
@@ -64,7 +52,7 @@ pub(crate) enum TempRuleOptions {
     Clear,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Subcommand)]
 pub(crate) enum InterceptOptions {
     /// List all captured data
     List,
@@ -74,56 +62,61 @@ pub(crate) enum InterceptOptions {
     Get { id: u32 },
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub(crate) struct StartOptions {
     /// Path of configuration. Default to $HOME/.config/boltconn
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub config: Option<PathBuf>,
     /// Path of application data. Default to $HOME/.local/share/boltconn
-    #[structopt(short = "d", long = "data")]
+    #[arg(short = 'd', long = "data")]
     pub app_data: Option<PathBuf>,
     /// Path of certificate. Default to ${app_data}/cert
-    #[structopt(long)]
+    #[arg(long)]
     pub cert: Option<PathBuf>,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub(crate) struct InitOptions {
     /// Path of configuration. Default to $HOME/.config/boltconn
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub config: Option<PathBuf>,
     /// Path of application data. Default to $HOME/.local/share/boltconn
-    #[structopt(short = "d", long = "data")]
+    #[arg(short = 'd', long = "data")]
     pub app_data: Option<PathBuf>,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Subcommand)]
 pub(crate) enum SubCommand {
     /// Start Main Program
     Start(StartOptions),
     /// Create Configurations
     Init(InitOptions),
     /// Proxy Settings
+    #[command(subcommand)]
     Proxy(ProxyOptions),
     /// Connection Settings
+    #[command(subcommand)]
     Conn(ConnOptions),
-    /// Logs Operations
-    Log(LogOptions),
     /// Generate Certificates
     Cert(CertOptions),
     /// Captured HTTP Data
+    #[command(subcommand)]
     Intercept(InterceptOptions),
     /// Adjust TUN Status
+    #[command(subcommand)]
     Tun(TunOptions),
     /// Modify Temporary Rules
+    #[command(subcommand)]
     Rule(TempRuleOptions),
     /// Clean Unexpected Shutdown
     Clean,
     /// Reload Configuration
     Reload,
+    #[clap(hide = true)]
+    Internal,
 }
 
-pub(crate) async fn controller_main(args: Args) -> ! {
+pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
     let default_uds_path = "/var/run/boltconn.sock";
     match args.cmd {
         SubCommand::Init(init) => {
@@ -211,12 +204,6 @@ pub(crate) async fn controller_main(args: Args) -> ! {
             ConnOptions::List => requester.get_connections().await,
             ConnOptions::Stop { nth } => requester.stop_connections(nth).await,
         },
-        SubCommand::Log(opt) => match opt {
-            LogOptions::List => {
-                // todo
-                Ok(())
-            }
-        },
         SubCommand::Tun(opt) => match opt {
             TunOptions::Get => requester.get_tun().await,
             TunOptions::Set { s } => requester.set_tun(s.as_str()).await,
@@ -232,7 +219,11 @@ pub(crate) async fn controller_main(args: Args) -> ! {
             TempRuleOptions::Delete { literal } => requester.delete_temporary_rule(literal).await,
             TempRuleOptions::Clear => requester.clear_temporary_rule().await,
         },
-        SubCommand::Start(_) | SubCommand::Init(_) | SubCommand::Cert(_) | SubCommand::Clean => {
+        SubCommand::Start(_)
+        | SubCommand::Init(_)
+        | SubCommand::Cert(_)
+        | SubCommand::Clean
+        | SubCommand::Internal => {
             unreachable!()
         }
     };

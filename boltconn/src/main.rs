@@ -5,6 +5,7 @@ extern crate core;
 use crate::app::App;
 use crate::cli::SubCommand;
 use crate::platform::set_maximum_opened_files;
+use clap::Parser;
 use is_root::is_root;
 use network::{
     dns::Dns,
@@ -12,7 +13,6 @@ use network::{
 };
 use std::process::ExitCode;
 use std::time::Duration;
-use structopt::StructOpt;
 
 mod adapter;
 mod app;
@@ -27,22 +27,23 @@ mod platform;
 mod proxy;
 mod transport;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 #[structopt(name = "boltconn", about = "Cli interface of BoltConn")]
-struct Args {
+struct ProgramArgs {
     /// RESTful API URL; if not set, the controller will use unix domain socket as default.
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub url: Option<String>,
-    #[structopt(subcommand)]
+    #[command(subcommand)]
     pub cmd: SubCommand,
 }
 
 fn main() -> ExitCode {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let _guard = rt.enter();
-    let args: Args = Args::from_args();
+    let args: ProgramArgs = ProgramArgs::parse();
     let cmds = match args.cmd {
         SubCommand::Start(sub) => sub,
+        SubCommand::Internal => return internal_code(),
         _ => rt.block_on(cli::controller_main(args)),
     };
     if !is_root() {
@@ -108,5 +109,11 @@ fn main() -> ExitCode {
     rt.block_on(app.serve_command());
     tracing::info!("Exiting...");
     rt.shutdown_timeout(Duration::from_millis(300));
+    ExitCode::SUCCESS
+}
+
+/// This function is a shortcut for testing things conveniently. Only for development use.
+fn internal_code() -> ExitCode {
+    println!("This option is not for end-user.");
     ExitCode::SUCCESS
 }
