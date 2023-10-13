@@ -1,17 +1,33 @@
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName};
 use regex::Regex;
-use rquickjs as js;
-use rquickjs::{FromJs, IntoJs};
+use rquickjs::class::{Trace, Tracer};
+use rquickjs::{Class, Context, Object, Runtime};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-#[derive(IntoJs, FromJs)]
+#[derive(Debug, Clone)]
+#[rquickjs::class]
 struct HttpData {
+    #[qjs(get, set)]
     url: String,
+    #[qjs(get, set)]
     method: String,
+    #[qjs(get, set)]
     header: HashMap<String, String>,
+    #[qjs(get, set)]
     body: Option<String>,
+}
+
+impl<'js> Trace<'js> for HttpData {
+    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
+        self.url.trace(tracer);
+        self.method.trace(tracer);
+        self.header.trace(tracer);
+        if let Some(body) = &self.body {
+            body.trace(tracer)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -38,8 +54,8 @@ impl ScriptEngine {
         headers: &HeaderMap,
         field: &str,
     ) -> Option<(HeaderMap, Option<String>)> {
-        let runtime = rquickjs::Runtime::new().ok()?;
-        let ctx = js::Context::full(&runtime).ok()?;
+        let runtime = Runtime::new().ok()?;
+        let ctx = Context::full(&runtime).ok()?;
         let js_data = HttpData {
             url: url.to_string(),
             method,
@@ -60,15 +76,40 @@ impl ScriptEngine {
             },
             body: data.and_then(|d| String::from_utf8(d.to_vec()).ok()),
         };
-        let r = match ctx.with(|ctx| -> Result<HttpData, js::Error> {
-            let obj = js::Object::new(ctx)?;
-            obj.set(field, js_data)?;
+        let r = match ctx.with(|ctx| -> Result<HttpData, rquickjs::Error> {
+            // init console
+            let cls = Class::instance(
+                ctx.clone(),
+                Console {
+                    id: self.name.clone().unwrap_or_else(|| "DEFAULT".to_string()),
+                },
+            )?;
+            ctx.globals().set("console", cls)?;
+
+            // init data
+            let data = Class::instance(ctx.clone(), js_data)?;
+            let obj = Object::new(ctx.clone())?;
+            obj.set(field, data)?;
             ctx.globals().set("data", obj)?;
-            let v: HttpData = ctx.eval(self.script.as_bytes())?;
-            Ok(v)
+
+            match ctx.eval::<HttpData, _>(self.script.as_bytes()) {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    if matches!(e, rquickjs::Error::Exception) {
+                        if let Ok(ex) = ctx.catch().get::<Object>() {
+                            if let Some(ex) = ctx.json_stringify(ex).ok().flatten() {
+                                tracing::trace!("Exception: {}", ex.to_string().unwrap())
+                            } else {
+                                tracing::trace!("Failed to parse exception")
+                            }
+                        }
+                    }
+                    Err(e)
+                }
+            }
         }) {
             Err(e) => {
-                tracing::warn!(
+                tracing::trace!(
                     "Failed to run script {} for {}: {}",
                     self.name
                         .clone()
@@ -112,5 +153,18 @@ impl ScriptEngine {
         let (header, body) = self.run_js(url, data, method.to_string(), header, "response")?;
         parts.headers = header;
         body.map(Bytes::from)
+    }
+}
+
+#[derive(Debug, Clone, Trace)]
+#[rquickjs::class]
+struct Console {
+    id: String,
+}
+
+#[rquickjs::methods]
+impl Console {
+    pub fn log(&self, str: String) {
+        tracing::info!("[js-{}]:{}", self.id, str);
     }
 }
