@@ -50,9 +50,14 @@ impl InterceptionPayload {
                         return Err(anyhow::anyhow!("Unexpected: {}", s));
                     }
                 }
-                ActionConfig::Script(cfg) => payloads.push(Arc::new(PayloadEntry::Script(
-                    ScriptEngine::new(cfg.name.as_ref(), &cfg.pattern, &cfg.script)?,
-                ))),
+                ActionConfig::Script(cfg) => {
+                    payloads.push(Arc::new(PayloadEntry::Script(ScriptEngine::new(
+                        cfg.name.as_ref(),
+                        cfg.script_type.as_str(),
+                        &cfg.pattern,
+                        &cfg.script,
+                    )?)))
+                }
             }
         }
         Ok(Self {

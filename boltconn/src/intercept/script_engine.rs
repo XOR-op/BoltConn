@@ -30,17 +30,36 @@ impl<'js> Trace<'js> for HttpData {
     }
 }
 
+#[derive(Debug, Clone)]
+enum ScriptType {
+    Req,
+    Resp,
+    All,
+}
+
 #[derive(Debug)]
 pub struct ScriptEngine {
     name: Option<String>,
+    script_type: ScriptType,
     pattern: Regex,
     script: String,
 }
 
 impl ScriptEngine {
-    pub fn new(name: Option<&String>, pattern: &str, script: &str) -> anyhow::Result<Self> {
+    pub fn new(
+        name: Option<&String>,
+        script_type: &str,
+        pattern: &str,
+        script: &str,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             name: name.cloned(),
+            script_type: match script_type.to_ascii_lowercase().as_str() {
+                "req" => ScriptType::Req,
+                "resp" => ScriptType::Resp,
+                "all" => ScriptType::All,
+                s => return Err(anyhow::anyhow!("Invalid script type: {}", s)),
+            },
             pattern: Regex::new(pattern)?,
             script: script.to_string(),
         })
@@ -88,9 +107,7 @@ impl ScriptEngine {
 
             // init data
             let data = Class::instance(ctx.clone(), js_data)?;
-            let obj = Object::new(ctx.clone())?;
-            obj.set(field, data)?;
-            ctx.globals().set("data", obj)?;
+            ctx.globals().set(field, data)?;
 
             match ctx.eval::<HttpData, _>(self.script.as_bytes()) {
                 Ok(v) => Ok(v),
@@ -135,11 +152,16 @@ impl ScriptEngine {
         parts: &mut http::request::Parts,
         data: Option<Bytes>,
     ) -> Option<Bytes> {
-        let method = parts.method.to_string();
-        let header = &parts.headers;
-        let (header, body) = self.run_js(url, data, method, header, "request")?;
-        parts.headers = header;
-        body.map(Bytes::from)
+        match self.script_type {
+            ScriptType::Req | ScriptType::All => {
+                let method = parts.method.to_string();
+                let header = &parts.headers;
+                let (header, body) = self.run_js(url, data, method, header, "request")?;
+                parts.headers = header;
+                body.map(Bytes::from)
+            }
+            ScriptType::Resp => None,
+        }
     }
 
     pub fn try_rewrite_resp(
@@ -149,10 +171,16 @@ impl ScriptEngine {
         parts: &mut http::response::Parts,
         data: Option<Bytes>,
     ) -> Option<Bytes> {
-        let header = &parts.headers;
-        let (header, body) = self.run_js(url, data, method.to_string(), header, "response")?;
-        parts.headers = header;
-        body.map(Bytes::from)
+        match self.script_type {
+            ScriptType::Req => None,
+            ScriptType::Resp | ScriptType::All => {
+                let header = &parts.headers;
+                let (header, body) =
+                    self.run_js(url, data, method.to_string(), header, "response")?;
+                parts.headers = header;
+                body.map(Bytes::from)
+            }
+        }
     }
 }
 

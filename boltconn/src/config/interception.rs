@@ -19,6 +19,8 @@ pub enum ActionConfig {
 pub struct ScriptActionConfig {
     #[serde(alias = "script-name")]
     pub name: Option<String>,
+    #[serde(alias = "type")]
+    pub script_type: String,
     pub pattern: String,
     pub script: String,
 }
