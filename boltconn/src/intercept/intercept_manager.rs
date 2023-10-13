@@ -1,4 +1,4 @@
-use crate::config::InterceptionConfig;
+use crate::config::{ActionConfig, InterceptionConfig};
 use crate::dispatch::{ConnInfo, Dispatching, DispatchingBuilder, ProxyImpl, RuleSetTable};
 use crate::external::MmdbReader;
 use crate::intercept::{HeaderEngine, ScriptEngine, UrlEngine};
@@ -20,29 +20,39 @@ struct InterceptionPayload {
 }
 
 impl InterceptionPayload {
-    fn parse_actions(actions: &[String]) -> anyhow::Result<Self> {
+    fn parse_actions(actions: &[ActionConfig]) -> anyhow::Result<Self> {
         let mut capture_request = false;
         let mut capture_response = false;
         let mut payloads = vec![];
         for s in actions.iter() {
-            if s.starts_with("url,") {
-                payloads.push(Arc::new(PayloadEntry::Url(
-                    UrlEngine::from_line(s).ok_or_else(|| {
-                        anyhow::anyhow!("Parse invalid url modifier rules: {}", s)
-                    })?,
-                )));
-            } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
-                payloads.push(Arc::new(PayloadEntry::Header(
-                    HeaderEngine::from_line(s).ok_or_else(|| {
-                        anyhow::anyhow!("Parse invalid header modifier rules: {}", s)
-                    })?,
-                )));
-            } else if s == "capture-request" {
-                capture_request = true;
-            } else if s == "capture-response" {
-                capture_response = true;
-            } else {
-                return Err(anyhow::anyhow!("Unexpected: {}", s));
+            match s {
+                ActionConfig::Standard(s) => {
+                    if s.starts_with("url,") {
+                        payloads.push(Arc::new(PayloadEntry::Url(
+                            UrlEngine::from_line(s).ok_or_else(|| {
+                                anyhow::anyhow!("Parse invalid url modifier rules: {}", s)
+                            })?,
+                        )));
+                    } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
+                        payloads.push(Arc::new(PayloadEntry::Header(
+                            HeaderEngine::from_line(s).ok_or_else(|| {
+                                anyhow::anyhow!("Parse invalid header modifier rules: {}", s)
+                            })?,
+                        )));
+                    } else if s == "capture" {
+                        capture_request = true;
+                        capture_response = true;
+                    } else if s == "capture-request" {
+                        capture_request = true;
+                    } else if s == "capture-response" {
+                        capture_response = true;
+                    } else {
+                        return Err(anyhow::anyhow!("Unexpected: {}", s));
+                    }
+                }
+                ActionConfig::Script(cfg) => payloads.push(Arc::new(PayloadEntry::Script(
+                    ScriptEngine::new(cfg.name.as_ref(), &cfg.pattern, &cfg.script)?,
+                ))),
             }
         }
         Ok(Self {

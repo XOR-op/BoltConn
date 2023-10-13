@@ -16,13 +16,15 @@ struct HttpData {
 
 #[derive(Debug)]
 pub struct ScriptEngine {
+    name: Option<String>,
     pattern: Regex,
     script: String,
 }
 
 impl ScriptEngine {
-    pub fn new(pattern: &str, script: &str) -> anyhow::Result<Self> {
+    pub fn new(name: Option<&String>, pattern: &str, script: &str) -> anyhow::Result<Self> {
         Ok(Self {
+            name: name.cloned(),
             pattern: Regex::new(pattern)?,
             script: script.to_string(),
         })
@@ -58,11 +60,26 @@ impl ScriptEngine {
             },
             body: data.and_then(|d| String::from_utf8(d.to_vec()).ok()),
         };
-        let r = ctx.with(|ctx| {
-            ctx.globals().set(field, js_data).ok()?;
-            let v: HttpData = ctx.eval(self.script.as_bytes()).ok()?;
-            Some(v)
-        })?;
+        let r = match ctx.with(|ctx| -> Result<HttpData, js::Error> {
+            let obj = js::Object::new(ctx)?;
+            obj.set(field, js_data)?;
+            ctx.globals().set("data", obj)?;
+            let v: HttpData = ctx.eval(self.script.as_bytes())?;
+            Ok(v)
+        }) {
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to run script {} for {}: {}",
+                    self.name
+                        .clone()
+                        .map_or("".to_string(), |s| format!("\"{}\"", s)),
+                    url,
+                    e
+                );
+                return None;
+            }
+            Ok(r) => r,
+        };
         // replace header
         let mut header = HeaderMap::new();
         for (k, v) in r.header {
