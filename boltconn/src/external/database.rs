@@ -1,5 +1,5 @@
 use crate::platform::get_user_info;
-use crate::proxy::{BodyOrWarning, ConnContext, HttpInterceptData};
+use crate::proxy::{CapturedBody, ConnContext, HttpInterceptData};
 use anyhow::anyhow;
 use rusqlite::{params, Error, ErrorCode, OpenFlags};
 use std::path::PathBuf;
@@ -205,9 +205,13 @@ impl DatabaseHandle {
         let mut stmt = tx
             .prepare_cached("INSERT INTO Intercept (process,uri,method,status,size,time,req_header,req_body,resp_header,resp_body) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
         for c in intes.iter() {
+            let req_body = match &c.req.body {
+                CapturedBody::FullCapture(b) => Some(b.as_ref()),
+                _ => None,
+            };
             let resp_body = match &c.resp.body {
-                BodyOrWarning::Body(b) => Some(b.as_ref()),
-                BodyOrWarning::Warning(_) => None,
+                CapturedBody::FullCapture(b) => Some(b.as_ref()),
+                _ => None,
             };
             stmt.execute(params![
                 c.process_info.as_ref().map(|proc| &proc.name),
@@ -217,7 +221,7 @@ impl DatabaseHandle {
                 c.resp.body_len(),
                 (c.resp.time - c.req.time).as_millis() as u64,
                 c.req.collect_headers().join("\n"),
-                c.req.body.as_ref(),
+                req_body,
                 c.resp.collect_headers().join("\n"),
                 resp_body
             ])?;

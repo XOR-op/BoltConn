@@ -1,7 +1,7 @@
 use crate::intercept::InterceptionResult;
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{
-    BodyOrWarning, ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr,
+    CapturedBody, ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -109,7 +109,7 @@ impl Modifier for Recorder {
             method: parts.method.clone(),
             version: parts.version,
             headers: parts.headers.clone(),
-            body: whole_body.clone(),
+            body: CapturedBody::FullCapture(whole_body.clone()),
             time: Instant::now(),
         };
         self.pending.insert(ctx.tag, req_copy);
@@ -123,12 +123,11 @@ impl Modifier for Recorder {
     ) -> anyhow::Result<Response<Body>> {
         let (parts, body) = resp.into_parts();
         let whole_body = hyper::body::to_bytes(body).await?;
-        // todo: optimize for large body
         let resp_copy = DumpedResponse {
             status: parts.status,
             version: parts.version,
             headers: parts.headers.clone(),
-            body: BodyOrWarning::Body(whole_body.clone()),
+            body: CapturedBody::FullCapture(whole_body.clone()),
             time: Instant::now(),
         };
         let req = self

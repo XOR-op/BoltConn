@@ -1,54 +1,71 @@
-use crate::config::InterceptionConfig;
+use crate::config::{ActionConfig, InterceptionConfig};
 use crate::dispatch::{ConnInfo, Dispatching, DispatchingBuilder, ProxyImpl, RuleSetTable};
 use crate::external::MmdbReader;
-use crate::intercept::{HeaderModManager, UrlModManager};
+use crate::intercept::{HeaderEngine, ScriptEngine, UrlEngine};
 use crate::network::dns::Dns;
 use std::sync::Arc;
 
 #[derive(Debug)]
+pub enum PayloadEntry {
+    Url(UrlEngine),
+    Header(HeaderEngine),
+    Script(ScriptEngine),
+}
+
+#[derive(Debug)]
 struct InterceptionPayload {
-    pub url_mgr: UrlModManager,
-    pub header_mgr: HeaderModManager,
-    pub capture: bool,
+    pub payloads: Vec<Arc<PayloadEntry>>,
+    pub capture_request: bool,
+    pub capture_response: bool,
 }
 
 impl InterceptionPayload {
-    fn parse_actions(actions: &[String]) -> anyhow::Result<Self> {
-        let (url_list, header_list, capture) = mapping_rewrite(actions)?;
-        let (url_mgr, header_mgr) = {
-            (
-                UrlModManager::new(url_list.as_slice()).map_err(|e| {
-                    anyhow::anyhow!("Parse url modifier rules, invalid regexes: {}", e)
-                })?,
-                HeaderModManager::new(header_list.as_slice()).map_err(|e| {
-                    anyhow::anyhow!("Parse header modifier rules, invalid regexes: {}", e)
-                })?,
-            )
-        };
+    fn parse_actions(actions: &[ActionConfig]) -> anyhow::Result<Self> {
+        let mut capture_request = false;
+        let mut capture_response = false;
+        let mut payloads = vec![];
+        for s in actions.iter() {
+            match s {
+                ActionConfig::Standard(s) => {
+                    if s.starts_with("url,") {
+                        payloads.push(Arc::new(PayloadEntry::Url(
+                            UrlEngine::from_line(s).ok_or_else(|| {
+                                anyhow::anyhow!("Parse invalid url modifier rules: {}", s)
+                            })?,
+                        )));
+                    } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
+                        payloads.push(Arc::new(PayloadEntry::Header(
+                            HeaderEngine::from_line(s).ok_or_else(|| {
+                                anyhow::anyhow!("Parse invalid header modifier rules: {}", s)
+                            })?,
+                        )));
+                    } else if s == "capture" {
+                        capture_request = true;
+                        capture_response = true;
+                    } else if s == "capture-request" {
+                        capture_request = true;
+                    } else if s == "capture-response" {
+                        capture_response = true;
+                    } else {
+                        return Err(anyhow::anyhow!("Unexpected: {}", s));
+                    }
+                }
+                ActionConfig::Script(cfg) => {
+                    payloads.push(Arc::new(PayloadEntry::Script(ScriptEngine::new(
+                        cfg.name.as_deref(),
+                        cfg.script_type.as_str(),
+                        cfg.pattern.as_deref(),
+                        &cfg.script,
+                    )?)))
+                }
+            }
+        }
         Ok(Self {
-            url_mgr,
-            header_mgr,
-            capture,
+            payloads,
+            capture_request,
+            capture_response,
         })
     }
-}
-
-fn mapping_rewrite(list: &[String]) -> anyhow::Result<(Vec<String>, Vec<String>, bool)> {
-    let mut url_list = vec![];
-    let mut header_list = vec![];
-    let mut capture = false;
-    for s in list.iter() {
-        if s.starts_with("url,") {
-            url_list.push(s.clone());
-        } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
-            header_list.push(s.clone());
-        } else if s == "capture" {
-            capture = true;
-        } else {
-            return Err(anyhow::anyhow!("Unexpected: {}", s));
-        }
-    }
-    Ok((url_list, header_list, capture))
 }
 
 struct InterceptionEntry {
@@ -66,21 +83,15 @@ impl InterceptionEntry {
 }
 
 pub struct InterceptionResult {
-    payloads: Vec<Arc<InterceptionPayload>>,
-    will_capture: bool,
+    pub payloads: Vec<Arc<PayloadEntry>>,
+    pub capture_request: bool,
+    pub capture_response: bool,
+    pub contains_script: bool,
 }
 
 impl InterceptionResult {
     pub fn should_intercept(&self) -> bool {
-        !self.payloads.is_empty() || self.will_capture
-    }
-
-    pub fn each_payload(&self) -> impl Iterator<Item = (&UrlModManager, &HeaderModManager)> {
-        self.payloads.iter().map(|x| (&x.url_mgr, &x.header_mgr))
-    }
-
-    pub fn should_capture(&self) -> bool {
-        self.will_capture
+        !self.payloads.is_empty() || self.capture_request || self.capture_response
     }
 }
 
@@ -110,16 +121,25 @@ impl InterceptionManager {
 
     pub async fn matches(&self, conn_info: &mut ConnInfo) -> InterceptionResult {
         let mut result = vec![];
-        let mut capture = false;
+        let mut capture_request = false;
+        let mut capture_response = false;
+        let mut contains_script = false;
         for i in self.entries.iter() {
             if let Some(payload) = i.matches(conn_info).await {
-                capture |= payload.capture;
-                result.push(payload);
+                capture_request |= payload.capture_request;
+                capture_response |= payload.capture_response;
+                contains_script |= payload
+                    .payloads
+                    .iter()
+                    .any(|x| matches!(x.as_ref(), PayloadEntry::Script(_)));
+                result.extend_from_slice(payload.payloads.as_slice());
             }
         }
         InterceptionResult {
             payloads: result,
-            will_capture: capture,
+            capture_request,
+            capture_response,
+            contains_script,
         }
     }
 }

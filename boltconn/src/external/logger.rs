@@ -95,7 +95,7 @@ impl<'a> MakeWriter<'a> for LoggerMaker {
     }
 }
 
-pub fn init_tracing(logger: &StreamLoggerSend) {
+pub fn init_tracing(logger: &StreamLoggerSend) -> anyhow::Result<()> {
     #[cfg(not(feature = "tokio-console"))]
     {
         let stdout_layer = fmt::layer()
@@ -113,10 +113,12 @@ pub fn init_tracing(logger: &StreamLoggerSend) {
             .with(stream_layer)
             .with(EnvFilter::new("boltconn=trace"))
             .init();
+        Ok(())
     }
     #[cfg(feature = "tokio-console")]
     {
         let console_layer = console_subscriber::ConsoleLayer::builder().spawn();
         tracing_subscriber::registry().with(console_layer).init();
+        Ok(())
     }
 }

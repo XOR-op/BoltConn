@@ -1,13 +1,14 @@
-mod header_rewrite;
+mod header_engine;
 mod http_intercept;
 mod https_intercept;
 mod intercept_manager;
 mod intercept_modifier;
 mod modifier;
-mod url_rewrite;
+mod script_engine;
+mod url_engine;
 
 use chrono::Datelike;
-pub use header_rewrite::*;
+pub use header_engine::*;
 pub use http_intercept::HttpIntercept;
 pub use https_intercept::HttpsIntercept;
 pub use intercept_manager::*;
@@ -18,10 +19,11 @@ use rcgen::{
     KeyUsagePurpose, SanType,
 };
 use regex::Regex;
+pub use script_engine::*;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
 use tokio_rustls::rustls::{Certificate as RustlsCertificate, PrivateKey as RustlsPrivateKey};
-pub use url_rewrite::*;
+pub use url_engine::*;
 
 fn sign_site_cert(
     common_name: &str,
@@ -91,7 +93,7 @@ impl ReplacedChunk {
 }
 
 #[derive(Clone, Debug)]
-struct Replacement {
+pub(super) struct Replacement {
     reg: Regex,
     chunks: Vec<ReplacedChunk>,
 }

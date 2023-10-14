@@ -3,8 +3,7 @@ use crate::dispatch::{GeneralProxy, Latency};
 use crate::external::{SharedDispatching, StreamLoggerRecv, StreamLoggerSend};
 use crate::network::configure::TunConfigure;
 use crate::proxy::{
-    latency_test, BodyOrWarning, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData,
-    SessionManager,
+    latency_test, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
@@ -213,16 +212,11 @@ impl Controller {
                         req,
                         resp,
                     } = list.get(0).unwrap();
-                    let (body, warning) = match &resp.body {
-                        BodyOrWarning::Body(b) => (b.to_vec(), None),
-                        BodyOrWarning::Warning(w) => (vec![], Some(w.clone())),
-                    };
                     let result = GetInterceptDataResp {
                         req_header: req.collect_headers(),
-                        req_body: req.body.to_vec(),
+                        req_body: req.body.to_captured_schema(),
                         resp_header: resp.collect_headers(),
-                        resp_body: body,
-                        warning,
+                        resp_body: resp.body.to_captured_schema(),
                     };
                     return Some(result);
                 }
