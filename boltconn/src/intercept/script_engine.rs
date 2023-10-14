@@ -1,34 +1,58 @@
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName};
 use regex::Regex;
-use rquickjs::class::{Trace, Tracer};
-use rquickjs::{Class, Context, Runtime};
+use rquickjs::class::Trace;
+use rquickjs::{Class, Context, Ctx, FromJs, IntoJs, Object, Runtime, Value};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
-#[rquickjs::class]
 struct HttpData {
-    #[qjs(get, set)]
     url: String,
-    #[qjs(get, set)]
     method: String,
-    #[qjs(get, set)]
     status: Option<u16>,
-    #[qjs(get, set)]
     header: HashMap<String, String>,
-    #[qjs(get, set)]
     body: Option<String>,
 }
 
-impl<'js> Trace<'js> for HttpData {
-    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
-        self.url.trace(tracer);
-        self.method.trace(tracer);
-        self.header.trace(tracer);
-        if let Some(body) = &self.body {
-            body.trace(tracer)
+impl<'js> FromJs<'js> for HttpData {
+    fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+        if let Some(obj) = value.clone().into_object() {
+            let url = obj.get("url")?;
+            let method = obj.get("method")?;
+            let status = obj.get("status").ok();
+            let header = obj.get("header")?;
+            let body = obj.get("body").ok();
+            Ok(HttpData {
+                url,
+                method,
+                status,
+                header,
+                body,
+            })
+        } else {
+            Err(rquickjs::Error::FromJs {
+                from: value.type_of().as_str(),
+                to: "HttpData",
+                message: None,
+            })
         }
+    }
+}
+
+impl<'js> IntoJs<'js> for HttpData {
+    fn into_js(self, ctx: &Ctx<'js>) -> rquickjs::Result<Value<'js>> {
+        let obj = Object::new(ctx.clone())?;
+        obj.set("url", self.url)?;
+        obj.set("method", self.method)?;
+        if let Some(s) = self.status {
+            obj.set("status", s)?;
+        }
+        obj.set("header", self.header)?;
+        if let Some(b) = self.body {
+            obj.set("body", b)?;
+        }
+        Ok(obj.into())
     }
 }
 
@@ -110,8 +134,7 @@ impl ScriptEngine {
             ctx.globals().set("console", cls)?;
 
             // init data
-            let data = Class::instance(ctx.clone(), js_data)?;
-            ctx.globals().set(field, data)?;
+            ctx.globals().set(field, js_data)?;
 
             match ctx.eval::<HttpData, _>(self.script.as_bytes()) {
                 Ok(v) => Ok(v),
@@ -151,7 +174,6 @@ impl ScriptEngine {
         // replace header
         let mut header = HeaderMap::new();
         for (k, v) in r.header {
-            tracing::trace!("is {}", v.parse::<String>().ok()?);
             header.insert(HeaderName::from_bytes(k.as_bytes()).ok()?, v.parse().ok()?);
         }
         Some((r.status, header, r.body))
@@ -230,19 +252,10 @@ mod test {
             "https://www.google.com",
             "\
         console.log('user-agent is '+$request.header['user-agent']);
-        console.log(JSON.stringify($request.header));
-        console.log(JSON.stringify($request));
         $request.header['user-agent'] = 'curl/1.2.3';
         $request.header['test'] = 'aaaa';
         $request.status = 502;
-        console.log('status is '+$request.status);
         console.log(JSON.stringify($request));
-        console.log($request.header['user-agent']);
-        console.log(JSON.stringify($request.header));
-        $request.header={'user-agent':'curl/1.2.4'};
-        console.log(JSON.stringify($request));
-        console.log($request.header['user-agent']);
-        console.log(JSON.stringify($request.header));
         $request
         ",
         )
