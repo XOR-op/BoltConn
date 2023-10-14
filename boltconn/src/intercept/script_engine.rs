@@ -2,7 +2,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderName};
 use regex::Regex;
 use rquickjs::class::{Trace, Tracer};
-use rquickjs::{Class, Context, Object, Runtime};
+use rquickjs::{Class, Context, Runtime};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
@@ -13,6 +13,8 @@ struct HttpData {
     url: String,
     #[qjs(get, set)]
     method: String,
+    #[qjs(get, set)]
+    status: Option<u16>,
     #[qjs(get, set)]
     header: HashMap<String, String>,
     #[qjs(get, set)]
@@ -70,9 +72,10 @@ impl ScriptEngine {
         url: &str,
         data: Option<Bytes>,
         method: String,
+        status: Option<u16>,
         headers: &HeaderMap,
         field: &str,
-    ) -> Option<(HeaderMap, Option<String>)> {
+    ) -> Option<(Option<u16>, HeaderMap, Option<String>)> {
         let runtime = Runtime::new().ok()?;
         let ctx = Context::full(&runtime).ok()?;
         let js_data = HttpData {
@@ -93,6 +96,7 @@ impl ScriptEngine {
                 }
                 header
             },
+            status,
             body: data.and_then(|d| String::from_utf8(d.to_vec()).ok()),
         };
         let r = match ctx.with(|ctx| -> Result<HttpData, rquickjs::Error> {
@@ -113,12 +117,18 @@ impl ScriptEngine {
                 Ok(v) => Ok(v),
                 Err(e) => {
                     if matches!(e, rquickjs::Error::Exception) {
-                        if let Ok(ex) = ctx.catch().get::<Object>() {
-                            if let Some(ex) = ctx.json_stringify(ex).ok().flatten() {
-                                tracing::trace!("Exception: {}", ex.to_string().unwrap())
-                            } else {
-                                tracing::trace!("Failed to parse exception")
-                            }
+                        let v = ctx.catch();
+                        if v.type_of() == rquickjs::Type::Exception {
+                            let v = v.as_exception().unwrap();
+                            tracing::trace!(
+                                "Script {} exception: {} {}",
+                                self.name
+                                    .clone()
+                                    .map_or_else(String::default, |n| format!("\"{}\"", n)),
+                                v.message().unwrap_or_else(|| "MISSING MSG".to_string()),
+                                v.line()
+                                    .map_or_else(String::default, |l| format!("in line {}", l))
+                            );
                         }
                     }
                     Err(e)
@@ -141,9 +151,10 @@ impl ScriptEngine {
         // replace header
         let mut header = HeaderMap::new();
         for (k, v) in r.header {
+            tracing::trace!("is {}", v.parse::<String>().ok()?);
             header.insert(HeaderName::from_bytes(k.as_bytes()).ok()?, v.parse().ok()?);
         }
-        Some((header, r.body))
+        Some((r.status, header, r.body))
     }
 
     pub fn try_rewrite_req(
@@ -156,7 +167,7 @@ impl ScriptEngine {
             ScriptType::Req | ScriptType::All => {
                 let method = parts.method.to_string();
                 let header = &parts.headers;
-                let (header, body) = self.run_js(url, data, method, header, "request")?;
+                let (_, header, body) = self.run_js(url, data, method, None, header, "$request")?;
                 parts.headers = header;
                 body.map(Bytes::from)
             }
@@ -175,8 +186,17 @@ impl ScriptEngine {
             ScriptType::Req => None,
             ScriptType::Resp | ScriptType::All => {
                 let header = &parts.headers;
-                let (header, body) =
-                    self.run_js(url, data, method.to_string(), header, "response")?;
+                let (status, header, body) = self.run_js(
+                    url,
+                    data,
+                    method.to_string(),
+                    Some(parts.status.as_u16()),
+                    header,
+                    "$response",
+                )?;
+                if let Some(status) = status.and_then(|s| http::StatusCode::from_u16(s).ok()) {
+                    parts.status = status;
+                }
                 parts.headers = header;
                 body.map(Bytes::from)
             }
@@ -193,6 +213,52 @@ struct Console {
 #[rquickjs::methods]
 impl Console {
     pub fn log(&self, str: String) {
-        tracing::info!("[js-{}]:{}", self.id, str);
+        tracing::info!("[js:{}]:{}", self.id, str);
+    }
+}
+
+mod test {
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_req() {
+        use crate::intercept::ScriptEngine;
+        tracing::trace!("Started");
+        let name = "test-req".to_string();
+        let engine = ScriptEngine::new(
+            Some(&name),
+            "req",
+            "https://www.google.com",
+            "\
+        console.log('user-agent is '+$request.header['user-agent']);
+        console.log(JSON.stringify($request.header));
+        console.log(JSON.stringify($request));
+        $request.header['user-agent'] = 'curl/1.2.3';
+        $request.header['test'] = 'aaaa';
+        $request.status = 502;
+        console.log('status is '+$request.status);
+        console.log(JSON.stringify($request));
+        console.log($request.header['user-agent']);
+        console.log(JSON.stringify($request.header));
+        $request.header={'user-agent':'curl/1.2.4'};
+        console.log(JSON.stringify($request));
+        console.log($request.header['user-agent']);
+        console.log(JSON.stringify($request.header));
+        $request
+        ",
+        )
+        .unwrap();
+        let mut hdr = http::HeaderMap::new();
+        hdr.insert("user-agent", "Mozilla/5.0 Safari/16.1.0".parse().unwrap());
+        let (_, hdr, _) = engine
+            .run_js(
+                "https://www.google.com",
+                None,
+                "post".to_string(),
+                None,
+                &hdr,
+                "$request",
+            )
+            .unwrap();
+        assert_eq!(hdr.get("user-agent").unwrap(), &"curl/1.2.3");
     }
 }
