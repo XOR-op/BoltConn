@@ -21,6 +21,6 @@ pub struct ScriptActionConfig {
     pub name: Option<String>,
     #[serde(alias = "type")]
     pub script_type: String,
-    pub pattern: String,
+    pub pattern: Option<String>,
     pub script: String,
 }

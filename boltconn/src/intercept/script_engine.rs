@@ -67,26 +67,26 @@ enum ScriptType {
 pub struct ScriptEngine {
     name: Option<String>,
     script_type: ScriptType,
-    pattern: Regex,
+    pattern: Option<Regex>,
     script: String,
 }
 
 impl ScriptEngine {
     pub fn new(
-        name: Option<&String>,
+        name: Option<&str>,
         script_type: &str,
-        pattern: &str,
+        pattern: Option<&str>,
         script: &str,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            name: name.cloned(),
+            name: name.map(|s| s.to_string()),
             script_type: match script_type.to_ascii_lowercase().as_str() {
                 "req" => ScriptType::Req,
                 "resp" => ScriptType::Resp,
                 "all" => ScriptType::All,
                 s => return Err(anyhow::anyhow!("Invalid script type: {}", s)),
             },
-            pattern: Regex::new(pattern)?,
+            pattern: pattern.map(Regex::new).transpose()?,
             script: script.to_string(),
         })
     }
@@ -185,15 +185,20 @@ impl ScriptEngine {
         parts: &mut http::request::Parts,
         data: Option<Bytes>,
     ) -> Option<Bytes> {
-        match self.script_type {
-            ScriptType::Req | ScriptType::All => {
-                let method = parts.method.to_string();
-                let header = &parts.headers;
-                let (_, header, body) = self.run_js(url, data, method, None, header, "$request")?;
-                parts.headers = header;
-                body.map(Bytes::from)
+        if self.pattern.as_ref().map_or(true, |s| s.is_match(url)) {
+            match self.script_type {
+                ScriptType::Req | ScriptType::All => {
+                    let method = parts.method.to_string();
+                    let header = &parts.headers;
+                    let (_, header, body) =
+                        self.run_js(url, data, method, None, header, "$request")?;
+                    parts.headers = header;
+                    body.map(Bytes::from)
+                }
+                ScriptType::Resp => None,
             }
-            ScriptType::Resp => None,
+        } else {
+            None
         }
     }
 
@@ -204,24 +209,28 @@ impl ScriptEngine {
         parts: &mut http::response::Parts,
         data: Option<Bytes>,
     ) -> Option<Bytes> {
-        match self.script_type {
-            ScriptType::Req => None,
-            ScriptType::Resp | ScriptType::All => {
-                let header = &parts.headers;
-                let (status, header, body) = self.run_js(
-                    url,
-                    data,
-                    method.to_string(),
-                    Some(parts.status.as_u16()),
-                    header,
-                    "$response",
-                )?;
-                if let Some(status) = status.and_then(|s| http::StatusCode::from_u16(s).ok()) {
-                    parts.status = status;
+        if self.pattern.as_ref().map_or(true, |s| s.is_match(url)) {
+            match self.script_type {
+                ScriptType::Req => None,
+                ScriptType::Resp | ScriptType::All => {
+                    let header = &parts.headers;
+                    let (status, header, body) = self.run_js(
+                        url,
+                        data,
+                        method.to_string(),
+                        Some(parts.status.as_u16()),
+                        header,
+                        "$response",
+                    )?;
+                    if let Some(status) = status.and_then(|s| http::StatusCode::from_u16(s).ok()) {
+                        parts.status = status;
+                    }
+                    parts.headers = header;
+                    body.map(Bytes::from)
                 }
-                parts.headers = header;
-                body.map(Bytes::from)
             }
+        } else {
+            None
         }
     }
 }
@@ -249,7 +258,7 @@ mod test {
         let engine = ScriptEngine::new(
             Some(&name),
             "req",
-            "https://www.google.com",
+            Some("https://www.google.com"),
             "\
         console.log('user-agent is '+$request.header['user-agent']);
         $request.header['user-agent'] = 'curl/1.2.3';

@@ -52,9 +52,9 @@ impl InterceptionPayload {
                 }
                 ActionConfig::Script(cfg) => {
                     payloads.push(Arc::new(PayloadEntry::Script(ScriptEngine::new(
-                        cfg.name.as_ref(),
+                        cfg.name.as_deref(),
                         cfg.script_type.as_str(),
-                        &cfg.pattern,
+                        cfg.pattern.as_deref(),
                         &cfg.script,
                     )?)))
                 }
