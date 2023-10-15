@@ -7,8 +7,8 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, InboundInfo, ProxyImpl};
 use crate::intercept::{HttpIntercept, HttpsIntercept, InterceptionManager, ModifierClosure};
 use crate::network::dns::Dns;
-use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
+use crate::platform::{get_iface_address, process};
 use crate::proxy::{ConnAbortHandle, ConnContext, ContextManager, NetworkAddr};
 use arc_swap::ArcSwap;
 use bytes::Bytes;
@@ -201,6 +201,7 @@ impl Dispatcher {
         let mut conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            local_ip: get_iface_address(self.iface_name.as_str()).ok(),
             inbound: inbound.clone(),
             resolved_dst: None,
             connection_type: NetworkType::Tcp,
@@ -390,6 +391,7 @@ impl Dispatcher {
         let mut conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr,
+            local_ip: get_iface_address(self.iface_name.as_str()).ok(),
             inbound: InboundInfo::Tun,
             resolved_dst: None,
             connection_type: NetworkType::Udp,
@@ -418,6 +420,7 @@ impl Dispatcher {
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            local_ip: get_iface_address(self.iface_name.as_str()).ok(),
             inbound: InboundInfo::Tun,
             resolved_dst: None,
             connection_type: NetworkType::Udp,
@@ -469,6 +472,7 @@ impl Dispatcher {
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
+            local_ip: get_iface_address(self.iface_name.as_str()).ok(),
             inbound: InboundInfo::Socks5(user),
             resolved_dst: None,
             connection_type: NetworkType::Udp,

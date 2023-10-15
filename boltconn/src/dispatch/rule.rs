@@ -59,6 +59,7 @@ pub enum RuleImpl {
     Domain(String),
     DomainSuffix(String),
     DomainKeyword(String),
+    LocalIpCidr(IpNet),
     IpCidr(IpNet),
     SrcPort(PortRule),
     DstPort(PortRule),
@@ -94,6 +95,7 @@ impl RuleImpl {
                     false
                 }
             }
+            RuleImpl::LocalIpCidr(net) => info.local_ip.as_ref().map_or(false, |s| net.contains(s)),
             RuleImpl::IpCidr(net) => info.socketaddr().is_some_and(|s| net.contains(&s.ip())),
             RuleImpl::GeoIP(mmdb, country) => info
                 .socketaddr()
@@ -279,12 +281,12 @@ impl RuleBuilder<'_> {
                             // all other rules
                             let content = retrive_string(list.get(1).unwrap())?;
                             Self::parse(prefix, content, Some(self.rulesets), self.mmdb.as_ref())
-                                .ok_or_else(|| anyhow!("Failed to parse"))
+                                .ok_or_else(|| anyhow!("Failed to parse 2-length sub-rule"))
                         }
                     },
                     3 => {
                         match prefix.as_str() {
-                            "IP-CIDR" | "IP-CIDR6" => {
+                            "IP-CIDR" | "IP-CIDR6" | "LOCAL-IP-CIDR" => {
                                 // ignore IP-CIDR,#ip#,no-resolve
                                 if *list.get(2).unwrap()
                                     != serde_yaml::Value::String("no-resolve".to_string())
@@ -298,7 +300,7 @@ impl RuleBuilder<'_> {
                                     Some(self.rulesets),
                                     self.mmdb.as_ref(),
                                 )
-                                .ok_or_else(|| anyhow!("Failed to parse"))
+                                .ok_or_else(|| anyhow!("Failed to parse 3-length sub-rule"))
                             }
                             _ => Err(anyhow!("Invalid length")),
                         }
@@ -362,6 +364,9 @@ impl RuleBuilder<'_> {
             "PROCESS-KEYWORD" => Some(RuleImpl::ProcessKeyword(content)),
             "PROC-PATH-KEYWORD" => Some(RuleImpl::ProcPathKeyword(content)),
             "PROC-CMD-REGEX" => Some(RuleImpl::ProcCmdRegex(Regex::new(&content).ok()?)),
+            "LOCAL-IP-CIDR" => IpNet::from_str(content.as_str())
+                .ok()
+                .map(RuleImpl::LocalIpCidr),
             "IP-CIDR" | "IP-CIDR6" => IpNet::from_str(content.as_str()).ok().map(RuleImpl::IpCidr),
             "GEOIP" => mmdb.map(|x| RuleImpl::GeoIP(x.clone(), content)),
             "ASN" => {

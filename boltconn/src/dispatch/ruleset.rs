@@ -104,6 +104,7 @@ pub struct RuleSetBuilder {
     domain: HostMatcherBuilder,
     domain_keyword: Vec<String>,
     ip_cidr: IpNetworkTable<()>,
+    local_ip_cidr: IpNetworkTable<()>,
     process_name: HashSet<String>,
     process_keyword: Vec<String>,
     procpath_keyword: Vec<String>,
@@ -126,6 +127,7 @@ impl RuleSetBuilder {
             domain: HostMatcherBuilder::new(),
             domain_keyword: vec![],
             ip_cidr: Default::default(),
+            local_ip_cidr: Default::default(),
             process_name: Default::default(),
             process_keyword: vec![],
             procpath_keyword: vec![],
@@ -190,6 +192,12 @@ impl RuleSetBuilder {
                         RuleImpl::Domain(dn) => retval.domain.add_exact(dn.as_str()),
                         RuleImpl::DomainSuffix(sfx) => retval.domain.add_suffix(sfx.as_str()),
                         RuleImpl::DomainKeyword(kw) => retval.domain_keyword.push(kw.clone()),
+                        RuleImpl::LocalIpCidr(ip) => {
+                            let ip =
+                                ip_network::IpNetwork::new_truncate(ip.addr(), ip.prefix_len())
+                                    .unwrap();
+                            retval.local_ip_cidr.insert(ip, ());
+                        }
                         RuleImpl::IpCidr(ip) => {
                             let ip =
                                 ip_network::IpNetwork::new_truncate(ip.addr(), ip.prefix_len())
@@ -291,6 +299,7 @@ impl RuleSetBuilder {
             domain: HostMatcherBuilder::new(),
             domain_keyword: vec![],
             ip_cidr: table,
+            local_ip_cidr: Default::default(),
             process_name: Default::default(),
             process_keyword: vec![],
             procpath_keyword: vec![],
@@ -419,6 +428,7 @@ fn test_rule_provider() {
             domain_name: "kb.apple.com".to_string(),
             port: 1234,
         },
+        local_ip: "192.168.1.2".parse().unwrap(),
         inbound: InboundInfo::Tun,
         resolved_dst: None,
         connection_type: NetworkType::Tcp,
@@ -431,6 +441,7 @@ fn test_rule_provider() {
             domain_name: "apple.com".to_string(),
             port: 1234,
         },
+        local_ip: "192.168.1.2".parse().unwrap(),
         inbound: InboundInfo::Tun,
         resolved_dst: None,
         connection_type: NetworkType::Tcp,
@@ -443,6 +454,7 @@ fn test_rule_provider() {
             domain_name: "icloud.com.akadns.net.com".to_string(),
             port: 1234,
         },
+        local_ip: "192.168.1.2".parse().unwrap(),
         inbound: InboundInfo::Tun,
         resolved_dst: None,
         connection_type: NetworkType::Tcp,
@@ -455,6 +467,7 @@ fn test_rule_provider() {
             domain_name: "apple.io".to_string(),
             port: 1234,
         },
+        local_ip: "192.168.1.2".parse().unwrap(),
         inbound: InboundInfo::Tun,
         resolved_dst: None,
         connection_type: NetworkType::Tcp,

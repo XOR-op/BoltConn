@@ -98,6 +98,7 @@ impl FromStr for InboundInfo {
 pub struct ConnInfo {
     pub src: SocketAddr,
     pub dst: NetworkAddr,
+    pub local_ip: Option<IpAddr>,
     pub inbound: InboundInfo,
     pub resolved_dst: Option<SocketAddr>,
     pub connection_type: NetworkType,
