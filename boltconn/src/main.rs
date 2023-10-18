@@ -28,7 +28,7 @@ mod proxy;
 mod transport;
 
 #[derive(Debug, Parser)]
-#[structopt(name = "boltconn", about = "Cli interface of BoltConn")]
+#[clap(name = "boltconn", about = "CLI interface of BoltConn", version = env!("CARGO_PKG_VERSION"))]
 struct ProgramArgs {
     /// RESTful API URL; if not set, the controller will use unix domain socket as default.
     #[arg(short, long)]
