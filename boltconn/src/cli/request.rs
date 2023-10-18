@@ -109,14 +109,8 @@ impl Requester {
         Ok(())
     }
 
-    pub async fn set_tun(&self, content: &str) -> Result<()> {
-        let enabled = boltapi::TunStatusSchema {
-            enabled: match content.to_lowercase().as_str() {
-                "on" => true,
-                "off" => false,
-                _ => return Err(anyhow::anyhow!("Unknown TUN setting: {}", content)),
-            },
-        };
+    pub async fn set_tun(&self, enabled: bool) -> Result<()> {
+        let enabled = boltapi::TunStatusSchema { enabled };
         match &self.inner {
             Inner::Web(c) => c.set_tun(enabled).await,
             Inner::Uds(c) => c.set_tun(enabled).await,

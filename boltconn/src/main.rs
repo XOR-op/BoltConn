@@ -43,6 +43,7 @@ fn main() -> ExitCode {
     let args: ProgramArgs = ProgramArgs::parse();
     let cmds = match args.cmd {
         SubCommand::Start(sub) => sub,
+        #[cfg(feature = "internal-test")]
         SubCommand::Internal => return internal_code(),
         _ => rt.block_on(cli::controller_main(args)),
     };
@@ -113,6 +114,7 @@ fn main() -> ExitCode {
 }
 
 /// This function is a shortcut for testing things conveniently. Only for development use.
+#[cfg(feature = "internal-test")]
 fn internal_code() -> ExitCode {
     println!("This option is not for end-user.");
     ExitCode::SUCCESS

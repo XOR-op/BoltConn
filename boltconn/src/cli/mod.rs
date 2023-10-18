@@ -6,7 +6,7 @@ mod request_web;
 
 use crate::ProgramArgs;
 use anyhow::anyhow;
-use clap::{Args, Subcommand};
+use clap::{Args, CommandFactory, Subcommand, ValueHint};
 use is_root::is_root;
 use std::path::PathBuf;
 use std::process::exit;
@@ -14,7 +14,12 @@ use std::process::exit;
 #[derive(Debug, Subcommand)]
 pub(crate) enum ProxyOptions {
     /// Set group's proxy
-    Set { group: String, proxy: String },
+    Set {
+        #[clap(value_hint = ValueHint::Other)]
+        group: String,
+        #[clap(value_hint = ValueHint::Other)]
+        proxy: String,
+    },
     /// List all groups
     List,
 }
@@ -24,14 +29,22 @@ pub(crate) enum ConnOptions {
     /// List all active connections
     List,
     Stop {
+        #[clap(value_hint = ValueHint::Other)]
         nth: Option<usize>,
     },
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub(crate) enum TunSetOptions {
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
 pub(crate) enum TunOptions {
     /// Set TUN
-    Set { s: String },
+    #[command(subcommand)]
+    Set(TunSetOptions),
     /// Get TUN status
     Get,
 }
@@ -45,9 +58,15 @@ pub(crate) struct CertOptions {
 #[derive(Debug, Subcommand)]
 pub(crate) enum TempRuleOptions {
     /// Add a temporary rule to the head of rule list
-    Add { literal: String },
+    Add {
+        #[clap(value_hint = ValueHint::Other)]
+        literal: String,
+    },
     /// Delete temporary rules matching this prefix
-    Delete { literal: String },
+    Delete {
+        #[clap(value_hint = ValueHint::Other)]
+        literal: String,
+    },
     /// Delete all temporary rules
     Clear,
 }
@@ -57,9 +76,17 @@ pub(crate) enum InterceptOptions {
     /// List all captured data
     List,
     /// List data ranged from *start* to *end*
-    Range { start: u32, end: Option<u32> },
+    Range {
+        #[clap(value_hint = ValueHint::Other)]
+        start: u32,
+        #[clap(value_hint = ValueHint::Other)]
+        end: Option<u32>,
+    },
     /// Get details of the packet
-    Get { id: u32 },
+    Get {
+        #[clap(value_hint = ValueHint::Other)]
+        id: u32,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -85,33 +112,51 @@ pub(crate) struct InitOptions {
     pub app_data: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub(crate) enum PromptOptions {
+    Bash,
+    Zsh,
+    Fish,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum GenerateOptions {
+    /// Create configurations
+    Init(InitOptions),
+    /// Generate certificates
+    Cert(CertOptions),
+    /// Generate auto-completion profiles for shells
+    #[command(subcommand)]
+    Prompt(PromptOptions),
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum SubCommand {
-    /// Start Main Program
+    /// Start the main program
     Start(StartOptions),
-    /// Create Configurations
-    Init(InitOptions),
-    /// Proxy Settings
-    #[command(subcommand)]
-    Proxy(ProxyOptions),
-    /// Connection Settings
+    /// Reload configurations
+    Reload,
+    /// Connection settings
     #[command(subcommand)]
     Conn(ConnOptions),
-    /// Generate Certificates
-    Cert(CertOptions),
-    /// Captured HTTP Data
+    /// Captured HTTP data
     #[command(subcommand)]
     Intercept(InterceptOptions),
-    /// Adjust TUN Status
+    /// Proxy settings
+    #[command(subcommand)]
+    Proxy(ProxyOptions),
+    /// Modify temporary rules
+    #[command(subcommand)]
+    TempRule(TempRuleOptions),
+    /// Adjust TUN status
     #[command(subcommand)]
     Tun(TunOptions),
-    /// Modify Temporary Rules
-    #[command(subcommand)]
-    Rule(TempRuleOptions),
-    /// Clean Unexpected Shutdown
+    /// Clean unexpected shutdown
     Clean,
-    /// Reload Configuration
-    Reload,
+    /// Generate necessary files before the first run
+    #[command(subcommand)]
+    Generate(GenerateOptions),
+    #[cfg(feature = "internal-test")]
     #[clap(hide = true)]
     Internal,
 }
@@ -119,7 +164,7 @@ pub(crate) enum SubCommand {
 pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
     let default_uds_path = "/var/run/boltconn.sock";
     match args.cmd {
-        SubCommand::Init(init) => {
+        SubCommand::Generate(GenerateOptions::Init(init)) => {
             fn create(init: InitOptions) -> anyhow::Result<()> {
                 let (config, data, _) =
                     crate::config::parse_paths(&init.config, &init.app_data, &None)?;
@@ -142,7 +187,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 }
             }
         }
-        SubCommand::Cert(opt) => {
+        SubCommand::Generate(GenerateOptions::Cert(opt)) => {
             if !is_root() {
                 eprintln!("Must be run with root/admin privilege");
                 exit(-1)
@@ -172,6 +217,17 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                     }
                 }
             }
+        }
+        SubCommand::Generate(GenerateOptions::Prompt(shell)) => {
+            let generator = match shell {
+                PromptOptions::Bash => clap_complete::Shell::Bash,
+                PromptOptions::Zsh => clap_complete::Shell::Zsh,
+                PromptOptions::Fish => clap_complete::Shell::Fish,
+            };
+            let mut command = ProgramArgs::command();
+            let bin_name = command.get_name().to_string();
+            clap_complete::generate(generator, &mut command, bin_name, &mut std::io::stdout());
+            exit(0)
         }
         SubCommand::Clean => {
             if !is_root() {
@@ -206,7 +262,14 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         },
         SubCommand::Tun(opt) => match opt {
             TunOptions::Get => requester.get_tun().await,
-            TunOptions::Set { s } => requester.set_tun(s.as_str()).await,
+            TunOptions::Set(s) => {
+                requester
+                    .set_tun(match s {
+                        TunSetOptions::On => true,
+                        TunSetOptions::Off => false,
+                    })
+                    .await
+            }
         },
         SubCommand::Intercept(opt) => match opt {
             InterceptOptions::List => requester.intercept(None).await,
@@ -214,16 +277,16 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             InterceptOptions::Get { id } => requester.get_intercept_payload(id).await,
         },
         SubCommand::Reload => requester.reload_config().await,
-        SubCommand::Rule(opt) => match opt {
+        SubCommand::TempRule(opt) => match opt {
             TempRuleOptions::Add { literal } => requester.add_temporary_rule(literal).await,
             TempRuleOptions::Delete { literal } => requester.delete_temporary_rule(literal).await,
             TempRuleOptions::Clear => requester.clear_temporary_rule().await,
         },
-        SubCommand::Start(_)
-        | SubCommand::Init(_)
-        | SubCommand::Cert(_)
-        | SubCommand::Clean
-        | SubCommand::Internal => {
+        SubCommand::Start(_) | SubCommand::Generate(_) | SubCommand::Clean => {
+            unreachable!()
+        }
+        #[cfg(feature = "internal-test")]
+        SubCommand::Internal => {
             unreachable!()
         }
     };
