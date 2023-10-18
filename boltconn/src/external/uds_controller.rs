@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel};
-use tarpc::tokio_serde::formats::Bincode;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio::net::UnixListener;
+use tokio_serde::formats::Cbor;
 
 pub struct UnixListenerGuard {
     path: PathBuf,
@@ -62,7 +62,7 @@ impl UdsController {
         loop {
             let (conn, _addr) = listener.get_listener().accept().await?;
             let framed = codec_builder.new_framed(conn);
-            let transport = tarpc::serde_transport::new(framed, Bincode::default());
+            let transport = tarpc::serde_transport::new(framed, Cbor::default());
             let (server_t, client_t, in_task, out_task) = rpc_multiplex_twoway(transport);
             tokio::spawn(in_task);
             tokio::spawn(out_task);

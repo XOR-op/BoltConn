@@ -7,10 +7,10 @@ use boltapi::{
 };
 use std::path::PathBuf;
 use tarpc::context::Context;
-use tarpc::tokio_serde::formats::Bincode;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tarpc::transport::channel::UnboundedChannel;
 use tokio::net::UnixStream;
+use tokio_serde::formats::Cbor;
 
 pub struct UdsConnector {
     client: ControlServiceClient,
@@ -21,7 +21,7 @@ impl UdsConnector {
         let conn = UnixStream::connect(bind_addr).await?;
         let transport = tarpc::serde_transport::new(
             LengthDelimitedCodec::builder().new_framed(conn),
-            Bincode::default(),
+            Cbor::default(),
         );
         let (placeholder, client_t, in_task, out_task) = rpc_multiplex_twoway(transport);
         // dirty hack to make rustc infer correct type
