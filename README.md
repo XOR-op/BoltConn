@@ -26,9 +26,9 @@ All efforts made to make you fully control your network. Experimental webui & de
 ## Features
 - **Fine-grained Traffic Control**: Allow VPN-style global control, or dedicated http/socks5 per-inbound control.
 - **Rule-based Blocking**: Block ad/tracking traffic on a per-process/per-website/flexible way.
-- **Rule-based Tunneling**: Flexible way to tunnel traffic through http/socks5/shadowsocks/trojan/wireguard outbounds.
+- **Rule-based Tunneling**: Flexible way to tunnel traffic through http/socks5/shadowsocks/trojan/wireguard outbounds. Able to use compatible rules from Clash community.
 - **Audit Traffic**: Audit traffic history by accessing API or dumping into SQLite.
-- **Modify HTTPS Data**: Manipulate requests and responses inside HTTPS traffic to redirect, block or modify them. Able to use compatible rules from Clash community.
+- **Modify HTTPS Data**: Manipulate requests and responses inside HTTPS traffic to redirect, block or modify them. Support injecting Javascript now.
 
 For the full features, see [features.md](./docs/features.md).
 
@@ -74,13 +74,9 @@ Learn more about BoltConn's architecture, RESTful API, and how it compares to ot
 - [features.md](./docs/features.md) lists full features of BoltConn.
 
 ## Future Plan
-- More rules
-  - Wi-Fi SSID
-- More MitM configurations
-  - modify HTTP body
-  - custom scripts
 - IPv6 support
 - Windows support with Wintun driver
+- Better integration with external programs (e.g. OpenVPN or ssh)
 
 ## License
 This software is released under the GPL-3.0 license.
