@@ -19,6 +19,7 @@ axum = { version = "0.6.18", features = ["ws"] }
 base64 = "0.21.0"
 boltapi = { path = "../boltapi" }
 boringtun = "0.6.0"
+brotli = "3.4.0"
 byteorder = "1.4.3"
 bytes = "1.2.1"
 chrono = { version = "0.4.31", default-features = false, features = ["clock", "std"] }
@@ -27,6 +28,7 @@ colored = "2.0.0"
 dashmap = "5.5.3"
 fast-socks5 = "0.9.1"
 fastrand = "2.0.0"
+flate2 = "1.0.28"
 flume = "0.11.0"
 futures = "0.3.25"
 http = "0.2.8"

@@ -5,6 +5,7 @@ use rquickjs::class::Trace;
 use rquickjs::{Class, Context, Ctx, FromJs, IntoJs, Object, Runtime, Value};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::io::Read;
 
 #[derive(Debug, Clone)]
 struct HttpData {
@@ -99,29 +100,57 @@ impl ScriptEngine {
         status: Option<u16>,
         headers: &HeaderMap,
         field: &str,
-    ) -> Option<(Option<u16>, HeaderMap, Option<String>)> {
+    ) -> Option<(Option<u16>, HeaderMap, Option<Bytes>)> {
         let runtime = Runtime::new().ok()?;
         let ctx = Context::full(&runtime).ok()?;
+        let header = {
+            let mut header = HashMap::new();
+            for (k, v) in headers.iter() {
+                let key = k.to_string();
+                match header.entry(key) {
+                    Entry::Vacant(e) => {
+                        e.insert(v.to_str().ok()?.to_string());
+                    }
+                    Entry::Occupied(mut e) => e
+                        .get_mut()
+                        .push_str(format!(", {}", v.to_str().ok()?).as_str()),
+                };
+            }
+            header
+        };
+        // decompress
+        let body = if let Some(compress) = header.get("content-encoding") {
+            data.and_then(|d| {
+                let mut v = vec![];
+                match compress.as_str() {
+                    "gzip" => {
+                        flate2::read::GzDecoder::new(d.as_ref())
+                            .read_to_end(&mut v)
+                            .ok()?;
+                    }
+                    "deflate" => {
+                        flate2::read::DeflateDecoder::new(d.as_ref())
+                            .read_to_end(&mut v)
+                            .ok()?;
+                    }
+                    "br" => {
+                        brotli::Decompressor::new(d.as_ref(), d.len())
+                            .read_to_end(&mut v)
+                            .ok()?;
+                    }
+                    _ => None?,
+                }
+                String::from_utf8(v).ok()
+            })
+        } else {
+            data.and_then(|d| String::from_utf8(d.to_vec()).ok())
+        };
         let js_data = HttpData {
             url: url.to_string(),
             method,
-            header: {
-                let mut header = HashMap::new();
-                for (k, v) in headers.iter() {
-                    let key = k.to_string();
-                    match header.entry(key) {
-                        Entry::Vacant(e) => {
-                            e.insert(v.to_str().ok()?.to_string());
-                        }
-                        Entry::Occupied(mut e) => e
-                            .get_mut()
-                            .push_str(format!(", {}", v.to_str().ok()?).as_str()),
-                    };
-                }
-                header
-            },
+            header,
             status,
-            body: data.and_then(|d| String::from_utf8(d.to_vec()).ok()),
+            body,
         };
         let r = match ctx.with(|ctx| -> Result<HttpData, rquickjs::Error> {
             // init console
@@ -159,7 +188,7 @@ impl ScriptEngine {
             }
         }) {
             Err(e) => {
-                tracing::trace!(
+                tracing::warn!(
                     "Failed to run script {} for {}: {}",
                     self.name
                         .clone()
@@ -176,7 +205,38 @@ impl ScriptEngine {
         for (k, v) in r.header {
             header.insert(HeaderName::from_bytes(k.as_bytes()).ok()?, v.parse().ok()?);
         }
-        Some((r.status, header, r.body))
+        // recompress
+        let body = if let Some(compress) = header.get("content-encoding") {
+            r.body.and_then(|d| {
+                let mut buf = vec![];
+                match compress.to_str().ok()? {
+                    "gzip" => {
+                        let r =
+                            flate2::read::GzEncoder::new(d.as_bytes(), flate2::Compression::none())
+                                .read_to_end(&mut buf);
+                        r.ok()?;
+                    }
+                    "deflate" => {
+                        flate2::read::DeflateEncoder::new(
+                            d.as_bytes(),
+                            flate2::Compression::none(),
+                        )
+                        .read_to_end(&mut buf)
+                        .ok()?;
+                    }
+                    "br" => {
+                        brotli::CompressorReader::new(d.as_bytes(), d.as_bytes().len(), 0, 22)
+                            .read_to_end(&mut buf)
+                            .ok()?;
+                    }
+                    _ => None?,
+                };
+                Some(Bytes::from(buf))
+            })
+        } else {
+            r.body.map(Bytes::from)
+        };
+        Some((r.status, header, body))
     }
 
     pub fn try_rewrite_req(

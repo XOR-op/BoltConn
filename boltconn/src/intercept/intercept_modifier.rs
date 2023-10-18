@@ -282,6 +282,7 @@ impl Modifier for InterceptModifier {
             .ok_or_else(|| anyhow!("no id"))?
             .1;
 
+        // For large body, we skip the manipulation
         let mut whole_data = if self.result.capture_response || self.result.contains_script {
             Self::read_at_most(body, self.size_limit).await?
         } else {
@@ -326,7 +327,6 @@ impl Modifier for InterceptModifier {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
         };
-        // For large body, we skip the manipulation
         self.contents.push(
             (
                 req,

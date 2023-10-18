@@ -137,7 +137,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             match create(init) {
                 Ok(_) => exit(0),
                 Err(err) => {
-                    eprintln!("{}", err);
+                    eprintln!("Error occurred: {}", err);
                     exit(-1)
                 }
             }
