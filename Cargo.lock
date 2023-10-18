@@ -490,7 +490,6 @@ dependencies = [
  "boltapi",
  "boringtun",
  "brotli",
- "byteorder",
  "bytes",
  "chrono",
  "clap",
