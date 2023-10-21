@@ -16,7 +16,7 @@ use smoltcp::socket::{
 };
 use smoltcp::socket::{tcp::SocketBuffer as TcpSocketBuffer, tcp::State as TcpState};
 use smoltcp::time::Instant as SmolInstant;
-use smoltcp::wire::{IpCidr, IpEndpoint};
+use smoltcp::wire::{HardwareAddress, IpCidr, IpEndpoint};
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
@@ -193,7 +193,8 @@ impl UdpConnTask {
             if let Ok((size, ep)) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
                 unsafe { buf.advance_mut(size) };
                 self.last_active = Instant::now();
-                let src_addr = NetworkAddr::Raw(SocketAddr::new(ep.addr.into(), ep.port));
+                let src_addr =
+                    NetworkAddr::Raw(SocketAddr::new(ep.endpoint.addr.into(), ep.endpoint.port));
                 // must not fail because there is only 1 sender
                 let _ = self.back_tx.send((buf.freeze(), src_addr)).await;
                 return true;
@@ -224,8 +225,8 @@ impl SmolStack {
         dns: Arc<Dns>,
         udp_timeout: Duration,
     ) -> Self {
-        let config = smoltcp::iface::Config::default();
-        let mut iface = Interface::new(config, &mut ip_device);
+        let config = smoltcp::iface::Config::new(HardwareAddress::Ip);
+        let mut iface = Interface::new(config, &mut ip_device, smoltcp::time::Instant::now());
         iface.update_ip_addrs(|v| {
             let _ = v.insert(0, IpCidr::new(iface_ip.into(), 32));
         });
