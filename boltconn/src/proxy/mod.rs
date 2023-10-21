@@ -22,7 +22,7 @@ pub use mixed_inbound::*;
 use rand::{Rng, SeedableRng};
 pub use session_ctl::*;
 pub use socks5_inbound::*;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::task::JoinHandle;
@@ -30,6 +30,17 @@ use tokio_rustls::rustls::ServerName;
 pub use tun_inbound::*;
 pub use tun_udp_inbound::*;
 use url::Host;
+
+fn get_random_local_addr(dst: &NetworkAddr, port: u16) -> SocketAddr {
+    match dst {
+        NetworkAddr::Raw(SocketAddr::V4(_)) | NetworkAddr::DomainName { .. } => {
+            SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), port)
+        }
+        NetworkAddr::Raw(SocketAddr::V6(_)) => {
+            SocketAddr::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(), port)
+        }
+    }
+}
 
 pub async fn latency_test(
     dispatcher: &Dispatcher,
@@ -80,7 +91,7 @@ pub async fn latency_test(
         ProxyImpl::Chain(vec) => {
             match dispatcher.create_chain(
                 vec,
-                rng.gen_range(32768..65535),
+                get_random_local_addr(&dst_addr, rng.gen_range(32768..65535)),
                 &dst_addr,
                 iface.as_str(),
             ) {
@@ -95,7 +106,7 @@ pub async fn latency_test(
             let creator = match dispatcher.build_normal_outbound(
                 iface.as_str(),
                 proxy_config,
-                rng.gen_range(32768..65535),
+                get_random_local_addr(&dst_addr, rng.gen_range(32768..65535)),
                 &dst_addr,
                 None,
             ) {

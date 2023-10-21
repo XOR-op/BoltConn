@@ -3,6 +3,7 @@ use crate::adapter::{AddrConnector, Connector};
 use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::transport::InterfaceAddress;
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -210,7 +211,7 @@ impl UdpConnTask {
 pub struct SmolStack {
     tcp_conn: DashMap<u16, TcpConnTask>,
     udp_conn: DashMap<u16, UdpConnTask>,
-    ip_addr: IpAddr,
+    ip_addr: InterfaceAddress,
     ip_device: VirtualIpDevice,
     iface: Interface,
     dns: Arc<Dns>,
@@ -220,15 +221,24 @@ pub struct SmolStack {
 
 impl SmolStack {
     pub fn new(
-        iface_ip: IpAddr,
+        iface_ip: InterfaceAddress,
         mut ip_device: VirtualIpDevice,
         dns: Arc<Dns>,
         udp_timeout: Duration,
     ) -> Self {
         let config = smoltcp::iface::Config::new(HardwareAddress::Ip);
         let mut iface = Interface::new(config, &mut ip_device, smoltcp::time::Instant::now());
-        iface.update_ip_addrs(|v| {
-            let _ = v.insert(0, IpCidr::new(iface_ip.into(), 32));
+        iface.update_ip_addrs(|v| match iface_ip {
+            InterfaceAddress::Ipv4(addr) => {
+                let _ = v.insert(0, IpCidr::new(addr.into(), 32));
+            }
+            InterfaceAddress::Ipv6(addr) => {
+                let _ = v.insert(0, IpCidr::new(addr.into(), 128));
+            }
+            InterfaceAddress::DualStack(v4, v6) => {
+                let _ = v.insert(0, IpCidr::new(v4.into(), 32));
+                let _ = v.insert(1, IpCidr::new(v6.into(), 128));
+            }
         });
         Self {
             tcp_conn: Default::default(),
@@ -252,13 +262,13 @@ impl SmolStack {
 
     pub fn open_tcp(
         &mut self,
-        local_port: u16,
+        local_addr: SocketAddr,
         remote_addr: SocketAddr,
         connector: Connector,
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> io::Result<()> {
-        if local_port == 0 {
+        if local_addr.port() == 0 {
             for _ in 0..10 {
                 let port = rand::thread_rng().gen_range(32768..65534);
                 match self.tcp_conn.entry(port) {
@@ -267,7 +277,9 @@ impl SmolStack {
                         let handle = Self::open_tcp_inner(
                             &mut self.iface,
                             &mut self.socket_set,
-                            self.ip_addr,
+                            self.ip_addr
+                                .matched_if_addr(local_addr.ip())
+                                .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
                             port,
                             remote_addr,
                         )?;
@@ -278,14 +290,16 @@ impl SmolStack {
             }
             Err(ErrorKind::AddrNotAvailable.into())
         } else {
-            match self.tcp_conn.entry(local_port) {
+            match self.tcp_conn.entry(local_addr.port()) {
                 Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
                 Entry::Vacant(e) => {
                     let handle = Self::open_tcp_inner(
                         &mut self.iface,
                         &mut self.socket_set,
-                        self.ip_addr,
-                        local_port,
+                        self.ip_addr
+                            .matched_if_addr(local_addr.ip())
+                            .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
+                        local_addr.port(),
                         remote_addr,
                     )?;
                     e.insert(TcpConnTask::new(connector, handle, abort_handle, notify));
@@ -323,19 +337,24 @@ impl SmolStack {
 
     pub fn open_udp(
         &mut self,
-        local_port: u16,
+        local_addr: SocketAddr,
         connector: AddrConnector,
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> io::Result<()> {
-        if local_port == 0 {
+        if local_addr.port() == 0 {
             for _ in 0..10 {
                 let port = rand::thread_rng().gen_range(32768..65534);
                 match self.udp_conn.entry(port) {
                     Entry::Occupied(_) => continue,
                     Entry::Vacant(e) => {
-                        let handle =
-                            Self::open_udp_inner(&mut self.socket_set, self.ip_addr, port)?;
+                        let handle = Self::open_udp_inner(
+                            &mut self.socket_set,
+                            self.ip_addr
+                                .matched_if_addr(local_addr.ip())
+                                .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
+                            port,
+                        )?;
                         // todo: remote dns
                         e.insert(UdpConnTask::new(
                             connector,
@@ -350,11 +369,16 @@ impl SmolStack {
             }
             Err(ErrorKind::AddrNotAvailable.into())
         } else {
-            match self.udp_conn.entry(local_port) {
+            match self.udp_conn.entry(local_addr.port()) {
                 Entry::Occupied(_) => Err(ErrorKind::AddrInUse.into()),
                 Entry::Vacant(e) => {
-                    let handle =
-                        Self::open_udp_inner(&mut self.socket_set, self.ip_addr, local_port)?;
+                    let handle = Self::open_udp_inner(
+                        &mut self.socket_set,
+                        self.ip_addr
+                            .matched_if_addr(local_addr.ip())
+                            .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
+                        local_addr.port(),
+                    )?;
                     // todo: remote dns
                     e.insert(UdpConnTask::new(
                         connector,

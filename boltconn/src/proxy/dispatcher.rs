@@ -75,7 +75,7 @@ impl Dispatcher {
         &self,
         iface_name: &str,
         proxy_config: &ProxyImpl,
-        src_port: u16,
+        src_addr: SocketAddr,
         dst_addr: &NetworkAddr,
         resolved_dst: Option<&SocketAddr>,
     ) -> Result<(Box<dyn Outbound>, OutboundType), ()> {
@@ -130,7 +130,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Wireguard(cfg) => (
                 Box::new(WireguardHandle::new(
-                    src_port,
+                    src_addr,
                     dst_addr.clone(),
                     cfg.clone(),
                     self.wireguard_mgr.clone(),
@@ -148,7 +148,7 @@ impl Dispatcher {
     pub(super) fn create_chain(
         &self,
         vec: &[GeneralProxy],
-        src_port: u16,
+        src_addr: SocketAddr,
         dst_addr: &NetworkAddr,
         iface_name: &str,
     ) -> Result<ChainOutbound, ()> {
@@ -179,7 +179,7 @@ impl Dispatcher {
             let (outbounding, _) = self.build_normal_outbound(
                 iface_name,
                 impls.get(idx).unwrap().as_ref(),
-                src_port,
+                src_addr,
                 dst_addrs.get(idx).unwrap(),
                 None,
             )?;
@@ -215,14 +215,14 @@ impl Dispatcher {
         let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
             if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
                 (
-                    Box::new(self.create_chain(vec, src_addr.port(), &dst_addr, iface_name)?),
+                    Box::new(self.create_chain(vec, src_addr, &dst_addr, iface_name)?),
                     OutboundType::Chain,
                 )
             } else {
                 self.build_normal_outbound(
                     iface_name,
                     proxy_config.as_ref(),
-                    src_addr.port(),
+                    src_addr,
                     &dst_addr,
                     conn_info.resolved_dst.as_ref(),
                 )?
@@ -355,14 +355,14 @@ impl Dispatcher {
         let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
             if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
                 (
-                    Box::new(self.create_chain(vec, src_addr.port(), &dst_addr, iface_name)?),
+                    Box::new(self.create_chain(vec, src_addr, &dst_addr, iface_name)?),
                     OutboundType::Chain,
                 )
             } else {
                 self.build_normal_outbound(
                     iface_name,
                     proxy_config.as_ref(),
-                    src_addr.port(),
+                    src_addr,
                     &dst_addr,
                     conn_info.resolved_dst.as_ref(),
                 )?

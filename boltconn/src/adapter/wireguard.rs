@@ -9,11 +9,11 @@ use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
-use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
+use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use bytes::Bytes;
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -55,7 +55,8 @@ impl Endpoint {
             Arc::new(WireguardTunnel::new(outbound, config, dns.clone(), notify.clone()).await?);
         let device = VirtualIpDevice::new(config.mtu, wg_smol_rx, smol_wg_tx);
         let smol_stack = Arc::new(Mutex::new(SmolStack::new(
-            config.ip_addr,
+            InterfaceAddress::from_dual(config.ip_addr, config.ip_addr6)
+                .ok_or_else(|| anyhow::anyhow!("Smol interface without v4 & v6"))?,
             device,
             dns,
             Duration::from_secs(120),
@@ -269,7 +270,7 @@ impl WireguardManager {
 
 #[derive(Clone)]
 pub struct WireguardHandle {
-    src_port: u16,
+    src: SocketAddr,
     dst: NetworkAddr,
     config: Arc<WireguardConfig>,
     manager: Arc<WireguardManager>,
@@ -278,14 +279,14 @@ pub struct WireguardHandle {
 
 impl WireguardHandle {
     pub fn new(
-        src_port: u16,
+        src: SocketAddr,
         dst: NetworkAddr,
         config: WireguardConfig,
         manager: Arc<WireguardManager>,
         dns_config: Arc<ResolverConfig>,
     ) -> Self {
         Self {
-            src_port,
+            src,
             dst,
             config: Arc::new(config),
             manager,
@@ -327,7 +328,7 @@ impl WireguardHandle {
 
         let notify = endpoint.clone_notify();
         let mut x = endpoint.stack.lock().await;
-        x.open_tcp(self.src_port, dst, inbound, abort_handle, notify)
+        x.open_tcp(self.src, dst, inbound, abort_handle, notify)
     }
 
     async fn get_endpoint(&self, adapter: Option<AdapterOrSocket>) -> io::Result<Arc<Endpoint>> {
@@ -346,7 +347,7 @@ impl WireguardHandle {
         let endpoint = self.get_endpoint(adapter).await?;
         let notify = endpoint.clone_notify();
         let mut x = endpoint.stack.lock().await;
-        x.open_udp(self.src_port, inbound, abort_handle, notify)
+        x.open_udp(self.src, inbound, abort_handle, notify)
     }
 }
 
@@ -462,14 +463,26 @@ impl RuntimeProvider for WireguardDnsProvider {
         Box::pin(async move {
             let notify = ep.clone_notify();
             let mut x = ep.stack.lock().await;
-            x.open_tcp(0, server_addr, inbound, handle, notify)?;
+            x.open_tcp(
+                SocketAddr::new(
+                    match &server_addr {
+                        SocketAddr::V4(_) => Ipv4Addr::new(0, 0, 0, 0).into(),
+                        SocketAddr::V6(_) => Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
+                    },
+                    0,
+                ),
+                server_addr,
+                inbound,
+                handle,
+                notify,
+            )?;
             Ok(AsyncIoTokioAsStd(DuplexChan::new(outbound)))
         })
     }
 
     fn bind_udp(
         &self,
-        _local_addr: SocketAddr,
+        local_addr: SocketAddr,
         _server_addr: SocketAddr,
     ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Udp>>>> {
         let ep = self.endpoint.clone();
@@ -478,7 +491,7 @@ impl RuntimeProvider for WireguardDnsProvider {
         Box::pin(async move {
             let notify = ep.clone_notify();
             let mut x = ep.stack.lock().await;
-            x.open_udp(0, inbound, handle, notify)?;
+            x.open_udp(local_addr, inbound, handle, notify)?;
             let outbound = AddrConnectorWrapper::from(outbound);
             Ok(outbound)
         })
