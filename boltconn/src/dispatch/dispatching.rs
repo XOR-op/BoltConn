@@ -461,6 +461,7 @@ impl DispatchingBuilder {
                 }
                 RawProxyLocalCfg::Wireguard {
                     local_addr,
+                    local_addr_v6,
                     private_key,
                     public_key,
                     endpoint,
@@ -470,6 +471,11 @@ impl DispatchingBuilder {
                     dns,
                     reserved,
                 } => {
+                    if local_addr.is_none() && local_addr_v6.is_none() {
+                        return Err(anyhow::anyhow!(
+                            "No local address configured for the WireGuard outbound"
+                        ));
+                    }
                     let endpoint = match endpoint {
                         RawServerSockAddr::Ip(addr) => NetworkAddr::Raw(*addr),
                         RawServerSockAddr::Domain(a) => {
@@ -520,6 +526,7 @@ impl DispatchingBuilder {
                         name.clone(),
                         ProxyImpl::Wireguard(WireguardConfig {
                             ip_addr: *local_addr,
+                            ip_addr6: *local_addr_v6,
                             private_key,
                             public_key,
                             endpoint,
