@@ -286,7 +286,7 @@ impl SmolStack {
                             &mut self.iface,
                             &mut self.socket_set,
                             self.ip_addr
-                                .matched_if_addr(local_addr.ip())
+                                .matched_if_addr(remote_addr.ip())
                                 .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
                             port,
                             remote_addr,
@@ -305,7 +305,7 @@ impl SmolStack {
                         &mut self.iface,
                         &mut self.socket_set,
                         self.ip_addr
-                            .matched_if_addr(local_addr.ip())
+                            .matched_if_addr(remote_addr.ip())
                             .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
                         local_addr.port(),
                         remote_addr,
@@ -350,6 +350,7 @@ impl SmolStack {
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> io::Result<()> {
+        // todo: IPv6 support when local_addr is a V4 address
         if local_addr.port() == 0 {
             for _ in 0..10 {
                 let port = rand::thread_rng().gen_range(32768..65534);

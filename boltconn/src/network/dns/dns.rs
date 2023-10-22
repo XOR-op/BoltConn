@@ -91,40 +91,59 @@ impl<P: RuntimeProvider> GenericDns<P> {
         })
     }
 
-    pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
-        let mut low_priority_result = None;
+    async fn genuine_lookup_v4(&self, domain_name: &str) -> Option<IpAddr> {
         for r in self.resolvers.load().iter() {
             if let Ok(r) =
-                tokio::time::timeout(Duration::from_secs(5), r.lookup_ip(domain_name)).await
+                tokio::time::timeout(Duration::from_secs(5), r.ipv4_lookup(domain_name)).await
             {
                 if let Ok(result) = r {
                     if let Some(i) = result.iter().next() {
-                        match (self.preference, i) {
-                            (DnsPreference::Ipv4Only, IpAddr::V4(addr))
-                            | (DnsPreference::PreferIpv4, IpAddr::V4(addr)) => {
-                                return Some(addr.into())
-                            }
-                            (DnsPreference::Ipv6Only, IpAddr::V6(addr))
-                            | (DnsPreference::PreferIpv6, IpAddr::V6(addr)) => {
-                                return Some(addr.into())
-                            }
-                            (DnsPreference::PreferIpv4, IpAddr::V6(addr)) => {
-                                low_priority_result = Some(addr.into());
-                            }
-                            (DnsPreference::PreferIpv6, IpAddr::V4(addr)) => {
-                                low_priority_result = Some(addr.into());
-                            }
-                            _ => {
-                                //pass
-                            }
-                        }
+                        return Some(i.0.into());
                     }
                 }
             } else {
                 tracing::trace!("DNS lookup for {domain_name} timeout");
             }
         }
-        low_priority_result
+        None
+    }
+
+    async fn genuine_lookup_v6(&self, domain_name: &str) -> Option<IpAddr> {
+        for r in self.resolvers.load().iter() {
+            if let Ok(r) =
+                tokio::time::timeout(Duration::from_secs(5), r.ipv6_lookup(domain_name)).await
+            {
+                if let Ok(result) = r {
+                    if let Some(i) = result.iter().next() {
+                        return Some(i.0.into());
+                    }
+                }
+            } else {
+                tracing::trace!("DNS lookup for {domain_name} timeout");
+            }
+        }
+        None
+    }
+
+    pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
+        match self.preference {
+            DnsPreference::Ipv4Only => self.genuine_lookup_v4(domain_name).await,
+            DnsPreference::Ipv6Only => self.genuine_lookup_v6(domain_name).await,
+            DnsPreference::PreferIpv4 => {
+                if let Some(a) = self.genuine_lookup_v4(domain_name).await {
+                    Some(a)
+                } else {
+                    self.genuine_lookup_v6(domain_name).await
+                }
+            }
+            DnsPreference::PreferIpv6 => {
+                if let Some(a) = self.genuine_lookup_v6(domain_name).await {
+                    Some(a)
+                } else {
+                    self.genuine_lookup_v4(domain_name).await
+                }
+            }
+        }
     }
 
     /// If no corresponding record, return fake ip itself.
