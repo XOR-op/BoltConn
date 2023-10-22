@@ -53,8 +53,22 @@ pub enum RawServerSockAddr {
     Domain(String),
 }
 
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+pub enum DnsPreference {
+    #[serde(alias = "ipv4-only")]
+    Ipv4Only,
+    #[serde(alias = "ipv6-only")]
+    Ipv6Only,
+    #[serde(alias = "prefer-ipv4")]
+    PreferIpv4,
+    #[serde(alias = "prefer-ipv6")]
+    PreferIpv6,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawDnsConfig {
+    #[serde(default = "default_dns_pref")]
+    pub preference: DnsPreference,
     pub bootstrap: Vec<IpAddr>,
     pub nameserver: Vec<String>,
 }
@@ -120,8 +134,10 @@ pub enum RawProxyLocalCfg {
         public_key: String,
         endpoint: RawServerSockAddr,
         dns: String,
+        #[serde(alias = "dns-preference", default = "default_dns_pref")]
+        dns_preference: DnsPreference,
         mtu: usize,
-        #[serde(alias = "public-key")]
+        #[serde(alias = "preshared-key")]
         preshared_key: Option<String>,
         keepalive: Option<u16>,
         reserved: Option<[u8; 3]>,
@@ -163,6 +179,10 @@ pub(super) fn default_rule_provider() -> HashMap<String, RuleProvider> {
 
 fn default_module() -> Vec<ModuleConfig> {
     Default::default()
+}
+
+fn default_dns_pref() -> DnsPreference {
+    DnsPreference::Ipv4Only
 }
 
 pub(super) fn default_str_vec() -> Vec<String> {

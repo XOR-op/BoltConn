@@ -469,6 +469,7 @@ impl DispatchingBuilder {
                     preshared_key,
                     keepalive,
                     dns,
+                    dns_preference,
                     reserved,
                 } => {
                     if local_addr.is_none() && local_addr_v6.is_none() {
@@ -534,6 +535,7 @@ impl DispatchingBuilder {
                             preshared_key,
                             keepalive: *keepalive,
                             dns,
+                            dns_preference: *dns_preference,
                             reserved: *reserved,
                         }),
                     ))

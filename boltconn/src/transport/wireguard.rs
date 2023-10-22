@@ -1,5 +1,6 @@
 use crate::common::io_err;
 use crate::common::MAX_PKT_SIZE;
+use crate::config::DnsPreference;
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
 use crate::transport::AdapterOrSocket;
@@ -29,6 +30,7 @@ pub struct WireguardConfig {
     pub preshared_key: Option<[u8; 32]>,
     pub keepalive: Option<u16>,
     pub dns: ResolverConfig,
+    pub dns_preference: DnsPreference,
     // reserved fields
     pub reserved: Option<[u8; 3]>,
 }

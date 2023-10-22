@@ -75,7 +75,7 @@ pub type Connector = AdapterConnector<Bytes>;
 pub type AddrConnector = AdapterConnector<(Bytes, NetworkAddr)>;
 
 #[derive(Debug, Clone)]
-struct AddrConnectorWrapper {
+pub struct AddrConnectorWrapper {
     pub tx: mpsc::Sender<(Bytes, NetworkAddr)>,
     pub rx: Arc<Mutex<mpsc::Receiver<(Bytes, NetworkAddr)>>>,
 }

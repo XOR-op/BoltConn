@@ -2,19 +2,17 @@ use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, O
 use std::collections::HashMap;
 use std::future::Future;
 
-use crate::common::duplex_chan::DuplexChan;
 use crate::common::{io_err, StreamOutboundTrait, MAX_PKT_SIZE};
-use crate::network::dns::Dns;
+use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
-use crate::transport::smol::{SmolStack, VirtualIpDevice};
+use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use bytes::Bytes;
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::pin::Pin;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
@@ -23,11 +21,10 @@ use tokio::select;
 use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinHandle;
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-use trust_dns_resolver::name_server::{GenericConnector, RuntimeProvider};
-use trust_dns_resolver::proto::iocompat::AsyncIoTokioAsStd;
+use trust_dns_resolver::name_server::GenericConnector;
 use trust_dns_resolver::proto::udp::DnsUdpSocket;
 use trust_dns_resolver::proto::TokioTime;
-use trust_dns_resolver::{AsyncResolver, TokioHandle};
+use trust_dns_resolver::AsyncResolver;
 
 // Shared Wireguard Tunnel between multiple client connections
 pub struct Endpoint {
@@ -42,25 +39,45 @@ impl Endpoint {
     pub async fn new(
         outbound: AdapterOrSocket,
         config: &WireguardConfig,
-        dns: Arc<Dns>,
+        endpoint_resolver: Arc<Dns>,
         timeout: Duration,
     ) -> anyhow::Result<Arc<Self>> {
         let notify = Arc::new(Notify::new());
+
         // control conn
         let (stop_send, mut stop_recv) = broadcast::channel(1);
 
         let (mut wg_smol_tx, wg_smol_rx) = flume::unbounded();
         let (smol_wg_tx, mut smol_wg_rx) = flume::unbounded();
-        let tunnel =
-            Arc::new(WireguardTunnel::new(outbound, config, dns.clone(), notify.clone()).await?);
+        let tunnel = Arc::new(
+            WireguardTunnel::new(outbound, config, endpoint_resolver, notify.clone()).await?,
+        );
         let device = VirtualIpDevice::new(config.mtu, wg_smol_rx, smol_wg_tx);
-        let smol_stack = Arc::new(Mutex::new(SmolStack::new(
-            InterfaceAddress::from_dual(config.ip_addr, config.ip_addr6)
-                .ok_or_else(|| anyhow::anyhow!("Smol interface without v4 & v6"))?,
-            device,
-            dns,
-            Duration::from_secs(120),
-        )));
+        let smol_stack = {
+            let iface = InterfaceAddress::from_dual(config.ip_addr, config.ip_addr6)
+                .ok_or_else(|| anyhow::anyhow!("Smol interface without v4 & v6"))?;
+            Arc::new_cyclic(|me| {
+                // create dns
+                let resolver = {
+                    let handle = ConnAbortHandle::new();
+                    handle.fulfill(vec![]);
+                    AsyncResolver::new(
+                        config.dns.clone(),
+                        ResolverOpts::default(),
+                        GenericConnector::new(SmolDnsProvider::new(
+                            me.clone(),
+                            handle,
+                            notify.clone(),
+                        )),
+                    )
+                };
+                let dns = Arc::new(GenericDns::new_with_resolver(
+                    resolver,
+                    config.dns_preference,
+                ));
+                Mutex::new(SmolStack::new(iface, device, dns, Duration::from_secs(120)))
+            })
+        };
 
         let last_active = Arc::new(Mutex::new(Instant::now()));
         let indicator = Arc::new(AtomicBool::new(true));
@@ -216,7 +233,7 @@ pub struct WireguardManager {
     iface: String,
     // We use an async wrapper to avoid deadlock in DashMap
     active_conn: tokio::sync::Mutex<HashMap<WireguardConfig, Arc<Endpoint>>>,
-    dns: Arc<Dns>,
+    endpoint_resolver: Arc<Dns>,
     timeout: Duration,
 }
 
@@ -225,7 +242,7 @@ impl WireguardManager {
         Self {
             iface: iface.to_string(),
             active_conn: Default::default(),
-            dns,
+            endpoint_resolver: dns,
             timeout,
         }
     }
@@ -246,7 +263,7 @@ impl WireguardManager {
                     continue;
                 }
             } else {
-                let server_addr = get_dst(&self.dns, &config.endpoint).await?;
+                let server_addr = get_dst(&self.endpoint_resolver, &config.endpoint).await?;
                 let outbound = adapter.unwrap_or(AdapterOrSocket::Socket(match server_addr {
                     SocketAddr::V4(_) => {
                         let socket = Egress::new(&self.iface).udpv4_socket().await?;
@@ -259,7 +276,13 @@ impl WireguardManager {
                         socket
                     }
                 }));
-                let ep = Endpoint::new(outbound, config, self.dns.clone(), self.timeout).await?;
+                let ep = Endpoint::new(
+                    outbound,
+                    config,
+                    self.endpoint_resolver.clone(),
+                    self.timeout,
+                )
+                .await?;
                 guard.insert(config.clone(), ep.clone());
                 return Ok(ep);
             }
@@ -301,32 +324,18 @@ impl WireguardHandle {
         adapter: Option<AdapterOrSocket>,
     ) -> io::Result<()> {
         let endpoint = self.get_endpoint(adapter).await?;
+        let notify = endpoint.clone_notify();
+        let smol_dns = endpoint.stack.lock().await.get_dns();
         let dst = match self.dst {
             NetworkAddr::Raw(s) => s,
-            NetworkAddr::DomainName { domain_name, port } => {
-                let abort_h = ConnAbortHandle::new();
-                abort_h.fulfill(vec![]);
-                let resolver = AsyncResolver::new(
-                    self.dns_config.as_ref().clone(),
-                    ResolverOpts::default(),
-                    GenericConnector::new(WireguardDnsProvider {
-                        handle: Default::default(),
-                        endpoint: endpoint.clone(),
-                        abort_handle: abort_h,
-                    }),
-                );
-                let r = resolver
-                    .ipv4_lookup(domain_name)
+            NetworkAddr::DomainName { domain_name, port } => SocketAddr::new(
+                smol_dns
+                    .genuine_lookup(domain_name.as_str())
                     .await
-                    .map_err(|_| io_err("Failed to resolve"))?;
-                match r.into_iter().next() {
-                    None => return Err(io_err("Not found")),
-                    Some(dst) => SocketAddr::new(dst.0.into(), port),
-                }
-            }
+                    .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
+                port,
+            ),
         };
-
-        let notify = endpoint.clone_notify();
         let mut x = endpoint.stack.lock().await;
         x.open_tcp(self.src, dst, inbound, abort_handle, notify)
     }
@@ -434,68 +443,6 @@ async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAddr> {
         }
         NetworkAddr::Raw(s) => *s,
     })
-}
-
-#[derive(Clone)]
-struct WireguardDnsProvider {
-    handle: TokioHandle,
-    endpoint: Arc<Endpoint>,
-    abort_handle: ConnAbortHandle,
-}
-
-impl RuntimeProvider for WireguardDnsProvider {
-    type Handle = TokioHandle;
-    type Timer = TokioTime;
-    type Udp = AddrConnectorWrapper;
-    type Tcp = AsyncIoTokioAsStd<DuplexChan>;
-
-    fn create_handle(&self) -> Self::Handle {
-        self.handle.clone()
-    }
-
-    fn connect_tcp(
-        &self,
-        server_addr: SocketAddr,
-    ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Tcp>>>> {
-        let ep = self.endpoint.clone();
-        let handle = self.abort_handle.clone();
-        let (inbound, outbound) = Connector::new_pair(10);
-        Box::pin(async move {
-            let notify = ep.clone_notify();
-            let mut x = ep.stack.lock().await;
-            x.open_tcp(
-                SocketAddr::new(
-                    match &server_addr {
-                        SocketAddr::V4(_) => Ipv4Addr::new(0, 0, 0, 0).into(),
-                        SocketAddr::V6(_) => Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
-                    },
-                    0,
-                ),
-                server_addr,
-                inbound,
-                handle,
-                notify,
-            )?;
-            Ok(AsyncIoTokioAsStd(DuplexChan::new(outbound)))
-        })
-    }
-
-    fn bind_udp(
-        &self,
-        local_addr: SocketAddr,
-        _server_addr: SocketAddr,
-    ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Udp>>>> {
-        let ep = self.endpoint.clone();
-        let handle = self.abort_handle.clone();
-        let (inbound, outbound) = AddrConnector::new_pair(10);
-        Box::pin(async move {
-            let notify = ep.clone_notify();
-            let mut x = ep.stack.lock().await;
-            x.open_udp(local_addr, inbound, handle, notify)?;
-            let outbound = AddrConnectorWrapper::from(outbound);
-            Ok(outbound)
-        })
-    }
 }
 
 impl DnsUdpSocket for AddrConnectorWrapper {
