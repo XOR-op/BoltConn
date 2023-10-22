@@ -1,5 +1,6 @@
 use crate::common::io_err;
 use crate::common::MAX_PKT_SIZE;
+use crate::config::DnsPreference;
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
 use crate::transport::AdapterOrSocket;
@@ -10,7 +11,7 @@ use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Notify;
 use trust_dns_resolver::config::ResolverConfig;
@@ -19,7 +20,8 @@ use trust_dns_resolver::config::ResolverConfig;
 #[derive(Clone)]
 pub struct WireguardConfig {
     // local
-    pub ip_addr: IpAddr,
+    pub ip_addr: Option<Ipv4Addr>,
+    pub ip_addr6: Option<Ipv6Addr>,
     pub private_key: x25519_dalek::StaticSecret,
     // peer
     pub public_key: x25519_dalek::PublicKey,
@@ -28,6 +30,7 @@ pub struct WireguardConfig {
     pub preshared_key: Option<[u8; 32]>,
     pub keepalive: Option<u16>,
     pub dns: ResolverConfig,
+    pub dns_preference: DnsPreference,
     // reserved fields
     pub reserved: Option<[u8; 3]>,
 }
@@ -36,6 +39,7 @@ impl Debug for WireguardConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("")
             .field(&self.ip_addr)
+            .field(&self.ip_addr6)
             .field(&self.endpoint)
             .field(&self.preshared_key)
             .finish()
@@ -46,6 +50,7 @@ impl PartialEq for WireguardConfig {
     fn eq(&self, other: &Self) -> bool {
         self.public_key == other.public_key
             && self.ip_addr == other.ip_addr
+            && self.ip_addr6 == other.ip_addr6
             && self.endpoint == other.endpoint
     }
 }
@@ -55,6 +60,7 @@ impl Eq for WireguardConfig {}
 impl Hash for WireguardConfig {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.ip_addr.hash(state);
+        self.ip_addr6.hash(state);
         self.public_key.hash(state);
         self.endpoint.hash(state);
     }

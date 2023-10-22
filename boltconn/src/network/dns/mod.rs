@@ -4,7 +4,7 @@ mod dns_table;
 mod provider;
 
 use crate::network::dns::provider::IfaceProvider;
-pub use dns::Dns;
+pub use dns::{Dns, GenericDns};
 use std::net::{IpAddr, SocketAddr};
 use trust_dns_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,

@@ -1,3 +1,4 @@
+use crate::config::DnsPreference;
 use crate::network::dns::dns_table::DnsTable;
 use crate::network::dns::provider::IfaceProvider;
 use arc_swap::ArcSwap;
@@ -9,17 +10,21 @@ use std::time::Duration;
 use trust_dns_proto::op::{Message, MessageType, ResponseCode};
 use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
 use trust_dns_resolver::config::*;
-use trust_dns_resolver::name_server::GenericConnector;
+use trust_dns_resolver::name_server::{GenericConnector, RuntimeProvider};
 use trust_dns_resolver::AsyncResolver;
 
-pub struct Dns {
+pub struct GenericDns<P: RuntimeProvider> {
     table: DnsTable,
-    resolvers: ArcSwap<Vec<AsyncResolver<GenericConnector<IfaceProvider>>>>,
+    preference: DnsPreference,
+    resolvers: ArcSwap<Vec<AsyncResolver<GenericConnector<P>>>>,
 }
+
+pub type Dns = GenericDns<IfaceProvider>;
 
 impl Dns {
     pub fn with_config(
         iface_name: &str,
+        preference: DnsPreference,
         configs: Vec<NameServerConfigGroup>,
     ) -> anyhow::Result<Dns> {
         let mut resolvers = Vec::new();
@@ -33,15 +38,9 @@ impl Dns {
         }
         Ok(Dns {
             table: DnsTable::new(),
+            preference,
             resolvers: ArcSwap::new(Arc::new(resolvers)),
         })
-    }
-
-    pub fn new() -> Dns {
-        Dns {
-            table: DnsTable::new(),
-            resolvers: ArcSwap::new(Arc::new(vec![])),
-        }
     }
 
     pub fn replace_resolvers(
@@ -61,6 +60,19 @@ impl Dns {
         self.resolvers.store(Arc::new(resolvers));
         Ok(())
     }
+}
+
+impl<P: RuntimeProvider> GenericDns<P> {
+    pub fn new_with_resolver(
+        resolver: AsyncResolver<GenericConnector<P>>,
+        preference: DnsPreference,
+    ) -> Self {
+        Self {
+            table: DnsTable::new(),
+            preference,
+            resolvers: ArcSwap::new(Arc::new(vec![resolver])),
+        }
+    }
 
     /// Return fake ip for the domain name instantly.
     pub fn domain_to_fake_ip(&self, domain_name: &str) -> IpAddr {
@@ -79,14 +91,14 @@ impl Dns {
         })
     }
 
-    pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
+    async fn genuine_lookup_v4(&self, domain_name: &str) -> Option<IpAddr> {
         for r in self.resolvers.load().iter() {
             if let Ok(r) =
-                tokio::time::timeout(Duration::from_secs(10), r.ipv4_lookup(domain_name)).await
+                tokio::time::timeout(Duration::from_secs(5), r.ipv4_lookup(domain_name)).await
             {
                 if let Ok(result) = r {
                     if let Some(i) = result.iter().next() {
-                        return Some(IpAddr::V4(i.0));
+                        return Some(i.0.into());
                     }
                 }
             } else {
@@ -94,6 +106,44 @@ impl Dns {
             }
         }
         None
+    }
+
+    async fn genuine_lookup_v6(&self, domain_name: &str) -> Option<IpAddr> {
+        for r in self.resolvers.load().iter() {
+            if let Ok(r) =
+                tokio::time::timeout(Duration::from_secs(5), r.ipv6_lookup(domain_name)).await
+            {
+                if let Ok(result) = r {
+                    if let Some(i) = result.iter().next() {
+                        return Some(i.0.into());
+                    }
+                }
+            } else {
+                tracing::trace!("DNS lookup for {domain_name} timeout");
+            }
+        }
+        None
+    }
+
+    pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
+        match self.preference {
+            DnsPreference::Ipv4Only => self.genuine_lookup_v4(domain_name).await,
+            DnsPreference::Ipv6Only => self.genuine_lookup_v6(domain_name).await,
+            DnsPreference::PreferIpv4 => {
+                if let Some(a) = self.genuine_lookup_v4(domain_name).await {
+                    Some(a)
+                } else {
+                    self.genuine_lookup_v6(domain_name).await
+                }
+            }
+            DnsPreference::PreferIpv6 => {
+                if let Some(a) = self.genuine_lookup_v6(domain_name).await {
+                    Some(a)
+                } else {
+                    self.genuine_lookup_v4(domain_name).await
+                }
+            }
+        }
     }
 
     /// If no corresponding record, return fake ip itself.

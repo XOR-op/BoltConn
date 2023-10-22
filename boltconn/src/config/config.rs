@@ -5,7 +5,7 @@ use crate::config::{AuthData, ModuleConfig, ProxyProvider, RuleConfigLine, RuleP
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -53,8 +53,22 @@ pub enum RawServerSockAddr {
     Domain(String),
 }
 
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+pub enum DnsPreference {
+    #[serde(alias = "ipv4-only")]
+    Ipv4Only,
+    #[serde(alias = "ipv6-only")]
+    Ipv6Only,
+    #[serde(alias = "prefer-ipv4")]
+    PreferIpv4,
+    #[serde(alias = "prefer-ipv6")]
+    PreferIpv6,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawDnsConfig {
+    #[serde(default = "default_dns_pref")]
+    pub preference: DnsPreference,
     pub bootstrap: Vec<IpAddr>,
     pub nameserver: Vec<String>,
 }
@@ -111,15 +125,19 @@ pub enum RawProxyLocalCfg {
     #[serde(alias = "wireguard")]
     Wireguard {
         #[serde(alias = "local-addr")]
-        local_addr: IpAddr,
+        local_addr: Option<Ipv4Addr>,
+        #[serde(alias = "local-addr6")]
+        local_addr_v6: Option<Ipv6Addr>,
         #[serde(alias = "private-key")]
         private_key: String,
         #[serde(alias = "public-key")]
         public_key: String,
         endpoint: RawServerSockAddr,
         dns: String,
+        #[serde(alias = "dns-preference", default = "default_dns_pref")]
+        dns_preference: DnsPreference,
         mtu: usize,
-        #[serde(alias = "public-key")]
+        #[serde(alias = "preshared-key")]
         preshared_key: Option<String>,
         keepalive: Option<u16>,
         reserved: Option<[u8; 3]>,
@@ -161,6 +179,10 @@ pub(super) fn default_rule_provider() -> HashMap<String, RuleProvider> {
 
 fn default_module() -> Vec<ModuleConfig> {
     Default::default()
+}
+
+fn default_dns_pref() -> DnsPreference {
+    DnsPreference::Ipv4Only
 }
 
 pub(super) fn default_str_vec() -> Vec<String> {
