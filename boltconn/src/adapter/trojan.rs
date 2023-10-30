@@ -134,8 +134,8 @@ impl TrojanOutbound {
             },
             payload: first_packet,
         };
-        let res = stream.write_all(trojan_req.serialize().as_slice()).await;
-        res?;
+        stream.write_all(trojan_req.serialize().as_slice()).await?;
+        stream.flush().await?;
         Ok(())
     }
 
