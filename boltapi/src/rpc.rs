@@ -3,6 +3,8 @@ use crate::{
     TunStatusSchema,
 };
 
+pub const MAX_CODEC_FRAME_LENGTH: usize = 512 * 1024 * 1024;
+
 #[tarpc::service]
 pub trait ControlService {
     // Proxies

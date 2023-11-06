@@ -58,7 +58,8 @@ impl UdsController {
     }
 
     pub async fn run(self, listener: Arc<UnixListenerGuard>) -> io::Result<()> {
-        let codec_builder = LengthDelimitedCodec::builder();
+        let mut codec_builder = LengthDelimitedCodec::builder();
+        codec_builder.max_frame_length(boltapi::rpc::MAX_CODEC_FRAME_LENGTH);
         loop {
             let (conn, _addr) = listener.get_listener().accept().await?;
             let framed = codec_builder.new_framed(conn);
