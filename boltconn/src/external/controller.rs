@@ -332,6 +332,26 @@ impl Controller {
         }
     }
 
+    pub fn list_temporary_rule(&self) -> Vec<String> {
+        let state = self.state.lock().unwrap();
+        state
+            .state
+            .temporary_list
+            .as_ref()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|item| {
+                        if let RuleConfigLine::Simple(line) = item {
+                            Some(line.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn clear_temporary_rule(&self) {
         let mut state = self.state.lock().unwrap();
         let _ = self.dispatching.load().update_temporary_list(&[]);

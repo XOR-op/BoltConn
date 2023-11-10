@@ -67,6 +67,8 @@ pub(crate) enum TempRuleOptions {
         #[clap(value_hint = ValueHint::Other)]
         literal: String,
     },
+    /// List all temporary rules
+    List,
     /// Delete all temporary rules
     Clear,
 }
@@ -280,6 +282,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         SubCommand::TempRule(opt) => match opt {
             TempRuleOptions::Add { literal } => requester.add_temporary_rule(literal).await,
             TempRuleOptions::Delete { literal } => requester.delete_temporary_rule(literal).await,
+            TempRuleOptions::List => requester.list_temporary_rule().await,
             TempRuleOptions::Clear => requester.clear_temporary_rule().await,
         },
         SubCommand::Start(_) | SubCommand::Generate(_) | SubCommand::Clean => {

@@ -35,6 +35,8 @@ pub trait ControlService {
 
     async fn delete_temporary_rule(rule_literal_prefix: String) -> bool;
 
+    async fn list_temporary_rule() -> Vec<String>;
+
     async fn clear_temporary_rule();
 
     // General

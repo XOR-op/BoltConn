@@ -246,6 +246,10 @@ impl ControlService for UdsRpcServer {
         self.controller.delete_temporary_rule(rule_literal_prefix)
     }
 
+    async fn list_temporary_rule(self, _ctx: Context) -> Vec<String> {
+        self.controller.list_temporary_rule()
+    }
+
     async fn clear_temporary_rule(self, _ctx: Context) {
         self.controller.clear_temporary_rule()
     }

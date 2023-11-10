@@ -208,6 +208,21 @@ impl Requester {
         }
     }
 
+    pub async fn list_temporary_rule(&self) -> Result<()> {
+        let list = match &self.inner {
+            Inner::Web(_) => Err(anyhow::anyhow!(
+                "List-Temporary-Rule: Not supported by RESTful API"
+            )),
+            Inner::Uds(c) => c.list_temporary_rule().await,
+        }?;
+        if list.is_empty() {
+            println!("{}", "Empty rule list".yellow());
+        } else {
+            list.into_iter().for_each(|l| println!("{}", l));
+        }
+        Ok(())
+    }
+
     pub async fn clear_temporary_rule(&self) -> Result<()> {
         match &self.inner {
             Inner::Web(_) => Err(anyhow::anyhow!(

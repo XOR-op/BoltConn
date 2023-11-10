@@ -108,6 +108,10 @@ impl UdsConnector {
             .await?)
     }
 
+    pub async fn list_temporary_rule(&self) -> Result<Vec<String>> {
+        Ok(self.client.list_temporary_rule(Context::current()).await?)
+    }
+
     pub async fn clear_temporary_rule(&self) -> Result<()> {
         Ok(self.client.clear_temporary_rule(Context::current()).await?)
     }
