@@ -33,15 +33,25 @@ impl Requester {
         })
     }
 
-    pub async fn get_group_list(&self) -> Result<()> {
+    pub async fn get_group_list(&self, full: bool) -> Result<()> {
         let result = match &self.inner {
             Inner::Web(c) => c.get_group_list().await,
             Inner::Uds(c) => c.get_group_list().await,
         }?;
         for entry in result {
-            println!("{}: {}", entry.name.bold().red(), entry.selected.blue());
-            for i in entry.list {
-                println!("  - {}", i.name)
+            println!(
+                "{}: {}",
+                entry.name.bold().green(),
+                if full {
+                    entry.selected.blue()
+                } else {
+                    entry.selected.white()
+                }
+            );
+            if full {
+                for i in entry.list {
+                    println!("  - {}", i.name)
+                }
             }
         }
         Ok(())

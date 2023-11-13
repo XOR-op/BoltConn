@@ -21,7 +21,10 @@ pub(crate) enum ProxyOptions {
         proxy: String,
     },
     /// List all groups
-    List,
+    List {
+        #[arg(short, long)]
+        full: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -256,7 +259,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
     let result = match args.cmd {
         SubCommand::Proxy(opt) => match opt {
             ProxyOptions::Set { group, proxy } => requester.set_group_proxy(group, proxy).await,
-            ProxyOptions::List => requester.get_group_list().await,
+            ProxyOptions::List { full: short } => requester.get_group_list(short).await,
         },
         SubCommand::Conn(opt) => match opt {
             ConnOptions::List => requester.get_connections().await,
