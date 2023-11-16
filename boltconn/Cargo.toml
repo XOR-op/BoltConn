@@ -39,9 +39,9 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 regex = "1.7.0"
 reqwest = { version = "0.11.20", default-features = false, features = ["rustls-tls", "json"] }
 scopeguard = "1.1.0"
-serde = { version = "1.0.147", features = ["derive"] }
-serde_json = "1.0.89"
-serde_yaml = "0.9.14"
+serde = { version = "1.0.192", features = ["derive"] }
+serde_json = "1.0.108"
+serde_yaml = "0.9.27"
 socket2 = { version = "0.5.1", features = ["all"] }
 tarpc = { version = "0.33.0", features = ["serde-transport", "unix"] }
 thiserror = "1.0.37"

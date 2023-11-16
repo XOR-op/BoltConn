@@ -24,6 +24,7 @@ pub use rule_provider::*;
 use serde::{Deserialize, Serialize};
 pub use state::*;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
@@ -152,4 +153,26 @@ pub(super) fn set_real_ownership(path: &Path) -> io::Result<()> {
         nix::unistd::chown(path, Some(uid.into()), Some(gid.into()))?;
     }
     Ok(())
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum SingleOrVec<T>
+where
+    T: Debug + Clone,
+{
+    Single(T),
+    List(Vec<T>),
+}
+
+impl<T> SingleOrVec<T>
+where
+    T: Debug + Clone,
+{
+    pub fn linearize(self) -> Vec<T> {
+        match self {
+            SingleOrVec::Single(v) => vec![v],
+            SingleOrVec::List(v) => v,
+        }
+    }
 }

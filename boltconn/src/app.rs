@@ -1,4 +1,6 @@
-use crate::config::{safe_join_path, LinkedState, LoadedConfig, RawInboundServiceConfig};
+use crate::config::{
+    safe_join_path, LinkedState, LoadedConfig, RawInboundServiceConfig, SingleOrVec,
+};
 use crate::dispatch::{DispatchingBuilder, RuleSetBuilder};
 use crate::external::{
     Controller, DatabaseHandle, MmdbReader, SharedDispatching, StreamLoggerSend, UdsController,
@@ -405,41 +407,39 @@ fn open_database_handle(data_path: &Path) -> anyhow::Result<DatabaseHandle> {
 
 #[allow(clippy::type_complexity)]
 fn parse_two_inbound_service(
-    http: &Option<RawInboundServiceConfig>,
-    socks5: &Option<RawInboundServiceConfig>,
+    http: &Option<SingleOrVec<RawInboundServiceConfig>>,
+    socks5: &Option<SingleOrVec<RawInboundServiceConfig>>,
 ) -> Vec<(
     u16,
     Option<HashMap<String, String>>,
     Option<HashMap<String, String>>,
 )> {
     fn parse_inbound_service(
-        auths: &Option<RawInboundServiceConfig>,
-    ) -> Option<(u16, HashMap<String, String>)> {
-        let Some(config) = auths.as_ref() else {
-            return None;
-        };
-        match config {
-            RawInboundServiceConfig::Simple(p) => Some((*p, Default::default())),
-            RawInboundServiceConfig::Complex { port, auth } => {
-                let authmap = auth
-                    .iter()
-                    .map(|a| (a.username.clone(), a.password.clone()))
-                    .collect();
-                Some((*port, authmap))
-            }
-        }
+        config: &Option<SingleOrVec<RawInboundServiceConfig>>,
+    ) -> HashMap<u16, HashMap<String, String>> {
+        config
+            .as_ref()
+            .map(|v| {
+                v.clone()
+                    .linearize()
+                    .into_iter()
+                    .map(|c| match c {
+                        RawInboundServiceConfig::Simple(p) => (p, HashMap::default()),
+                        RawInboundServiceConfig::Complex { port, auth } => (port, auth),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
+    let http_map = parse_inbound_service(http);
+    let mut socks5_map = parse_inbound_service(socks5);
 
-    match (parse_inbound_service(http), parse_inbound_service(socks5)) {
-        (Some(h), Some(s)) => {
-            if h.0 == s.0 {
-                vec![(h.0, Some(h.1), Some(s.1))]
-            } else {
-                vec![(h.0, Some(h.1), None), (s.0, None, Some(s.1))]
-            }
-        }
-        (Some(h), None) => vec![(h.0, Some(h.1), None)],
-        (None, Some(s)) => vec![(s.0, None, Some(s.1))],
-        (None, None) => vec![],
-    }
+    let mut result = vec![];
+    http_map.into_iter().for_each(|(port, http_auth)| {
+        result.push((port, Some(http_auth), socks5_map.remove(&port)))
+    });
+    socks5_map
+        .into_iter()
+        .for_each(|(port, socks5_auth)| result.push((port, None, Some(socks5_auth))));
+    result
 }

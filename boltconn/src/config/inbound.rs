@@ -1,19 +1,23 @@
-use crate::config::AuthData;
+use crate::config::SingleOrVec;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum RawInboundServiceConfig {
     Simple(u16),
-    Complex { port: u16, auth: Vec<AuthData> },
+    Complex {
+        port: u16,
+        auth: HashMap<String, String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawInboundConfig {
     #[serde(alias = "enable-tun", default = "default_true")]
     pub enable_tun: bool,
-    pub http: Option<RawInboundServiceConfig>,
-    pub socks5: Option<RawInboundServiceConfig>,
+    pub http: Option<SingleOrVec<RawInboundServiceConfig>>,
+    pub socks5: Option<SingleOrVec<RawInboundServiceConfig>>,
 }
 
 fn default_true() -> bool {
@@ -30,18 +34,18 @@ http: 1234
     ";
     let simple2 = "\
 http: 1234
-socks: 8901
+socks5:
+  - 8901
     ";
     let complex = "\
 enable-tun: false
 http: 1080
 socks5:
-    port: 8080
+  - 2000
+  - port: 8080
     auth:
-    - username: alice
-      password: bob
-    - username: browser
-      password: none
+      alice: bob
+      browser: none
     ";
     let fail = "\
 enable-tun: false
