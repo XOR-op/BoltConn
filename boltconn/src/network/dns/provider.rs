@@ -1,12 +1,12 @@
 use crate::network::egress::Egress;
+use hickory_resolver::name_server::RuntimeProvider;
+use hickory_resolver::proto::iocompat::AsyncIoTokioAsStd;
+use hickory_resolver::proto::TokioTime;
+use hickory_resolver::TokioHandle;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use tokio::net::{TcpStream, UdpSocket};
-use trust_dns_resolver::name_server::RuntimeProvider;
-use trust_dns_resolver::proto::iocompat::AsyncIoTokioAsStd;
-use trust_dns_resolver::proto::TokioTime;
-use trust_dns_resolver::TokioHandle;
 
 #[derive(Clone)]
 pub struct IfaceProvider {

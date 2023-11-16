@@ -9,6 +9,10 @@ use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use flume::TryRecvError;
+use hickory_proto::iocompat::AsyncIoTokioAsStd;
+use hickory_proto::TokioTime;
+use hickory_resolver::name_server::RuntimeProvider;
+use hickory_resolver::TokioHandle;
 use rand::Rng;
 use smoltcp::iface::{Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -27,10 +31,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex, Notify};
-use trust_dns_proto::iocompat::AsyncIoTokioAsStd;
-use trust_dns_proto::TokioTime;
-use trust_dns_resolver::name_server::RuntimeProvider;
-use trust_dns_resolver::TokioHandle;
 
 struct TcpConnTask {
     back_tx: mpsc::Sender<Bytes>,

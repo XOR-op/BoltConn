@@ -10,6 +10,11 @@ use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use bytes::Bytes;
+use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+use hickory_resolver::name_server::GenericConnector;
+use hickory_resolver::proto::udp::DnsUdpSocket;
+use hickory_resolver::proto::TokioTime;
+use hickory_resolver::AsyncResolver;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
@@ -20,11 +25,6 @@ use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinHandle;
-use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-use trust_dns_resolver::name_server::GenericConnector;
-use trust_dns_resolver::proto::udp::DnsUdpSocket;
-use trust_dns_resolver::proto::TokioTime;
-use trust_dns_resolver::AsyncResolver;
 
 // Shared Wireguard Tunnel between multiple client connections
 pub struct Endpoint {

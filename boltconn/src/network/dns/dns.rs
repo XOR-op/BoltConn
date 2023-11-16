@@ -2,16 +2,16 @@ use crate::config::DnsPreference;
 use crate::network::dns::dns_table::DnsTable;
 use crate::network::dns::provider::IfaceProvider;
 use arc_swap::ArcSwap;
+use hickory_proto::op::{Message, MessageType, ResponseCode};
+use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
+use hickory_resolver::config::*;
+use hickory_resolver::name_server::{GenericConnector, RuntimeProvider};
+use hickory_resolver::AsyncResolver;
 use std::io;
 use std::io::Result;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use trust_dns_proto::op::{Message, MessageType, ResponseCode};
-use trust_dns_proto::rr::{DNSClass, RData, Record, RecordType};
-use trust_dns_resolver::config::*;
-use trust_dns_resolver::name_server::{GenericConnector, RuntimeProvider};
-use trust_dns_resolver::AsyncResolver;
 
 pub struct GenericDns<P: RuntimeProvider> {
     table: DnsTable,
@@ -190,7 +190,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                     .set_rr_type(RecordType::A)
                     .set_dns_class(DNSClass::IN)
                     .set_ttl(60)
-                    .set_data(Some(RData::A(trust_dns_proto::rr::rdata::A(fake_ip))));
+                    .set_data(Some(RData::A(hickory_proto::rr::rdata::A(fake_ip))));
                 resp.add_answer(ans);
                 Ok(resp.to_vec()?)
             }

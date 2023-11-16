@@ -7,6 +7,7 @@ use crate::transport::AdapterOrSocket;
 use boringtun::noise::errors::WireGuardError;
 use boringtun::noise::{Tunn, TunnResult};
 use bytes::BytesMut;
+use hickory_resolver::config::ResolverConfig;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -14,7 +15,6 @@ use std::io::ErrorKind;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Notify;
-use trust_dns_resolver::config::ResolverConfig;
 
 // We left AllowedIPs since it's boltconn that manages routing.
 #[derive(Clone)]

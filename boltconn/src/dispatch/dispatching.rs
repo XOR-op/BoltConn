@@ -18,6 +18,7 @@ use crate::transport::wireguard::WireguardConfig;
 use anyhow::anyhow;
 use arc_swap::ArcSwap;
 use base64::Engine;
+use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
 use shadowsocks::crypto::CipherKind;
@@ -27,7 +28,6 @@ use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum InboundInfo {

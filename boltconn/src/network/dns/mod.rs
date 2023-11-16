@@ -5,12 +5,12 @@ mod provider;
 
 use crate::network::dns::provider::IfaceProvider;
 pub use dns::{Dns, GenericDns};
-use std::net::{IpAddr, SocketAddr};
-use trust_dns_resolver::config::{
+use hickory_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
 };
-use trust_dns_resolver::name_server::GenericConnector;
-use trust_dns_resolver::AsyncResolver;
+use hickory_resolver::name_server::GenericConnector;
+use hickory_resolver::AsyncResolver;
+use std::net::{IpAddr, SocketAddr};
 
 fn add_tls_server(
     ips: &[IpAddr],
