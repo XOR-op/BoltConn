@@ -93,8 +93,8 @@ pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
 pub struct SystemDnsHandle {}
 
 impl SystemDnsHandle {
-    const PATH: &str = "/tmp/fake_resolv.conf";
-    const RESOLV: &str = "/etc/resolv.conf";
+    const PATH: &'static str = "/tmp/fake_resolv.conf";
+    const RESOLV: &'static str = "/etc/resolv.conf";
     pub fn new(ip: Ipv4Addr) -> io::Result<Self> {
         let mut output = File::create(Self::PATH).unwrap_or(
             OpenOptions::new()
