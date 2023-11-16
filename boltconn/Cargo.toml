@@ -91,7 +91,7 @@ libproc = "0.13.0"
 netlink-sys = "0.8.3"
 netlink-packet-core = "0.5.0"
 netlink-packet-sock-diag = "0.4.0"
-procfs = "0.15.1"
+procfs = "0.16.0"
 
 [dev-dependencies]
 tracing-test = "0.2.4"
