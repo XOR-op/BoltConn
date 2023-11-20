@@ -1,10 +1,11 @@
 use crate::dispatch::InboundInfo;
-use crate::proxy::Dispatcher;
-use fast_socks5::util::target_addr::read_address;
+use crate::proxy::{Dispatcher, NetworkAddr};
+use fast_socks5::util::target_addr::{read_address, TargetAddr};
 use fast_socks5::{consts, read_exact, ReplyError, SocksError};
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,7 +69,17 @@ impl Socks5Inbound {
             Err(SocksError::UnsupportedSocksVersion(version))?;
         }
 
-        let target_addr = read_address(&mut socks_stream, address_type).await?;
+        let target_addr = match read_address(&mut socks_stream, address_type).await? {
+            TargetAddr::Ip(sa) => NetworkAddr::Raw(sa),
+            TargetAddr::Domain(domain_name, port) => {
+                // Many clients will say they send domain name even if they actually send IP address.
+                // We ignore their flags and parse it manually anyway.
+                match IpAddr::from_str(&domain_name) {
+                    Ok(ip) => NetworkAddr::Raw(SocketAddr::new(ip, port)),
+                    Err(_) => NetworkAddr::DomainName { domain_name, port },
+                }
+            }
+        };
 
         // perform proxying
         match cmd {
@@ -83,7 +94,7 @@ impl Socks5Inbound {
                     .submit_tcp(
                         InboundInfo::Socks5(incoming_user),
                         src_addr,
-                        target_addr.into(),
+                        target_addr,
                         Arc::new(AtomicU8::new(2)),
                         socks_stream,
                     )
@@ -114,7 +125,7 @@ impl Socks5Inbound {
                     .submit_socks_udp_pkt(
                         incoming_user,
                         src_addr,
-                        target_addr.into(),
+                        target_addr,
                         indicator.clone(),
                         peer_sock,
                     )
