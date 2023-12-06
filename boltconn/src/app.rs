@@ -202,6 +202,7 @@ impl App {
         let speedtest_url = Arc::new(std::sync::RwLock::new(config.speedtest_url.clone()));
         let controller = Arc::new(Controller::new(
             manager.clone(),
+            dns.clone(),
             stat_center,
             Some(http_capturer.clone()),
             dispatcher.clone(),
