@@ -94,6 +94,20 @@ impl UdsConnector {
             .ok_or(anyhow::anyhow!("No response"))
     }
 
+    pub async fn real_lookup(&self, domain: String) -> Result<String> {
+        self.client
+            .real_lookup(Context::current(), domain)
+            .await?
+            .ok_or(anyhow::anyhow!("No DNS record"))
+    }
+
+    pub async fn fake_ip_to_real(&self, fake_ip: String) -> Result<String> {
+        self.client
+            .fake_ip_to_real(Context::current(), fake_ip)
+            .await?
+            .ok_or(anyhow::anyhow!("No fake IP mapping"))
+    }
+
     pub async fn add_temporary_rule(&self, rule_literal: String) -> Result<bool> {
         Ok(self
             .client

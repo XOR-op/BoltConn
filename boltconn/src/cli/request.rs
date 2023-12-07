@@ -242,6 +242,27 @@ impl Requester {
         }
     }
 
+    pub async fn real_lookup(&self, domain: String) -> Result<()> {
+        let ip = match &self.inner {
+            Inner::Web(c) => c.real_lookup(domain.clone()).await,
+            Inner::Uds(c) => c.real_lookup(domain.clone()).await,
+        }
+        .unwrap_or_default();
+        println!("{}\t{}", domain, ip);
+        Ok(())
+    }
+
+    pub async fn fake_ip_to_real(&self, fake_ip: String) -> Result<()> {
+        match match &self.inner {
+            Inner::Web(c) => c.fake_ip_to_real(fake_ip.clone()).await,
+            Inner::Uds(c) => c.fake_ip_to_real(fake_ip.clone()).await,
+        } {
+            Ok(real_domain) => println!("{}\t{}", fake_ip, real_domain),
+            Err(_) => println!("Mapping for {} not found", fake_ip),
+        }
+        Ok(())
+    }
+
     pub async fn reload_config(&self) -> Result<()> {
         match &self.inner {
             Inner::Web(c) => c.reload_config().await,

@@ -56,6 +56,8 @@ impl WebController {
                 "/proxies/:group",
                 get(Self::get_proxy_group).put(Self::set_selection),
             )
+            .route("/dns/mapping/:fake_ip", get(Self::fake_ip_to_real))
+            .route("/dns/lookup/:domain", get(Self::real_lookup))
             .route("/speedtest/:group", get(Self::update_latency))
             .route("/reload", post(Self::reload))
             .route_layer(map_request(wrapper))
@@ -277,6 +279,33 @@ impl WebController {
         };
         server.controller.update_latency(group).await;
         Json(serde_json::Value::Bool(true))
+    }
+
+    async fn fake_ip_to_real(
+        State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        Json(json!(server.controller.fake_ip_to_real(
+            match params.get("fake_ip") {
+                Some(ip) => ip.clone(),
+                None => return Json(serde_json::Value::Null),
+            }
+        )))
+    }
+
+    async fn real_lookup(
+        State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        Json(json!(
+            server
+                .controller
+                .real_lookup(match params.get("domain_name") {
+                    Some(domain_name) => domain_name.clone(),
+                    None => return Json(serde_json::Value::Null),
+                })
+                .await
+        ))
     }
 
     async fn reload(State(server): State<Self>) {
