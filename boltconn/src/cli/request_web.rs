@@ -97,6 +97,22 @@ impl WebConnector {
         Ok(result)
     }
 
+    pub async fn real_lookup(&self, domain: String) -> Result<String> {
+        let data = reqwest::get(self.route(format!("/dns/lookup/{}", domain).as_str()))
+            .await?
+            .text()
+            .await?;
+        Ok(data)
+    }
+
+    pub async fn fake_ip_to_real(&self, fake_ip: String) -> Result<String> {
+        let data = reqwest::get(self.route(format!("/dns/mapping/{}", fake_ip).as_str()))
+            .await?
+            .text()
+            .await?;
+        Ok(data)
+    }
+
     pub async fn reload_config(&self) -> Result<()> {
         reqwest::Client::new()
             .post(self.route("/reload"))

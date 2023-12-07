@@ -93,8 +93,9 @@ impl UdsController {
 
 #[derive(Clone, Debug)]
 enum ClientRequests {
-    EnableTraffic(u64),
-    EnableLogs(u64),
+    Traffic(u64),
+    ConnectionStream(u64),
+    Logs(u64),
 }
 
 struct UdsRpcBackClient {
@@ -119,7 +120,7 @@ impl UdsRpcBackClient {
 
     async fn process_request(self: Arc<Self>, req: ClientRequests) {
         match req {
-            ClientRequests::EnableTraffic(ctx_id) => {
+            ClientRequests::Traffic(ctx_id) => {
                 // spawn traffic processing coroutine
                 tokio::spawn(async move {
                     let TrafficResp {
@@ -164,7 +165,24 @@ impl UdsRpcBackClient {
                     }
                 });
             }
-            ClientRequests::EnableLogs(ctx_id) => {
+            ClientRequests::ConnectionStream(ctx_id) => {
+                tokio::spawn(async move {
+                    let interval_ms = 1000;
+                    loop {
+                        let conn = self.controller.get_active_conns();
+                        if !self
+                            .client
+                            .post_connections(Context::current(), conn)
+                            .await
+                            .is_ok_and(|x| x == ctx_id)
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+                    }
+                });
+            }
+            ClientRequests::Logs(ctx_id) => {
                 let mut log_receiver = self.controller.get_log_subscriber();
                 tokio::spawn(async move {
                     while let Ok(log) = log_receiver.recv().await {
@@ -254,6 +272,14 @@ impl ControlService for UdsRpcServer {
         self.controller.clear_temporary_rule()
     }
 
+    async fn real_lookup(self, _ctx: Context, domain: String) -> Option<String> {
+        self.controller.real_lookup(domain).await
+    }
+
+    async fn fake_ip_to_real(self, _ctx: Context, fake_ip: String) -> Option<String> {
+        self.controller.fake_ip_to_real(fake_ip)
+    }
+
     async fn get_tun(self, _ctx: Context) -> TunStatusSchema {
         self.controller.get_tun()
     }
@@ -271,10 +297,14 @@ impl ControlService for UdsRpcServer {
     }
 
     async fn request_traffic_stream(self, _ctx: Context, ctx_id: u64) {
-        let _ = self.sender.send(ClientRequests::EnableTraffic(ctx_id));
+        let _ = self.sender.send(ClientRequests::Traffic(ctx_id));
+    }
+
+    async fn request_connection_stream(self, _ctx: Context, ctx_id: u64) {
+        let _ = self.sender.send(ClientRequests::ConnectionStream(ctx_id));
     }
 
     async fn request_log_stream(self, _ctx: Context, ctx_id: u64) {
-        let _ = self.sender.send(ClientRequests::EnableLogs(ctx_id));
+        let _ = self.sender.send(ClientRequests::Logs(ctx_id));
     }
 }

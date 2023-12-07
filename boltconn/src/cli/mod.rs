@@ -77,6 +77,20 @@ pub(crate) enum TempRuleOptions {
 }
 
 #[derive(Debug, Subcommand)]
+pub(crate) enum DnsOptions {
+    /// Add a temporary rule to the head of rule list
+    Lookup {
+        #[clap(value_hint = ValueHint::Other)]
+        domain_name: String,
+    },
+    /// Delete temporary rules matching this prefix
+    Mapping {
+        #[clap(value_hint = ValueHint::Other)]
+        fake_ip: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub(crate) enum InterceptOptions {
     /// List all captured data
     List,
@@ -150,6 +164,9 @@ pub(crate) enum SubCommand {
     /// Proxy settings
     #[command(subcommand)]
     Proxy(ProxyOptions),
+    /// DNS information
+    #[command(subcommand)]
+    Dns(DnsOptions),
     /// Modify temporary rules
     #[command(subcommand)]
     TempRule(TempRuleOptions),
@@ -287,6 +304,10 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             TempRuleOptions::Delete { literal } => requester.delete_temporary_rule(literal).await,
             TempRuleOptions::List => requester.list_temporary_rule().await,
             TempRuleOptions::Clear => requester.clear_temporary_rule().await,
+        },
+        SubCommand::Dns(opt) => match opt {
+            DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
+            DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
         },
         SubCommand::Start(_) | SubCommand::Generate(_) | SubCommand::Clean => {
             unreachable!()

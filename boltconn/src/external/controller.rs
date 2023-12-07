@@ -2,8 +2,10 @@ use crate::config::{LinkedState, RuleConfigLine};
 use crate::dispatch::{GeneralProxy, Latency};
 use crate::external::{SharedDispatching, StreamLoggerRecv, StreamLoggerSend};
 use crate::network::configure::TunConfigure;
+use crate::network::dns::Dns;
 use crate::proxy::{
-    latency_test, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
+    latency_test, ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData,
+    SessionManager,
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
@@ -17,6 +19,7 @@ use std::time::{Duration, UNIX_EPOCH};
 #[derive(Clone)]
 pub struct Controller {
     manager: Arc<SessionManager>,
+    dns: Arc<Dns>,
     stat_center: Arc<ContextManager>,
     http_capturer: Option<Arc<HttpCapturer>>,
     dispatcher: Arc<Dispatcher>,
@@ -32,6 +35,7 @@ impl Controller {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         manager: Arc<SessionManager>,
+        dns: Arc<Dns>,
         stat_center: Arc<ContextManager>,
         http_capturer: Option<Arc<HttpCapturer>>,
         dispatcher: Arc<Dispatcher>,
@@ -44,6 +48,7 @@ impl Controller {
     ) -> Self {
         Self {
             manager,
+            dns,
             stat_center,
             http_capturer,
             tun_configure: global_setting,
@@ -86,33 +91,49 @@ impl Controller {
 
     pub fn get_all_conns(&self) -> Vec<ConnectionSchema> {
         let (list, offset) = self.stat_center.get_copy();
-        let mut result = Vec::new();
-        for (idx, info) in list.iter().enumerate() {
-            let conn = ConnectionSchema {
-                conn_id: (idx + offset) as u64,
-                inbound: info.inbound_info.to_string(),
-                destination: info.dest.to_string(),
-                protocol: info.session_proto.write().unwrap().to_string(),
-                proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
-                process: info.process_info.as_ref().map(|i| ProcessSchema {
-                    pid: i.pid,
-                    path: i.path.clone(),
-                    name: i.name.clone(),
-                    cmdline: i.cmdline.clone(),
-                    parent_name: i.parent_name.clone(),
-                }),
-                upload: info.upload_traffic.load(Ordering::Relaxed),
-                download: info.download_traffic.load(Ordering::Relaxed),
-                start_time: info
-                    .start_time
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                active: !info.done.load(Ordering::Relaxed),
-            };
-            result.push(conn);
+        list.into_iter()
+            .enumerate()
+            .map(|(idx, info)| Self::get_connection_schema(idx, offset, info.as_ref()))
+            .collect()
+    }
+
+    pub fn get_active_conns(&self) -> Vec<ConnectionSchema> {
+        let (list, offset) = self.stat_center.get_copy();
+        list.iter()
+            .enumerate()
+            .filter_map(|(idx, info)| {
+                if info.done.load(Ordering::Relaxed) {
+                    Some(Self::get_connection_schema(idx, offset, info.as_ref()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn get_connection_schema(idx: usize, offset: usize, info: &ConnContext) -> ConnectionSchema {
+        ConnectionSchema {
+            conn_id: (idx + offset) as u64,
+            inbound: info.inbound_info.to_string(),
+            destination: info.dest.to_string(),
+            protocol: info.session_proto.write().unwrap().to_string(),
+            proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
+            process: info.process_info.as_ref().map(|i| ProcessSchema {
+                pid: i.pid,
+                path: i.path.clone(),
+                name: i.name.clone(),
+                cmdline: i.cmdline.clone(),
+                parent_name: i.parent_name.clone(),
+            }),
+            upload: info.upload_traffic.load(Ordering::Relaxed),
+            download: info.download_traffic.load(Ordering::Relaxed),
+            start_time: info
+                .start_time
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            active: !info.done.load(Ordering::Relaxed),
         }
-        result
     }
 
     pub fn stop_all_conn(&self) {
@@ -357,6 +378,19 @@ impl Controller {
         let _ = self.dispatching.load().update_temporary_list(&[]);
         state.state.temporary_list = None;
         Self::flush_state(&state);
+    }
+
+    pub async fn real_lookup(&self, domain_name: String) -> Option<String> {
+        self.dns
+            .genuine_lookup(domain_name.as_str())
+            .await
+            .map(|ip| ip.to_string())
+    }
+
+    pub fn fake_ip_to_real(&self, fake_ip: String) -> Option<String> {
+        self.dns
+            .fake_ip_to_domain(fake_ip.parse().ok()?)
+            .map(|ip| ip.to_string())
     }
 
     fn flush_state(state: &LinkedState) {

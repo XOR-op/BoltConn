@@ -39,6 +39,11 @@ pub trait ControlService {
 
     async fn clear_temporary_rule();
 
+    // DNS
+    async fn real_lookup(domain: String) -> Option<String>;
+
+    async fn fake_ip_to_real(fake_ip: String) -> Option<String>;
+
     // General
     async fn get_tun() -> TunStatusSchema;
 
@@ -51,6 +56,8 @@ pub trait ControlService {
     // Streaming
     async fn request_traffic_stream(ctx_id: u64);
 
+    async fn request_connection_stream(ctx_id: u64);
+
     async fn request_log_stream(ctx_id: u64);
 }
 
@@ -60,6 +67,8 @@ pub trait ControlService {
 // When such methods return invalid ctx_id, we can safely terminate posting.
 pub trait ClientStreamService {
     async fn post_traffic(traffic: TrafficResp) -> u64;
+
+    async fn post_connections(traffic: Vec<ConnectionSchema>) -> u64;
 
     async fn post_log(log: String) -> u64;
 }
