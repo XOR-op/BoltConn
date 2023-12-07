@@ -36,6 +36,7 @@ impl WebController {
 
         let mut app = Router::new()
             .route("/ws/traffic", get(Self::ws_get_traffic))
+            .route("/ws/connections", get(Self::ws_get_connections))
             .route("/ws/logs", get(Self::ws_get_logs))
             .route(
                 "/tun",
@@ -134,6 +135,23 @@ impl WebController {
             if socket.send(Message::Text(log)).await.is_err() {
                 return;
             }
+        }
+    }
+
+    async fn ws_get_connections(
+        State(server): State<Self>,
+        ws: WebSocketUpgrade,
+    ) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| Self::ws_get_traffic_inner(server, socket))
+    }
+
+    async fn ws_get_connections_inner(server: Self, mut socket: WebSocket) {
+        loop {
+            let data = json!(server.controller.get_active_conns()).to_string();
+            if socket.send(Message::Text(data)).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
