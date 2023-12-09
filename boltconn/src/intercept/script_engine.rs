@@ -172,7 +172,7 @@ impl ScriptEngine {
                         let v = ctx.catch();
                         if v.type_of() == rquickjs::Type::Exception {
                             let v = v.as_exception().unwrap();
-                            tracing::trace!(
+                            tracing::debug!(
                                 "Script {} exception: {} {}",
                                 self.name
                                     .clone()
@@ -313,7 +313,7 @@ mod test {
     #[tracing_test::traced_test]
     fn test_req() {
         use crate::intercept::ScriptEngine;
-        tracing::trace!("Started");
+        tracing::debug!("Started");
         let name = "test-req".to_string();
         let engine = ScriptEngine::new(
             Some(&name),

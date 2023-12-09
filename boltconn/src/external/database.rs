@@ -97,7 +97,7 @@ impl DatabaseHandle {
                         }
                         _ = s =>{
                             Self::vacuum_oldest(&conn, 40000, 5000);
-                            tracing::trace!("Vacuum database")
+                            tracing::debug!("Vacuum database")
                         }
                     }
                 };

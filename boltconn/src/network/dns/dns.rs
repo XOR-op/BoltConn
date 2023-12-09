@@ -102,7 +102,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                     }
                 }
             } else {
-                tracing::trace!("DNS lookup for {domain_name} timeout");
+                tracing::debug!("DNS lookup for {domain_name} timeout");
             }
         }
         None
@@ -119,7 +119,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                     }
                 }
             } else {
-                tracing::trace!("DNS lookup for {domain_name} timeout");
+                tracing::debug!("DNS lookup for {domain_name} timeout");
             }
         }
         None
@@ -153,7 +153,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 .await
                 .unwrap_or(fake_ip)
         } else {
-            tracing::trace!("Failed to extract fake_ip: {}", fake_ip);
+            tracing::debug!("Failed to extract fake_ip: {}", fake_ip);
             fake_ip
         }
     }

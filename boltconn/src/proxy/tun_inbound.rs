@@ -38,7 +38,6 @@ impl TunTcpInbound {
             self.nat_addr
         );
         loop {
-            // tracing::debug!("Wait for new NAT connection");
             let (socket, addr) = match tcp_listener.accept().await {
                 Ok(r) => r,
                 Err(e) => {
@@ -46,7 +45,6 @@ impl TunTcpInbound {
                     Err(e)?
                 }
             };
-            // tracing::debug!("Accepted new NAT connection");
             if let Ok((src_addr, dst_addr, indicator)) =
                 self.session_mgr.lookup_tcp_session(addr.port())
             {
@@ -57,7 +55,6 @@ impl TunTcpInbound {
                         port: dst_addr.port(),
                     },
                 };
-                // tracing::debug!("[NAT] received new connection {}->{}", src_addr, dst_addr);
                 if self
                     .dispatcher
                     .submit_tcp(

@@ -150,10 +150,9 @@ impl TunDevice {
                     },
                 )?;
                 let _ = outbound.write(pkt.packet_data()).await?;
-                // tracing::trace!("IPv4 send done: {}", size);
             }
             _ => {
-                tracing::trace!("Drop IPv6 send");
+                tracing::debug!("Drop IPv6 send");
                 // Since we did not configure v6 route, we just ignore them (although some are broadcast).
             }
         }
@@ -205,7 +204,6 @@ impl TunDevice {
     ) {
         if pkt.src_addr().is_ipv6() {
             // todo: not supported now
-            // tracing::trace!("[TUN] drop IPv6: {} -> {} ", pkt.src_addr(), pkt.dst_addr());
             return;
         }
         let (src, dst) = match (pkt.src_addr(), pkt.dst_addr()) {
@@ -269,13 +267,12 @@ impl TunDevice {
             }
             IpProtocol::Icmp => {
                 // just echo now
-                // tracing::trace!("ICMP packet: {} -> {}", src, dst);
                 let mut pkt = Icmpv4Pkt::new(pkt);
                 pkt.rewrite_addr(dst, src);
                 let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
             }
             _ => {
-                tracing::trace!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);
+                tracing::debug!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);
                 // discarded
             }
         }

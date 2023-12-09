@@ -273,7 +273,7 @@ impl Dispatcher {
                     match port {
                         80 => {
                             // hijack
-                            tracing::trace!("HTTP intercept for {}", domain_name);
+                            tracing::debug!("HTTP intercept for {}", domain_name);
                             {
                                 let info = info.clone();
                                 tokio::spawn(async move {
@@ -293,7 +293,7 @@ impl Dispatcher {
                             return Ok(());
                         }
                         443 => {
-                            tracing::trace!("HTTPS intercept for {}", domain_name);
+                            tracing::debug!("HTTPS intercept for {}", domain_name);
                             {
                                 let info = info.clone();
                                 let mocker = match HttpsIntercept::new(

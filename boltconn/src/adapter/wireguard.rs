@@ -194,7 +194,7 @@ impl Endpoint {
                     if last_active.lock().await.elapsed() > timeout {
                         indi_write.store(false, Ordering::Relaxed);
                         let _ = stop_send.send(());
-                        tracing::trace!(
+                        tracing::debug!(
                             "[WireGuard] Stop inactive tunnel after for {}s.",
                             timeout.as_secs()
                         );
@@ -509,7 +509,7 @@ async fn wireguard_timeout<F: Future<Output = io::Result<()>>>(future: F) -> io:
     match tokio::time::timeout(Duration::from_secs(10), future).await {
         Ok(r) => r,
         Err(_) => {
-            tracing::trace!("WireGuard timeout after 10s");
+            tracing::debug!("WireGuard timeout after 10s");
             Err(ErrorKind::TimedOut.into())
         }
     }

@@ -129,7 +129,7 @@ where
     let content: T = if !force_update && full_path.as_path().exists() {
         serde_yaml::from_str(fs::read_to_string(full_path.as_path())?.as_str())?
     } else {
-        tracing::trace!("Downloading external resource from {}", url);
+        tracing::debug!("Downloading external resource from {}", url);
         let resp = reqwest::get(url).await?;
         let text = resp.text().await?;
         let content: T = serde_yaml::from_str(text.as_str())?;

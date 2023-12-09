@@ -304,7 +304,7 @@ impl Controller {
         list.extend(old);
 
         if let Err(e) = self.dispatching.load().update_temporary_list(&list) {
-            tracing::trace!("Adding rule {} failed: {}", rule_literal, e);
+            tracing::debug!("Adding rule {} failed: {}", rule_literal, e);
             false
         } else {
             state.state.temporary_list = Some(list);
@@ -412,7 +412,7 @@ impl Controller {
     }
 
     pub async fn update_latency(&self, group: String) {
-        tracing::trace!("Start speedtest for group {}", group);
+        tracing::debug!("Start speedtest for group {}", group);
         let speedtest_url = self.speedtest_url.read().unwrap().clone();
         let list = self.dispatching.load().get_group_list();
         for g in list.iter() {
