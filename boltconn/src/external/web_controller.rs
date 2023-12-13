@@ -142,7 +142,7 @@ impl WebController {
         State(server): State<Self>,
         ws: WebSocketUpgrade,
     ) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| Self::ws_get_traffic_inner(server, socket))
+        ws.on_upgrade(move |socket| Self::ws_get_connections_inner(server, socket))
     }
 
     async fn ws_get_connections_inner(server: Self, mut socket: WebSocket) {

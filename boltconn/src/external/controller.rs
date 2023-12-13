@@ -103,9 +103,9 @@ impl Controller {
             .enumerate()
             .filter_map(|(idx, info)| {
                 if info.done.load(Ordering::Relaxed) {
-                    Some(Self::get_connection_schema(idx, offset, info.as_ref()))
-                } else {
                     None
+                } else {
+                    Some(Self::get_connection_schema(idx, offset, info.as_ref()))
                 }
             })
             .collect()
