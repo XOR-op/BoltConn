@@ -90,6 +90,9 @@ tabular = "0.2.0"
 console-subscriber = { version = "0.1.10", optional = true }
 russh = "0.45.0"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = "0.52.0"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 libproc = "0.13.0"
 
