@@ -84,6 +84,9 @@ tabular = "0.2.0"
 # features(tokio-console)
 console-subscriber = { version = "0.1.10", optional = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = "0.52.0"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 libproc = "0.13.0"
 
