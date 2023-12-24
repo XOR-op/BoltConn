@@ -1,14 +1,23 @@
-use windows::Win32::{
-    Foundation::ERROR_INSUFFICIENT_BUFFER,
-    NetworkManagement::IpHelper::{
-        GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP_STATE_ESTAB, TCP_TABLE_CLASS,
-        TCP_TABLE_OWNER_PID_CONNECTIONS, UDP_TABLE_OWNER_PID,
+use windows::{
+    Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
+    Win32::{
+        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER},
+        NetworkManagement::IpHelper::{
+            GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP_STATE_ESTAB, TCP_TABLE_CLASS,
+            TCP_TABLE_OWNER_PID_CONNECTIONS, UDP_TABLE_OWNER_PID,
+        },
+        Networking::WinSock::{ADDRESS_FAMILY, AF_INET, AF_INET6},
+        System::Threading::{
+            OpenProcess, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+        },
     },
-    Networking::WinSock::{ADDRESS_FAMILY, AF_INET, AF_INET6},
 };
 
 use crate::platform::process::{NetworkType, ProcessInfo};
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    mem,
+    net::{IpAddr, SocketAddr},
+};
 
 pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> std::io::Result<libc::pid_t> {
     let family = match addr {
@@ -56,7 +65,60 @@ fn get_table(family: ADDRESS_FAMILY, net_type: NetworkType) -> std::io::Result<V
     Err(std::io::ErrorKind::NotFound.into())
 }
 
-pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {}
+pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
+    let (ppid, path, name, cmdline) = get_process_info_inner(pid)?;
+    let p_name = get_process_info_inner(ppid).map(|(_, _, p_name, _)| p_name);
+    Some(ProcessInfo {
+        pid,
+        ppid,
+        path,
+        name,
+        cmdline,
+        parent_name: p_name,
+    })
+}
+
+fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
+    match pid {
+        0 => return (0, "", ":System Idle Process", ""),
+        4 => return (0, "", ":System", ""),
+        _ => {}
+    }
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    const INFO_SIZE: usize = std::mem::size_of::<PROCESS_BASIC_INFORMATION>();
+    let mut proc_basic_info: PROCESS_BASIC_INFORMATION = unsafe { mem::zeroed() };
+    let mut out_len_unused = 0u32;
+    let err_no = unsafe {
+        NtQueryInformationProcess(
+            handle,
+            ProcessBasicInformation,
+            proc_basic_info.as_mut_ptr() as *mut _,
+            INFO_SIZE as u32,
+            &mut out_len_unused as *mut u32,
+        )
+    };
+    if err_no.is_err() {
+        let _ = unsafe { CloseHandle(handle) };
+        return None;
+    }
+    let ppid = proc_basic_info.InheritedFromUniqueProcessId as i32;
+    let parameters = unsafe { *(*proc_basic_info.PebBaseAddress).ProcessParameters };
+    let cmdline = String::from_utf16_lossy(unsafe {
+        std::slice::from_raw_parts(
+            parameters.CommandLine.Buffer,
+            parameters.CommandLine.Length as usize / 2,
+        )
+    });
+    let path = String::from_utf16_lossy(unsafe {
+        std::slice::from_raw_parts(
+            parameters.ImagePathName.Buffer,
+            parameters.ImagePathName.Length as usize / 2,
+        )
+    });
+    let name = path.rsplit('\\').next().unwrap_or("").to_owned();
+    let _ = unsafe { CloseHandle(handle) };
+    Some((ppid, path, name, cmdline))
+}
 
 // Search for the data returned by GetExtented*Table.
 // Offsets correspond to MIB_TCPROW_OWNER_PID, MIB_TCP6ROW_OWNER_PID etc.
