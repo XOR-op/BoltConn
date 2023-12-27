@@ -125,7 +125,7 @@ impl RuleImpl {
                 PortRule::AnyTcp => info.connection_type == NetworkType::Tcp,
                 PortRule::AnyUdp => info.connection_type == NetworkType::Udp,
             },
-            RuleImpl::Inbound(inbound) => info.inbound == *inbound,
+            RuleImpl::Inbound(inbound) => inbound.contains(&info.inbound),
             RuleImpl::ProcessName(proc) => info
                 .process_info
                 .as_ref()

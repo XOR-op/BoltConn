@@ -8,7 +8,7 @@ use crate::dispatch::proxy::ProxyImpl;
 use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
 use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::temporary::TemporaryList;
-use crate::dispatch::{GeneralProxy, Proxy, ProxyGroup, RuleSetTable};
+use crate::dispatch::{GeneralProxy, InboundInfo, Proxy, ProxyGroup, RuleSetTable};
 use crate::external::MmdbReader;
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -24,76 +24,8 @@ use regex::Regex;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
 use std::sync::Arc;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum InboundInfo {
-    Tun,
-    HttpAny,
-    Socks5Any,
-    Http(Option<String>),
-    Socks5(Option<String>),
-}
-
-impl Display for InboundInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(
-            match self {
-                InboundInfo::Tun => "TUN".to_string(),
-                InboundInfo::HttpAny => "HTTP".to_string(),
-                InboundInfo::Socks5Any => "SOCKS5".to_string(),
-                InboundInfo::Http(user) => user
-                    .clone()
-                    .map_or("HTTP".to_string(), |x| format!("HTTP({x})")),
-                InboundInfo::Socks5(user) => user
-                    .clone()
-                    .map_or("SOCKS5".to_string(), |x| format!("SOCKS5({x})")),
-            }
-            .as_str(),
-        )
-    }
-}
-
-impl InboundInfo {
-    pub fn is_subset_of(&self, rhs: &InboundInfo) -> bool {
-        self == rhs
-            || match self {
-                InboundInfo::Http(_) => matches!(rhs, InboundInfo::HttpAny),
-                InboundInfo::Socks5(_) => matches!(rhs, InboundInfo::Socks5Any),
-                _ => false,
-            }
-    }
-}
-
-impl FromStr for InboundInfo {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "tun" => Ok(Self::Tun),
-            "http" => Ok(Self::HttpAny),
-            "socks5" => Ok(Self::Socks5Any),
-            s => {
-                if s.ends_with("/http") {
-                    s.split_once("/http")
-                        .map(|(p, _)| Some(p.to_string()))
-                        .map(Self::Http)
-                        .ok_or(())
-                } else if s.ends_with("/socks5") {
-                    s.split_once("/socks5")
-                        .map(|(p, _)| Some(p.to_string()))
-                        .map(Self::Socks5)
-                        .ok_or(())
-                } else {
-                    Err(())
-                }
-            }
-        }
-    }
-}
 
 pub struct ConnInfo {
     pub src: SocketAddr,

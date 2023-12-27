@@ -4,7 +4,9 @@ use crate::adapter::{
     WireguardHandle, WireguardManager,
 };
 use crate::common::duplex_chan::DuplexChan;
-use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, InboundInfo, ProxyImpl};
+use crate::dispatch::{
+    ConnInfo, Dispatching, GeneralProxy, InboundIdentity, InboundInfo, ProxyImpl,
+};
 use crate::intercept::{HttpIntercept, HttpsIntercept, InterceptionManager, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -461,6 +463,7 @@ impl Dispatcher {
 
     pub async fn submit_socks_udp_pkt(
         &self,
+        inbound_port: u16,
         user: Option<String>,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
@@ -473,7 +476,10 @@ impl Dispatcher {
             src: src_addr,
             dst: dst_addr.clone(),
             local_ip: get_iface_address(self.iface_name.as_str()).ok(),
-            inbound: InboundInfo::Socks5(user),
+            inbound: InboundInfo::Socks5(InboundIdentity {
+                user,
+                port: Some(inbound_port),
+            }),
             resolved_dst: None,
             connection_type: NetworkType::Udp,
             process_info: process_info.clone(),

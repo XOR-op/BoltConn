@@ -1,7 +1,7 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{ProviderBehavior, RuleSchema};
 use crate::dispatch::rule::{PortRule, RuleBuilder, RuleImpl};
-use crate::dispatch::{ConnInfo, InboundInfo};
+use crate::dispatch::{ConnInfo, InboundIdentity, InboundInfo};
 use crate::external::MmdbReader;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
@@ -171,18 +171,8 @@ impl RuleSetBuilder {
                     match rule {
                         RuleImpl::Inbound(inbound) => match inbound {
                             InboundInfo::Tun => retval.tun_inbound = true,
-                            InboundInfo::HttpAny => retval.http_inbound.set_any(),
-                            InboundInfo::Socks5Any => retval.socks5_inbound.set_any(),
-                            InboundInfo::Http(user) => {
-                                if let Some(s) = user {
-                                    retval.http_inbound.insert(s)
-                                }
-                            }
-                            InboundInfo::Socks5(user) => {
-                                if let Some(s) = user {
-                                    retval.socks5_inbound.insert(s)
-                                }
-                            }
+                            InboundInfo::Http(s) => retval.http_inbound.insert(s),
+                            InboundInfo::Socks5(s) => retval.socks5_inbound.insert(s),
                         },
                         RuleImpl::ProcessName(pn) => {
                             retval.process_name.insert(pn.clone());
@@ -362,15 +352,19 @@ impl Default for PortFilter {
 
 enum InboundFilter {
     Any,
-    Some(HashSet<String>),
+    Some(Vec<InboundIdentity>),
 }
 
 impl InboundFilter {
-    pub fn insert(&mut self, user: String) {
+    pub fn insert(&mut self, entry: InboundIdentity) {
         match self {
             InboundFilter::Any => {}
             InboundFilter::Some(s) => {
-                s.insert(user);
+                if entry.user.is_none() && entry.port.is_none() {
+                    *self = Self::Any;
+                } else {
+                    s.push(entry);
+                }
             }
         }
     }
@@ -379,10 +373,10 @@ impl InboundFilter {
         *self = InboundFilter::Any
     }
 
-    pub fn contains(&self, user: &str) -> bool {
+    pub fn contains(&self, rhs: &InboundIdentity) -> bool {
         match self {
             InboundFilter::Any => true,
-            InboundFilter::Some(s) => s.contains(user),
+            InboundFilter::Some(v) => v.iter().any(|s| s.contains(rhs)),
         }
     }
 
@@ -407,7 +401,7 @@ impl Default for InboundFilter {
 #[test]
 fn test_rule_provider() {
     use crate::config::RawRuleSchema;
-    use crate::dispatch::InboundInfo;
+    use crate::dispatch::inbound::InboundInfo;
     use crate::platform::process::NetworkType;
     let config_text = std::fs::read_to_string("../examples/Rules/Apple").unwrap();
     let deserialized: RawRuleSchema = serde_yaml::from_str(&config_text).unwrap();

@@ -1,4 +1,4 @@
-use crate::dispatch::InboundInfo;
+use crate::dispatch::{InboundIdentity, InboundInfo};
 use crate::proxy::Dispatcher;
 use anyhow::anyhow;
 use base64::Engine;
@@ -41,7 +41,9 @@ impl HttpInbound {
                 Ok((socket, addr)) => {
                     let disp = self.dispatcher.clone();
                     let auth = self.auth.clone();
-                    tokio::spawn(Self::serve_connection(socket, auth, addr, disp, None));
+                    tokio::spawn(Self::serve_connection(
+                        self.port, socket, auth, addr, disp, None,
+                    ));
                 }
                 Err(err) => {
                     tracing::error!("HTTP inbound failed to accept: {}", err);
@@ -52,6 +54,7 @@ impl HttpInbound {
     }
 
     pub(super) async fn serve_connection(
+        self_port: u16,
         socket: TcpStream,
         auth: Arc<HashMap<String, String>>,
         addr: SocketAddr,
@@ -126,7 +129,10 @@ impl HttpInbound {
                 socket.write_all(Self::response200().as_bytes()).await?;
                 let _ = dispatcher
                     .submit_tcp(
-                        InboundInfo::Http(authorized.unwrap()),
+                        InboundInfo::Http(InboundIdentity {
+                            user: authorized.unwrap(),
+                            port: Some(self_port),
+                        }),
                         addr,
                         dest,
                         Arc::new(AtomicU8::new(2)),

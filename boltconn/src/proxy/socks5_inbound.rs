@@ -1,4 +1,4 @@
-use crate::dispatch::InboundInfo;
+use crate::dispatch::{InboundIdentity, InboundInfo};
 use crate::proxy::{Dispatcher, NetworkAddr};
 use fast_socks5::util::target_addr::{read_address, TargetAddr};
 use fast_socks5::{consts, read_exact, ReplyError, SocksError};
@@ -45,7 +45,9 @@ impl Socks5Inbound {
                 Ok((socket, src_addr)) => {
                     let disp = self.dispatcher.clone();
                     let auth = self.auth.clone();
-                    tokio::spawn(Self::serve_connection(socket, auth, src_addr, disp, None));
+                    tokio::spawn(Self::serve_connection(
+                        self.port, socket, auth, src_addr, disp, None,
+                    ));
                 }
                 Err(err) => {
                     tracing::error!("Socks5 inbound failed to accept: {}", err);
@@ -56,6 +58,7 @@ impl Socks5Inbound {
     }
 
     pub(super) async fn serve_connection(
+        self_port: u16,
         mut socks_stream: TcpStream,
         auth: Arc<HashMap<String, String>>,
         src_addr: SocketAddr,
@@ -92,7 +95,10 @@ impl Socks5Inbound {
                     .await?;
                 let _ = dispatcher
                     .submit_tcp(
-                        InboundInfo::Socks5(incoming_user),
+                        InboundInfo::Socks5(InboundIdentity {
+                            user: incoming_user,
+                            port: Some(self_port),
+                        }),
                         src_addr,
                         target_addr,
                         Arc::new(AtomicU8::new(2)),
@@ -123,6 +129,7 @@ impl Socks5Inbound {
                 });
                 if dispatcher
                     .submit_socks_udp_pkt(
+                        self_port,
                         incoming_user,
                         src_addr,
                         target_addr,

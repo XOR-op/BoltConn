@@ -44,7 +44,7 @@ impl MixedInbound {
                     let http_auth = self.http_auth.clone();
                     let socks_auth = self.socks_auth.clone();
                     tokio::spawn(Self::serve_connection(
-                        socket, http_auth, socks_auth, src_addr, disp,
+                        self.port, socket, http_auth, socks_auth, src_addr, disp,
                     ));
                 }
                 Err(err) => {
@@ -56,6 +56,7 @@ impl MixedInbound {
     }
 
     async fn serve_connection(
+        self_port: u16,
         mut socks_stream: TcpStream,
         http_auth: Arc<HashMap<String, String>>,
         socks_auth: Arc<HashMap<String, String>>,
@@ -71,6 +72,7 @@ impl MixedInbound {
             }
             5u8 => {
                 Socks5Inbound::serve_connection(
+                    self_port,
                     socks_stream,
                     socks_auth,
                     src_addr,
@@ -82,6 +84,7 @@ impl MixedInbound {
 
             C_ASCII => {
                 HttpInbound::serve_connection(
+                    self_port,
                     socks_stream,
                     http_auth,
                     src_addr,
