@@ -248,7 +248,7 @@ impl RuleBuilder<'_> {
     }
 
     fn parse_sub_rule(&self, list: &[serde_yaml::Value]) -> anyhow::Result<RuleImpl> {
-        let prefix = retrive_string(list.get(0).unwrap())?;
+        let prefix = retrive_string(list.first().unwrap())?;
         match prefix.as_str() {
             "AND" | "OR" => {
                 if list.len() <= 2 {

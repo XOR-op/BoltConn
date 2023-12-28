@@ -15,8 +15,6 @@ mod sys;
 use sys::ffi;
 pub use sys::*;
 
-pub use crate::common::async_raw_fd::AsyncRawFd;
-
 pub fn errno_err(msg: &str) -> io::Error {
     io::Error::new(io::Error::last_os_error().kind(), msg)
 }

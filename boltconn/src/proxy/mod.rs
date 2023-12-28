@@ -20,7 +20,6 @@ use hyper::client::conn;
 pub use manager::*;
 pub use mixed_inbound::*;
 use rand::{Rng, SeedableRng};
-pub use session_ctl::*;
 pub use socks5_inbound::*;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;

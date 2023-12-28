@@ -232,7 +232,7 @@ impl Controller {
                         process_info: _,
                         req,
                         resp,
-                    } = list.get(0).unwrap();
+                    } = list.first().unwrap();
                     let result = GetInterceptDataResp {
                         req_header: req.collect_headers(),
                         req_body: req.body.to_captured_schema(),
