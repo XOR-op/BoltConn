@@ -182,7 +182,7 @@ fn default_module() -> Vec<ModuleConfig> {
 }
 
 fn default_dns_pref() -> DnsPreference {
-    DnsPreference::Ipv4Only
+    DnsPreference::PreferIpv4
 }
 
 pub(super) fn default_str_vec() -> Vec<String> {
