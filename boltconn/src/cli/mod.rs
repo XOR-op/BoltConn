@@ -78,12 +78,12 @@ pub(crate) enum TempRuleOptions {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum DnsOptions {
-    /// Add a temporary rule to the head of rule list
+    /// Lookup real address of a domain
     Lookup {
         #[clap(value_hint = ValueHint::Other)]
         domain_name: String,
     },
-    /// Delete temporary rules matching this prefix
+    /// Find the internal mapping of a fake IP
     Mapping {
         #[clap(value_hint = ValueHint::Other)]
         fake_ip: String,
