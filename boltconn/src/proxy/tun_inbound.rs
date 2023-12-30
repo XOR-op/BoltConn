@@ -45,8 +45,9 @@ impl TunTcpInbound {
                     Err(e)?
                 }
             };
-            if let Ok((src_addr, dst_addr, indicator)) =
-                self.session_mgr.lookup_tcp_session(addr.port())
+            if let Ok((src_addr, dst_addr, indicator)) = self
+                .session_mgr
+                .lookup_tcp_session(self.nat_addr.is_ipv6(), addr.port())
             {
                 let dst_addr = match self.dns.fake_ip_to_domain(dst_addr.ip()) {
                     None => NetworkAddr::Raw(dst_addr),

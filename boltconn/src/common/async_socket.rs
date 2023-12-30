@@ -1,31 +1,52 @@
-use libc::{c_int, sockaddr_in, socklen_t};
+use libc::{c_int, sockaddr_in, sockaddr_in6, socklen_t};
 use std::io::{Error, ErrorKind, Result};
+use std::mem;
+use std::net::IpAddr;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll, Poll::*};
-use std::{mem, net};
 
 use tokio::io::{unix, AsyncWrite};
 
 pub struct AsyncRawSocket {
-    pub fd: unix::AsyncFd<RawFd>,
-    pub sockaddr: sockaddr_in,
+    fd: unix::AsyncFd<RawFd>,
+    sockaddr: SockAddr,
+}
+
+enum SockAddr {
+    V4(sockaddr_in),
+    V6(sockaddr_in6),
 }
 
 impl AsyncRawSocket {
-    pub fn create(fd: c_int, dst_addr: net::Ipv4Addr) -> Result<Self> {
+    pub fn create(fd: c_int, dst_addr: IpAddr) -> Result<Self> {
         set_nonblock(fd)?;
-        let mut sockaddr: sockaddr_in = unsafe { mem::zeroed() };
-        sockaddr.sin_family = libc::AF_INET as libc::sa_family_t;
-        sockaddr.sin_port = 0;
-        sockaddr.sin_addr = libc::in_addr {
-            s_addr: u32::to_be(u32::from(dst_addr)),
-        };
-
-        Ok(Self {
-            fd: unix::AsyncFd::new(fd)?,
-            sockaddr,
-        })
+        match dst_addr {
+            IpAddr::V4(dst_addr) => {
+                let mut sockaddr: sockaddr_in = unsafe { mem::zeroed() };
+                sockaddr.sin_family = libc::AF_INET as libc::sa_family_t;
+                sockaddr.sin_port = 0;
+                sockaddr.sin_addr = libc::in_addr {
+                    s_addr: u32::to_be(u32::from(dst_addr)),
+                };
+                Ok(Self {
+                    fd: unix::AsyncFd::new(fd)?,
+                    sockaddr: SockAddr::V4(sockaddr),
+                })
+            }
+            IpAddr::V6(dst_addr) => {
+                let mut sockaddr: sockaddr_in6 = unsafe { mem::zeroed() };
+                sockaddr.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+                sockaddr.sin6_port = 0;
+                sockaddr.sin6_addr = libc::in6_addr {
+                    s6_addr: dst_addr.octets(),
+                };
+                Ok(Self {
+                    fd: unix::AsyncFd::new(fd)?,
+                    sockaddr: SockAddr::V6(sockaddr),
+                })
+            }
+        }
     }
 }
 
@@ -44,14 +65,24 @@ impl AsyncWrite for AsyncRawSocket {
             };
 
             let ret = unsafe {
-                libc::sendto(
-                    self.as_raw_fd(),
-                    buf.as_ptr() as _,
-                    buf.len(),
-                    0,
-                    &self.sockaddr as *const _ as *const _,
-                    mem::size_of_val(&self.sockaddr) as socklen_t,
-                )
+                match &self.sockaddr {
+                    SockAddr::V4(sockaddr) => libc::sendto(
+                        self.as_raw_fd(),
+                        buf.as_ptr() as _,
+                        buf.len(),
+                        0,
+                        sockaddr as *const _ as *const _,
+                        mem::size_of_val(sockaddr) as socklen_t,
+                    ),
+                    SockAddr::V6(sockaddr6) => libc::sendto(
+                        self.as_raw_fd(),
+                        buf.as_ptr() as _,
+                        buf.len(),
+                        0,
+                        sockaddr6 as *const _ as *const _,
+                        mem::size_of_val(sockaddr6) as socklen_t,
+                    ),
+                }
             };
 
             return if ret < 0 {

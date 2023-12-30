@@ -36,6 +36,7 @@ pub struct TunDevice {
     fake_dns_addr: Ipv4Addr,
     udp_tx: flume::Sender<Bytes>,
     udp_rx: flume::Receiver<Bytes>,
+    ipv6_enabled: bool,
 }
 
 impl TunDevice {
@@ -46,6 +47,7 @@ impl TunDevice {
         fake_dns_addr: Ipv4Addr,
         udp_tx: flume::Sender<Bytes>,
         udp_rx: flume::Receiver<Bytes>,
+        ipv6_enabled: bool,
     ) -> io::Result<TunDevice> {
         let (fd, name) = unsafe { platform::open_tun()? };
         let ctl_fd = {
@@ -67,6 +69,7 @@ impl TunDevice {
             fake_dns_addr,
             udp_tx,
             udp_rx,
+            ipv6_enabled,
         })
     }
 
@@ -142,18 +145,25 @@ impl TunDevice {
                 platform::bind_to_device(fd, self.gw_name.as_str()).map_err(|e| {
                     io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
                 })?;
-                let mut outbound = AsyncRawSocket::create(
-                    fd,
-                    match pkt.dst_addr() {
-                        IpAddr::V4(addr) => addr,
-                        _ => unreachable!(),
-                    },
-                )?;
+                let mut outbound = AsyncRawSocket::create(fd, pkt.dst_addr())?;
                 let _ = outbound.write(pkt.packet_data()).await?;
             }
-            _ => {
-                tracing::debug!("Drop IPv6 send");
-                // Since we did not configure v6 route, we just ignore them (although some are broadcast).
+            IPPkt::V6(_) => {
+                if self.ipv6_enabled {
+                    let fd = socket2::Socket::new(
+                        socket2::Domain::IPV6,
+                        socket2::Type::DGRAM,
+                        Some(socket2::Protocol::from(libc::IPPROTO_RAW)),
+                    )?
+                    .into_raw_fd();
+                    platform::bind_to_device(fd, self.gw_name.as_str()).map_err(|e| {
+                        io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
+                    })?;
+                    let mut outbound = AsyncRawSocket::create(fd, pkt.dst_addr())?;
+                    let _ = outbound.write(pkt.packet_data()).await?;
+                } else {
+                    tracing::trace!("Drop IPv6 packets: IPv6 disabled");
+                }
             }
         }
         Ok(())
@@ -216,8 +226,9 @@ impl TunDevice {
                 let mut pkt = TcpPkt::new(pkt);
                 if *nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                     // outbound->inbound
-                    if let Ok((conn_src, conn_dst, _)) =
-                        self.session_mgr.lookup_tcp_session(pkt.dst_port())
+                    if let Ok((conn_src, conn_dst, _)) = self
+                        .session_mgr
+                        .lookup_tcp_session(pkt.ip_pkt().src_addr().is_ipv6(), pkt.dst_port())
                     {
                         pkt.rewrite_addr(conn_dst, conn_src);
                         if Self::send_ip(fd_write, pkt.ip_pkt()).await.is_err() {

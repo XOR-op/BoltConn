@@ -1,6 +1,6 @@
 use super::session_ctl::{TcpSessionCtl, UdpSessionCtl};
 use dashmap::mapref::entry::Entry;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use io::Result;
 use std::io;
 use std::io::ErrorKind;
@@ -11,10 +11,9 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 pub struct SessionManager {
-    tcp_records: Arc<DashMap<u16, TcpSessionCtl>>,
-    // ipv4 as key
-    udp_records: Arc<DashMap<u16, UdpSessionCtl>>,
-    occupied_key: Arc<DashSet<u32>>,
+    // (is_ipv6, port) -> SessionCtl
+    tcp_records: Arc<DashMap<(bool, u16), TcpSessionCtl>>,
+    udp_records: Arc<DashMap<(bool, u16), UdpSessionCtl>>,
     tcp_stale_time: Duration,
     udp_stale_time: Duration,
 }
@@ -24,7 +23,6 @@ impl SessionManager {
         Self {
             tcp_records: Default::default(),
             udp_records: Default::default(),
-            occupied_key: Default::default(),
             // 2MSL
             tcp_stale_time: Duration::from_secs(120),
             udp_stale_time: Duration::from_secs(45),
@@ -33,7 +31,9 @@ impl SessionManager {
 
     /// inbound->outbound, return inbound.port
     pub fn register_tcp_session(&self, src_addr: SocketAddr, dst_addr: SocketAddr) -> u16 {
-        let entry = self.tcp_records.entry(src_addr.port());
+        let entry = self
+            .tcp_records
+            .entry((src_addr.is_ipv6(), src_addr.port()));
         let mut pair = entry.or_insert(TcpSessionCtl::new(src_addr, dst_addr));
         // If original connection silently expired
         if pair.dest_addr != dst_addr {
@@ -47,15 +47,16 @@ impl SessionManager {
             *pair.value_mut() = TcpSessionCtl::new(src_addr, dst_addr);
         }
         pair.value_mut().update_time();
-        *pair.key()
+        pair.key().1
     }
 
     /// Use inbound.port to query session
     pub fn lookup_tcp_session(
         &self,
+        is_ipv6: bool,
         inbound_port: u16,
     ) -> Result<(SocketAddr, SocketAddr, Arc<AtomicU8>)> {
-        match self.tcp_records.get(&inbound_port) {
+        match self.tcp_records.get(&(is_ipv6, inbound_port)) {
             Some(s) => Ok((s.source_addr, s.dest_addr, s.available.clone())),
             None => Err(io::Error::new(
                 ErrorKind::AddrNotAvailable,
@@ -82,7 +83,6 @@ impl SessionManager {
         let shallow_copy = Self {
             tcp_records: self.tcp_records.clone(),
             udp_records: self.udp_records.clone(),
-            occupied_key: self.occupied_key.clone(),
             tcp_stale_time: self.tcp_stale_time,
             udp_stale_time: self.udp_stale_time,
         };
@@ -103,7 +103,7 @@ impl SessionManager {
     }
 
     pub fn get_udp_probe(&self, src: SocketAddr) -> Arc<AtomicBool> {
-        match self.udp_records.entry(src.port()) {
+        match self.udp_records.entry((src.is_ipv6(), src.port())) {
             Entry::Occupied(s) => s.get().available.clone(),
             Entry::Vacant(entry) => {
                 let ctl = UdpSessionCtl::new(src);

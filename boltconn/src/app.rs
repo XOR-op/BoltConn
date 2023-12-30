@@ -126,6 +126,7 @@ impl App {
                 fake_dns_server,
                 tun_udp_tx,
                 udp_tun_rx,
+                false, // TODO: load from configuration
             )
             .map_err(|e| anyhow!("Fail to create TUN: {e}"))?;
             // create tun device
