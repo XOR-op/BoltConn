@@ -10,7 +10,7 @@ use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns};
 use crate::network::tun_device::TunDevice;
-use crate::platform::get_default_route;
+use crate::platform::get_default_v4_route;
 use crate::proxy::{
     ContextManager, Dispatcher, HttpCapturer, HttpInbound, MixedInbound, SessionManager,
     Socks5Inbound, TunTcpInbound, TunUdpInbound,
@@ -55,7 +55,7 @@ impl App {
 
         // interface
         let (_, real_iface_name) =
-            get_default_route().map_err(|e| anyhow!("Failed to get default route: {}", e))?;
+            get_default_v4_route().map_err(|e| anyhow!("Failed to get default route: {}", e))?;
         let fake_dns_server = "198.18.99.88".parse().unwrap();
 
         // setup Unix socket

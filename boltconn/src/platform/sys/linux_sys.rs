@@ -1,12 +1,15 @@
 use super::linux_ffi::*;
 use crate::common::io_err;
-use crate::platform::{create_req, get_command_output, linux_ffi, run_command};
+use crate::platform::{
+    create_req, get_command_output, linux_ffi, run_command, run_command_with_args,
+};
 use ipnet::IpNet;
 use libc::{c_int, socklen_t, O_RDWR};
 use std::ffi::CStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
+use std::process::Command;
 use std::{cmp, io, mem};
 
 use super::super::errno_err;
@@ -33,31 +36,49 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     ))
 }
 
+fn ip_command_by_addr(addr: &IpAddr) -> Command {
+    let mut cmd = Command::new("ip");
+    if matches!(addr, IpAddr::V6(_)) {
+        cmd.arg("-6");
+    }
+    cmd
+}
+
+fn ip_command_by_net(addr: &IpNet) -> Command {
+    let mut cmd = Command::new("ip");
+    if matches!(addr, IpNet::V6(_)) {
+        cmd.arg("-6");
+    }
+    cmd
+}
+
 pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
-    // todo: do not use external commands
-    run_command("ip", ["route", "add", &format!("{}", subnet), "dev", name])
+    run_command(ip_command_by_net(&subnet).args([
+        "route",
+        "add",
+        &format!("{}", subnet),
+        "dev",
+        name,
+    ]))
 }
 
 pub fn add_route_entry_via_gateway(dst: IpAddr, gw: IpAddr, name: &str) -> io::Result<()> {
-    run_command(
-        "ip",
-        [
-            "route",
-            "add",
-            &format!("{}", dst),
-            "dev",
-            name,
-            "via",
-            &format!("{}", gw),
-        ],
-    )
+    run_command(ip_command_by_addr(&dst).args([
+        "route",
+        "add",
+        &format!("{}", dst),
+        "dev",
+        name,
+        "via",
+        &format!("{}", gw),
+    ]))
 }
 
 pub fn delete_route_entry(addr: IpNet) -> io::Result<()> {
-    run_command("ip", ["route", "delete", &format!("{}", addr)])
+    run_command(ip_command_by_net(&subnet).args(["route", "delete", &format!("{}", addr)]))
 }
 
-pub fn get_default_route() -> io::Result<(IpAddr, String)> {
+pub fn get_default_v4_route() -> io::Result<(IpAddr, String)> {
     let words: Vec<String> = get_command_output("ip", ["-s", "route", "get", "1.1.1.1"])?
         .split(' ')
         .map(|s| s.to_string())
@@ -104,14 +125,14 @@ impl SystemDnsHandle {
                 .open(Self::PATH)?,
         );
         output.write_all(format!("nameserver {}\n", ip).as_bytes())?;
-        run_command("mount", ["--bind", Self::PATH, Self::RESOLV])?;
+        run_command_with_args("mount", ["--bind", Self::PATH, Self::RESOLV])?;
         Ok(Self {})
     }
 }
 
 impl Drop for SystemDnsHandle {
     fn drop(&mut self) {
-        let _ = run_command("umount", [Self::RESOLV]);
+        let _ = run_command_with_args("umount", [Self::RESOLV]);
     }
 }
 

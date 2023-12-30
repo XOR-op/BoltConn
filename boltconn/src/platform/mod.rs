@@ -19,13 +19,8 @@ pub fn errno_err(msg: &str) -> io::Error {
     io::Error::new(io::Error::last_os_error().kind(), msg)
 }
 
-pub fn run_command<I, S>(cmd: &str, args: I) -> io::Result<()>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let mut handle = Command::new(cmd)
-        .args(args)
+pub fn run_command(cmd: &mut Command) -> io::Result<()> {
+    let mut handle = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -39,6 +34,14 @@ where
             format!("Subcommand exit status: {}", status),
         ))
     }
+}
+
+pub fn run_command_with_args<I, S>(cmd: &str, args: I) -> io::Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_command(Command::new(cmd).args(args))
 }
 
 fn get_command_output<I, S>(cmd: &str, args: I) -> io::Result<String>

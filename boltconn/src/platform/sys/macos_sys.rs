@@ -1,11 +1,12 @@
 use super::macos_ffi::*;
 use crate::common::io_err;
-use crate::platform::{errno_err, get_command_output, run_command};
+use crate::platform::{errno_err, get_command_output, run_command, run_command_with_args};
 use ipnet::IpNet;
 use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr};
+use std::process::Command;
 use std::{io, mem};
 
 pub unsafe fn open_tun() -> io::Result<(i32, String)> {
@@ -78,31 +79,44 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     Err(errno_err("No available sc_unit"))
 }
 
+fn ip_command_by_addr(addr: &IpAddr) -> Command {
+    let mut cmd = Command::new("route");
+    if matches!(addr, IpAddr::V6(_)) {
+        cmd.arg("-6");
+    }
+    cmd
+}
+
+fn ip_command_by_net(addr: &IpNet) -> Command {
+    let mut cmd = Command::new("route");
+    if matches!(addr, IpNet::V6(_)) {
+        cmd.arg("-6");
+    }
+    cmd
+}
+
 pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
-    // todo: do not use external commands
-    run_command(
-        "route",
-        [
-            "-n",
-            "add",
-            "-net",
-            &format!("{}", subnet),
-            "-interface",
-            name,
-        ],
-    )
+    run_command(ip_command_by_net(&subnet).args([
+        "-n",
+        "add",
+        "-net",
+        &format!("{}", subnet),
+        "-interface",
+        name,
+    ]))
 }
 
 pub fn add_route_entry_via_gateway(dst: IpAddr, gw: IpAddr, _name: &str) -> io::Result<()> {
-    run_command(
-        "route",
-        ["-n", "add", &format!("{}", dst), &format!("{}", gw)],
-    )
+    run_command(ip_command_by_addr(&dst).args([
+        "-n",
+        "add",
+        &format!("{}", dst),
+        &format!("{}", gw),
+    ]))
 }
 
 pub fn delete_route_entry(addr: IpNet) -> io::Result<()> {
-    // todo: do not use external commands
-    run_command("route", ["-n", "delete", &format!("{}", addr)])
+    run_command(ip_command_by_net(&addr).args(["-n", "delete", &format!("{}", addr)]))
 }
 
 pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
@@ -123,7 +137,7 @@ pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
     Ok(())
 }
 
-pub fn get_default_route() -> io::Result<(IpAddr, String)> {
+pub fn get_default_v4_route() -> io::Result<(IpAddr, String)> {
     let kv: HashMap<String, String> = get_command_output("route", ["-n", "get", "1.1.1.1"])?
         .split('\n')
         .map(|s| s.to_string())
@@ -187,7 +201,7 @@ impl SystemDnsHandle {
 
         // overwrite them
         for s in services.iter() {
-            run_command("networksetup", ["-setdnsservers", s, &ip.to_string()])?
+            run_command_with_args("networksetup", ["-setdnsservers", s, &ip.to_string()])?
         }
         Ok(Self { old_dns })
     }
@@ -198,7 +212,7 @@ impl Drop for SystemDnsHandle {
         for args in self.old_dns.iter() {
             let mut v = vec![String::from("-setdnsservers")];
             v.extend_from_slice(args);
-            run_command("networksetup", v).unwrap_or(());
+            run_command_with_args("networksetup", v).unwrap_or(());
         }
     }
 }
