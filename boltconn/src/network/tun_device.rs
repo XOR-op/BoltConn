@@ -18,7 +18,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
-use tokio::io::split;
+use tokio::io::{split, AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 
 const ETH_P_IP: u16 = 0x0800;
@@ -75,8 +75,8 @@ impl TunDevice {
     }
 
     /// Read a full ip packet from tun device.
-    async fn recv_ip(
-        receiver: &mut ReadHalf<AsyncRawFd>,
+    async fn recv_ip<T: AsyncRead>(
+        receiver: &mut ReadHalf<T>,
         mut handle: BytesMut,
     ) -> io::Result<IPPkt> {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
@@ -99,7 +99,7 @@ impl TunDevice {
         }
     }
 
-    async fn send_ip(sender: &mut WriteHalf<AsyncRawFd>, ip_pkt: &IPPkt) -> io::Result<()> {
+    async fn send_ip<T: AsyncWrite>(sender: &mut WriteHalf<T>, ip_pkt: &IPPkt) -> io::Result<()> {
         if sender.write(ip_pkt.raw_data()).await? != ip_pkt.raw_data().len() {
             Err(io::Error::new(ErrorKind::Other, "Write partial packet"))
         } else {
@@ -184,7 +184,7 @@ impl TunDevice {
         }
     }
 
-    async fn backwarding_udp_v4(packet: Bytes, fd_write: &mut WriteHalf<AsyncRawFd>) {
+    async fn backwarding_udp_v4<T: AsyncWrite>(packet: Bytes, fd_write: &mut WriteHalf<T>) {
         #[cfg(target_os = "linux")]
         let _ = fd_write.write_all(packet.as_ref()).await;
         #[cfg(target_os = "macos")]
@@ -196,11 +196,11 @@ impl TunDevice {
         }
     }
 
-    async fn forwarding_packet(
+    async fn forwarding_packet<T: AsyncWrite>(
         &self,
         pkt: IPPkt,
         nat_addr: &SocketAddrV4,
-        fd_write: &mut WriteHalf<AsyncRawFd>,
+        fd_write: &mut WriteHalf<T>,
     ) {
         if pkt.src_addr().is_ipv6() {
             // todo: not supported now
