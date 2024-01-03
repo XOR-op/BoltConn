@@ -75,7 +75,7 @@ pub fn add_route_entry_via_gateway(dst: IpAddr, gw: IpAddr, name: &str) -> io::R
 }
 
 pub fn delete_route_entry(addr: IpNet) -> io::Result<()> {
-    run_command(ip_command_by_net(&subnet).args(["route", "delete", &format!("{}", addr)]))
+    run_command(ip_command_by_net(&addr).args(["route", "delete", &format!("{}", addr)]))
 }
 
 pub fn get_default_v4_route() -> io::Result<(IpAddr, String)> {
