@@ -82,7 +82,12 @@ pub async fn latency_test(
             port: _,
         } => ServerName::try_from(domain_name.as_str())?,
     };
-    let mut rng = rand::rngs::SmallRng::from_entropy();
+    let mut rng = rand::rngs::SmallRng::seed_from_u64(
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::default())
+            .as_secs(),
+    );
     let iface = iface.unwrap_or(dispatcher.get_iface_name());
 
     // create outbound

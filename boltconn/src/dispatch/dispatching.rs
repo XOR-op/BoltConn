@@ -458,6 +458,7 @@ impl DispatchingBuilder {
                     Arc::new(Proxy::new(
                         name.clone(),
                         ProxyImpl::Wireguard(WireguardConfig {
+                            name: name.clone(),
                             ip_addr: *local_addr,
                             ip_addr6: *local_addr_v6,
                             private_key,

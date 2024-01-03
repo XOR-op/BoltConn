@@ -19,6 +19,7 @@ use tokio::sync::Notify;
 // We left AllowedIPs since it's boltconn that manages routing.
 #[derive(Clone)]
 pub struct WireguardConfig {
+    pub name: String,
     // local
     pub ip_addr: Option<Ipv4Addr>,
     pub ip_addr6: Option<Ipv6Addr>,

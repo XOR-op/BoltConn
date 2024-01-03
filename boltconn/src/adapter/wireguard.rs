@@ -130,6 +130,7 @@ impl Endpoint {
         let wg_tick = {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
+            let name = config.name.clone();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 let mut continuous_err_cnt = 0;
@@ -140,7 +141,7 @@ impl Endpoint {
                             if continuous_err_cnt >= 2 {
                                 // Stop the current WireGuard connection
                                 let _ = stop_send.send(());
-                                tracing::warn!("[WireGuard] Close connection for {}", e);
+                                tracing::warn!("[WireGuard] Close connection #{} for {}", name, e);
                                 return;
                             }
                             tokio::time::sleep(Duration::from_millis(300)).await;
