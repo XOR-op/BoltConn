@@ -32,6 +32,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex, Notify};
 
+#[derive(Debug, Copy, Clone)]
+enum SmolError {
+    Disconnected,
+    Aborted,
+}
+
 struct TcpConnTask {
     back_tx: mpsc::Sender<Bytes>,
     rx: flume::Receiver<Bytes>,
@@ -166,7 +172,7 @@ impl UdpConnTask {
         }
     }
 
-    pub fn try_send(&mut self, socket: &mut SmolUdpSocket<'_>) -> io::Result<bool> {
+    pub fn try_send(&mut self, socket: &mut SmolUdpSocket<'_>) -> Result<bool, SmolError> {
         let mut has_activity = false;
         // Send data
         if socket.can_send() {
@@ -181,11 +187,11 @@ impl UdpConnTask {
                     {
                         self.last_active = Instant::now();
                     } else {
-                        return Err(ErrorKind::ConnectionAborted.into());
+                        return Err(SmolError::Aborted);
                     }
                 }
                 Err(TryRecvError::Empty) => {}
-                Err(_) => return Err(ErrorKind::ConnectionAborted.into()),
+                Err(TryRecvError::Disconnected) => return Err(SmolError::Disconnected),
             }
         }
         Ok(has_activity)
@@ -445,9 +451,17 @@ impl SmolStack {
             if socket.is_open() {
                 match item.try_send(socket) {
                     Ok(v) => has_activity |= v,
-                    Err(_) => {
+                    Err(SmolError::Aborted) => {
                         socket.close();
                         item.abort_handle.cancel();
+                    }
+                    Err(SmolError::Disconnected) => {
+                        // send side has closed
+                        // if don't received any data in 30s, close the socket
+                        if item.last_active.elapsed() > Duration::from_secs(30) {
+                            socket.close();
+                            item.abort_handle.cancel();
+                        }
                     }
                 }
                 // this async is a channel operation
