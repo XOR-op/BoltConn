@@ -190,13 +190,15 @@ impl Endpoint {
         {
             let stop_send = stop_send.clone();
             let indi_write = indi_write.clone();
+            let name = config.name.clone();
             tokio::spawn(async move {
                 loop {
                     if last_active.lock().await.elapsed() > timeout {
                         indi_write.store(false, Ordering::Relaxed);
                         let _ = stop_send.send(());
                         tracing::debug!(
-                            "[WireGuard] Stop inactive tunnel after for {}s.",
+                            "[WireGuard] Stop inactive tunnel #{} after for {}s.",
+                            name,
                             timeout.as_secs()
                         );
                         break;
