@@ -123,6 +123,10 @@ impl DispatchingBuilder {
             "REJECT".into(),
             Arc::new(Proxy::new("REJECT", ProxyImpl::Reject)),
         );
+        builder.proxies.insert(
+            "BLACKHOLE".into(),
+            Arc::new(Proxy::new("BLACKHOLE", ProxyImpl::BlackHole)),
+        );
         builder
     }
 

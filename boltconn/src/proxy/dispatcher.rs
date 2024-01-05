@@ -22,6 +22,11 @@ use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 
+enum BlockType {
+    Reject,
+    BlackHole,
+}
+
 pub struct Dispatcher {
     iface_name: String,
     dns: Arc<Dns>,
@@ -91,9 +96,6 @@ impl Dispatcher {
                 )),
                 OutboundType::Direct,
             ),
-            ProxyImpl::Reject => {
-                return Err(());
-            }
             ProxyImpl::Http(cfg) => (
                 Box::new(HttpOutbound::new(
                     iface_name,
@@ -144,6 +146,7 @@ impl Dispatcher {
                 tracing::warn!("Nested chain unsupported");
                 return Err(());
             }
+            ProxyImpl::BlackHole | ProxyImpl::Reject => return Err(()),
         })
     }
 
@@ -215,19 +218,25 @@ impl Dispatcher {
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
         let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
-            if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
-                (
+            match proxy_config.as_ref() {
+                ProxyImpl::Chain(vec) => (
                     Box::new(self.create_chain(vec, src_addr, &dst_addr, iface_name)?),
                     OutboundType::Chain,
-                )
-            } else {
-                self.build_normal_outbound(
+                ),
+                ProxyImpl::BlackHole => {
+                    tokio::spawn(async {
+                        tokio::time::interval(Duration::from_secs(30)).tick().await;
+                        drop(stream)
+                    });
+                    return Err(());
+                }
+                _ => self.build_normal_outbound(
                     iface_name,
                     proxy_config.as_ref(),
                     src_addr,
                     &dst_addr,
                     conn_info.resolved_dst.as_ref(),
-                )?
+                )?,
             };
 
         // conn info
@@ -349,25 +358,30 @@ impl Dispatcher {
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         mut conn_info: ConnInfo,
-    ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), ()> {
+    ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), BlockType> {
         let (proxy_config, iface) = self.dispatching.load().matches(&mut conn_info, true).await;
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
         let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
-            if let ProxyImpl::Chain(vec) = proxy_config.as_ref() {
-                (
-                    Box::new(self.create_chain(vec, src_addr, &dst_addr, iface_name)?),
+            match proxy_config.as_ref() {
+                ProxyImpl::Chain(vec) => (
+                    Box::new(
+                        self.create_chain(vec, src_addr, &dst_addr, iface_name)
+                            .map_err(|_| BlockType::Reject)?,
+                    ),
                     OutboundType::Chain,
-                )
-            } else {
-                self.build_normal_outbound(
-                    iface_name,
-                    proxy_config.as_ref(),
-                    src_addr,
-                    &dst_addr,
-                    conn_info.resolved_dst.as_ref(),
-                )?
+                ),
+                ProxyImpl::BlackHole => return Err(BlockType::BlackHole),
+                _ => self
+                    .build_normal_outbound(
+                        iface_name,
+                        proxy_config.as_ref(),
+                        src_addr,
+                        &dst_addr,
+                        conn_info.resolved_dst.as_ref(),
+                    )
+                    .map_err(|_| BlockType::Reject)?,
             };
         // conn info
         let abort_handle = ConnAbortHandle::new();
@@ -429,7 +443,18 @@ impl Dispatcher {
             process_info: proc_info,
         };
         let (outbounding, info, abort_handle) =
-            self.route_udp(src_addr, dst_addr, conn_info).await?;
+            match self.route_udp(src_addr, dst_addr, conn_info).await {
+                Ok(r) => r,
+                Err(BlockType::Reject) => return Err(()),
+                Err(BlockType::BlackHole) => {
+                    tokio::spawn(async {
+                        tokio::time::interval(Duration::from_secs(30)).tick().await;
+                        drop(send_rx);
+                        drop(recv_tx);
+                    });
+                    return Err(());
+                }
+            };
 
         let mut handles = Vec::new();
 
@@ -485,7 +510,17 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         let (outbounding, info, abort_handle) =
-            self.route_udp(src_addr, dst_addr, conn_info).await?;
+            match self.route_udp(src_addr, dst_addr, conn_info).await {
+                Ok(r) => r,
+                Err(BlockType::Reject) => return Err(()),
+                Err(BlockType::BlackHole) => {
+                    tokio::spawn(async {
+                        tokio::time::interval(Duration::from_secs(30)).tick().await;
+                        drop(socket);
+                    });
+                    return Err(());
+                }
+            };
         let mut handles = Vec::new();
 
         let (adapter_conn, adapter_next) = AddrConnector::new_pair(10);

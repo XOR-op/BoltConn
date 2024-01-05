@@ -52,6 +52,7 @@ impl Proxy {
 pub enum ProxyImpl {
     Direct,
     Reject,
+    BlackHole,
     Http(HttpConfig),
     Socks5(Socks5Config),
     Shadowsocks(ShadowSocksConfig),
@@ -65,6 +66,7 @@ impl ProxyImpl {
         match self {
             ProxyImpl::Direct => true,
             ProxyImpl::Reject => true,
+            ProxyImpl::BlackHole => true,
             ProxyImpl::Http(_) => false,
             ProxyImpl::Socks5(c) => c.udp,
             ProxyImpl::Shadowsocks(c) => c.udp,
@@ -79,6 +81,7 @@ impl ProxyImpl {
         match self {
             ProxyImpl::Direct => "direct",
             ProxyImpl::Reject => "reject",
+            ProxyImpl::BlackHole => "blackhole",
             ProxyImpl::Http(_) => "http",
             ProxyImpl::Socks5(_) => "socks5",
             ProxyImpl::Shadowsocks(_) => "shadowsocks",
@@ -91,7 +94,9 @@ impl ProxyImpl {
 
     pub fn server_addr(&self) -> Option<NetworkAddr> {
         match self {
-            ProxyImpl::Direct | ProxyImpl::Reject | ProxyImpl::Chain(_) => None,
+            ProxyImpl::Direct | ProxyImpl::Reject | ProxyImpl::BlackHole | ProxyImpl::Chain(_) => {
+                None
+            }
             ProxyImpl::Http(c) => Some(c.server_addr.clone()),
             ProxyImpl::Socks5(c) => Some(c.server_addr.clone()),
             ProxyImpl::Shadowsocks(c) => Some(match c.server_addr.clone() {
