@@ -331,11 +331,12 @@ impl SmolStack {
         remote_addr: SocketAddr,
     ) -> io::Result<SocketHandle> {
         // create socket resource
-        let tx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
-        let rx_buf = TcpSocketBuffer::new(vec![0u8; MAX_PKT_SIZE]);
+        let tx_buf = TcpSocketBuffer::new(vec![0u8; 48 * MAX_PKT_SIZE]);
+        let rx_buf = TcpSocketBuffer::new(vec![0u8; 48 * MAX_PKT_SIZE]);
         let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
         // Since we are behind kernel's TCP/IP stack, no second Nagle is needed.
         client_socket.set_nagle_enabled(false);
+        client_socket.set_ack_delay(None);
 
         // connect to remote
         client_socket
@@ -412,10 +413,14 @@ impl SmolStack {
         local_port: u16,
     ) -> io::Result<SocketHandle> {
         // create socket resource
-        let tx_buf =
-            UdpSocketBuffer::new(vec![UdpPacketMetadata::EMPTY; 16], vec![0u8; MAX_PKT_SIZE]);
-        let rx_buf =
-            UdpSocketBuffer::new(vec![UdpPacketMetadata::EMPTY; 16], vec![0u8; MAX_PKT_SIZE]);
+        let tx_buf = UdpSocketBuffer::new(
+            vec![UdpPacketMetadata::EMPTY; 256],
+            vec![0u8; 32 * MAX_PKT_SIZE],
+        );
+        let rx_buf = UdpSocketBuffer::new(
+            vec![UdpPacketMetadata::EMPTY; 256],
+            vec![0u8; 32 * MAX_PKT_SIZE],
+        );
         let mut client_socket = SmolUdpSocket::new(rx_buf, tx_buf);
 
         client_socket
