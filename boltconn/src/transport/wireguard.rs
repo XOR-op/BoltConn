@@ -132,8 +132,12 @@ impl WireguardTunnel {
         let len = self.inner.outbound_recv(buf).await?;
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
-        let mut guard = self.tunnel.lock().await;
-        Ok(match guard.decapsulate(None, &buf[..len], wg_buf) {
+        let result = self
+            .tunnel
+            .lock()
+            .await
+            .decapsulate(None, &buf[..len], wg_buf);
+        Ok(match result {
             TunnResult::WriteToTunnelV4(data, _addr) => {
                 let data = BytesMut::from_iter(data.iter());
                 smol_tx.send_async(data).await?;
@@ -149,7 +153,9 @@ impl WireguardTunnel {
             TunnResult::WriteToNetwork(data) => {
                 self.inner.outbound_send(data).await?;
                 // flush pending queue
-                while let TunnResult::WriteToNetwork(data) = guard.decapsulate(None, &[], buf) {
+                while let TunnResult::WriteToNetwork(data) =
+                    self.tunnel.lock().await.decapsulate(None, &[], buf)
+                {
                     self.inner.outbound_send(data).await?;
                 }
                 false
@@ -199,6 +205,7 @@ impl WireguardTunnel {
                         Ok(false)
                     }
                     TunnResult::WriteToNetwork(data) => {
+                        drop(guard);
                         if let Err(e) = self.inner.outbound_send(data).await {
                             tracing::warn!("Failed to write to network: {}", e);
                             Err(e)
@@ -213,6 +220,7 @@ impl WireguardTunnel {
                 }
             }
             TunnResult::WriteToNetwork(packet) => {
+                drop(guard);
                 if let Err(e) = self.inner.outbound_send(packet).await {
                     tracing::warn!("Failed to send timer message: {}", e);
                     Err(e)
