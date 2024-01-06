@@ -407,6 +407,7 @@ impl DispatchingBuilder {
                     dns,
                     dns_preference,
                     reserved,
+                    over_tcp,
                 } => {
                     if local_addr.is_none() && local_addr_v6.is_none() {
                         return Err(anyhow::anyhow!(
@@ -474,6 +475,7 @@ impl DispatchingBuilder {
                             dns,
                             dns_preference: *dns_preference,
                             reserved: *reserved,
+                            over_tcp: *over_tcp,
                         }),
                     ))
                 }

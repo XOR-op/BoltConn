@@ -18,6 +18,7 @@ mod socks5;
 mod tcp_adapter;
 mod trojan;
 mod udp_adapter;
+mod udp_over_tcp;
 mod wireguard;
 
 pub use self::http::*;

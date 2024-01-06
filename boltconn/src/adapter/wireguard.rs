@@ -2,6 +2,7 @@ use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, O
 use std::collections::HashMap;
 use std::future::Future;
 
+use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
 use crate::common::{io_err, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
@@ -267,18 +268,23 @@ impl WireguardManager {
                 }
             } else {
                 let server_addr = get_dst(&self.endpoint_resolver, &config.endpoint).await?;
-                let outbound = adapter.unwrap_or(AdapterOrSocket::Socket(match server_addr {
-                    SocketAddr::V4(_) => {
-                        let socket = Egress::new(&self.iface).udpv4_socket().await?;
-                        socket.connect(server_addr).await?;
-                        socket
-                    }
-                    SocketAddr::V6(_) => {
-                        let socket = Egress::new(&self.iface).udpv6_socket().await?;
-                        socket.connect(server_addr).await?;
-                        socket
-                    }
-                }));
+                let outbound = adapter.unwrap_or(if config.over_tcp {
+                    let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
+                    AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(stream, server_addr)?))
+                } else {
+                    AdapterOrSocket::Socket(match server_addr {
+                        SocketAddr::V4(_) => {
+                            let socket = Egress::new(&self.iface).udpv4_socket().await?;
+                            socket.connect(server_addr).await?;
+                            socket
+                        }
+                        SocketAddr::V6(_) => {
+                            let socket = Egress::new(&self.iface).udpv6_socket().await?;
+                            socket.connect(server_addr).await?;
+                            socket
+                        }
+                    })
+                });
                 let ep = Endpoint::new(
                     outbound,
                     config,

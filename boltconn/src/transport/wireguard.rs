@@ -34,6 +34,7 @@ pub struct WireguardConfig {
     pub dns_preference: DnsPreference,
     // reserved fields
     pub reserved: Option<[u8; 3]>,
+    pub over_tcp: bool,
 }
 
 impl Debug for WireguardConfig {

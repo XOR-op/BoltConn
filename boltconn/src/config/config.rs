@@ -141,6 +141,8 @@ pub enum RawProxyLocalCfg {
         preshared_key: Option<String>,
         keepalive: Option<u16>,
         reserved: Option<[u8; 3]>,
+        #[serde(alias = "over-tcp", default = "default_false")]
+        over_tcp: bool,
     },
 }
 
