@@ -1,8 +1,10 @@
 use chrono::Timelike;
 use std::collections::VecDeque;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
+use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::{format::Writer, time::FormatTime, MakeWriter};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -111,7 +113,11 @@ pub fn init_tracing(logger: &StreamLoggerSend) -> anyhow::Result<()> {
         tracing_subscriber::registry()
             .with(stdout_layer)
             .with(stream_layer)
-            .with(EnvFilter::new("boltconn=trace"))
+            .with(
+                EnvFilter::builder()
+                    .with_default_directive(Directive::from_str("boltconn=trace")?)
+                    .from_env_lossy(),
+            )
             .init();
         Ok(())
     }
