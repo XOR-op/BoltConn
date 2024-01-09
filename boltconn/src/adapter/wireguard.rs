@@ -48,7 +48,7 @@ impl Endpoint {
         // control conn
         let (stop_send, mut stop_recv) = broadcast::channel(1);
 
-        let (mut wg_smol_tx, wg_smol_rx) = flume::unbounded();
+        let (mut wg_smol_tx, wg_smol_rx) = flume::bounded(4096);
         let (smol_wg_tx, mut smol_wg_rx) = flume::unbounded();
         let tunnel = Arc::new(
             WireguardTunnel::new(outbound, config, endpoint_resolver, notify.clone()).await?,
@@ -175,10 +175,17 @@ impl Endpoint {
                     immediate_next_loop |= stack_handle.poll_all_udp().await;
                     stack_handle.purge_closed_tcp();
                     stack_handle.purge_timeout_udp();
+                    let wait_time = if immediate_next_loop {
+                        Duration::from_secs(0)
+                    } else {
+                        stack_handle
+                            .suggested_wait_time()
+                            .unwrap_or(Duration::from_secs(3))
+                    };
                     drop(stack_handle);
                     if !immediate_next_loop {
                         select! {
-                            _ = tokio::time::sleep(Duration::from_secs(3)) =>{}
+                            _ = tokio::time::sleep(wait_time) =>{}
                             _ = notifier.notified() =>{}
                         }
                     }

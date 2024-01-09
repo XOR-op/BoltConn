@@ -57,11 +57,11 @@ impl TcpConnTask {
             tx: back_tx,
             rx: mut back_rx,
         } = connector;
-        let (tx, rx) = flume::unbounded();
+        let (tx, rx) = flume::bounded(4096);
         // notify smol when new message comes
         tokio::spawn(async move {
             while let Some(buf) = back_rx.recv().await {
-                let _ = tx.send(buf);
+                let _ = tx.send_async(buf).await;
                 notify.notify_one();
             }
         });
@@ -77,7 +77,7 @@ impl TcpConnTask {
     pub fn try_send(&mut self, socket: &mut SmolTcpSocket<'_>) -> Result<bool, SmolError> {
         let mut has_activity = false;
         // Send data
-        if socket.can_send() {
+        while socket.can_send() {
             if let Some((buf, start)) = self.remain_to_send.take() {
                 if let Ok(sent) = socket.send_slice(&buf.as_ref()[start..]) {
                     // successfully sent
@@ -102,7 +102,7 @@ impl TcpConnTask {
                             return Err(SmolError::Aborted);
                         }
                     }
-                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return Err(SmolError::Disconnected),
                 }
             }
@@ -115,16 +115,17 @@ impl TcpConnTask {
 
     pub async fn try_recv(&self, socket: &mut SmolTcpSocket<'_>) -> bool {
         // Receive data
-        if socket.can_recv() && self.back_tx.capacity() > 0 {
+        let mut has_activity = false;
+        while socket.can_recv() && self.back_tx.capacity() > 0 {
             let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
             if let Ok(size) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
                 unsafe { buf.advance_mut(size) };
                 // must not fail because there is only 1 sender
                 let _ = self.back_tx.send(buf.freeze()).await;
-                return true;
+                has_activity = true;
             }
         }
-        false
+        has_activity
     }
 }
 
@@ -148,7 +149,7 @@ impl UdpConnTask {
             tx: back_tx,
             rx: mut back_rx,
         } = connector;
-        let (tx, rx) = flume::unbounded();
+        let (tx, rx) = flume::bounded(4096);
         tokio::spawn(async move {
             while let Some((buf, dst)) = back_rx.recv().await {
                 if let Some(dst) = match dst {
@@ -158,7 +159,7 @@ impl UdpConnTask {
                         .await
                         .map(|ip| SocketAddr::new(ip, port)),
                 } {
-                    let _ = tx.send((buf, dst));
+                    let _ = tx.send_async((buf, dst)).await;
                     notify.notify_one();
                 }
             }
@@ -175,7 +176,7 @@ impl UdpConnTask {
     pub fn try_send(&mut self, socket: &mut SmolUdpSocket<'_>) -> Result<bool, SmolError> {
         let mut has_activity = false;
         // Send data
-        if socket.can_send() {
+        while socket.can_send() {
             // fetch new data
             match self.rx.try_recv() {
                 // todo: full-cone NAT
@@ -190,7 +191,7 @@ impl UdpConnTask {
                         return Err(SmolError::Aborted);
                     }
                 }
-                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return Err(SmolError::Disconnected),
             }
         }
@@ -199,7 +200,8 @@ impl UdpConnTask {
 
     pub async fn try_recv(&mut self, socket: &mut SmolUdpSocket<'_>) -> bool {
         // Receive data
-        if socket.can_recv() && self.back_tx.capacity() > 0 {
+        let mut has_activity = false;
+        while socket.can_recv() && self.back_tx.capacity() > 0 {
             let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
             if let Ok((size, ep)) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
                 unsafe { buf.advance_mut(size) };
@@ -208,11 +210,11 @@ impl UdpConnTask {
                     NetworkAddr::Raw(SocketAddr::new(ep.endpoint.addr.into(), ep.endpoint.port));
                 // must not fail because there is only 1 sender
                 let _ = self.back_tx.send((buf.freeze(), src_addr)).await;
-                return true;
+                has_activity = true;
                 // discard mismatched packet
             }
         }
-        false
+        has_activity
     }
 }
 
@@ -268,6 +270,12 @@ impl SmolStack {
             &mut self.ip_device,
             &mut self.socket_set,
         )
+    }
+
+    pub fn suggested_wait_time(&mut self) -> Option<Duration> {
+        self.iface
+            .poll_delay(SmolInstant::now(), &self.socket_set)
+            .map(|du| Duration::from_micros(du.total_micros()))
     }
 
     pub fn get_dns(&self) -> Arc<GenericDns<SmolDnsProvider>> {
@@ -546,9 +554,17 @@ impl Device for VirtualIpDevice {
     }
 
     fn transmit(&mut self, _timestamp: SmolInstant) -> Option<Self::TxToken<'_>> {
-        Some(VirtualTxToken {
-            sender: self.outbound.clone(),
-        })
+        if self
+            .outbound
+            .capacity()
+            .map_or(self.outbound.len() < 4096, |cap| cap > self.outbound.len())
+        {
+            Some(VirtualTxToken {
+                sender: self.outbound.clone(),
+            })
+        } else {
+            None
+        }
     }
 
     fn capabilities(&self) -> DeviceCapabilities {

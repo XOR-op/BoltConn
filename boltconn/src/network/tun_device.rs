@@ -273,7 +273,7 @@ impl TunDevice {
                         let start_offset = 0;
                         pkt.into_bytes_mut().freeze().slice(start_offset..)
                     };
-                    let _ = self.udp_tx.send(pkt);
+                    let _ = self.udp_tx.send_async(pkt).await;
                 }
             }
             IpProtocol::Icmp => {

@@ -116,8 +116,8 @@ impl App {
         };
 
         // Create TUN
-        let (tun_udp_tx, tun_udp_rx) = flume::unbounded();
-        let (udp_tun_tx, udp_tun_rx) = flume::unbounded();
+        let (tun_udp_tx, tun_udp_rx) = flume::bounded(4096);
+        let (udp_tun_tx, udp_tun_rx) = flume::bounded(4096);
         let tun = {
             let mut tun = TunDevice::open(
                 manager.clone(),
