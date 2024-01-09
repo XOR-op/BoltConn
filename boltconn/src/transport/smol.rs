@@ -74,7 +74,7 @@ impl TcpConnTask {
         }
     }
 
-    pub fn try_send(&mut self, socket: &mut SmolTcpSocket<'_>) -> io::Result<bool> {
+    pub fn try_send(&mut self, socket: &mut SmolTcpSocket<'_>) -> Result<bool, SmolError> {
         let mut has_activity = false;
         // Send data
         if socket.can_send() {
@@ -86,7 +86,7 @@ impl TcpConnTask {
                         self.remain_to_send = Some((buf, sent + start));
                     }
                 } else {
-                    return Err(ErrorKind::ConnectionAborted.into());
+                    return Err(SmolError::Aborted);
                 }
             } else {
                 // fetch new data
@@ -99,11 +99,11 @@ impl TcpConnTask {
                                 self.remain_to_send = Some((buf, sent));
                             }
                         } else {
-                            return Err(ErrorKind::ConnectionAborted.into());
+                            return Err(SmolError::Aborted);
                         }
                     }
                     Err(TryRecvError::Empty) => {}
-                    Err(_) => return Err(ErrorKind::ConnectionAborted.into()),
+                    Err(TryRecvError::Disconnected) => return Err(SmolError::Disconnected),
                 }
             }
         }
