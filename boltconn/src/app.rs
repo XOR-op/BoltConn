@@ -53,11 +53,6 @@ impl App {
         let stream_logger = StreamLoggerSend::new();
         external::init_tracing(&stream_logger)?;
 
-        // interface
-        let (_, real_iface_name) =
-            get_default_v4_route().map_err(|e| anyhow!("Failed to get default route: {}", e))?;
-        let fake_dns_server = "198.18.99.88".parse().unwrap();
-
         // setup Unix socket
         let uds_listener = Arc::new(UnixListenerGuard::new("/var/run/boltconn.sock")?);
 
@@ -74,9 +69,14 @@ impl App {
             }
         };
 
+        let fake_dns_server = "198.18.99.88".parse().unwrap();
+
         let outbound_iface = if config.interface != "auto" {
+            tracing::info!("Use pre-configured interface: {}", config.interface);
             config.interface.clone()
         } else {
+            let (_, real_iface_name) = get_default_v4_route()
+                .map_err(|e| anyhow!("Failed to get default route: {}", e))?;
             tracing::info!("Auto detected interface: {}", real_iface_name);
             real_iface_name
         };
