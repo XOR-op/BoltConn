@@ -1,4 +1,5 @@
 use crate::dispatch::InboundInfo;
+use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::manager::SessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use crate::Dns;
@@ -56,7 +57,7 @@ impl TunTcpInbound {
                         port: dst_addr.port(),
                     },
                 };
-                if self
+                match self
                     .dispatcher
                     .submit_tcp(
                         InboundInfo::Tun,
@@ -66,10 +67,11 @@ impl TunTcpInbound {
                         socket,
                     )
                     .await
-                    .is_err()
                 {
-                    indicator.store(0, Ordering::Relaxed)
-                };
+                    Ok(_) => {}
+                    Err(DispatchError::BlackHole) => {}
+                    Err(_) => indicator.store(0, Ordering::Relaxed),
+                }
             } else {
                 tracing::warn!("Unexpected: no record found by port {}", addr.port())
             }

@@ -2,6 +2,7 @@ use crate::network::dns::Dns;
 use crate::network::packet::transport_layer::create_raw_udp_pkt;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
+use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::{Dispatcher, NetworkAddr, SessionManager};
 use bytes::Bytes;
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, UdpPacket};
@@ -161,7 +162,7 @@ impl TunUdpInbound {
                 let tun_tx = self.tun_tx.clone();
                 tokio::spawn(Self::back_prop(recv_rx, tun_tx, src));
 
-                if self
+                match self
                     .dispatcher
                     .submit_tun_udp_session(
                         src,
@@ -172,10 +173,10 @@ impl TunUdpInbound {
                         probe.clone(),
                     )
                     .await
-                    .is_err()
                 {
-                    probe.store(false, Ordering::Relaxed)
-                };
+                    Ok(_) | Err(DispatchError::BlackHole) => {}
+                    Err(_) => probe.store(false, Ordering::Relaxed),
+                }
                 true
             }
         }

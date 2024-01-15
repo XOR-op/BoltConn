@@ -22,9 +22,11 @@ use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 
-enum BlockType {
+pub(crate) enum DispatchError {
     Reject,
     BlackHole,
+    BadMitmCert,
+    BadChain,
 }
 
 pub struct Dispatcher {
@@ -200,7 +202,7 @@ impl Dispatcher {
         dst_addr: NetworkAddr,
         indicator: Arc<AtomicU8>,
         stream: TcpStream,
-    ) -> Result<(), ()> {
+    ) -> Result<(), DispatchError> {
         let process_info = process::get_pid(src_addr, process::NetworkType::Tcp)
             .map_or(None, process::get_process_info);
         let mut conn_info = ConnInfo {
@@ -220,23 +222,28 @@ impl Dispatcher {
         let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
             match proxy_config.as_ref() {
                 ProxyImpl::Chain(vec) => (
-                    Box::new(self.create_chain(vec, src_addr, &dst_addr, iface_name)?),
+                    Box::new(
+                        self.create_chain(vec, src_addr, &dst_addr, iface_name)
+                            .map_err(|_| DispatchError::BadChain)?,
+                    ),
                     OutboundType::Chain,
                 ),
                 ProxyImpl::BlackHole => {
-                    tokio::spawn(async {
-                        tokio::time::interval(Duration::from_secs(30)).tick().await;
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
                         drop(stream)
                     });
-                    return Err(());
+                    return Err(DispatchError::BlackHole);
                 }
-                _ => self.build_normal_outbound(
-                    iface_name,
-                    proxy_config.as_ref(),
-                    src_addr,
-                    &dst_addr,
-                    conn_info.resolved_dst.as_ref(),
-                )?,
+                _ => self
+                    .build_normal_outbound(
+                        iface_name,
+                        proxy_config.as_ref(),
+                        src_addr,
+                        &dst_addr,
+                        conn_info.resolved_dst.as_ref(),
+                    )
+                    .map_err(|_| DispatchError::Reject)?,
             };
 
         // conn info
@@ -321,7 +328,7 @@ impl Dispatcher {
                                             "[Dispatcher] sign certificate failed: {}",
                                             err
                                         );
-                                        return Err(());
+                                        return Err(DispatchError::BadMitmCert);
                                     }
                                 };
                                 tokio::spawn(async move {
@@ -358,7 +365,7 @@ impl Dispatcher {
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         mut conn_info: ConnInfo,
-    ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), BlockType> {
+    ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), DispatchError> {
         let (proxy_config, iface) = self.dispatching.load().matches(&mut conn_info, true).await;
         let iface_name = iface
             .as_ref()
@@ -368,11 +375,11 @@ impl Dispatcher {
                 ProxyImpl::Chain(vec) => (
                     Box::new(
                         self.create_chain(vec, src_addr, &dst_addr, iface_name)
-                            .map_err(|_| BlockType::Reject)?,
+                            .map_err(|_| DispatchError::Reject)?,
                     ),
                     OutboundType::Chain,
                 ),
-                ProxyImpl::BlackHole => return Err(BlockType::BlackHole),
+                ProxyImpl::BlackHole => return Err(DispatchError::BlackHole),
                 _ => self
                     .build_normal_outbound(
                         iface_name,
@@ -381,7 +388,7 @@ impl Dispatcher {
                         &dst_addr,
                         conn_info.resolved_dst.as_ref(),
                     )
-                    .map_err(|_| BlockType::Reject)?,
+                    .map_err(|_| DispatchError::Reject)?,
             };
         // conn info
         let abort_handle = ConnAbortHandle::new();
@@ -432,7 +439,7 @@ impl Dispatcher {
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
         indicator: Arc<AtomicBool>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), DispatchError> {
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
@@ -445,15 +452,15 @@ impl Dispatcher {
         let (outbounding, info, abort_handle) =
             match self.route_udp(src_addr, dst_addr, conn_info).await {
                 Ok(r) => r,
-                Err(BlockType::Reject) => return Err(()),
-                Err(BlockType::BlackHole) => {
-                    tokio::spawn(async {
-                        tokio::time::interval(Duration::from_secs(30)).tick().await;
+                Err(DispatchError::BlackHole) => {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
                         drop(send_rx);
                         drop(recv_tx);
                     });
-                    return Err(());
+                    return Err(DispatchError::BlackHole);
                 }
+                Err(e) => return Err(e),
             };
 
         let mut handles = Vec::new();
@@ -494,7 +501,7 @@ impl Dispatcher {
         dst_addr: NetworkAddr,
         indicator: Arc<AtomicBool>,
         socket: UdpSocket,
-    ) -> Result<(), ()> {
+    ) -> Result<(), DispatchError> {
         let process_info =
             process::get_pid(src_addr, NetworkType::Udp).map_or(None, process::get_process_info);
         let conn_info = ConnInfo {
@@ -512,14 +519,14 @@ impl Dispatcher {
         let (outbounding, info, abort_handle) =
             match self.route_udp(src_addr, dst_addr, conn_info).await {
                 Ok(r) => r,
-                Err(BlockType::Reject) => return Err(()),
-                Err(BlockType::BlackHole) => {
+                Err(DispatchError::BlackHole) => {
                     tokio::spawn(async {
                         tokio::time::interval(Duration::from_secs(30)).tick().await;
                         drop(socket);
                     });
-                    return Err(());
+                    return Err(DispatchError::BlackHole);
                 }
+                Err(e) => return Err(e),
             };
         let mut handles = Vec::new();
 
