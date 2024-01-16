@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
-use crate::common::{io_err, StreamOutboundTrait, MAX_PKT_SIZE};
+use crate::common::{io_err, local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
@@ -164,11 +164,12 @@ impl Endpoint {
         let smol_drive = {
             let smol_stack = smol_stack.clone();
             let notifier = notify.clone();
+            let (abort_canary, canary_clone) = AbortCanary::pair();
 
-            tokio::spawn(async move {
+            local_async_run(async move {
                 let mut immediate_next_loop = false;
                 notifier.notified().await;
-                loop {
+                while abort_canary.alive() {
                     let mut stack_handle = smol_stack.lock().await;
                     stack_handle.drive_iface();
                     immediate_next_loop |= stack_handle.poll_all_tcp().await;
@@ -191,7 +192,8 @@ impl Endpoint {
                     }
                     immediate_next_loop = false;
                 }
-            })
+            });
+            canary_clone
         };
 
         // timeout inactive tunnel
