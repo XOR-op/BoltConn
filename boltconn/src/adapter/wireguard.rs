@@ -111,16 +111,16 @@ impl Endpoint {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 let mut wg_buf = [0u8; MAX_PKT_SIZE];
                 loop {
-                    if let Ok(newer) = tunnel
+                    match tunnel
                         .receive_incoming_packet(&mut wg_smol_tx, &mut buf, &mut wg_buf)
                         .await
                     {
-                        if newer {
-                            *timer.lock().await = Instant::now();
+                        Ok(true) => *timer.lock().await = Instant::now(),
+                        Ok(false) => {}
+                        Err(_) => {
+                            let _ = stop_send.send(());
+                            return;
                         }
-                    } else {
-                        let _ = stop_send.send(());
-                        return;
                     }
                 }
             })
