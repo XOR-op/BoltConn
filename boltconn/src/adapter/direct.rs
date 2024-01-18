@@ -82,7 +82,7 @@ impl Outbound for DirectOutbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
         return Err(io::ErrorKind::InvalidData.into());
     }
@@ -103,7 +103,7 @@ impl Outbound for DirectOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         tracing::error!("spawn_udp_with_outbound() should not be called with DirectOutbound");
         return Err(io::ErrorKind::InvalidData.into());
     }

@@ -167,13 +167,14 @@ pub trait Outbound: Send + Sync {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>>;
 
+    /// Return whether outbound is used
     async fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()>;
+    ) -> io::Result<bool>;
 
     /// Run with tokio::spawn.
     fn spawn_udp(
@@ -183,6 +184,7 @@ pub trait Outbound: Send + Sync {
         tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>>;
 
+    /// Return whether outbound is used
     async fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
@@ -190,7 +192,7 @@ pub trait Outbound: Send + Sync {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<()>;
+    ) -> io::Result<bool>;
 }
 
 fn empty_handle() -> JoinHandle<io::Result<()>> {

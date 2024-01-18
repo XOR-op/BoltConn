@@ -125,7 +125,7 @@ impl Outbound for HttpOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid HTTP proxy tcp spawn");
             return Err(io::ErrorKind::InvalidData.into());
@@ -133,7 +133,8 @@ impl Outbound for HttpOutbound {
         self.clone()
             .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
             .await
-            .map_err(|e| io_err(e.to_string().as_str()))
+            .map_err(|e| io_err(e.to_string().as_str()))?;
+        Ok(true)
     }
 
     fn spawn_udp(
@@ -153,7 +154,7 @@ impl Outbound for HttpOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         tracing::error!("spawn_udp_with_outbound() should not be called with HttpOutbound");
         return Err(io::ErrorKind::InvalidData.into());
     }

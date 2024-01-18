@@ -159,7 +159,7 @@ impl Outbound for SSOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Shadowsocks tcp spawn");
             return Err(io::ErrorKind::InvalidData.into());
@@ -167,7 +167,8 @@ impl Outbound for SSOutbound {
         let server_addr = self.get_server_addr().await?;
         self.clone()
             .run_tcp(inbound, tcp_outbound.unwrap(), server_addr, abort_handle)
-            .await
+            .await?;
+        Ok(true)
     }
 
     fn spawn_udp(
@@ -206,7 +207,7 @@ impl Outbound for SSOutbound {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Shadowsocks UDP outbound ancestor");
             return Err(io::ErrorKind::InvalidData.into());
@@ -221,7 +222,8 @@ impl Outbound for SSOutbound {
                 abort_handle,
                 tunnel_only,
             )
-            .await
+            .await?;
+        Ok(true)
     }
 }
 

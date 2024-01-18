@@ -156,14 +156,15 @@ impl Outbound for Socks5Outbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Socks5 tcp spawn");
             return Err(io::ErrorKind::InvalidData.into());
         }
         self.clone()
             .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
-            .await
+            .await?;
+        Ok(true)
     }
 
     fn spawn_udp(
@@ -192,7 +193,7 @@ impl Outbound for Socks5Outbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         tracing::error!("Socks5 does not support UDP chain");
         return Err(io::ErrorKind::InvalidData.into());
     }

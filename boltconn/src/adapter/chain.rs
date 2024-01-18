@@ -33,17 +33,21 @@ impl ChainOutbound {
     ) -> JoinHandle<io::Result<()>> {
         tokio::spawn(async move {
             let mut not_first_jump = false;
+            let mut need_next_jump = true;
             let (first_part, last_one) = self.chains.split_at(self.chains.len() - 1);
 
             // connect proxies
             for tunnel in first_part {
+                if !need_next_jump {
+                    return Ok(());
+                }
                 if use_tcp {
                     let inbound = inbound_tcp_container.take().unwrap();
                     if tunnel.outbound_type().tcp_transfer_type() == TcpTransferType::TcpOverUdp {
                         use_tcp = false;
                         let (inner, outer) = AddrConnector::new_pair(10);
                         inbound_udp_container = Some(outer);
-                        tunnel
+                        need_next_jump = tunnel
                             .spawn_tcp_with_outbound(
                                 inbound,
                                 None,
@@ -55,7 +59,7 @@ impl ChainOutbound {
                         let (inner, outer) = Connector::new_pair(10);
                         let chan = Box::new(DuplexChan::new(inner));
                         inbound_tcp_container = Some(outer);
-                        tunnel
+                        need_next_jump = tunnel
                             .spawn_tcp_with_outbound(
                                 inbound,
                                 Some(chan),
@@ -72,7 +76,7 @@ impl ChainOutbound {
                         let (inner, outer) = Connector::new_pair(10);
                         let chan = Box::new(DuplexChan::new(inner));
                         inbound_tcp_container = Some(outer);
-                        tunnel
+                        need_next_jump = tunnel
                             .spawn_udp_with_outbound(
                                 inbound,
                                 Some(chan),
@@ -84,7 +88,7 @@ impl ChainOutbound {
                     } else {
                         let (inner, outer) = AddrConnector::new_pair(10);
                         inbound_udp_container = Some(outer);
-                        tunnel
+                        need_next_jump = tunnel
                             .spawn_udp_with_outbound(
                                 inbound,
                                 None,
@@ -96,6 +100,10 @@ impl ChainOutbound {
                     };
                 }
                 not_first_jump = true;
+            }
+
+            if !need_next_jump {
+                return Ok(());
             }
 
             // connect last one
@@ -132,7 +140,7 @@ impl Outbound for ChainOutbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with ChainOutbound");
         return Err(io::ErrorKind::InvalidData.into());
     }
@@ -153,7 +161,7 @@ impl Outbound for ChainOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         tracing::error!("spawn_udp_with_outbound() should not be called with ChainUdpOutbound");
         return Err(io::ErrorKind::InvalidData.into());
     }
