@@ -442,14 +442,19 @@ impl SmolStack {
         // no double entry here, so theoretically there is no deadlock related to DashMap
         for mut item in self.tcp_conn.iter_mut() {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(item.handle);
-            if socket.state() != TcpState::Closed {
+            if socket.state() == TcpState::Established || socket.state() == TcpState::SynSent {
                 match item.try_send(socket) {
                     Ok(v) => has_activity |= v,
-                    Err(_) => {
+                    Err(SmolError::Disconnected) => {
+                        socket.close();
+                    }
+                    Err(SmolError::Aborted) => {
                         socket.close();
                         item.abort_handle.cancel();
                     }
                 }
+            }
+            if socket.state() != TcpState::Closed {
                 // this async is a channel operation
                 has_activity |= item.try_recv(socket).await;
             }
