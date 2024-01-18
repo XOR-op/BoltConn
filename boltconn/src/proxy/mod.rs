@@ -124,9 +124,7 @@ pub async fn latency_test(
         }
     };
 
-    let abort_handle = ConnAbortHandle::new();
-    abort_handle.fulfill(vec![]);
-    let proxy_handle = creator.spawn_tcp(inbound, abort_handle.clone());
+    let proxy_handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
 
     // connect to the url
     let http_handle: JoinHandle<anyhow::Result<Latency>> = tokio::spawn(async move {

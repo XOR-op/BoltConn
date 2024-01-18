@@ -39,14 +39,12 @@ impl HttpIntercept {
         req: Request<Body>,
         ctx: ModifierContext,
     ) -> anyhow::Result<Response<Body>> {
-        let abort_handle = ConnAbortHandle::new();
-        abort_handle.fulfill(vec![]);
         let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
         if let Some(resp) = fake_resp {
             return Ok(resp);
         }
         let (inbound, outbound) = Connector::new_pair(10);
-        let _handle = creator.spawn_tcp(inbound, abort_handle.clone());
+        let _handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
         let (mut sender, connection) = conn::Builder::new()
             .handshake(DuplexChan::new(outbound))
             .await?;

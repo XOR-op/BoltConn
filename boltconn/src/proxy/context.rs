@@ -168,6 +168,13 @@ impl ConnAbortHandle {
         }))
     }
 
+    pub fn placeholder() -> Self {
+        Self(Arc::new(AbortHandle {
+            handles: ArcSwap::new(Arc::new(vec![])),
+            state: AtomicU8::new(READY),
+        }))
+    }
+
     pub fn cancel(&self) {
         loop {
             let state = self.0.state.load(Ordering::Acquire);

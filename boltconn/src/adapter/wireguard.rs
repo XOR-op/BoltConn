@@ -60,14 +60,12 @@ impl Endpoint {
             Arc::new_cyclic(|me| {
                 // create dns
                 let resolver = {
-                    let handle = ConnAbortHandle::new();
-                    handle.fulfill(vec![]);
                     AsyncResolver::new(
                         config.dns.clone(),
                         ResolverOpts::default(),
                         GenericConnector::new(SmolDnsProvider::new(
                             me.clone(),
-                            handle,
+                            ConnAbortHandle::placeholder(),
                             notify.clone(),
                         )),
                     )

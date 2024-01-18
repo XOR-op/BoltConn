@@ -65,10 +65,8 @@ impl HttpsIntercept {
             let mut sender = sender.lock().await;
             if sender.is_none() {
                 *sender = Some({
-                    let abort_handle = ConnAbortHandle::new();
-                    abort_handle.fulfill(vec![]);
                     let (inbound, outbound) = Connector::new_pair(10);
-                    let _handle = creator.spawn_tcp(inbound, abort_handle.clone());
+                    let _handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
                     let outbound = client_tls
                         .connect(server_name, DuplexChan::new(outbound))
                         .await?;
