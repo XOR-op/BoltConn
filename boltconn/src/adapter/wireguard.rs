@@ -10,6 +10,7 @@ use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
+use async_trait::async_trait;
 use bytes::Bytes;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::GenericConnector;
@@ -376,6 +377,7 @@ impl WireguardHandle {
     }
 }
 
+#[async_trait]
 impl Outbound for WireguardHandle {
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Wireguard
@@ -393,23 +395,24 @@ impl Outbound for WireguardHandle {
         )))
     }
 
-    fn spawn_tcp_with_outbound(
+    async fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<()> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
-            return tokio::spawn(async move { Ok(()) });
+            return Err(ErrorKind::InvalidData.into());
         }
         let udp_outbound = udp_outbound.unwrap();
-        tokio::spawn(wireguard_timeout(self.clone().attach_tcp(
+        wireguard_timeout(self.clone().attach_tcp(
             inbound,
             abort_handle,
             Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-        )))
+        ))
+        .await
     }
 
     fn spawn_udp(
@@ -425,24 +428,25 @@ impl Outbound for WireguardHandle {
         )))
     }
 
-    fn spawn_udp_with_outbound(
+    async fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<()> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
-            return tokio::spawn(async move { Ok(()) });
+            return Err(ErrorKind::InvalidData.into());
         }
         let udp_outbound = udp_outbound.unwrap();
-        tokio::spawn(wireguard_timeout(self.clone().attach_udp(
+        wireguard_timeout(self.clone().attach_udp(
             inbound,
             abort_handle,
             Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-        )))
+        ))
+        .await
     }
 }
 
