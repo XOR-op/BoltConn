@@ -1,6 +1,5 @@
 use crate::adapter::{
-    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
-    OutboundType,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
@@ -167,6 +166,7 @@ impl TrojanOutbound {
     }
 }
 
+#[async_trait]
 impl Outbound for TrojanOutbound {
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Trojan
@@ -188,21 +188,21 @@ impl Outbound for TrojanOutbound {
         })
     }
 
-    fn spawn_tcp_with_outbound(
+    async fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
-            return empty_handle();
+            return Err(io::ErrorKind::InvalidData.into());
         }
-        tokio::spawn(
-            self.clone()
-                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle),
-        )
+        self.clone()
+            .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+            .await?;
+        Ok(true)
     }
 
     fn spawn_udp(
@@ -224,25 +224,23 @@ impl Outbound for TrojanOutbound {
         })
     }
 
-    fn spawn_udp_with_outbound(
+    async fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
-            return empty_handle();
+            return Err(io::ErrorKind::InvalidData.into());
         }
         let tcp_outbound = tcp_outbound.unwrap();
-        let self_clone = self.clone();
-        tokio::spawn(async move {
-            self_clone
-                .run_udp(inbound, tcp_outbound, abort_handle, tunnel_only)
-                .await
-        })
+        self.clone()
+            .run_udp(inbound, tcp_outbound, abort_handle, tunnel_only)
+            .await?;
+        Ok(true)
     }
 }
 

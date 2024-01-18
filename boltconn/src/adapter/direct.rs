@@ -1,6 +1,5 @@
 use crate::adapter::{
-    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
-    OutboundType,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
 };
 use crate::common::StreamOutboundTrait;
 use crate::network::dns::Dns;
@@ -63,6 +62,7 @@ impl DirectOutbound {
     }
 }
 
+#[async_trait]
 impl Outbound for DirectOutbound {
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Direct
@@ -76,15 +76,15 @@ impl Outbound for DirectOutbound {
         tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
     }
 
-    fn spawn_tcp_with_outbound(
+    async fn spawn_tcp_with_outbound(
         &self,
         _inbound: Connector,
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
-        empty_handle()
+        return Err(io::ErrorKind::InvalidData.into());
     }
 
     fn spawn_udp(
@@ -96,16 +96,16 @@ impl Outbound for DirectOutbound {
         tokio::spawn(self.clone().run_udp(inbound, abort_handle))
     }
 
-    fn spawn_udp_with_outbound(
+    async fn spawn_udp_with_outbound(
         &self,
         _inbound: AddrConnector,
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         tracing::error!("spawn_udp_with_outbound() should not be called with DirectOutbound");
-        empty_handle()
+        return Err(io::ErrorKind::InvalidData.into());
     }
 }
 

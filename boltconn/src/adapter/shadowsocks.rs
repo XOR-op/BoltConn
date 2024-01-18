@@ -1,6 +1,5 @@
 use crate::adapter::{
-    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
-    OutboundType,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
 };
 
 use crate::common::{io_err, StreamOutboundTrait};
@@ -131,6 +130,7 @@ impl SSOutbound {
     }
 }
 
+#[async_trait]
 impl Outbound for SSOutbound {
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Shadowsocks
@@ -153,24 +153,22 @@ impl Outbound for SSOutbound {
         })
     }
 
-    fn spawn_tcp_with_outbound(
+    async fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Shadowsocks tcp spawn");
-            return empty_handle();
+            return Err(io::ErrorKind::InvalidData.into());
         }
-        let self_clone = self.clone();
-        tokio::spawn(async move {
-            let server_addr = self_clone.get_server_addr().await?;
-            self_clone
-                .run_tcp(inbound, tcp_outbound.unwrap(), server_addr, abort_handle)
-                .await
-        })
+        let server_addr = self.get_server_addr().await?;
+        self.clone()
+            .run_tcp(inbound, tcp_outbound.unwrap(), server_addr, abort_handle)
+            .await?;
+        Ok(true)
     }
 
     fn spawn_udp(
@@ -202,32 +200,30 @@ impl Outbound for SSOutbound {
         })
     }
 
-    fn spawn_udp_with_outbound(
+    async fn spawn_udp_with_outbound(
         &self,
         inbound: AddrConnector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Shadowsocks UDP outbound ancestor");
-            return empty_handle();
+            return Err(io::ErrorKind::InvalidData.into());
         }
         let udp_outbound = udp_outbound.unwrap();
-        let self_clone = self.clone();
-        tokio::spawn(async move {
-            let server_addr = self_clone.get_server_addr().await?;
-            self_clone
-                .run_udp(
-                    AdapterOrSocket::Adapter(Arc::from(udp_outbound)),
-                    inbound,
-                    server_addr,
-                    abort_handle,
-                    tunnel_only,
-                )
-                .await
-        })
+        let server_addr = self.get_server_addr().await?;
+        self.clone()
+            .run_udp(
+                AdapterOrSocket::Adapter(Arc::from(udp_outbound)),
+                inbound,
+                server_addr,
+                abort_handle,
+                tunnel_only,
+            )
+            .await?;
+        Ok(true)
     }
 }
 

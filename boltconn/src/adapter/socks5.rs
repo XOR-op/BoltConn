@@ -1,6 +1,5 @@
 use crate::adapter::{
-    empty_handle, established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound,
-    OutboundType,
+    established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
 };
 
 use crate::common::{as_io_err, io_err, StreamOutboundTrait};
@@ -129,6 +128,7 @@ impl Socks5Outbound {
     }
 }
 
+#[async_trait]
 impl Outbound for Socks5Outbound {
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Socks5
@@ -150,21 +150,21 @@ impl Outbound for Socks5Outbound {
         })
     }
 
-    fn spawn_tcp_with_outbound(
+    async fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Socks5 tcp spawn");
-            return empty_handle();
+            return Err(io::ErrorKind::InvalidData.into());
         }
-        tokio::spawn(
-            self.clone()
-                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle),
-        )
+        self.clone()
+            .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+            .await?;
+        Ok(true)
     }
 
     fn spawn_udp(
@@ -186,16 +186,16 @@ impl Outbound for Socks5Outbound {
         })
     }
 
-    fn spawn_udp_with_outbound(
+    async fn spawn_udp_with_outbound(
         &self,
         _inbound: AddrConnector,
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         tracing::error!("Socks5 does not support UDP chain");
-        empty_handle()
+        return Err(io::ErrorKind::InvalidData.into());
     }
 }
 

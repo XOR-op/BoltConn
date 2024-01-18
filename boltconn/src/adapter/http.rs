@@ -8,6 +8,7 @@ use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
+use async_trait::async_trait;
 use base64::Engine;
 use httparse::Response;
 use std::io;
@@ -93,6 +94,7 @@ impl HttpOutbound {
     }
 }
 
+#[async_trait]
 impl Outbound for HttpOutbound {
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Http
@@ -117,24 +119,22 @@ impl Outbound for HttpOutbound {
         })
     }
 
-    fn spawn_tcp_with_outbound(
+    async fn spawn_tcp_with_outbound(
         &self,
         inbound: Connector,
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid HTTP proxy tcp spawn");
-            return empty_handle();
+            return Err(io::ErrorKind::InvalidData.into());
         }
-        let self_clone = self.clone();
-        tokio::spawn(async move {
-            self_clone
-                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
-                .await
-                .map_err(|e| io_err(e.to_string().as_str()))
-        })
+        self.clone()
+            .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+            .await
+            .map_err(|e| io_err(e.to_string().as_str()))?;
+        Ok(true)
     }
 
     fn spawn_udp(
@@ -147,15 +147,15 @@ impl Outbound for HttpOutbound {
         empty_handle()
     }
 
-    fn spawn_udp_with_outbound(
+    async fn spawn_udp_with_outbound(
         &self,
         _inbound: AddrConnector,
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> io::Result<bool> {
         tracing::error!("spawn_udp_with_outbound() should not be called with HttpOutbound");
-        empty_handle()
+        return Err(io::ErrorKind::InvalidData.into());
     }
 }
