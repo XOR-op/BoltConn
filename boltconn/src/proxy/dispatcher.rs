@@ -266,20 +266,23 @@ impl Dispatcher {
             let info = info.clone();
             let dst_addr = dst_addr.clone();
             let abort_handle = abort_handle.clone();
-            tokio::spawn(async move {
-                let tun = TcpAdapter::new(
-                    src_addr,
-                    dst_addr,
-                    info,
-                    stream,
-                    indicator,
-                    tun_conn,
-                    abort_handle,
-                );
-                if let Err(err) = tun.run().await {
-                    tracing::error!("[Dispatcher] run TcpAdapter failed: {}", err)
-                }
-            })
+            (
+                "tcp".to_string(),
+                tokio::spawn(async move {
+                    let tun = TcpAdapter::new(
+                        src_addr,
+                        dst_addr,
+                        info,
+                        stream,
+                        indicator,
+                        tun_conn,
+                        abort_handle,
+                    );
+                    if let Err(err) = tun.run().await {
+                        tracing::error!("[Dispatcher] run TcpAdapter failed: {}", err)
+                    }
+                }),
+            )
         });
 
         // mitm for 80/443
@@ -349,11 +352,14 @@ impl Dispatcher {
             }
         }
         let abort_handle2 = abort_handle.clone();
-        handles.push(tokio::spawn(async move {
-            if let Err(err) = outbounding.spawn_tcp(tun_next, abort_handle2).await {
-                tracing::error!("[Dispatcher] create failed: {}", err)
-            }
-        }));
+        handles.push((
+            outbounding.outbound_type().to_string(),
+            tokio::spawn(async move {
+                if let Err(err) = outbounding.spawn_tcp(tun_next, abort_handle2).await {
+                    tracing::error!("[Dispatcher] create failed: {}", err)
+                }
+            }),
+        ));
         abort_handle.fulfill(handles);
         self.stat_center.push(info);
         Ok(())
@@ -467,7 +473,7 @@ impl Dispatcher {
 
         let (adapter_tun, adapter_next) = AddrConnector::new_pair(10);
 
-        handles.push({
+        handles.push(("tun_udp".to_string(), {
             let info = info.clone();
             let abort_handle = abort_handle.clone();
             let dns = self.dns.clone();
@@ -478,16 +484,19 @@ impl Dispatcher {
                     tracing::error!("[Dispatcher] run TunUdpAdapter failed: {}", err)
                 }
             })
-        });
-        let abort_handle2 = abort_handle.clone();
-        handles.push(tokio::spawn(async move {
-            if let Err(err) = outbounding
-                .spawn_udp(adapter_next, abort_handle2, false)
-                .await
-            {
-                tracing::error!("[Dispatcher] create failed: {}", err)
-            }
         }));
+        let abort_handle2 = abort_handle.clone();
+        handles.push((
+            outbounding.outbound_type().to_string(),
+            tokio::spawn(async move {
+                if let Err(err) = outbounding
+                    .spawn_udp(adapter_next, abort_handle2, false)
+                    .await
+                {
+                    tracing::error!("[Dispatcher] create failed: {}", err)
+                }
+            }),
+        ));
         abort_handle.fulfill(handles);
         self.stat_center.push(info.clone());
         Ok(())
@@ -532,7 +541,7 @@ impl Dispatcher {
 
         let (adapter_conn, adapter_next) = AddrConnector::new_pair(10);
 
-        handles.push({
+        handles.push(("udp".to_string(), {
             let info = info.clone();
             let abort_handle = abort_handle.clone();
             tokio::spawn(async move {
@@ -542,16 +551,19 @@ impl Dispatcher {
                     tracing::error!("[Dispatcher] run StandardUdpAdapter failed: {}", err)
                 }
             })
-        });
-        let abort_handle2 = abort_handle.clone();
-        handles.push(tokio::spawn(async move {
-            if let Err(err) = outbounding
-                .spawn_udp(adapter_next, abort_handle2, false)
-                .await
-            {
-                tracing::error!("[Dispatcher] create failed: {}", err)
-            }
         }));
+        let abort_handle2 = abort_handle.clone();
+        handles.push((
+            outbounding.outbound_type().to_string(),
+            tokio::spawn(async move {
+                if let Err(err) = outbounding
+                    .spawn_udp(adapter_next, abort_handle2, false)
+                    .await
+                {
+                    tracing::error!("[Dispatcher] create failed: {}", err)
+                }
+            }),
+        ));
         abort_handle.fulfill(handles);
         self.stat_center.push(info.clone());
         Ok(())

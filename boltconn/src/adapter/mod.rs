@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
+use std::fmt::{Display, Formatter};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -101,6 +102,20 @@ pub enum OutboundType {
     Chain,
 }
 
+impl Display for OutboundType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            OutboundType::Direct => "direct",
+            OutboundType::Socks5 => "socks5",
+            OutboundType::Http => "http",
+            OutboundType::Shadowsocks => "shadowsocks",
+            OutboundType::Trojan => "trojan",
+            OutboundType::Wireguard => "wireguard",
+            OutboundType::Chain => "chain",
+        })
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum TcpTransferType {
     Tcp,
@@ -181,6 +196,7 @@ fn empty_handle() -> JoinHandle<io::Result<()>> {
     tokio::spawn(async move { Err(io_err("Invalid spawn")) })
 }
 
+#[tracing::instrument(skip_all)]
 async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)
 where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
@@ -229,6 +245,7 @@ where
     }
 }
 
+#[tracing::instrument(skip_all)]
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     inbound: AddrConnector,
     outbound: S,

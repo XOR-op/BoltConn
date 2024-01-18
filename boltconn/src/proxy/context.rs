@@ -149,7 +149,7 @@ enum CancelState {
 
 #[derive(Debug)]
 struct AbortHandle {
-    handles: ArcSwap<Vec<JoinHandle<()>>>,
+    handles: ArcSwap<Vec<(String, JoinHandle<()>)>>,
     state: AtomicU8,
 }
 
@@ -206,8 +206,8 @@ impl ConnAbortHandle {
                         // other thread is cancelling
                         return;
                     }
-                    for i in self.0.handles.load().iter() {
-                        i.abort()
+                    for (_, handle) in self.0.handles.load().iter() {
+                        handle.abort()
                     }
                     self.0
                         .state
@@ -227,7 +227,7 @@ impl ConnAbortHandle {
         }
     }
 
-    pub fn fulfill(&self, handles: Vec<JoinHandle<()>>) {
+    pub fn fulfill(&self, handles: Vec<(String, JoinHandle<()>)>) {
         if self
             .0
             .state
@@ -242,7 +242,7 @@ impl ConnAbortHandle {
             ) {
                 tracing::error!("Fulfill a cancel handle twice from state{}!", err);
             } else {
-                for i in handles.iter() {
+                for (_, i) in handles.iter() {
                     i.abort()
                 }
                 self.0
