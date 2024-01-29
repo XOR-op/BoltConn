@@ -129,6 +129,12 @@ impl TcpConnTask {
     }
 }
 
+impl Drop for TcpConnTask {
+    fn drop(&mut self) {
+        self.abort_handle.cancel();
+    }
+}
+
 struct UdpConnTask {
     back_tx: mpsc::Sender<(Bytes, NetworkAddr)>,
     rx: flume::Receiver<(Bytes, SocketAddr)>,
@@ -215,6 +221,12 @@ impl UdpConnTask {
             }
         }
         has_activity
+    }
+}
+
+impl Drop for UdpConnTask {
+    fn drop(&mut self) {
+        self.abort_handle.cancel();
     }
 }
 
