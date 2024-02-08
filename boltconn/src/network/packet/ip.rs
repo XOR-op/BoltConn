@@ -125,6 +125,13 @@ impl IPPkt {
         }
     }
 
+    pub fn ip_header_len(&self) -> usize {
+        match self {
+            IPPkt::V4(_) => Ipv4Packet::new_unchecked(self.packet_data()).header_len() as usize,
+            IPPkt::V6(_) => Ipv6Packet::new_unchecked(self.packet_data()).header_len(),
+        }
+    }
+
     pub fn pkt_total_len(&self) -> usize {
         match self {
             IPPkt::V4(_) => Ipv4Packet::new_unchecked(self.packet_data()).total_len() as usize,
