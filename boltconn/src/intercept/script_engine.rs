@@ -152,7 +152,7 @@ impl ScriptEngine {
             status,
             body,
         };
-        let r = match ctx.with(|ctx| -> Result<HttpData, rquickjs::Error> {
+        let eval_result = ctx.with(|ctx| -> Result<HttpData, rquickjs::Error> {
             // init console
             let cls = Class::instance(
                 ctx.clone(),
@@ -186,7 +186,8 @@ impl ScriptEngine {
                     Err(e)
                 }
             }
-        }) {
+        });
+        let r = match eval_result {
             Err(e) => {
                 tracing::warn!(
                     "Failed to run script {} for {}: {}",
