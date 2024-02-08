@@ -254,6 +254,10 @@ impl TunDevice {
                 }
             }
             IpProtocol::Udp => {
+                if pkt.pkt_total_len() < pkt.ip_header_len() + 8 {
+                    // drop invalid UDP packet
+                    return;
+                }
                 let pkt = UdpPkt::new(pkt);
                 if pkt.dst_port() == 53 && dst == self.fake_dns_addr {
                     // fake ip
