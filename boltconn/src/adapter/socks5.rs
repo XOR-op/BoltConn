@@ -161,9 +161,12 @@ impl Outbound for Socks5Outbound {
             tracing::error!("Invalid Socks5 tcp spawn");
             return Err(io::ErrorKind::InvalidData.into());
         }
-        self.clone()
-            .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
-            .await?;
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+                .await
+        });
         Ok(true)
     }
 

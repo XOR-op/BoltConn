@@ -199,9 +199,12 @@ impl Outbound for TrojanOutbound {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
             return Err(io::ErrorKind::InvalidData.into());
         }
-        self.clone()
-            .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
-            .await?;
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+                .await
+        });
         Ok(true)
     }
 
@@ -237,9 +240,12 @@ impl Outbound for TrojanOutbound {
             return Err(io::ErrorKind::InvalidData.into());
         }
         let tcp_outbound = tcp_outbound.unwrap();
-        self.clone()
-            .run_udp(inbound, tcp_outbound, abort_handle, tunnel_only)
-            .await?;
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone
+                .run_udp(inbound, tcp_outbound, abort_handle, tunnel_only)
+                .await
+        });
         Ok(true)
     }
 }

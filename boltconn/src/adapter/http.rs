@@ -130,10 +130,13 @@ impl Outbound for HttpOutbound {
             tracing::error!("Invalid HTTP proxy tcp spawn");
             return Err(io::ErrorKind::InvalidData.into());
         }
-        self.clone()
-            .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
-            .await
-            .map_err(|e| io_err(e.to_string().as_str()))?;
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+                .await
+                .map_err(|e| io_err(e.to_string().as_str()))
+        });
         Ok(true)
     }
 

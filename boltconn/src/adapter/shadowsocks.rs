@@ -164,10 +164,13 @@ impl Outbound for SSOutbound {
             tracing::error!("Invalid Shadowsocks tcp spawn");
             return Err(io::ErrorKind::InvalidData.into());
         }
-        let server_addr = self.get_server_addr().await?;
-        self.clone()
-            .run_tcp(inbound, tcp_outbound.unwrap(), server_addr, abort_handle)
-            .await?;
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            let server_addr = self_clone.get_server_addr().await?;
+            self_clone
+                .run_tcp(inbound, tcp_outbound.unwrap(), server_addr, abort_handle)
+                .await
+        });
         Ok(true)
     }
 
@@ -213,16 +216,19 @@ impl Outbound for SSOutbound {
             return Err(io::ErrorKind::InvalidData.into());
         }
         let udp_outbound = udp_outbound.unwrap();
-        let server_addr = self.get_server_addr().await?;
-        self.clone()
-            .run_udp(
-                AdapterOrSocket::Adapter(Arc::from(udp_outbound)),
-                inbound,
-                server_addr,
-                abort_handle,
-                tunnel_only,
-            )
-            .await?;
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            let server_addr = self_clone.get_server_addr().await?;
+            self_clone
+                .run_udp(
+                    AdapterOrSocket::Adapter(Arc::from(udp_outbound)),
+                    inbound,
+                    server_addr,
+                    abort_handle,
+                    tunnel_only,
+                )
+                .await
+        });
         Ok(true)
     }
 }
