@@ -1,5 +1,6 @@
 use crate::config::DnsPreference;
 use crate::network::dns::dns_table::DnsTable;
+use crate::network::dns::hosts::HostsResolver;
 use crate::network::dns::provider::IfaceProvider;
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
@@ -7,6 +8,7 @@ use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
 use hickory_resolver::config::*;
 use hickory_resolver::name_server::{GenericConnector, RuntimeProvider};
 use hickory_resolver::AsyncResolver;
+use std::collections::HashMap;
 use std::io;
 use std::io::Result;
 use std::net::IpAddr;
@@ -16,6 +18,7 @@ use std::time::Duration;
 pub struct GenericDns<P: RuntimeProvider> {
     table: DnsTable,
     preference: DnsPreference,
+    host_resolver: ArcSwap<HostsResolver>,
     resolvers: ArcSwap<Vec<AsyncResolver<GenericConnector<P>>>>,
 }
 
@@ -25,6 +28,7 @@ impl Dns {
     pub fn with_config(
         iface_name: &str,
         preference: DnsPreference,
+        hosts: &HashMap<String, IpAddr>,
         configs: Vec<NameServerConfigGroup>,
     ) -> anyhow::Result<Dns> {
         let mut resolvers = Vec::new();
@@ -36,9 +40,11 @@ impl Dns {
                 GenericConnector::new(IfaceProvider::new(iface_name)),
             ));
         }
+        let host_resolver = HostsResolver::new(hosts);
         Ok(Dns {
             table: DnsTable::new(),
             preference,
+            host_resolver: ArcSwap::new(Arc::new(host_resolver)),
             resolvers: ArcSwap::new(Arc::new(resolvers)),
         })
     }
@@ -70,6 +76,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
         Self {
             table: DnsTable::new(),
             preference,
+            host_resolver: ArcSwap::new(Arc::new(HostsResolver::empty())),
             resolvers: ArcSwap::new(Arc::new(vec![resolver])),
         }
     }
@@ -126,6 +133,9 @@ impl<P: RuntimeProvider> GenericDns<P> {
     }
 
     pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
+        if let Some(ip) = self.host_resolver.load().resolve(domain_name) {
+            return Some(ip);
+        }
         match self.preference {
             DnsPreference::Ipv4Only => self.genuine_lookup_v4(domain_name).await,
             DnsPreference::Ipv6Only => self.genuine_lookup_v6(domain_name).await,

@@ -1,6 +1,7 @@
 #[allow(clippy::module_inception)]
 mod dns;
 mod dns_table;
+mod hosts;
 mod provider;
 
 use crate::network::dns::provider::IfaceProvider;

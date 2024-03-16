@@ -124,7 +124,7 @@ impl RuleSetBuilder {
     pub fn new(name: &str, payload: &RuleSchema) -> Option<Self> {
         let mut retval = Self {
             name: name.to_string(),
-            domain: HostMatcherBuilder::new(),
+            domain: HostMatcher::builder(),
             domain_keyword: vec![],
             ip_cidr: Default::default(),
             local_ip_cidr: Default::default(),
@@ -286,7 +286,7 @@ impl RuleSetBuilder {
         });
         Self {
             name: name.to_string(),
-            domain: HostMatcherBuilder::new(),
+            domain: HostMatcher::builder(),
             domain_keyword: vec![],
             ip_cidr: table,
             local_ip_cidr: Default::default(),

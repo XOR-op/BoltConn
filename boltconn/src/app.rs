@@ -110,8 +110,13 @@ impl App {
                 Err(e) => return Err(anyhow!("Parse dns config failed: {e}")),
             };
             Arc::new(
-                Dns::with_config(outbound_iface.as_str(), config.dns.preference, group)
-                    .map_err(|e| anyhow!("DNS failed to initialize: {e}"))?,
+                Dns::with_config(
+                    outbound_iface.as_str(),
+                    config.dns.preference,
+                    &config.dns.hosts,
+                    group,
+                )
+                .map_err(|e| anyhow!("DNS failed to initialize: {e}"))?,
             )
         };
 

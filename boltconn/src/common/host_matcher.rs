@@ -35,12 +35,16 @@ impl HostMatcher {
         }
         false
     }
+
+    pub fn builder() -> HostMatcherBuilder {
+        HostMatcherBuilder::new()
+    }
 }
 
 pub struct HostMatcherBuilder(Vec<(String, HostType)>);
 
 impl HostMatcherBuilder {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self(Vec::new())
     }
 
@@ -64,7 +68,7 @@ impl HostMatcherBuilder {
 
 #[test]
 fn test_matcher() {
-    let mut builder = HostMatcherBuilder::new();
+    let mut builder = HostMatcher::builder();
     builder.add_suffix("telemetry.google.com");
     builder.add_suffix("analytics.google.com");
     builder.add_exact("test.google.com");
@@ -77,7 +81,7 @@ fn test_matcher() {
     assert!(!matcher.matches("me.notgoogle.com"));
     assert!(!matcher.matches("ogle.com"));
     assert!(!matcher.matches("t-02.test.google.com"));
-    let mut builder = HostMatcherBuilder::new();
+    let mut builder = HostMatcher::builder();
     builder.add_suffix("ogle.com");
     let matcher = builder.build();
     assert!(matcher.matches("hi.ogle.com"));
