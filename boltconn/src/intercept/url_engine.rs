@@ -31,9 +31,7 @@ impl UrlEngine {
         }
         replaced_url?;
 
-        let Some(chunks) = ReplacedChunk::parse_chunks(&regex, replaced_url.unwrap()) else {
-            return None;
-        };
+        let chunks = ReplacedChunk::parse_chunks(&regex, replaced_url.unwrap())?;
         Some(Self {
             mod_type,
             regex,
