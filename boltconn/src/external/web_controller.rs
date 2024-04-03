@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 
 pub type SharedDispatching = Arc<ArcSwap<Dispatching>>;
@@ -29,7 +30,7 @@ impl WebController {
         Self { secret, controller }
     }
 
-    pub async fn run(self, port: u16, cors_allowed_list: &[String]) {
+    pub async fn run(self, port: u16, cors_allowed_list: &[String]) -> anyhow::Result<()> {
         let secret = Arc::new(self.secret.clone());
         let cors_vec = parse_cors_allow(cors_allowed_list);
         let wrapper = move |r| Self::auth(secret.clone(), r, cors_vec.clone());
@@ -73,10 +74,9 @@ impl WebController {
         }
 
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
-        axum::Server::bind(&addr)
-            .serve(app.into_make_service())
-            .await
-            .unwrap();
+        let listener = TcpListener::bind(&addr).await?;
+        axum::serve(listener, app.into_make_service()).await?;
+        Ok(())
     }
 
     async fn auth<B>(

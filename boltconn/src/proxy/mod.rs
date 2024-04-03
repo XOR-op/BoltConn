@@ -12,11 +12,13 @@ use crate::adapter::{Connector, Outbound};
 use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{Latency, Proxy, ProxyImpl};
+use bytes::Bytes;
 pub use context::*;
 pub use dispatcher::*;
 use http::Request;
 pub use http_inbound::*;
 use hyper::client::conn;
+use hyper_util::rt::TokioIo;
 pub use manager::*;
 pub use mixed_inbound::*;
 use rand::{Rng, SeedableRng};
@@ -52,7 +54,7 @@ pub async fn latency_test(
     let req = Request::builder()
         .method("GET")
         .uri(url)
-        .body(hyper::body::Body::empty())
+        .body(http_body_util::Empty::<Bytes>::new())
         .unwrap();
     let (inbound, outbound) = Connector::new_pair(10);
     let parsed_url = url::Url::parse(url)?;
@@ -134,12 +136,14 @@ pub async fn latency_test(
             let outbound = tls_conector
                 .connect(server_name, DuplexChan::new(outbound))
                 .await?;
-            let (mut sender, connection) = conn::http1::Builder::new().handshake(outbound).await?;
+            let (mut sender, connection) = conn::http1::Builder::new()
+                .handshake(TokioIo::new(outbound))
+                .await?;
             tokio::spawn(connection);
             let _ = sender.send_request(req).await?;
         } else {
             let (mut sender, connection) = conn::http1::Builder::new()
-                .handshake(DuplexChan::new(outbound))
+                .handshake(TokioIo::new(DuplexChan::new(outbound)))
                 .await?;
             tokio::spawn(connection);
             let _ = sender.send_request(req).await?;
