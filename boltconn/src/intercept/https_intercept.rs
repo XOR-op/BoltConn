@@ -6,8 +6,7 @@ use crate::intercept::modifier::Modifier;
 use crate::intercept::{sign_site_cert, ModifierContext};
 use crate::proxy::{ConnAbortHandle, ConnContext};
 use hyper::client::conn;
-use hyper::client::conn::SendRequest;
-use hyper::server::conn::Http;
+use hyper::client::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 use rcgen::Certificate as CaCertificate;
@@ -50,7 +49,7 @@ impl HttpsIntercept {
     }
 
     async fn proxy(
-        sender: Arc<Mutex<Option<SendRequest<Body>>>>,
+        sender: Arc<Mutex<Option<http1::SendRequest<Body>>>>,
         client_tls: TlsConnector,
         server_name: ServerName<'static>,
         creator: Arc<dyn Outbound>,
@@ -71,7 +70,8 @@ impl HttpsIntercept {
                     let outbound = client_tls
                         .connect(server_name, DuplexChan::new(outbound))
                         .await?;
-                    let (sender, connection) = conn::Builder::new().handshake(outbound).await?;
+                    let (sender, connection) =
+                        conn::http1::Builder::new().handshake(outbound).await?;
                     tokio::spawn(connection);
                     sender
                 });
@@ -118,10 +118,9 @@ impl HttpsIntercept {
 
         // start running
         let inbound = acceptor.accept(self.inbound).await?;
-        if let Err(http_err) = Http::new()
-            .http1_only(true)
-            .http1_preserve_header_case(true)
-            .http1_title_case_headers(true)
+        if let Err(http_err) = hyper::server::conn::http1::Builder::new()
+            .preserve_header_case(true)
+            .title_case_headers(true)
             .serve_connection(inbound, service)
             .await
         {

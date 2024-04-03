@@ -5,7 +5,6 @@ use crate::intercept::modifier::Modifier;
 use crate::intercept::ModifierContext;
 use crate::proxy::{ConnAbortHandle, ConnContext};
 use hyper::client::conn;
-use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 use std::io;
@@ -45,7 +44,7 @@ impl HttpIntercept {
         }
         let (inbound, outbound) = Connector::new_pair(10);
         let _handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
-        let (mut sender, connection) = conn::Builder::new()
+        let (mut sender, connection) = conn::http1::Builder::new()
             .handshake(DuplexChan::new(outbound))
             .await?;
         tokio::spawn(connection);
@@ -67,10 +66,9 @@ impl HttpIntercept {
                 },
             )
         });
-        if let Err(http_err) = Http::new()
-            .http1_only(true)
-            .http1_preserve_header_case(true)
-            .http1_title_case_headers(true)
+        if let Err(http_err) = hyper::server::conn::http1::Builder::new()
+            .preserve_header_case(true)
+            .title_case_headers(true)
             .serve_connection(self.inbound, service)
             .await
         {

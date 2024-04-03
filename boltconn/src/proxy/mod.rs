@@ -130,21 +130,20 @@ pub async fn latency_test(
     // connect to the url
     let http_handle: JoinHandle<anyhow::Result<Latency>> = tokio::spawn(async move {
         let start_timer = SystemTime::now();
-        let mut sender = if parsed_url.scheme() == "https" {
+        if parsed_url.scheme() == "https" {
             let outbound = tls_conector
                 .connect(server_name, DuplexChan::new(outbound))
                 .await?;
-            let (sender, connection) = conn::Builder::new().handshake(outbound).await?;
+            let (mut sender, connection) = conn::http1::Builder::new().handshake(outbound).await?;
             tokio::spawn(connection);
-            sender
+            let _ = sender.send_request(req).await?;
         } else {
-            let (sender, connection) = conn::Builder::new()
+            let (mut sender, connection) = conn::http1::Builder::new()
                 .handshake(DuplexChan::new(outbound))
                 .await?;
             tokio::spawn(connection);
-            sender
+            let _ = sender.send_request(req).await?;
         };
-        let _ = sender.send_request(req).await?;
         let end_timer = SystemTime::now();
         match end_timer.duration_since(start_timer) {
             Ok(duration) => Ok(Latency::Value(duration.as_millis() as u32)),
