@@ -25,7 +25,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::task::JoinHandle;
-use tokio_rustls::rustls::ServerName;
+use tokio_rustls::rustls::pki_types::ServerName;
 pub use tun_inbound::*;
 pub use tun_udp_inbound::*;
 use url::Host;
@@ -76,12 +76,13 @@ pub async fn latency_test(
         Host::Ipv6(ip) => NetworkAddr::Raw(SocketAddr::new(ip.into(), port)),
     };
     let server_name = match &dst_addr {
-        NetworkAddr::Raw(s) => ServerName::IpAddress(s.ip()),
+        NetworkAddr::Raw(s) => ServerName::IpAddress(s.ip().into()),
         NetworkAddr::DomainName {
             domain_name,
             port: _,
         } => ServerName::try_from(domain_name.as_str())?,
-    };
+    }
+    .to_owned();
     let mut rng = rand::rngs::SmallRng::seed_from_u64(
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)

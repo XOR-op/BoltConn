@@ -14,12 +14,13 @@ use rcgen::Certificate as CaCertificate;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig, ServerName};
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub struct HttpsIntercept {
-    cert: Vec<Certificate>,
-    priv_key: PrivateKey,
+    cert: Vec<CertificateDer<'static>>,
+    priv_key: PrivateKeyDer<'static>,
     server_name: String,
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
@@ -51,7 +52,7 @@ impl HttpsIntercept {
     async fn proxy(
         sender: Arc<Mutex<Option<SendRequest<Body>>>>,
         client_tls: TlsConnector,
-        server_name: ServerName,
+        server_name: ServerName<'static>,
         creator: Arc<dyn Outbound>,
         modifier: Arc<dyn Modifier>,
         req: Request<Body>,
@@ -86,7 +87,6 @@ impl HttpsIntercept {
     pub async fn run(self) -> io::Result<()> {
         // tls server
         let tls_config = ServerConfig::builder()
-            .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(self.cert, self.priv_key)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
@@ -96,7 +96,8 @@ impl HttpsIntercept {
         // tls client
         let client_tls = create_tls_connector();
         let server_name = ServerName::try_from(self.server_name.as_str())
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+            .to_owned();
         let id_gen = IdGenerator::default();
         let sender = Arc::new(Mutex::new(None));
         let service = service_fn(|req| {

@@ -4,15 +4,14 @@ use bytes::Bytes;
 use sha2::{Digest, Sha224};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::Mutex;
-use tokio_rustls::rustls::client::{
+use tokio_rustls::rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
 };
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use tokio_rustls::rustls::{
-    Certificate, ClientConfig, DigitallySignedStruct, Error, OwnedTrustAnchor, RootCertStore,
-    ServerName, SignatureScheme,
+    ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme,
 };
 
 #[derive(Clone, Debug)]
@@ -260,25 +259,25 @@ where
     }
 }
 
+#[derive(Debug)]
 struct NoCertVerification {}
 
 impl ServerCertVerifier for NoCertVerification {
     fn verify_server_cert(
         &self,
-        _end_entity: &Certificate,
-        _intermediates: &[Certificate],
-        _server_name: &ServerName,
-        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
-        _now: SystemTime,
-    ) -> std::result::Result<ServerCertVerified, Error> {
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
         Ok(ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
         &self,
         _message: &[u8],
-        _cert: &Certificate,
+        _cert: &CertificateDer<'_>,
         _dss: &DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, Error> {
         Ok(HandshakeSignatureValid::assertion())
@@ -287,7 +286,7 @@ impl ServerCertVerifier for NoCertVerification {
     fn verify_tls13_signature(
         &self,
         _message: &[u8],
-        _cert: &Certificate,
+        _cert: &CertificateDer<'_>,
         _dss: &DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, Error> {
         Ok(HandshakeSignatureValid::assertion())
@@ -308,16 +307,11 @@ impl ServerCertVerifier for NoCertVerification {
             SignatureScheme::RSA_PKCS1_SHA1,
         ]
     }
-
-    fn request_scts(&self) -> bool {
-        false
-    }
 }
 
 pub(crate) fn make_tls_config(skip_cert_verify: bool) -> Arc<ClientConfig> {
     if skip_cert_verify {
         let mut config = ClientConfig::builder()
-            .with_safe_defaults()
             .with_root_certificates(RootCertStore::empty())
             .with_no_client_auth();
         config
@@ -326,16 +320,9 @@ pub(crate) fn make_tls_config(skip_cert_verify: bool) -> Arc<ClientConfig> {
         Arc::new(config)
     } else {
         let mut root_cert_store = RootCertStore::empty();
-        root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject,
-                ta.spki,
-                ta.name_constraints,
-            )
-        }));
+        root_cert_store.roots = webpki_roots::TLS_SERVER_ROOTS.to_vec();
         Arc::new(
             ClientConfig::builder()
-                .with_safe_defaults()
                 .with_root_certificates(root_cert_store)
                 .with_no_client_auth(),
         )

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinHandle;
 use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::ServerName;
+use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::client_async;
 
@@ -142,7 +142,9 @@ impl TrojanOutbound {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let server_name = ServerName::try_from(self.config.sni.as_str()).map_err(as_io_err)?;
+        let server_name = ServerName::try_from(self.config.sni.as_str())
+            .map_err(as_io_err)?
+            .to_owned();
         let tls_conn = TlsConnector::from(make_tls_config(self.config.skip_cert_verify));
         let stream = tls_conn.connect(server_name, outbound).await?;
         Ok(stream)

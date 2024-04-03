@@ -22,13 +22,15 @@ use regex::Regex;
 pub use script_engine::*;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
-use tokio_rustls::rustls::{Certificate as RustlsCertificate, PrivateKey as RustlsPrivateKey};
+use tokio_rustls::rustls::pki_types::{
+    CertificateDer as RustlsCertificate, PrivateKeyDer as RustlsPrivateKey,
+};
 pub use url_engine::*;
 
 fn sign_site_cert(
     common_name: &str,
     ca_cert: &Certificate,
-) -> anyhow::Result<(Vec<RustlsCertificate>, RustlsPrivateKey)> {
+) -> anyhow::Result<(Vec<RustlsCertificate<'static>>, RustlsPrivateKey<'static>)> {
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::CommonName, common_name.to_string());
     distinguished_name.push(DnType::OrganizationName, "BoltConn-MITM");
@@ -50,9 +52,13 @@ fn sign_site_cert(
     let cert = Certificate::from_params(params)?;
     let cert_crt = cert.serialize_pem_with_signer(ca_cert)?;
     let private_key = cert.serialize_private_key_pem();
-    let res_cert = RustlsCertificate(rustls_pemfile::certs(&mut cert_crt.as_bytes())?.remove(0));
-    let res_key = RustlsPrivateKey(
-        rustls_pemfile::pkcs8_private_keys(&mut private_key.as_bytes())?.remove(0),
+    let res_cert = rustls_pemfile::certs(&mut cert_crt.as_bytes())
+        .next()
+        .ok_or(anyhow::anyhow!("No generated cert available"))??;
+    let res_key = RustlsPrivateKey::Pkcs8(
+        rustls_pemfile::pkcs8_private_keys(&mut private_key.as_bytes())
+            .next()
+            .ok_or(anyhow::anyhow!("No generated privkey available"))??,
     );
     Ok((vec![res_cert], res_key))
 }
