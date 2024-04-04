@@ -2,11 +2,12 @@ use crate::adapter::{Connector, Outbound};
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
-use crate::intercept::ModifierContext;
+use crate::intercept::{HyperBody, ModifierContext};
 use crate::proxy::{ConnAbortHandle, ConnContext};
 use hyper::client::conn;
 use hyper::service::service_fn;
-use hyper::{Body, Request, Response};
+use hyper::{Request, Response};
+use hyper_util::rt::TokioIo;
 use std::io;
 use std::sync::Arc;
 
@@ -35,9 +36,9 @@ impl HttpIntercept {
     async fn proxy(
         creator: Arc<dyn Outbound>,
         modifier: Arc<dyn Modifier>,
-        req: Request<Body>,
+        req: Request<HyperBody>,
         ctx: ModifierContext,
-    ) -> anyhow::Result<Response<Body>> {
+    ) -> anyhow::Result<Response<HyperBody>> {
         let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
         if let Some(resp) = fake_resp {
             return Ok(resp);
@@ -45,21 +46,24 @@ impl HttpIntercept {
         let (inbound, outbound) = Connector::new_pair(10);
         let _handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
         let (mut sender, connection) = conn::http1::Builder::new()
-            .handshake(DuplexChan::new(outbound))
+            .handshake(TokioIo::new(DuplexChan::new(outbound)))
             .await?;
         tokio::spawn(connection);
-        let resp = sender.send_request(req).await?;
-        let resp = modifier.modify_response(resp, &ctx).await?;
+        let (parts, resp_body) = sender.send_request(req).await?.into_parts();
+        let resp = modifier
+            .modify_response(Response::from_parts(parts, HyperBody::new(resp_body)), &ctx)
+            .await?;
         Ok(resp)
     }
 
     pub async fn run(self) -> io::Result<()> {
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
+            let (parts, body) = req.into_parts();
             Self::proxy(
                 self.creator.clone(),
                 self.modifier.clone(),
-                req,
+                Request::from_parts(parts, HyperBody::new(body)),
                 ModifierContext {
                     tag: id_gen.get(),
                     conn_info: self.conn_info.clone(),
@@ -69,7 +73,7 @@ impl HttpIntercept {
         if let Err(http_err) = hyper::server::conn::http1::Builder::new()
             .preserve_header_case(true)
             .title_case_headers(true)
-            .serve_connection(self.inbound, service)
+            .serve_connection(TokioIo::new(self.inbound), service)
             .await
         {
             tracing::warn!("Sniff err {}", http_err);

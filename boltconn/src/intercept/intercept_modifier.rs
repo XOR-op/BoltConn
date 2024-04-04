@@ -1,6 +1,6 @@
 use crate::intercept::intercept_manager::PayloadEntry;
 use crate::intercept::url_engine::UrlModType;
-use crate::intercept::{InterceptionResult, Modifier, ModifierContext};
+use crate::intercept::{HyperBody, InterceptionResult, Modifier, ModifierContext};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{CapturedBody, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
 use anyhow::anyhow;
@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
 use http::{header, Request, Response, Version};
-use hyper::body::HttpBody;
-use hyper::Body;
+use http_body_util::BodyExt;
+use hyper::body::Body;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -18,18 +18,22 @@ use std::time::Instant;
 
 enum ReadData {
     Full(Bytes),
-    Partial(Bytes, Body),
-    NotRead(Body),
+    Partial(Bytes, HyperBody),
+    NotRead(HyperBody),
 }
 
 impl ReadData {
-    fn into_body(self) -> Body {
+    fn into_body(self) -> HyperBody {
         match self {
-            ReadData::Full(bytes) => Body::from(bytes),
-            ReadData::Partial(bytes, stream) => Body::wrap_stream(PartialReadStream {
-                has_read: Some(bytes),
-                inner_body: stream,
-            }),
+            ReadData::Full(bytes) => {
+                HyperBody::new(http_body_util::Full::new(bytes).map_err(|e| match e {}))
+            }
+            ReadData::Partial(bytes, stream) => {
+                HyperBody::new(http_body_util::StreamBody::new(PartialReadStream {
+                    has_read: Some(bytes),
+                    inner_body: stream,
+                }))
+            }
             ReadData::NotRead(body) => body,
         }
     }
@@ -47,17 +51,17 @@ impl ReadData {
 
 struct PartialReadStream {
     has_read: Option<Bytes>,
-    inner_body: Body,
+    inner_body: HyperBody,
 }
 
 impl futures::Stream for PartialReadStream {
-    type Item = Result<Bytes, hyper::Error>;
+    type Item = Result<http_body::Frame<Bytes>, hyper::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(data) = self.has_read.take() {
-            Poll::Ready(Some(Ok(data)))
+            Poll::Ready(Some(Ok(http_body::Frame::data(data))))
         } else {
-            Pin::new(&mut self.inner_body).poll_data(cx)
+            Pin::new(&mut self.inner_body).poll_frame(cx)
         }
     }
 }
@@ -86,10 +90,11 @@ impl InterceptModifier {
     }
 
     // From hyper::body::to_bytes, with some modifications
-    async fn read_at_most(mut body: Body, size_limit: usize) -> anyhow::Result<ReadData> {
+    async fn read_at_most(mut body: HyperBody, size_limit: usize) -> anyhow::Result<ReadData> {
         // If there's only 1 chunk, we can just return Buf::to_bytes()
-        let mut first = if let Some(buf) = body.data().await {
-            buf?
+        let mut first = if let Some(buf) = body.frame().await {
+            buf?.into_data()
+                .map_err(|_| anyhow::anyhow!("Invalid data"))?
         } else {
             return Ok(ReadData::Full(Bytes::new()));
         };
@@ -102,8 +107,9 @@ impl InterceptModifier {
             ));
         }
 
-        let second = if let Some(buf) = body.data().await {
-            buf?
+        let second = if let Some(buf) = body.frame().await {
+            buf?.into_data()
+                .map_err(|_| anyhow::anyhow!("Invalid data"))?
         } else {
             return Ok(ReadData::Full(first.copy_to_bytes(first.remaining())));
         };
@@ -123,8 +129,11 @@ impl InterceptModifier {
             if vec.len() > size_limit {
                 return Ok(ReadData::Partial(vec.freeze(), body));
             }
-            if let Some(buf) = body.data().await {
-                vec.put(buf?);
+            if let Some(buf) = body.frame().await {
+                vec.put(
+                    buf?.into_data()
+                        .map_err(|_| anyhow::anyhow!("Invalid data"))?,
+                );
             } else {
                 break;
             }
@@ -160,9 +169,9 @@ fn get_full_uri(
 impl Modifier for InterceptModifier {
     async fn modify_request(
         &self,
-        req: Request<Body>,
+        req: Request<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
+    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)> {
         let (mut parts, body) = req.into_parts();
 
         let url = get_full_uri(
@@ -207,7 +216,7 @@ impl Modifier for InterceptModifier {
                                 };
                                 // record request and fake resp
                                 let (resp_parts, body) = resp.into_parts();
-                                let resp_body = hyper::body::to_bytes(body).await?;
+                                let resp_body = body.collect().await?.to_bytes();
 
                                 if self.result.capture_response {
                                     let resp_copy = DumpedResponse {
@@ -239,7 +248,13 @@ impl Modifier for InterceptModifier {
                                 }
                                 return Ok((
                                     Request::from_parts(parts, whole_data.into_body()),
-                                    Some(Response::from_parts(resp_parts, Body::from(resp_body))),
+                                    Some(Response::from_parts(
+                                        resp_parts,
+                                        HyperBody::new(
+                                            http_body_util::Full::new(resp_body)
+                                                .map_err(|e| match e {}),
+                                        ),
+                                    )),
                                 ));
                             }
                         }
@@ -271,9 +286,9 @@ impl Modifier for InterceptModifier {
 
     async fn modify_response(
         &self,
-        resp: Response<Body>,
+        resp: Response<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<Body>> {
+    ) -> anyhow::Result<Response<HyperBody>> {
         let (mut parts, body) = resp.into_parts();
         // FIXME: self.pending may leak if the connection is interrupted before getting a response
         let req = self
@@ -339,14 +354,16 @@ impl Modifier for InterceptModifier {
     }
 }
 
-fn generate_404(req_parts: &http::request::Parts) -> Response<Body> {
+fn generate_404(req_parts: &http::request::Parts) -> Response<HyperBody> {
     let resp_builder = http::response::Builder::new();
     resp_builder
         .status(404)
         .version(req_parts.version)
         .header(header::CONNECTION, "close")
         .header(header::CONTENT_LENGTH, 0)
-        .body(Body::empty())
+        .body(HyperBody::new(
+            http_body_util::Empty::new().map_err(|e| match e {}),
+        ))
         .unwrap()
 }
 
@@ -354,7 +371,7 @@ fn generate_redirect(
     req_parts: &http::request::Parts,
     status: UrlModType,
     target_url: &str,
-) -> Response<Body> {
+) -> Response<HyperBody> {
     let status = match status {
         UrlModType::R301 => 301,
         UrlModType::R302 => 302,
@@ -369,6 +386,8 @@ fn generate_redirect(
         .header(header::CONNECTION, "close")
         .header(header::CONTENT_LENGTH, 0)
         .header(header::LOCATION, target_url)
-        .body(Body::empty())
+        .body(HyperBody::new(
+            http_body_util::Empty::new().map_err(|e| match e {}),
+        ))
         .unwrap()
 }

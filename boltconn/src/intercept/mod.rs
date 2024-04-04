@@ -27,6 +27,15 @@ use tokio_rustls::rustls::pki_types::{
 };
 pub use url_engine::*;
 
+pub(super) type HyperBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
+
+// #[derive(Error, Debug)]
+// pub(super) enum HyperBodyError {
+//     Infallible(#[from] Infallible),
+//     Hyper(#[from] hyper::Error),
+// }
+//
+
 fn sign_site_cert(
     common_name: &str,
     ca_cert: &Certificate,

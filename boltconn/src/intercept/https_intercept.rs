@@ -3,12 +3,12 @@ use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
-use crate::intercept::{sign_site_cert, ModifierContext};
+use crate::intercept::{sign_site_cert, HyperBody, ModifierContext};
 use crate::proxy::{ConnAbortHandle, ConnContext};
-use hyper::client::conn;
 use hyper::client::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Body, Request, Response};
+use hyper::{Request, Response};
+use hyper_util::rt::TokioIo;
 use rcgen::Certificate as CaCertificate;
 use std::io;
 use std::sync::Arc;
@@ -49,14 +49,14 @@ impl HttpsIntercept {
     }
 
     async fn proxy(
-        sender: Arc<Mutex<Option<http1::SendRequest<Body>>>>,
+        sender: Arc<Mutex<Option<http1::SendRequest<HyperBody>>>>,
         client_tls: TlsConnector,
         server_name: ServerName<'static>,
         creator: Arc<dyn Outbound>,
         modifier: Arc<dyn Modifier>,
-        req: Request<Body>,
+        req: Request<HyperBody>,
         ctx: ModifierContext,
-    ) -> anyhow::Result<Response<Body>> {
+    ) -> anyhow::Result<Response<HyperBody>> {
         let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
         if let Some(resp) = fake_resp {
             return Ok(resp);
@@ -70,8 +70,9 @@ impl HttpsIntercept {
                     let outbound = client_tls
                         .connect(server_name, DuplexChan::new(outbound))
                         .await?;
-                    let (sender, connection) =
-                        conn::http1::Builder::new().handshake(outbound).await?;
+                    let (sender, connection) = http1::Builder::new()
+                        .handshake(TokioIo::new(outbound))
+                        .await?;
                     tokio::spawn(connection);
                     sender
                 });
@@ -79,8 +80,10 @@ impl HttpsIntercept {
             sender.as_mut().unwrap().send_request(req)
         };
 
-        let resp = resp_future.await?;
-        let resp = modifier.modify_response(resp, &ctx).await?;
+        let (parts, resp_body) = resp_future.await?.into_parts();
+        let resp = modifier
+            .modify_response(Response::from_parts(parts, HyperBody::new(resp_body)), &ctx)
+            .await?;
         Ok(resp)
     }
 
@@ -102,13 +105,14 @@ impl HttpsIntercept {
         let sender = Arc::new(Mutex::new(None));
         let service = service_fn(|req| {
             // since sniffer is the middle part, async tasks should be cancelled properly
+            let (parts, body) = req.into_parts();
             Self::proxy(
                 sender.clone(),
                 client_tls.clone(),
                 server_name.clone(),
                 self.creator.clone(),
                 self.modifier.clone(),
-                req,
+                Request::from_parts(parts, HyperBody::new(body)),
                 ModifierContext {
                     tag: id_gen.get(),
                     conn_info: self.conn_info.clone(),
@@ -121,7 +125,7 @@ impl HttpsIntercept {
         if let Err(http_err) = hyper::server::conn::http1::Builder::new()
             .preserve_header_case(true)
             .title_case_headers(true)
-            .serve_connection(inbound, service)
+            .serve_connection(TokioIo::new(inbound), service)
             .await
         {
             tracing::warn!("Sniff err {}", http_err);

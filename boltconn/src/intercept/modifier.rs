@@ -1,4 +1,4 @@
-use crate::intercept::InterceptionResult;
+use crate::intercept::{HyperBody, InterceptionResult};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::{
     CapturedBody, ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr,
@@ -6,7 +6,8 @@ use crate::proxy::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use hyper::{Body, Request, Response};
+use http_body_util::BodyExt;
+use hyper::{Request, Response};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -23,14 +24,14 @@ pub trait Modifier: Send + Sync {
     /// Return: new request and generated response, if any.
     async fn modify_request(
         &self,
-        req: Request<Body>,
+        req: Request<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)>;
+    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)>;
     async fn modify_response(
         &self,
-        resp: Response<Body>,
+        resp: Response<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<Body>>;
+    ) -> anyhow::Result<Response<HyperBody>>;
 }
 
 #[derive(Default)]
@@ -40,18 +41,18 @@ pub struct Logger;
 impl Modifier for Logger {
     async fn modify_request(
         &self,
-        req: Request<Body>,
+        req: Request<HyperBody>,
         _ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
+    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)> {
         println!("{:?}", req);
         Ok((req, None))
     }
 
     async fn modify_response(
         &self,
-        resp: Response<Body>,
+        resp: Response<HyperBody>,
         _ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<Body>> {
+    ) -> anyhow::Result<Response<HyperBody>> {
         println!("{:?}", resp);
         Ok(resp)
     }
@@ -64,17 +65,17 @@ pub struct Nooper;
 impl Modifier for Nooper {
     async fn modify_request(
         &self,
-        req: Request<Body>,
+        req: Request<HyperBody>,
         _ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
+    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)> {
         Ok((req, None))
     }
 
     async fn modify_response(
         &self,
-        resp: Response<Body>,
+        resp: Response<HyperBody>,
         _ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<Body>> {
+    ) -> anyhow::Result<Response<HyperBody>> {
         Ok(resp)
     }
 }
@@ -99,11 +100,11 @@ impl Recorder {
 impl Modifier for Recorder {
     async fn modify_request(
         &self,
-        req: Request<Body>,
+        req: Request<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<Body>, Option<Response<Body>>)> {
+    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)> {
         let (parts, body) = req.into_parts();
-        let whole_body = hyper::body::to_bytes(body).await?;
+        let whole_body = body.collect().await?.to_bytes();
         let req_copy = DumpedRequest {
             uri: parts.uri.clone(),
             method: parts.method.clone(),
@@ -113,16 +114,22 @@ impl Modifier for Recorder {
             time: Instant::now(),
         };
         self.pending.insert(ctx.tag, req_copy);
-        Ok((Request::from_parts(parts, Body::from(whole_body)), None))
+        Ok((
+            Request::from_parts(
+                parts,
+                HyperBody::new(http_body_util::Full::new(whole_body).map_err(|e| match e {})),
+            ),
+            None,
+        ))
     }
 
     async fn modify_response(
         &self,
-        resp: Response<Body>,
+        resp: Response<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<Body>> {
+    ) -> anyhow::Result<Response<HyperBody>> {
         let (parts, body) = resp.into_parts();
-        let whole_body = hyper::body::to_bytes(body).await?;
+        let whole_body = body.collect().await?.to_bytes();
         let resp_copy = DumpedResponse {
             status: parts.status,
             version: parts.version,
@@ -141,6 +148,9 @@ impl Modifier for Recorder {
         };
         self.contents
             .push((req, resp_copy), host, self.client.clone());
-        Ok(Response::from_parts(parts, Body::from(whole_body)))
+        Ok(Response::from_parts(
+            parts,
+            HyperBody::new(http_body_util::Full::new(whole_body).map_err(|e| match e {})),
+        ))
     }
 }
