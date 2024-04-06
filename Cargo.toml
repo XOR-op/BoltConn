@@ -13,3 +13,6 @@ strip = true
 [profile.dev]
 opt-level = 0
 debug = true
+
+[patch.crates-io]
+rustls = { git = "https://github.com/XOR-op/rustls.delta.git", branch = "unofficial-rel-0.23" }

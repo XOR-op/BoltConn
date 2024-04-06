@@ -10,11 +10,13 @@ use tokio_rustls::TlsConnector;
 pub mod async_raw_fd;
 pub mod async_socket;
 pub mod async_ws_stream;
+pub mod client_hello;
 pub mod duplex_chan;
 pub mod evictable_vec;
 pub mod host_matcher;
 pub mod id_gen;
 mod sync;
+
 pub use sync::{local_async_run, AbortCanary};
 
 pub fn io_err(msg: &str) -> std::io::Error {
@@ -46,11 +48,17 @@ pub(crate) unsafe fn mut_buf(buf: &mut BytesMut) -> &mut [u8] {
     unsafe { transmute(buf.spare_capacity_mut()) }
 }
 
-pub fn create_tls_connector() -> TlsConnector {
+use tokio_rustls::rustls::client::client_hello::ClientHelloOverride;
+pub fn create_tls_connector(hello_override: Option<Arc<dyn ClientHelloOverride>>) -> TlsConnector {
     let mut root_cert_store = RootCertStore::empty();
     root_cert_store.roots = webpki_roots::TLS_SERVER_ROOTS.to_vec();
-    let client_cfg = ClientConfig::builder()
+    let mut client_cfg = ClientConfig::builder()
         .with_root_certificates(root_cert_store)
         .with_no_client_auth();
+    client_cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    if let Some(hello_override) = hello_override {
+        let mut dangerous_cfg = client_cfg.dangerous();
+        dangerous_cfg.set_hello_override(hello_override);
+    }
     TlsConnector::from(Arc::new(client_cfg))
 }

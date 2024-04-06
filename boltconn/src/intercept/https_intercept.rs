@@ -1,11 +1,13 @@
 use crate::adapter::{Connector, Outbound};
+use crate::common::client_hello::get_overrider;
 use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
 use crate::intercept::{sign_site_cert, HyperBody, ModifierContext};
 use crate::proxy::{ConnAbortHandle, ConnContext};
-use hyper::client::conn::http1;
+use anyhow::Context;
+use hyper::client::conn::http2;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
@@ -49,7 +51,7 @@ impl HttpsIntercept {
     }
 
     async fn proxy(
-        sender: Arc<Mutex<Option<http1::SendRequest<HyperBody>>>>,
+        sender: Arc<Mutex<Option<http2::SendRequest<HyperBody>>>>,
         client_tls: TlsConnector,
         server_name: ServerName<'static>,
         creator: Arc<dyn Outbound>,
@@ -70,9 +72,11 @@ impl HttpsIntercept {
                     let outbound = client_tls
                         .connect(server_name, DuplexChan::new(outbound))
                         .await?;
-                    let (sender, connection) = http1::Builder::new()
-                        .handshake(TokioIo::new(outbound))
-                        .await?;
+                    let (sender, connection) =
+                        http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+                            .handshake(TokioIo::new(outbound))
+                            .await
+                            .context("Intercept h2 failed")?;
                     tokio::spawn(connection);
                     sender
                 });
@@ -97,7 +101,8 @@ impl HttpsIntercept {
         let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
         // tls client
-        let client_tls = create_tls_connector();
+        let client_tls = create_tls_connector(Some(get_overrider()));
+        // let client_tls = create_tls_connector(None);
         let server_name = ServerName::try_from(self.server_name.as_str())
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
             .to_owned();

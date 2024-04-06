@@ -50,7 +50,7 @@ pub async fn latency_test(
     timeout: Duration,
     iface: Option<String>,
 ) -> anyhow::Result<JoinHandle<()>> {
-    let tls_conector = create_tls_connector();
+    let tls_conector = create_tls_connector(None);
     let req = Request::builder()
         .method("GET")
         .uri(url)
