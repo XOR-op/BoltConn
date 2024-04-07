@@ -27,6 +27,7 @@ pub struct HttpsIntercept {
     modifier: Arc<dyn Modifier>,
     creator: Arc<dyn Outbound>,
     conn_info: Arc<ConnContext>,
+    parrot_fingerprint: bool,
 }
 
 impl HttpsIntercept {
@@ -37,6 +38,7 @@ impl HttpsIntercept {
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn Outbound>,
         conn_info: Arc<ConnContext>,
+        parrot_fingerprint: bool,
     ) -> anyhow::Result<Self> {
         let (cert, priv_key) = sign_site_cert(server_name.as_str(), ca_cert)?;
         Ok(Self {
@@ -47,6 +49,7 @@ impl HttpsIntercept {
             modifier,
             creator: Arc::from(creator),
             conn_info,
+            parrot_fingerprint,
         })
     }
 
@@ -101,8 +104,11 @@ impl HttpsIntercept {
         let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
         // tls client
-        let client_tls = create_tls_connector(Some(get_overrider()));
-        // let client_tls = create_tls_connector(None);
+        let client_tls = create_tls_connector(if self.parrot_fingerprint {
+            Some(get_overrider())
+        } else {
+            None
+        });
         let server_name = ServerName::try_from(self.server_name.as_str())
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
             .to_owned();

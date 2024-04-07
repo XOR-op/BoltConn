@@ -176,3 +176,7 @@ where
         }
     }
 }
+
+pub(in crate::config) fn default_true() -> bool {
+    true
+}

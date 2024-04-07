@@ -149,11 +149,11 @@ pub enum RawProxyLocalCfg {
 }
 
 // Used for serde
-fn default_true() -> bool {
+pub(super) fn default_true() -> bool {
     true
 }
 
-fn default_false() -> bool {
+pub(super) fn default_false() -> bool {
     false
 }
 

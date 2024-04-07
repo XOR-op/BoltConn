@@ -290,6 +290,7 @@ impl Dispatcher {
             if port == 80 || port == 443 {
                 let result = self.intercept_mgr.load().matches(&mut conn_info).await;
                 if result.should_intercept() {
+                    let parrot_fingerprint = result.parrot_fingerprint;
                     let modifier = (self.modifier.load())(result, process_info);
                     match port {
                         80 => {
@@ -314,7 +315,11 @@ impl Dispatcher {
                             return Ok(());
                         }
                         443 => {
-                            tracing::debug!("HTTPS intercept for {}", domain_name);
+                            tracing::debug!(
+                                "HTTPS intercept for {}; parrot_fingerprint={}",
+                                domain_name,
+                                parrot_fingerprint
+                            );
                             {
                                 let info = info.clone();
                                 let mocker = match HttpsIntercept::new(
@@ -324,6 +329,7 @@ impl Dispatcher {
                                     modifier,
                                     outbounding,
                                     info,
+                                    parrot_fingerprint,
                                 ) {
                                     Ok(v) => v,
                                     Err(err) => {

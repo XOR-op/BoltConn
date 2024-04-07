@@ -1,3 +1,4 @@
+use super::config::default_true;
 use crate::config::SingleOrVec;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,10 +19,6 @@ pub struct RawInboundConfig {
     pub enable_tun: bool,
     pub http: Option<SingleOrVec<RawInboundServiceConfig>>,
     pub socks5: Option<SingleOrVec<RawInboundServiceConfig>>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[test]
