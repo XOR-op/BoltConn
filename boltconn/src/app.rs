@@ -386,7 +386,10 @@ impl App {
             .replace_modifier(Box::new(move |result, proc_info| {
                 Arc::new(InterceptModifier::new(hcap2.clone(), result, proc_info))
             }));
-        *self.speedtest_url.write().unwrap() = config.speedtest_url.clone();
+        self.speedtest_url
+            .write()
+            .unwrap()
+            .clone_from(&config.speedtest_url);
         Ok(())
     }
 }

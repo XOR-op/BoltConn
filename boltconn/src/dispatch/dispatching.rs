@@ -166,7 +166,7 @@ impl DispatchingBuilder {
                 false,
             )?;
         }
-        builder.rulesets = ruleset.clone();
+        builder.rulesets.clone_from(ruleset);
         Ok(builder)
     }
 
