@@ -32,6 +32,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex, Notify};
 
+const TCP_RING_BUF_SIZE: usize = 1024 * 1024;
+const UDP_RING_BUF_SIZE: usize = 1024 * 1024;
+
 #[derive(Debug, Copy, Clone)]
 enum SmolError {
     Disconnected,
@@ -351,8 +354,8 @@ impl SmolStack {
         remote_addr: SocketAddr,
     ) -> io::Result<SocketHandle> {
         // create socket resource
-        let tx_buf = TcpSocketBuffer::new(vec![0u8; 48 * MAX_PKT_SIZE]);
-        let rx_buf = TcpSocketBuffer::new(vec![0u8; 48 * MAX_PKT_SIZE]);
+        let tx_buf = TcpSocketBuffer::new(vec![0u8; TCP_RING_BUF_SIZE]);
+        let rx_buf = TcpSocketBuffer::new(vec![0u8; TCP_RING_BUF_SIZE]);
         let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
         // Since we are behind kernel's TCP/IP stack, no second Nagle is needed.
         client_socket.set_nagle_enabled(false);
@@ -435,11 +438,11 @@ impl SmolStack {
         // create socket resource
         let tx_buf = UdpSocketBuffer::new(
             vec![UdpPacketMetadata::EMPTY; 256],
-            vec![0u8; 32 * MAX_PKT_SIZE],
+            vec![0u8; UDP_RING_BUF_SIZE],
         );
         let rx_buf = UdpSocketBuffer::new(
             vec![UdpPacketMetadata::EMPTY; 256],
-            vec![0u8; 32 * MAX_PKT_SIZE],
+            vec![0u8; UDP_RING_BUF_SIZE],
         );
         let mut client_socket = SmolUdpSocket::new(rx_buf, tx_buf);
 
