@@ -249,6 +249,7 @@ impl Dispatcher {
         // conn info
         let abort_handle = ConnAbortHandle::new();
         let info = Arc::new(ConnContext::new(
+            self.stat_center.alloc_unique_id(),
             dst_addr.clone(),
             process_info.clone(),
             inbound,
@@ -257,6 +258,7 @@ impl Dispatcher {
             abort_handle.clone(),
             self.stat_center.get_upload(),
             self.stat_center.get_download(),
+            self.stat_center.get_notify_handle(),
         ));
 
         let (tun_conn, tun_next) = Connector::new_pair(10);
@@ -405,6 +407,7 @@ impl Dispatcher {
         // conn info
         let abort_handle = ConnAbortHandle::new();
         let info = Arc::new(ConnContext::new(
+            self.stat_center.alloc_unique_id(),
             dst_addr,
             conn_info.process_info,
             conn_info.inbound,
@@ -413,6 +416,7 @@ impl Dispatcher {
             abort_handle.clone(),
             self.stat_center.get_upload(),
             self.stat_center.get_download(),
+            self.stat_center.get_notify_handle(),
         ));
         Ok((outbounding, info, abort_handle))
     }

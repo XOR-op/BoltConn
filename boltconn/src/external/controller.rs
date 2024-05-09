@@ -90,30 +90,27 @@ impl Controller {
     }
 
     pub fn get_all_conns(&self) -> Vec<ConnectionSchema> {
-        let (list, offset) = self.stat_center.get_copy();
+        let mut list = self.stat_center.get_active_copy();
+        list.extend(self.stat_center.get_inactive_copy());
+        // sort and remove duplicated
+        list.sort_by_key(|x| x.id);
+        list.dedup_by_key(|x| x.id);
+
         list.into_iter()
-            .enumerate()
-            .map(|(idx, info)| Self::get_connection_schema(idx, offset, info.as_ref()))
+            .map(|info| Self::get_connection_schema(info.as_ref()))
             .collect()
     }
 
     pub fn get_active_conns(&self) -> Vec<ConnectionSchema> {
-        let (list, offset) = self.stat_center.get_copy();
+        let list = self.stat_center.get_active_copy();
         list.iter()
-            .enumerate()
-            .filter_map(|(idx, info)| {
-                if info.done.load(Ordering::Relaxed) {
-                    None
-                } else {
-                    Some(Self::get_connection_schema(idx, offset, info.as_ref()))
-                }
-            })
+            .map(|info| Self::get_connection_schema(info.as_ref()))
             .collect()
     }
 
-    fn get_connection_schema(idx: usize, offset: usize, info: &ConnContext) -> ConnectionSchema {
+    fn get_connection_schema(info: &ConnContext) -> ConnectionSchema {
         ConnectionSchema {
-            conn_id: (idx + offset) as u64,
+            conn_id: info.id,
             inbound: info.inbound_info.to_string(),
             destination: info.dest.to_string(),
             protocol: info.session_proto.write().unwrap().to_string(),
@@ -137,13 +134,13 @@ impl Controller {
     }
 
     pub fn stop_all_conn(&self) {
-        let (list, _) = self.stat_center.get_copy();
+        let list = self.stat_center.get_active_copy();
         for entry in list {
             entry.abort();
         }
     }
 
-    pub async fn stop_conn(&self, id: usize) -> bool {
+    pub async fn stop_conn(&self, id: u64) -> bool {
         if let Some(ele) = self.stat_center.get_nth(id).await {
             ele.abort();
             true

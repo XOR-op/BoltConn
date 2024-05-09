@@ -7,6 +7,7 @@ use crate::platform::process::{NetworkType, ProcessInfo};
 use arc_swap::ArcSwap;
 use boltapi::CapturedBodySchema;
 use fast_socks5::util::target_addr::TargetAddr;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -264,6 +265,7 @@ impl ConnAbortHandle {
 // Info about one connection
 #[derive(Debug)]
 pub struct ConnContext {
+    pub id: u64,
     pub start_time: SystemTime,
     pub dest: NetworkAddr,
     pub process_info: Option<ProcessInfo>,
@@ -278,12 +280,14 @@ pub struct ConnContext {
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
     abort_handle: ConnAbortHandle,
+    notify_handle: Arc<AtomicBool>,
 }
 
 impl ConnContext {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         // static info
+        id: u64,
         dst: NetworkAddr,
         process_info: Option<ProcessInfo>,
         inbound_info: InboundInfo,
@@ -293,8 +297,10 @@ impl ConnContext {
         abort_handle: ConnAbortHandle,
         global_upload: Arc<AtomicU64>,
         global_download: Arc<AtomicU64>,
+        notify_handle: Arc<AtomicBool>,
     ) -> Self {
         Self {
+            id,
             start_time: SystemTime::now(),
             dest: dst,
             inbound_info,
@@ -310,6 +316,7 @@ impl ConnContext {
             global_upload,
             global_download,
             abort_handle,
+            notify_handle,
         }
     }
 
@@ -337,6 +344,7 @@ impl ConnContext {
 
     pub fn mark_fin(&self) {
         self.done.store(true, Ordering::Relaxed);
+        self.notify_handle.store(true, Ordering::Relaxed);
     }
 
     pub fn abort(&self) {
@@ -390,10 +398,13 @@ pub struct ContextManager {
     inner: RwLock<ContextManagerInner>,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
+    notify_handle: Arc<AtomicBool>,
+    unique_id_cnt: AtomicU64,
 }
 
 struct ContextManagerInner {
-    content: EvictableVec<Arc<ConnContext>>,
+    active_ctx: HashMap<u64, Arc<ConnContext>>,
+    inactive_ctx: EvictableVec<Arc<ConnContext>>,
     keep_count: usize,
     grace_threshold: usize,
     db_handle: Option<DatabaseHandle>,
@@ -403,14 +414,21 @@ impl ContextManager {
     pub fn new(db_handle: Option<DatabaseHandle>) -> Self {
         Self {
             inner: RwLock::new(ContextManagerInner {
-                content: EvictableVec::new(),
+                active_ctx: Default::default(),
+                inactive_ctx: EvictableVec::new(),
                 keep_count: 50,
                 grace_threshold: 5,
                 db_handle,
             }),
             global_upload: Arc::new(Default::default()),
             global_download: Arc::new(Default::default()),
+            notify_handle: Arc::new(AtomicBool::new(false)),
+            unique_id_cnt: Default::default(),
         }
+    }
+
+    pub fn alloc_unique_id(&self) -> u64 {
+        self.unique_id_cnt.fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn get_upload(&self) -> Arc<AtomicU64> {
@@ -421,31 +439,51 @@ impl ContextManager {
         self.global_download.clone()
     }
 
+    pub fn get_notify_handle(&self) -> Arc<AtomicBool> {
+        self.notify_handle.clone()
+    }
+
     pub fn push(&self, info: Arc<ConnContext>) {
         let mut inner = self.inner.write().unwrap();
-        inner.content.push(info);
-        inner.evict();
+        inner.active_ctx.insert(info.id, info);
+        let process_active = self.notify_handle.swap(false, Ordering::Relaxed);
+        inner.evict(process_active);
     }
 
-    pub fn get_copy(&self) -> (Vec<Arc<ConnContext>>, usize) {
-        let inner = self.inner.read().unwrap();
-        let data = inner.content.get_last_n(inner.content.real_len());
-        (
-            data,
-            minimum_start(inner.content.logical_len(), inner.keep_count),
-        )
+    pub fn get_active_copy(&self) -> Vec<Arc<ConnContext>> {
+        self.inner
+            .read()
+            .unwrap()
+            .active_ctx
+            .values()
+            .cloned()
+            .collect()
     }
 
-    pub async fn get_nth(&self, idx: usize) -> Option<Arc<ConnContext>> {
-        self.inner.read().unwrap().content.get(idx).cloned()
+    pub fn get_inactive_copy(&self) -> Vec<Arc<ConnContext>> {
+        self.inner.read().unwrap().inactive_ctx.as_vec()
+    }
+
+    pub async fn get_nth(&self, idx: u64) -> Option<Arc<ConnContext>> {
+        self.inner.read().unwrap().active_ctx.get(&idx).cloned()
     }
 }
 
 impl ContextManagerInner {
-    fn evict(&mut self) {
-        if self.content.real_len() > self.keep_count + self.grace_threshold {
-            self.content.evict_until(
-                |c, left| -> bool { left > self.keep_count && c.done.load(Ordering::Relaxed) },
+    fn evict(&mut self, process_active: bool) {
+        if process_active {
+            let mut to_remove = vec![];
+            for (id, ctx) in self.active_ctx.iter() {
+                if ctx.done.load(Ordering::Relaxed) {
+                    to_remove.push(*id);
+                    self.inactive_ctx.push(ctx.clone());
+                }
+            }
+            self.active_ctx.retain(|k, _| !to_remove.contains(k));
+        }
+        if self.inactive_ctx.real_len() > self.keep_count + self.grace_threshold {
+            self.inactive_ctx.evict_until(
+                |_c, left| -> bool { left > self.keep_count },
                 |data| {
                     if let Some(handle) = &mut self.db_handle {
                         handle.add_connections(data)
@@ -458,7 +496,11 @@ impl ContextManagerInner {
 
 impl Drop for ContextManagerInner {
     fn drop(&mut self) {
-        self.content.evict_with(0, |data| {
+        let active_list: Vec<_> = self.active_ctx.values().cloned().collect();
+        if let Some(handle) = &mut self.db_handle {
+            handle.add_connections(active_list)
+        }
+        self.inactive_ctx.evict_with(0, |data| {
             if let Some(handle) = &mut self.db_handle {
                 handle.add_connections(data)
             }

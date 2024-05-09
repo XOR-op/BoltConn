@@ -37,7 +37,7 @@ impl std::io::Write for StreamLoggerSend {
             let _ = self.sender.send(s.to_string());
             let mut backup = self.backup.lock().unwrap();
             backup.push_back(s.to_string());
-            if backup.len() > 10 {
+            if backup.len() > 20 {
                 backup.pop_front();
             }
         }

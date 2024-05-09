@@ -78,7 +78,8 @@ impl Requester {
         }?;
         for conn in result {
             println!(
-                "{} ({},{}) {}\t [up:{},down:{},time:{}] [{}]",
+                "#{}: {} ({},{}) {}\t [up:{},down:{},time:{}] [{}]",
+                conn.conn_id,
                 conn.destination.cyan(),
                 conn.protocol,
                 conn.proxy.italic(),

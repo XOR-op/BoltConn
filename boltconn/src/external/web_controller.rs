@@ -210,7 +210,7 @@ impl WebController {
             let Some(id) = params.get("id") else {
                 return Json(serde_json::Value::Bool(false));
             };
-            if let Ok(s) = id.parse::<usize>() {
+            if let Ok(s) = id.parse::<u64>() {
                 s
             } else {
                 return Json(serde_json::Value::Bool(false));

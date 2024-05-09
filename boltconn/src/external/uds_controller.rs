@@ -253,7 +253,7 @@ impl ControlService for UdsRpcServer {
     }
 
     async fn stop_conn(self, _ctx: Context, id: u32) -> bool {
-        self.controller.stop_conn(id as usize).await
+        self.controller.stop_conn(id as u64).await
     }
 
     async fn add_temporary_rule(self, _ctx: Context, rule_literal: String) -> bool {
