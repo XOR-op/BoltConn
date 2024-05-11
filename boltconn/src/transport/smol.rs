@@ -27,6 +27,7 @@ use std::future::Future;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::ops::Add;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,6 +48,7 @@ struct TcpConnTask {
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     remain_to_send: Option<(Bytes, usize)>, // buffer, start_offset
+    half_close_timeout: Option<Instant>,
 }
 
 impl TcpConnTask {
@@ -74,6 +76,7 @@ impl TcpConnTask {
             handle,
             abort_handle,
             remain_to_send: None,
+            half_close_timeout: None,
         }
     }
 
@@ -469,9 +472,11 @@ impl SmolStack {
                     }
                 }
             }
-            if socket.state() != TcpState::Closed {
+            if socket.may_recv() {
                 // this async is a channel operation
                 has_activity |= item.try_recv(socket).await;
+            } else if socket.state() == TcpState::Established && item.half_close_timeout.is_none() {
+                item.half_close_timeout = Some(Instant::now().add(Duration::from_secs(30)));
             }
         }
         has_activity
@@ -507,7 +512,12 @@ impl SmolStack {
     pub fn purge_closed_tcp(&mut self) {
         self.tcp_conn.retain(|_port, task| {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(task.handle);
-            if socket.state() == TcpState::Closed {
+            if socket.state() == TcpState::Closed
+                || task
+                    .half_close_timeout
+                    .as_ref()
+                    .is_some_and(|ddl| Instant::now().ge(ddl))
+            {
                 self.socket_set.remove(task.handle);
                 // Here we only abort normally closed sockets. Maybe unnecessary?
                 task.abort_handle.cancel();
