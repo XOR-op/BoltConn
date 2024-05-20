@@ -173,7 +173,7 @@ impl Endpoint {
                     stack_handle.drive_iface();
                     immediate_next_loop |= stack_handle.poll_all_tcp().await;
                     immediate_next_loop |= stack_handle.poll_all_udp().await;
-                    stack_handle.purge_closed_tcp();
+                    stack_handle.purge_invalid_tcp();
                     stack_handle.purge_timeout_udp();
                     let wait_time = if immediate_next_loop {
                         Duration::from_secs(0)

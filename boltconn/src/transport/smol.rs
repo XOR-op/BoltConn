@@ -48,6 +48,7 @@ struct TcpConnTask {
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     remain_to_send: Option<(Bytes, usize)>, // buffer, start_offset
+    start_timestamp: Instant,
     half_close_timeout: Option<Instant>,
 }
 
@@ -76,6 +77,7 @@ impl TcpConnTask {
             handle,
             abort_handle,
             remain_to_send: None,
+            start_timestamp: Instant::now(),
             half_close_timeout: None,
         }
     }
@@ -509,14 +511,18 @@ impl SmolStack {
         has_activity
     }
 
-    pub fn purge_closed_tcp(&mut self) {
+    pub fn purge_invalid_tcp(&mut self) {
         self.tcp_conn.retain(|_port, task| {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(task.handle);
             if socket.state() == TcpState::Closed
+                // half close timeout
                 || task
                     .half_close_timeout
                     .as_ref()
                     .is_some_and(|ddl| Instant::now().ge(ddl))
+                // syn but no response
+                || (socket.state() == TcpState::SynSent
+                    && task.start_timestamp.elapsed() > Duration::from_secs(30))
             {
                 self.socket_set.remove(task.handle);
                 // Here we only abort normally closed sockets. Maybe unnecessary?
