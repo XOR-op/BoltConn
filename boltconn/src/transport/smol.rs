@@ -33,8 +33,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex, Notify};
 
-const TCP_RING_BUF_SIZE: usize = 1024 * 1024;
-const UDP_RING_BUF_SIZE: usize = 1024 * 1024;
+const TCP_RECV_BUF_SIZE: usize = 1024 * 1024;
+const TCP_SEND_BUF_SIZE: usize = 256 * 1024;
 
 #[derive(Debug, Copy, Clone)]
 enum SmolError {
@@ -356,8 +356,8 @@ impl SmolStack {
         remote_addr: SocketAddr,
     ) -> io::Result<SocketHandle> {
         // create socket resource
-        let tx_buf = TcpSocketBuffer::new(vec![0u8; TCP_RING_BUF_SIZE]);
-        let rx_buf = TcpSocketBuffer::new(vec![0u8; TCP_RING_BUF_SIZE]);
+        let tx_buf = TcpSocketBuffer::new(vec![0u8; TCP_SEND_BUF_SIZE]);
+        let rx_buf = TcpSocketBuffer::new(vec![0u8; TCP_RECV_BUF_SIZE]);
         let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
         // Since we are behind kernel's TCP/IP stack, no second Nagle is needed.
         client_socket.set_nagle_enabled(false);
@@ -382,6 +382,17 @@ impl SmolStack {
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> io::Result<()> {
+        self.open_udp_extended(local_addr, connector, abort_handle, notify, 256)
+    }
+
+    pub fn open_udp_extended(
+        &mut self,
+        local_addr: SocketAddr,
+        connector: AddrConnector,
+        abort_handle: ConnAbortHandle,
+        notify: Arc<Notify>,
+        buffer_packet_cnt: usize,
+    ) -> io::Result<()> {
         // todo: IPv6 support when local_addr is a V4 address
         if local_addr.port() == 0 {
             for _ in 0..10 {
@@ -395,6 +406,7 @@ impl SmolStack {
                                 .matched_if_addr(local_addr.ip())
                                 .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
                             port,
+                            buffer_packet_cnt,
                         )?;
                         e.insert(UdpConnTask::new(
                             connector,
@@ -418,6 +430,7 @@ impl SmolStack {
                             .matched_if_addr(local_addr.ip())
                             .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
                         local_addr.port(),
+                        buffer_packet_cnt,
                     )?;
                     e.insert(UdpConnTask::new(
                         connector,
@@ -436,15 +449,17 @@ impl SmolStack {
         socket_set: &mut SocketSet<'static>,
         ip_addr: IpAddr,
         local_port: u16,
+        buffer_packet_cnt: usize,
     ) -> io::Result<SocketHandle> {
         // create socket resource
+        const UDP_PACKET_SIZE: usize = 1536;
         let tx_buf = UdpSocketBuffer::new(
-            vec![UdpPacketMetadata::EMPTY; 256],
-            vec![0u8; UDP_RING_BUF_SIZE],
+            vec![UdpPacketMetadata::EMPTY; buffer_packet_cnt],
+            vec![0u8; buffer_packet_cnt * UDP_PACKET_SIZE],
         );
         let rx_buf = UdpSocketBuffer::new(
-            vec![UdpPacketMetadata::EMPTY; 256],
-            vec![0u8; UDP_RING_BUF_SIZE],
+            vec![UdpPacketMetadata::EMPTY; buffer_packet_cnt],
+            vec![0u8; buffer_packet_cnt * UDP_PACKET_SIZE],
         );
         let mut client_socket = SmolUdpSocket::new(rx_buf, tx_buf);
 
@@ -497,7 +512,7 @@ impl SmolStack {
                     }
                     Err(SmolError::Disconnected) => {
                         // send side has closed
-                        // if don't received any data in 30s, close the socket
+                        // if we don't receive any data in 30s, close the socket
                         if item.last_active.elapsed() > Duration::from_secs(30) {
                             socket.close();
                             item.abort_handle.cancel();
@@ -711,7 +726,7 @@ impl RuntimeProvider for SmolDnsProvider {
         Box::pin(async move {
             let smol = smol.ok_or_else(|| io::Error::from(ErrorKind::ConnectionReset))?;
             let mut x = smol.lock().await;
-            x.open_udp(local_addr, inbound, handle, notify)?;
+            x.open_udp_extended(local_addr, inbound, handle, notify, 8)?;
             let outbound = AddrConnectorWrapper::from(outbound);
             Ok(outbound)
         })
