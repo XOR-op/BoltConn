@@ -150,6 +150,24 @@ pub(crate) enum GenerateOptions {
 }
 
 #[derive(Debug, Subcommand)]
+pub(crate) enum LogsCommand {
+    /// limit of logs retained
+    #[command(subcommand)]
+    Limit(LogsLimitOptions),
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub(crate) enum LogsLimitOptions {
+    /// Set the limit of logs
+    Set {
+        #[clap(value_hint = ValueHint::Other)]
+        limit: u32,
+    },
+    /// Get the limit of logs
+    Get,
+}
+
+#[derive(Debug, Subcommand)]
 pub(crate) enum SubCommand {
     /// Start the main program
     Start(StartOptions),
@@ -173,6 +191,8 @@ pub(crate) enum SubCommand {
     /// Adjust TUN status
     #[command(subcommand)]
     Tun(TunOptions),
+    #[command(subcommand)]
+    Logs(LogsCommand),
     /// Clean unexpected shutdown
     Clean,
     /// Generate necessary files before the first run
@@ -308,6 +328,12 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         SubCommand::Dns(opt) => match opt {
             DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
             DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
+        },
+        SubCommand::Logs(subcmd) => match subcmd {
+            LogsCommand::Limit(opt) => match opt {
+                LogsLimitOptions::Set { limit } => requester.set_log_limit(limit).await,
+                LogsLimitOptions::Get => requester.get_log_limit().await,
+            },
         },
         SubCommand::Start(_) | SubCommand::Generate(_) | SubCommand::Clean => {
             unreachable!()

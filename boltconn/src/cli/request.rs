@@ -243,6 +243,24 @@ impl Requester {
         }
     }
 
+    pub async fn get_log_limit(&self) -> Result<()> {
+        let limit = match &self.inner {
+            Inner::Web(c) => c.get_log_limit().await,
+            Inner::Uds(c) => c.get_log_limit().await,
+        }?;
+        println!("{}", limit);
+        Ok(())
+    }
+
+    pub async fn set_log_limit(&self, limit: u32) -> Result<()> {
+        match &self.inner {
+            Inner::Web(c) => c.set_log_limit(limit).await,
+            Inner::Uds(c) => c.set_log_limit(limit).await,
+        }?;
+        println!("{}", "Success".green());
+        Ok(())
+    }
+
     pub async fn real_lookup(&self, domain: String) -> Result<()> {
         let ip = match &self.inner {
             Inner::Web(c) => c.real_lookup(domain.clone()).await,

@@ -90,7 +90,10 @@ impl App {
             };
             let intercept_handle = conn_handle.clone();
             (
-                Arc::new(ContextManager::new(conn_handle)),
+                Arc::new(ContextManager::new(
+                    conn_handle,
+                    loaded_config.state.log_limit.unwrap_or(50),
+                )),
                 Arc::new(HttpCapturer::new(intercept_handle)),
             )
         };

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 pub struct RawState {
     pub group_selection: HashMap<String, String>,
     pub temporary_list: Option<Vec<RuleConfigLine>>,
+    pub log_limit: Option<u32>,
 }
 
 #[derive(Debug)]

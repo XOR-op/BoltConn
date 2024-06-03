@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Instant, SystemTime};
 use tokio::task::JoinHandle;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionProtocol {
     Tcp,
@@ -405,18 +404,18 @@ pub struct ContextManager {
 struct ContextManagerInner {
     active_ctx: HashMap<u64, Arc<ConnContext>>,
     inactive_ctx: EvictableVec<Arc<ConnContext>>,
-    keep_count: usize,
+    log_limit: u32,
     grace_threshold: usize,
     db_handle: Option<DatabaseHandle>,
 }
 
 impl ContextManager {
-    pub fn new(db_handle: Option<DatabaseHandle>) -> Self {
+    pub fn new(db_handle: Option<DatabaseHandle>, log_limit: u32) -> Self {
         Self {
             inner: RwLock::new(ContextManagerInner {
                 active_ctx: Default::default(),
                 inactive_ctx: EvictableVec::new(),
-                keep_count: 50,
+                log_limit,
                 grace_threshold: 5,
                 db_handle,
             }),
@@ -441,6 +440,14 @@ impl ContextManager {
 
     pub fn get_notify_handle(&self) -> Arc<AtomicBool> {
         self.notify_handle.clone()
+    }
+
+    pub fn get_log_limit(&self) -> u32 {
+        self.inner.read().unwrap().log_limit
+    }
+
+    pub fn set_log_limit(&self, limit: u32) {
+        self.inner.write().unwrap().log_limit = limit;
     }
 
     pub fn push(&self, info: Arc<ConnContext>) {
@@ -471,6 +478,7 @@ impl ContextManager {
 
 impl ContextManagerInner {
     fn evict(&mut self, process_active: bool) {
+        let log_limit = self.log_limit as usize;
         if process_active {
             let mut to_remove = vec![];
             for (id, ctx) in self.active_ctx.iter() {
@@ -481,9 +489,9 @@ impl ContextManagerInner {
             }
             self.active_ctx.retain(|k, _| !to_remove.contains(k));
         }
-        if self.inactive_ctx.real_len() > self.keep_count + self.grace_threshold {
+        if self.inactive_ctx.real_len() > log_limit + self.grace_threshold {
             self.inactive_ctx.evict_until(
-                |_c, left| -> bool { left > self.keep_count },
+                |_c, left| -> bool { left > log_limit },
                 |data| {
                     if let Some(handle) = &mut self.db_handle {
                         handle.add_connections(data)

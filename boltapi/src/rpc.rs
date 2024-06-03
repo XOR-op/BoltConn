@@ -51,6 +51,10 @@ pub trait ControlService {
 
     async fn get_traffic() -> TrafficResp;
 
+    async fn set_log_limit(limit: u32);
+
+    async fn get_log_limit() -> u32;
+
     async fn reload();
 
     // Streaming

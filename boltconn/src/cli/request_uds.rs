@@ -130,6 +130,14 @@ impl UdsConnector {
         Ok(self.client.clear_temporary_rule(Context::current()).await?)
     }
 
+    pub async fn set_log_limit(&self, limit: u32) -> Result<()> {
+        Ok(self.client.set_log_limit(Context::current(), limit).await?)
+    }
+
+    pub async fn get_log_limit(&self) -> Result<u32> {
+        Ok(self.client.get_log_limit(Context::current()).await?)
+    }
+
     pub async fn reload_config(&self) -> Result<()> {
         Ok(self.client.reload(Context::current()).await?)
     }

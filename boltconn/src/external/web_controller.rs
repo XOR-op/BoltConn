@@ -61,6 +61,10 @@ impl WebController {
             .route("/dns/mapping/:fake_ip", get(Self::fake_ip_to_real))
             .route("/dns/lookup/:domain", get(Self::real_lookup))
             .route("/speedtest/:group", get(Self::update_latency))
+            .route(
+                "/logs/limit",
+                get(Self::get_log_limit).put(Self::set_log_limit),
+            )
             .route("/reload", post(Self::reload))
             .route_layer(map_request(wrapper))
             .with_state(self);
@@ -324,6 +328,18 @@ impl WebController {
                 })
                 .await
         ))
+    }
+
+    async fn set_log_limit(
+        State(server): State<Self>,
+        Json(limit): Json<u32>,
+    ) -> Json<serde_json::Value> {
+        server.controller.set_log_limit(limit);
+        Json(serde_json::Value::Null)
+    }
+
+    async fn get_log_limit(State(server): State<Self>) -> Json<serde_json::Value> {
+        Json(json!(server.controller.get_log_limit()))
     }
 
     async fn reload(State(server): State<Self>) {

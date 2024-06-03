@@ -292,6 +292,14 @@ impl ControlService for UdsRpcServer {
         self.controller.get_traffic()
     }
 
+    async fn set_log_limit(self, _ctx: Context, limit: u32) {
+        self.controller.set_log_limit(limit)
+    }
+
+    async fn get_log_limit(self, _ctx: Context) -> u32 {
+        self.controller.get_log_limit()
+    }
+
     async fn reload(self, _ctx: Context) {
         self.controller.reload().await
     }

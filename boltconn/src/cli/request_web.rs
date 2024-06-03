@@ -113,6 +113,24 @@ impl WebConnector {
         Ok(data)
     }
 
+    pub async fn set_log_limit(&self, limit: u32) -> Result<()> {
+        reqwest::Client::new()
+            .put(self.route("/logs/limit"))
+            .json(&limit)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_log_limit(&self) -> Result<u32> {
+        let data = reqwest::get(self.route("/logs/limit"))
+            .await?
+            .text()
+            .await?;
+        let result: u32 = serde_json::from_str(data.as_str())?;
+        Ok(result)
+    }
+
     pub async fn reload_config(&self) -> Result<()> {
         reqwest::Client::new()
             .post(self.route("/reload"))
