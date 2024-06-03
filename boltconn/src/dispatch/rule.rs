@@ -83,7 +83,14 @@ impl RuleImpl {
             }
             RuleImpl::DomainSuffix(d) => {
                 if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
-                    domain_name.ends_with(d)
+                    if domain_name.len() == d.len() {
+                        domain_name == d
+                    } else if domain_name.len() > d.len() {
+                        domain_name.ends_with(d)
+                            && domain_name.chars().rev().nth(d.len()) == Some('.')
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
