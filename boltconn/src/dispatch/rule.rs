@@ -85,11 +85,10 @@ impl RuleImpl {
                 if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
                     if domain_name.len() == d.len() {
                         domain_name == d
-                    } else if domain_name.len() > d.len() {
-                        domain_name.ends_with(d)
-                            && domain_name.chars().rev().nth(d.len()) == Some('.')
                     } else {
-                        false
+                        domain_name.len() > d.len()
+                            && domain_name.ends_with(d)
+                            && domain_name.chars().rev().nth(d.len()) == Some('.')
                     }
                 } else {
                     false
