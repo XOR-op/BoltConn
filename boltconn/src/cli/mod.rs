@@ -35,6 +35,8 @@ pub(crate) enum ConnOptions {
         #[clap(value_hint = ValueHint::Other)]
         nth: Option<usize>,
     },
+    #[command(subcommand)]
+    Limit(LogsLimitOptions),
 }
 
 #[derive(Debug, Clone, Copy, Subcommand)]
@@ -149,13 +151,6 @@ pub(crate) enum GenerateOptions {
     Prompt(PromptOptions),
 }
 
-#[derive(Debug, Subcommand)]
-pub(crate) enum LogsCommand {
-    /// limit of logs retained
-    #[command(subcommand)]
-    Limit(LogsLimitOptions),
-}
-
 #[derive(Debug, Clone, Copy, Subcommand)]
 pub(crate) enum LogsLimitOptions {
     /// Set the limit of logs
@@ -191,8 +186,6 @@ pub(crate) enum SubCommand {
     /// Adjust TUN status
     #[command(subcommand)]
     Tun(TunOptions),
-    #[command(subcommand)]
-    Logs(LogsCommand),
     /// Clean unexpected shutdown
     Clean,
     /// Generate necessary files before the first run
@@ -301,6 +294,10 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         SubCommand::Conn(opt) => match opt {
             ConnOptions::List => requester.get_connections().await,
             ConnOptions::Stop { nth } => requester.stop_connections(nth).await,
+            ConnOptions::Limit(opt) => match opt {
+                LogsLimitOptions::Set { limit } => requester.set_conn_log_limit(limit).await,
+                LogsLimitOptions::Get => requester.get_conn_log_limit().await,
+            },
         },
         SubCommand::Tun(opt) => match opt {
             TunOptions::Get => requester.get_tun().await,
@@ -328,12 +325,6 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         SubCommand::Dns(opt) => match opt {
             DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
             DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
-        },
-        SubCommand::Logs(subcmd) => match subcmd {
-            LogsCommand::Limit(opt) => match opt {
-                LogsLimitOptions::Set { limit } => requester.set_log_limit(limit).await,
-                LogsLimitOptions::Get => requester.get_log_limit().await,
-            },
         },
         SubCommand::Start(_) | SubCommand::Generate(_) | SubCommand::Clean => {
             unreachable!()

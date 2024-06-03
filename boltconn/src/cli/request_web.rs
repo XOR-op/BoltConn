@@ -113,17 +113,17 @@ impl WebConnector {
         Ok(data)
     }
 
-    pub async fn set_log_limit(&self, limit: u32) -> Result<()> {
+    pub async fn set_conn_log_limit(&self, limit: u32) -> Result<()> {
         reqwest::Client::new()
-            .put(self.route("/logs/limit"))
+            .put(self.route("/connections/log_limit"))
             .json(&limit)
             .send()
             .await?;
         Ok(())
     }
 
-    pub async fn get_log_limit(&self) -> Result<u32> {
-        let data = reqwest::get(self.route("/logs/limit"))
+    pub async fn get_conn_log_limit(&self) -> Result<u32> {
+        let data = reqwest::get(self.route("/connections/log_limit"))
             .await?
             .text()
             .await?;

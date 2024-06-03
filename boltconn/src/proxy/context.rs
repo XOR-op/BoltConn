@@ -442,11 +442,11 @@ impl ContextManager {
         self.notify_handle.clone()
     }
 
-    pub fn get_log_limit(&self) -> u32 {
+    pub fn get_conn_log_limit(&self) -> u32 {
         self.inner.read().unwrap().log_limit
     }
 
-    pub fn set_log_limit(&self, limit: u32) {
+    pub fn set_conn_log_limit(&self, limit: u32) {
         self.inner.write().unwrap().log_limit = limit;
     }
 

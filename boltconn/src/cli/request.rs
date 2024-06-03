@@ -243,19 +243,19 @@ impl Requester {
         }
     }
 
-    pub async fn get_log_limit(&self) -> Result<()> {
+    pub async fn get_conn_log_limit(&self) -> Result<()> {
         let limit = match &self.inner {
-            Inner::Web(c) => c.get_log_limit().await,
-            Inner::Uds(c) => c.get_log_limit().await,
+            Inner::Web(c) => c.get_conn_log_limit().await,
+            Inner::Uds(c) => c.get_conn_log_limit().await,
         }?;
         println!("{}", limit);
         Ok(())
     }
 
-    pub async fn set_log_limit(&self, limit: u32) -> Result<()> {
+    pub async fn set_conn_log_limit(&self, limit: u32) -> Result<()> {
         match &self.inner {
-            Inner::Web(c) => c.set_log_limit(limit).await,
-            Inner::Uds(c) => c.set_log_limit(limit).await,
+            Inner::Web(c) => c.set_conn_log_limit(limit).await,
+            Inner::Uds(c) => c.set_conn_log_limit(limit).await,
         }?;
         println!("{}", "Success".green());
         Ok(())

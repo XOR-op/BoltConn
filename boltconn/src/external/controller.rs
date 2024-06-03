@@ -377,15 +377,15 @@ impl Controller {
         Self::flush_state(&state);
     }
 
-    pub fn set_log_limit(&self, limit: u32) {
+    pub fn set_conn_log_limit(&self, limit: u32) {
         let mut state = self.state.lock().unwrap();
-        self.stat_center.set_log_limit(limit);
+        self.stat_center.set_conn_log_limit(limit);
         state.state.log_limit = Some(limit);
         Self::flush_state(&state);
     }
 
-    pub fn get_log_limit(&self) -> u32 {
-        self.stat_center.get_log_limit()
+    pub fn get_conn_log_limit(&self) -> u32 {
+        self.stat_center.get_conn_log_limit()
     }
 
     pub async fn real_lookup(&self, domain_name: String) -> Option<String> {
