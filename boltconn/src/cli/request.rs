@@ -29,7 +29,7 @@ impl Requester {
 
     pub async fn new_uds(path: PathBuf) -> Result<Self> {
         Ok(Self {
-            inner: Inner::Uds(UdsConnector::new(path).await?),
+            inner: Inner::Uds(UdsConnector::new(path).await?.0),
         })
     }
 

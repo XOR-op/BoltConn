@@ -3,7 +3,9 @@ mod clean;
 mod request;
 mod request_uds;
 mod request_web;
+mod streaming;
 
+use crate::cli::streaming::ConnectionState;
 use crate::ProgramArgs;
 use anyhow::anyhow;
 use clap::{Args, CommandFactory, Subcommand, ValueHint};
@@ -31,10 +33,12 @@ pub(crate) enum ProxyOptions {
 pub(crate) enum ConnOptions {
     /// List all active connections
     List,
+    /// Stop connection
     Stop {
         #[clap(value_hint = ValueHint::Other)]
         nth: Option<usize>,
     },
+    /// Connection logs limit
     #[command(subcommand)]
     Limit(LogsLimitOptions),
 }
@@ -186,6 +190,8 @@ pub(crate) enum SubCommand {
     /// Adjust TUN status
     #[command(subcommand)]
     Tun(TunOptions),
+    /// Display logs
+    Log,
     /// Clean unexpected shutdown
     Clean,
     /// Generate necessary files before the first run
@@ -274,6 +280,21 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 exit(0)
             }
         }
+        SubCommand::Log => {
+            if args.url.is_some() {
+                eprintln!("Log command does not support remote connection");
+                exit(-1)
+            }
+            let state = match ConnectionState::new(PathBuf::from(default_uds_path)).await {
+                Ok(s) => s,
+                Err(err) => {
+                    eprintln!("{}", err);
+                    exit(-1)
+                }
+            };
+            state.stream_log().await.unwrap();
+            exit(0)
+        }
         _ => (),
     }
     let requester = match match args.url {
@@ -326,7 +347,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
             DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
         },
-        SubCommand::Start(_) | SubCommand::Generate(_) | SubCommand::Clean => {
+        SubCommand::Start(_) | SubCommand::Generate(_) | SubCommand::Clean | SubCommand::Log => {
             unreachable!()
         }
         #[cfg(feature = "internal-test")]

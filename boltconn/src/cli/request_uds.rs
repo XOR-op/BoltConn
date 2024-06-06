@@ -1,6 +1,6 @@
 use anyhow::Result;
 use boltapi::multiplex::rpc_multiplex_twoway;
-use boltapi::rpc::ControlServiceClient;
+use boltapi::rpc::{ClientStreamServiceRequest, ClientStreamServiceResponse, ControlServiceClient};
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
     TunStatusSchema,
@@ -17,22 +17,29 @@ pub struct UdsConnector {
 }
 
 impl UdsConnector {
-    pub async fn new(bind_addr: PathBuf) -> Result<Self> {
+    pub async fn new(
+        bind_addr: PathBuf,
+    ) -> Result<(
+        Self,
+        UnboundedChannel<
+            tarpc::ClientMessage<ClientStreamServiceRequest>,
+            tarpc::Response<ClientStreamServiceResponse>,
+        >,
+    )> {
         let conn = UnixStream::connect(bind_addr).await?;
         let transport = tarpc::serde_transport::new(
-            LengthDelimitedCodec::builder().new_framed(conn),
+            LengthDelimitedCodec::builder()
+                .max_frame_length(boltapi::rpc::MAX_CODEC_FRAME_LENGTH)
+                .new_framed(conn),
             Cbor::default(),
         );
-        let (placeholder, client_t, in_task, out_task) = rpc_multiplex_twoway(transport);
-        // dirty hack to make rustc infer correct type
-        fn infer_generic_type(_: UnboundedChannel<tarpc::ClientMessage<()>, tarpc::Response<()>>) {}
-        infer_generic_type(placeholder);
+        let (server_t, client_t, in_task, out_task) = rpc_multiplex_twoway(transport);
 
         tokio::spawn(in_task);
         tokio::spawn(out_task);
         let client = ControlServiceClient::new(Default::default(), client_t).spawn();
 
-        Ok(Self { client })
+        Ok((Self { client }, server_t))
     }
 
     pub async fn get_group_list(&self) -> Result<Vec<GetGroupRespSchema>> {
@@ -139,6 +146,13 @@ impl UdsConnector {
 
     pub async fn get_conn_log_limit(&self) -> Result<u32> {
         Ok(self.client.get_conn_log_limit(Context::current()).await?)
+    }
+
+    pub async fn get_log_stream(&self, ctx_id: u64) -> Result<()> {
+        Ok(self
+            .client
+            .request_log_stream(Context::current(), ctx_id)
+            .await?)
     }
 
     pub async fn reload_config(&self) -> Result<()> {
