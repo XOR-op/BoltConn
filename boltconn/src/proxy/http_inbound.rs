@@ -63,11 +63,7 @@ impl HttpInbound {
     ) -> anyhow::Result<()> {
         // get response
         let mut buf_reader = BufReader::new(socket);
-        let mut req = if let Some(byte) = first_byte {
-            byte
-        } else {
-            String::new()
-        };
+        let mut req = first_byte.unwrap_or_default();
         while !req.ends_with("\r\n\r\n") {
             if buf_reader.read_line(&mut req).await? == 0 {
                 return Err(anyhow!("EOF"));

@@ -87,7 +87,11 @@ impl TunDevice {
         // And we are guaranteed to read a full packet when fd is ready.
         let raw_buffer = handle.chunk_mut();
         let len = receiver
-            .read(unsafe { core::mem::transmute(raw_buffer.as_uninit_slice_mut()) })
+            .read(unsafe {
+                core::mem::transmute::<&mut [std::mem::MaybeUninit<u8>], &mut [u8]>(
+                    raw_buffer.as_uninit_slice_mut(),
+                )
+            })
             .await?;
         unsafe { handle.advance_mut(len) };
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag

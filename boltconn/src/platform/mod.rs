@@ -101,7 +101,7 @@ pub(crate) unsafe fn get_sockaddr(v4: Ipv4Addr) -> libc::sockaddr_in {
 #[cfg(target_os = "macos")]
 unsafe fn set_dest(fd: c_int, name: &str, addr: Ipv4Addr) -> io::Result<()> {
     let mut addr_req = create_req(name);
-    addr_req.ifru.dstaddr = mem::transmute(get_sockaddr(addr));
+    addr_req.ifru.dstaddr = mem::transmute::<libc::sockaddr_in, libc::sockaddr>(get_sockaddr(addr));
     if ffi::siocsifdstaddr(fd, &addr_req) < 0 {
         return Err(errno_err("Failed to set tun dst addr"));
     }
@@ -117,7 +117,8 @@ unsafe fn set_dest(_fd: c_int, _name: &str, _addr: Ipv4Addr) -> io::Result<()> {
 pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
     unsafe {
         let mut addr_req = create_req(name);
-        addr_req.ifru.addr = mem::transmute(get_sockaddr(addr.addr()));
+        addr_req.ifru.addr =
+            mem::transmute::<libc::sockaddr_in, libc::sockaddr>(get_sockaddr(addr.addr()));
         if ffi::siocsifaddr(fd, &addr_req) < 0 {
             return Err(errno_err("Failed to set tun addr"));
         }
@@ -126,7 +127,8 @@ pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
 
         // set subnet mask
         let mut mask_req = create_req(name);
-        mask_req.ifru.addr = mem::transmute(get_sockaddr(addr.netmask()));
+        mask_req.ifru.addr =
+            mem::transmute::<libc::sockaddr_in, libc::sockaddr>(get_sockaddr(addr.netmask()));
         if ffi::siocsifnetmask(fd, &mask_req) < 0 {
             return Err(errno_err("Failed to set tun mask"));
         }

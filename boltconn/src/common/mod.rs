@@ -39,7 +39,9 @@ pub async fn read_to_bytes_mut(
     read: &mut ReadHalf<impl AsyncRead>,
 ) -> io::Result<usize> {
     let raw_buffer = buf.spare_capacity_mut();
-    let len = read.read(unsafe { transmute(raw_buffer) }).await?;
+    let len = read
+        .read(unsafe { transmute::<&mut [std::mem::MaybeUninit<u8>], &mut [u8]>(raw_buffer) })
+        .await?;
     unsafe { buf.advance_mut(len) };
     Ok(len)
 }
