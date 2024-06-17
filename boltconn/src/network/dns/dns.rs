@@ -30,7 +30,7 @@ impl Dns {
         preference: DnsPreference,
         hosts: &HashMap<String, IpAddr>,
         configs: Vec<NameServerConfigGroup>,
-    ) -> anyhow::Result<Dns> {
+    ) -> Dns {
         let mut resolvers = Vec::new();
         for config in configs {
             let cfg = ResolverConfig::from_parts(None, vec![], config);
@@ -41,19 +41,15 @@ impl Dns {
             ));
         }
         let host_resolver = HostsResolver::new(hosts);
-        Ok(Dns {
+        Dns {
             table: DnsTable::new(),
             preference,
             host_resolver: ArcSwap::new(Arc::new(host_resolver)),
             resolvers: ArcSwap::new(Arc::new(resolvers)),
-        })
+        }
     }
 
-    pub fn replace_resolvers(
-        &self,
-        iface_name: &str,
-        configs: Vec<NameServerConfigGroup>,
-    ) -> Result<()> {
+    pub fn replace_resolvers(&self, iface_name: &str, configs: Vec<NameServerConfigGroup>) {
         let mut resolvers = Vec::new();
         for config in configs {
             let cfg = ResolverConfig::from_parts(None, vec![], config);
@@ -64,7 +60,6 @@ impl Dns {
             ));
         }
         self.resolvers.store(Arc::new(resolvers));
-        Ok(())
     }
 }
 

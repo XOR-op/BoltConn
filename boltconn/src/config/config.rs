@@ -73,6 +73,8 @@ pub struct RawDnsConfig {
     pub nameserver: Vec<String>,
     #[serde(default = "default_hosts")]
     pub hosts: HashMap<String, IpAddr>,
+    #[serde(alias = "nameserver-policy", default = "default_nameserver_policy")]
+    pub nameserver_policy: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -186,6 +188,10 @@ fn default_module() -> Vec<ModuleConfig> {
 }
 
 fn default_hosts() -> HashMap<String, IpAddr> {
+    Default::default()
+}
+
+fn default_nameserver_policy() -> HashMap<String, String> {
     Default::default()
 }
 

@@ -103,7 +103,8 @@ impl App {
             let bootstrap =
                 new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice())
                     .unwrap();
-            let group = match parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await {
+            let group = match parse_dns_config(config.dns.nameserver.iter(), Some(&bootstrap)).await
+            {
                 Ok(g) => {
                     if g.is_empty() {
                         return Err(anyhow!("No DNS specified"));
@@ -112,15 +113,12 @@ impl App {
                 }
                 Err(e) => return Err(anyhow!("Parse dns config failed: {e}")),
             };
-            Arc::new(
-                Dns::with_config(
-                    outbound_iface.as_str(),
-                    config.dns.preference,
-                    &config.dns.hosts,
-                    group,
-                )
-                .map_err(|e| anyhow!("DNS failed to initialize: {e}"))?,
-            )
+            Arc::new(Dns::with_config(
+                outbound_iface.as_str(),
+                config.dns.preference,
+                &config.dns.hosts,
+                group,
+            ))
         };
 
         // Create TUN
@@ -361,7 +359,7 @@ impl App {
 
         let bootstrap =
             new_bootstrap_resolver(&self.outbound_iface, config.dns.bootstrap.as_slice())?;
-        let group = parse_dns_config(&config.dns.nameserver, Some(bootstrap)).await?;
+        let group = parse_dns_config(config.dns.nameserver.iter(), Some(&bootstrap)).await?;
         let dispatching = {
             let builder =
                 DispatchingBuilder::new(self.dns.clone(), mmdb.clone(), &loaded_config, &ruleset)?;
@@ -378,7 +376,7 @@ impl App {
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );
 
-        self.dns.replace_resolvers(&self.outbound_iface, group)?;
+        self.dns.replace_resolvers(&self.outbound_iface, group);
 
         // start atomic replacing
         self.api_dispatching_handler.store(dispatching.clone());

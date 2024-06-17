@@ -214,7 +214,7 @@ impl RuleBuilder<'_> {
     }
 
     #[allow(clippy::get_first)]
-    pub fn parse_literal(&mut self, s: &str) -> anyhow::Result<Rule> {
+    pub fn parse_literal(&mut self, s: &str) -> anyhow::Result<Rule<GeneralProxy>> {
         let processed_str = "[".to_string() + s + "]";
         let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
 
@@ -392,18 +392,18 @@ impl RuleBuilder<'_> {
     }
 }
 
-pub struct Rule {
+pub struct Rule<T: Clone> {
     rule: RuleImpl,
-    policy: GeneralProxy,
+    result: T,
 }
 
-impl Rule {
-    pub(crate) fn new(rule: RuleImpl, policy: GeneralProxy) -> Self {
-        Self { rule, policy }
+impl<T: Clone> Rule<T> {
+    pub(crate) fn new(rule: RuleImpl, result: T) -> Self {
+        Self { rule, result }
     }
 
-    pub fn matches(&self, info: &ConnInfo) -> Option<GeneralProxy> {
-        self.rule.matches(info).then(|| self.policy.clone())
+    pub fn matches(&self, info: &ConnInfo) -> Option<T> {
+        self.rule.matches(info).then(|| self.result.clone())
     }
 
     pub fn get_impl(&self) -> &RuleImpl {
@@ -411,13 +411,13 @@ impl Rule {
     }
 }
 
-impl Debug for Rule {
+impl<T: Clone> Debug for Rule<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.rule.fmt(f)
     }
 }
 
-impl Display for Rule {
+impl<T: Clone> Display for Rule<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.rule.fmt(f)
     }
@@ -432,6 +432,6 @@ fn retrive_string(val: &serde_yaml::Value) -> anyhow::Result<String> {
 }
 
 pub enum RuleOrAction {
-    Rule(Rule),
+    Rule(Rule<GeneralProxy>),
     Action(Action),
 }

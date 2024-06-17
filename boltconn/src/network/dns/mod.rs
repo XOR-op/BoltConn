@@ -2,6 +2,7 @@
 mod dns;
 mod dns_table;
 mod hosts;
+mod ns_policy;
 mod provider;
 
 use crate::network::dns::provider::IfaceProvider;
@@ -34,7 +35,7 @@ fn add_tls_server(
 }
 
 async fn resolve_dns(
-    bootstrap: &Option<AsyncResolver<GenericConnector<IfaceProvider>>>,
+    bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
     dn: &str,
 ) -> anyhow::Result<Vec<IpAddr>> {
     let Some(resolver) = bootstrap else {
@@ -76,8 +77,8 @@ pub fn new_bootstrap_resolver(
 }
 
 pub async fn parse_dns_config(
-    lines: &Vec<String>,
-    bootstrap: Option<AsyncResolver<GenericConnector<IfaceProvider>>>,
+    lines: impl Iterator<Item = &String>,
+    bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
 ) -> anyhow::Result<Vec<NameServerConfigGroup>> {
     let mut arr = Vec::new();
     for l in lines {
@@ -89,52 +90,48 @@ pub async fn parse_dns_config(
             parts.first().unwrap().to_string(),
             parts.get(1).unwrap().to_string(),
         );
-        match proto.as_str() {
-            "udp" => {
-                arr.push(NameServerConfigGroup::from(vec![NameServerConfig::new(
-                    SocketAddr::new(content.parse::<IpAddr>()?, 53),
-                    Protocol::Udp,
-                )]));
-            }
-            "dot" => {
-                arr.push(add_tls_server(
-                    resolve_dns(&bootstrap, content.as_str()).await?.as_slice(),
-                    Protocol::Tls,
-                    853,
-                    content.as_str(),
-                ));
-            }
-            "doh" => {
-                arr.push(add_tls_server(
-                    resolve_dns(&bootstrap, content.as_str()).await?.as_slice(),
-                    Protocol::Https,
-                    443,
-                    content.as_str(),
-                ));
-            }
-            "dot-preset" => {
-                let ns_cfg_group = match content.as_str() {
-                    "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_tls(),
-                    "quad9" => NameServerConfigGroup::quad9_tls(),
-                    _ => return Err(anyhow::anyhow!("Unknown DoT preset {}", content)),
-                };
-                arr.push(ns_cfg_group);
-            }
-            "doh-preset" => {
-                let ns_cfg_group = match content.as_str() {
-                    "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_https(),
-                    "quad9" => NameServerConfigGroup::quad9_https(),
-                    "google" => NameServerConfigGroup::google_https(),
-                    _ => return Err(anyhow::anyhow!("Unknown DoH preset {}", content)),
-                };
-                arr.push(ns_cfg_group);
-            }
-            _ => {
-                return Err(anyhow::anyhow!("Unknown DNS type {}", proto));
-            }
-        }
+        arr.push(parse_single_dns(proto.as_str(), content.as_str(), bootstrap).await?);
     }
     Ok(arr)
+}
+
+pub async fn parse_single_dns(
+    proto: &str,
+    content: &str,
+    bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
+) -> anyhow::Result<NameServerConfigGroup> {
+    Ok(match proto {
+        "udp" => NameServerConfigGroup::from(vec![NameServerConfig::new(
+            SocketAddr::new(content.parse::<IpAddr>()?, 53),
+            Protocol::Udp,
+        )]),
+        "dot" => add_tls_server(
+            resolve_dns(bootstrap, content).await?.as_slice(),
+            Protocol::Tls,
+            853,
+            content,
+        ),
+        "doh" => add_tls_server(
+            resolve_dns(bootstrap, content).await?.as_slice(),
+            Protocol::Https,
+            443,
+            content,
+        ),
+        "dot-preset" => match content {
+            "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_tls(),
+            "quad9" => NameServerConfigGroup::quad9_tls(),
+            _ => return Err(anyhow::anyhow!("Unknown DoT preset {}", content)),
+        },
+        "doh-preset" => match content {
+            "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_https(),
+            "quad9" => NameServerConfigGroup::quad9_https(),
+            "google" => NameServerConfigGroup::google_https(),
+            _ => return Err(anyhow::anyhow!("Unknown DoH preset {}", content)),
+        },
+        _ => {
+            return Err(anyhow::anyhow!("Unknown DNS type {}", proto));
+        }
+    })
 }
 
 pub fn extract_address(group: &[NameServerConfigGroup]) -> Vec<IpAddr> {
