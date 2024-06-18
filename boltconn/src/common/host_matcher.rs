@@ -57,6 +57,15 @@ impl HostMatcherBuilder {
             .push((host.chars().rev().collect(), HostType::Suffix))
     }
 
+    /// Automatically add a host to the matcher, determining the type based on wildcards.
+    pub fn add_auto(&mut self, host: &str) {
+        if let Some(stripped_host) = host.strip_prefix("*.") {
+            self.add_suffix(stripped_host);
+        } else {
+            self.add_exact(host);
+        }
+    }
+
     pub fn build(self) -> HostMatcher {
         HostMatcher(Trie::from_iter(self.0))
     }

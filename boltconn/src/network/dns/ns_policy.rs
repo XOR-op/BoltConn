@@ -7,7 +7,7 @@ use hickory_resolver::AsyncResolver;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-pub(super) struct NameserverPolicies {
+pub struct NameserverPolicies {
     matchers: Vec<(HostMatcher, AsyncResolver<GenericConnector<IfaceProvider>>)>,
 }
 
@@ -31,12 +31,12 @@ impl NameserverPolicies {
 
             // clustering
             match builder.entry(key) {
-                Entry::Occupied(mut e) => e.get_mut().0.add_suffix(host),
+                Entry::Occupied(mut e) => e.get_mut().0.add_auto(host),
                 Entry::Vacant(e) => {
                     let ns_config =
                         parse_single_dns(e.key().0.as_str(), e.key().1.as_str(), bootstrap).await?;
                     let mut matcher = HostMatcher::builder();
-                    matcher.add_suffix(host);
+                    matcher.add_auto(host);
                     e.insert((matcher, ns_config));
                 }
             }
@@ -54,5 +54,20 @@ impl NameserverPolicies {
             })
             .collect();
         Ok(Self { matchers: res })
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            matchers: Vec::new(),
+        }
+    }
+
+    pub fn resolve(&self, host: &str) -> Option<&AsyncResolver<GenericConnector<IfaceProvider>>> {
+        for (matcher, resolver) in &self.matchers {
+            if matcher.matches(host) {
+                return Some(resolver);
+            }
+        }
+        None
     }
 }

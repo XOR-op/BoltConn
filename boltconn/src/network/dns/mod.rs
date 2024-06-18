@@ -12,6 +12,7 @@ use hickory_resolver::config::{
 };
 use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::AsyncResolver;
+pub use ns_policy::NameserverPolicies;
 use std::net::{IpAddr, SocketAddr};
 
 fn add_tls_server(

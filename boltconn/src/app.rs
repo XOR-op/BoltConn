@@ -8,7 +8,7 @@ use crate::external::{
 };
 use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
-use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns};
+use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns, NameserverPolicies};
 use crate::network::tun_device::TunDevice;
 use crate::platform::get_default_v4_route;
 use crate::proxy::{
@@ -113,10 +113,18 @@ impl App {
                 }
                 Err(e) => return Err(anyhow!("Parse dns config failed: {e}")),
             };
+            let ns_policy = NameserverPolicies::new(
+                &config.dns.nameserver_policy,
+                Some(&bootstrap),
+                outbound_iface.as_str(),
+            )
+            .await
+            .map_err(|e| anyhow!("Parse nameserver policy failed: {e}"))?;
             Arc::new(Dns::with_config(
                 outbound_iface.as_str(),
                 config.dns.preference,
                 &config.dns.hosts,
+                ns_policy,
                 group,
             ))
         };
@@ -360,6 +368,12 @@ impl App {
         let bootstrap =
             new_bootstrap_resolver(&self.outbound_iface, config.dns.bootstrap.as_slice())?;
         let group = parse_dns_config(config.dns.nameserver.iter(), Some(&bootstrap)).await?;
+        let ns_policy = NameserverPolicies::new(
+            &config.dns.nameserver_policy,
+            Some(&bootstrap),
+            self.outbound_iface.as_str(),
+        )
+        .await?;
         let dispatching = {
             let builder =
                 DispatchingBuilder::new(self.dns.clone(), mmdb.clone(), &loaded_config, &ruleset)?;
@@ -377,6 +391,8 @@ impl App {
         );
 
         self.dns.replace_resolvers(&self.outbound_iface, group);
+        self.dns.replace_ns_policy(ns_policy);
+        self.dns.replace_hosts(&config.dns.hosts);
 
         // start atomic replacing
         self.api_dispatching_handler.store(dispatching.clone());
