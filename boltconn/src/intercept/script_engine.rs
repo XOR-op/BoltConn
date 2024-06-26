@@ -1,3 +1,4 @@
+use crate::config::ScriptError;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName};
 use regex::Regex;
@@ -78,16 +79,26 @@ impl ScriptEngine {
         script_type: &str,
         pattern: Option<&str>,
         script: &str,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, ScriptError> {
         Ok(Self {
             name: name.map(|s| s.to_string()),
             script_type: match script_type.to_ascii_lowercase().as_str() {
                 "req" => ScriptType::Req,
                 "resp" => ScriptType::Resp,
                 "all" => ScriptType::All,
-                s => return Err(anyhow::anyhow!("Invalid script type: {}", s)),
+                s => {
+                    return Err(ScriptError::InvalidType(
+                        name.unwrap_or("<anonymous>").to_string(),
+                        s.to_string(),
+                    ))
+                }
             },
-            pattern: pattern.map(Regex::new).transpose()?,
+            pattern: pattern.map(Regex::new).transpose().map_err(|_| {
+                ScriptError::InvalidType(
+                    name.unwrap_or("<anonymous>").to_string(),
+                    pattern.unwrap_or("<empty>").to_string(),
+                )
+            })?,
             script: script.to_string(),
         })
     }

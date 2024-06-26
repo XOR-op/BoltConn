@@ -1,4 +1,4 @@
-use crate::config::{load_remote_config, safe_join_path, RawProxyLocalCfg};
+use crate::config::{load_remote_config, safe_join_path, ConfigError, FileError, RawProxyLocalCfg};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -42,10 +42,10 @@ pub async fn read_proxy_schema(
     config_path: &Path,
     providers: &HashMap<String, ProxyProvider>,
     force_update: bool,
-) -> anyhow::Result<HashMap<String, ProxySchema>> {
+) -> Result<HashMap<String, ProxySchema>, ConfigError> {
     let mut table = HashMap::new();
     // concurrently download rules
-    let tasks: HashMap<String, JoinHandle<anyhow::Result<ProxySchema>>> = providers
+    let tasks: HashMap<String, JoinHandle<Result<ProxySchema, ConfigError>>> = providers
         .clone()
         .into_iter()
         .map(|(name, item)| {
@@ -55,13 +55,19 @@ pub async fn read_proxy_schema(
                 tokio::spawn(async move {
                     match item {
                         ProxyProvider::File { path } => {
+                            let io_err = |e| FileError::Io(path.clone(), e);
                             let content: ProxySchema = serde_yaml::from_str(
-                                fs::read_to_string(safe_join_path(&root_path, &path)?)?.as_str(),
-                            )?;
+                                fs::read_to_string(
+                                    safe_join_path(&root_path, &path).map_err(io_err)?,
+                                )
+                                .map_err(io_err)?
+                                .as_str(),
+                            )
+                            .map_err(|e| FileError::Serde(path.clone(), e))?;
                             Ok(content)
                         }
                         ProxyProvider::Http { url, path, .. } => {
-                            load_remote_config(url, path, &root_path, force_update).await
+                            Ok(load_remote_config(&url, &path, &root_path, force_update).await?)
                         }
                     }
                 }),
@@ -71,7 +77,7 @@ pub async fn read_proxy_schema(
     for (name, task) in tasks {
         let content = match task.await? {
             Ok(c) => c,
-            Err(e) => return Err(anyhow::anyhow!("In proxy provider {}: {}", name, e)),
+            Err(e) => return Err(e),
         };
         table.insert(name, content);
     }

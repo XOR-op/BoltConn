@@ -1,5 +1,5 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
-use crate::config::{ProviderBehavior, RuleSchema};
+use crate::config::{ProviderBehavior, RuleError, RuleSchema};
 use crate::dispatch::rule::{PortRule, RuleBuilder, RuleImpl};
 use crate::dispatch::{ConnInfo, InboundIdentity, InboundInfo};
 use crate::external::MmdbReader;
@@ -259,9 +259,9 @@ impl RuleSetBuilder {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<RuleSet> {
+    pub fn build(self) -> Result<RuleSet, RuleError> {
         Ok(RuleSet {
-            name: self.name,
+            name: self.name.clone(),
             domain: self.domain.build(),
             ip: self.ip_cidr,
             src_tcp_port: self.src_tcp_port,
@@ -271,11 +271,14 @@ impl RuleSetBuilder {
             http_inbound: self.http_inbound,
             socks5_inbound: self.socks5_inbound,
             tun_inbound: self.tun_inbound,
-            domain_keyword: AhoCorasick::new(self.domain_keyword.into_iter())?,
+            domain_keyword: AhoCorasick::new(self.domain_keyword.into_iter())
+                .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
             process_name: self.process_name,
             mmdb: self.mmdb.map(|m| (m, self.asn, self.geoip_country)),
-            process_keyword: AhoCorasick::new(self.process_keyword.into_iter())?,
-            procpath_keyword: AhoCorasick::new(self.procpath_keyword.into_iter())?,
+            process_keyword: AhoCorasick::new(self.process_keyword.into_iter())
+                .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
+            procpath_keyword: AhoCorasick::new(self.procpath_keyword.into_iter())
+                .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
         })
     }
 

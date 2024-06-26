@@ -1,7 +1,8 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
-    LoadedConfig, ProxySchema, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption,
-    RawServerAddr, RawServerSockAddr, RawState, RuleAction, RuleConfigLine,
+    ConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema, RawProxyGroupCfg,
+    RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr, RawServerSockAddr, RawState,
+    RuleAction, RuleConfigLine, RuleError,
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
@@ -15,7 +16,6 @@ use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
-use anyhow::anyhow;
 use arc_swap::ArcSwap;
 use base64::Engine;
 use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
@@ -68,19 +68,19 @@ impl Dispatching {
         }
     }
 
-    pub fn update_temporary_list(&self, list: &[RuleConfigLine]) -> anyhow::Result<()> {
+    pub fn update_temporary_list(&self, list: &[RuleConfigLine]) -> Result<(), ConfigError> {
         let list = self.templist_builder.build_temporary_list(list)?;
         self.temporary_list.store(Arc::new(list));
         Ok(())
     }
 
-    pub fn set_group_selection(&self, group: &str, proxy: &str) -> anyhow::Result<()> {
+    pub fn set_group_selection(&self, group: &str, proxy: &str) -> Result<(), ConfigError> {
         for (name, g) in self.groups.iter() {
             if name == group {
-                return g.set_selection(proxy);
+                return Ok(g.set_selection(proxy)?);
             }
         }
-        Err(anyhow!("Group not found"))
+        Err(ProxyError::MissingGroup(group.to_string()).into())
     }
 
     pub fn get_group_list(&self) -> Vec<Arc<ProxyGroup>> {
@@ -135,7 +135,7 @@ impl DispatchingBuilder {
         mmdb: Option<Arc<MmdbReader>>,
         loaded_config: &LoadedConfig,
         ruleset: &RuleSetTable,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, ConfigError> {
         let mut builder = Self::empty(dns, mmdb);
         // start init
         let LoadedConfig {
@@ -170,16 +170,19 @@ impl DispatchingBuilder {
         Ok(builder)
     }
 
-    pub fn build_temporary_list(&self, list: &[RuleConfigLine]) -> anyhow::Result<TemporaryList> {
+    pub fn build_temporary_list(
+        &self,
+        list: &[RuleConfigLine],
+    ) -> Result<TemporaryList, ConfigError> {
         let (list, fallback) = self.build_rules_loosely(list)?;
         if fallback.is_none() {
             Ok(TemporaryList::new(list))
         } else {
-            Err(anyhow::anyhow!("Unexpected Fallback"))
+            Err(ProxyError::Invalid("Fallback in temporary list".to_string()).into())
         }
     }
 
-    pub fn build(self, loaded_config: &LoadedConfig) -> anyhow::Result<Dispatching> {
+    pub fn build(self, loaded_config: &LoadedConfig) -> Result<Dispatching, ConfigError> {
         let (rules, fallback) = self.build_rules(loaded_config.config.rule_local.as_slice())?;
 
         let groups = {
@@ -210,7 +213,7 @@ impl DispatchingBuilder {
     fn build_rules_loosely(
         &self,
         rules: &[RuleConfigLine],
-    ) -> anyhow::Result<(Vec<RuleOrAction>, Option<GeneralProxy>)> {
+    ) -> Result<(Vec<RuleOrAction>, Option<GeneralProxy>), ConfigError> {
         let mut rule_builder = RuleBuilder::new(
             self.dns.clone(),
             self.mmdb.clone(),
@@ -223,24 +226,18 @@ impl DispatchingBuilder {
                 RuleConfigLine::Complex(action) => match action {
                     RuleAction::LocalResolve => rule_builder.append_local_resolve(),
                     RuleAction::SubDispatch(sub) => {
-                        match rule_builder.parse_incomplete(sub.matches.as_str()) {
-                            Ok(matches) => {
-                                let (sub_rules, sub_fallback) =
-                                    self.build_rules(sub.subrules.as_slice())?;
-                                rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
-                                    SubDispatch::new(
-                                        matches,
-                                        DispatchingSnippet {
-                                            rules: sub_rules,
-                                            fallback: sub_fallback,
-                                        },
-                                    ),
-                                )))
-                            }
-                            Err(err) => {
-                                return Err(anyhow!("Invalid matches {}:{}", sub.matches, err))
-                            }
-                        }
+                        let matches = rule_builder.parse_incomplete(sub.matches.as_str())?;
+                        let (sub_rules, sub_fallback) =
+                            self.build_rules(sub.subrules.as_slice())?;
+                        rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
+                            SubDispatch::new(
+                                matches,
+                                DispatchingSnippet {
+                                    rules: sub_rules,
+                                    fallback: sub_fallback,
+                                },
+                            ),
+                        )))
                     }
                 },
                 RuleConfigLine::Simple(r) => {
@@ -250,9 +247,7 @@ impl DispatchingBuilder {
                             return Ok((rule_builder.emit_all(), Some(fallback)));
                         }
                     }
-                    rule_builder
-                        .append_literal(r.as_str())
-                        .map_err(|e| anyhow!("{} ({:?})", r, e))?;
+                    rule_builder.append_literal(r.as_str())?;
                 }
             }
         }
@@ -262,12 +257,12 @@ impl DispatchingBuilder {
     fn build_rules(
         &self,
         rules: &[RuleConfigLine],
-    ) -> anyhow::Result<(Vec<RuleOrAction>, GeneralProxy)> {
+    ) -> Result<(Vec<RuleOrAction>, GeneralProxy), ConfigError> {
         let (list, fallback) = self.build_rules_loosely(rules)?;
         if let Some(fallback) = fallback {
             Ok((list, fallback))
         } else {
-            Err(anyhow::anyhow!("Bad rules: missing fallback"))
+            Err(RuleError::MissingFallback.into())
         }
     }
 
@@ -276,7 +271,7 @@ impl DispatchingBuilder {
         self,
         rules: &[String],
         ruleset: &RuleSetTable,
-    ) -> anyhow::Result<Dispatching> {
+    ) -> Result<Dispatching, ConfigError> {
         let mut rule_builder = RuleBuilder::new(
             self.dns.clone(),
             self.mmdb.clone(),
@@ -309,11 +304,11 @@ impl DispatchingBuilder {
     fn parse_proxies<'a, I: Iterator<Item = (&'a String, &'a RawProxyLocalCfg)>>(
         &mut self,
         proxies: I,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ConfigError> {
         for (name, proxy) in proxies {
             // avoid duplication
             if self.proxies.contains_key(name) || self.groups.contains_key(name) {
-                return Err(anyhow!("Duplicate proxy name:{}", *name));
+                return Err(ProxyError::DuplicateProxy(name.to_string()).into());
             }
             let p = match proxy {
                 RawProxyLocalCfg::Http { server, port, auth } => Arc::new(Proxy::new(
@@ -348,7 +343,11 @@ impl DispatchingBuilder {
                         "aes-256-gcm" => CipherKind::AES_256_GCM,
                         "aes-128-gcm" => CipherKind::AES_128_GCM,
                         _ => {
-                            return Err(anyhow!("Bad ShadowSocks {}: unsupported cipher", *name));
+                            return Err(ProxyError::ProxyFieldError(
+                                name.clone(),
+                                "Unknown cipher kind in Shadowsocks proxy",
+                            )
+                            .into());
                         }
                     };
                     let addr = match server {
@@ -410,18 +409,26 @@ impl DispatchingBuilder {
                     over_tcp,
                 } => {
                     if local_addr.is_none() && local_addr_v6.is_none() {
-                        return Err(anyhow::anyhow!(
-                            "No local address configured for the WireGuard outbound"
-                        ));
+                        return Err(ProxyError::ProxyFieldError(
+                            name.clone(),
+                            "No local address configured for the WireGuard outbound",
+                        )
+                        .into());
                     }
                     let endpoint = match endpoint {
                         RawServerSockAddr::Ip(addr) => NetworkAddr::Raw(*addr),
                         RawServerSockAddr::Domain(a) => {
                             let parts = a.split(':').collect::<Vec<&str>>();
                             let Some(port_str) = parts.get(1) else {
-                                return Err(anyhow!("No port"));
+                                return Err(ProxyError::ProxyFieldError(
+                                    name.clone(),
+                                    "No port configured for the WireGuard outbound",
+                                )
+                                .into());
                             };
-                            let port = port_str.parse::<u16>()?;
+                            let port = port_str.parse::<u16>().map_err(|_| {
+                                ProxyError::ProxyFieldError(name.clone(), "Invalid port")
+                            })?;
                             #[allow(clippy::get_first)]
                             NetworkAddr::DomainName {
                                 domain_name: parts.get(0).unwrap().to_string(),
@@ -432,27 +439,46 @@ impl DispatchingBuilder {
                     // parse key
                     let b64decoder = base64::engine::general_purpose::STANDARD;
                     let private_key = {
-                        let val = b64decoder.decode(private_key)?;
-                        let val: [u8; 32] =
-                            val.try_into().map_err(|_| anyhow!("Decode private key"))?;
+                        let val = b64decoder.decode(private_key).map_err(|_| {
+                            ProxyError::ProxyFieldError(
+                                name.clone(),
+                                "Decode private key in base64 format",
+                            )
+                        })?;
+                        let val: [u8; 32] = val.try_into().map_err(|_| {
+                            ProxyError::ProxyFieldError(name.clone(), "Invalid private key")
+                        })?;
                         x25519_dalek::StaticSecret::from(val)
                     };
                     let public_key = {
-                        let val = b64decoder.decode(public_key)?;
-                        let val: [u8; 32] =
-                            val.try_into().map_err(|_| anyhow!("Decode public key"))?;
+                        let val = b64decoder.decode(public_key).map_err(|_| {
+                            ProxyError::ProxyFieldError(
+                                name.clone(),
+                                "Decode public key in base64 format",
+                            )
+                        })?;
+                        let val: [u8; 32] = val.try_into().map_err(|_| {
+                            ProxyError::ProxyFieldError(name.clone(), "Invalid public key")
+                        })?;
                         x25519_dalek::PublicKey::from(val)
                     };
                     let preshared_key = if let Some(v) = preshared_key {
-                        let val = b64decoder.decode(v)?;
-                        let val: [u8; 32] = val.try_into().map_err(|_| anyhow!("Decode PSK"))?;
+                        let val = b64decoder.decode(v).map_err(|_| {
+                            ProxyError::ProxyFieldError(name.clone(), "Decode PSK in base64 format")
+                        })?;
+                        let val: [u8; 32] = val.try_into().map_err(|_| {
+                            ProxyError::ProxyFieldError(name.clone(), "Invalid PSK")
+                        })?;
                         Some(val)
                     } else {
                         None
                     };
                     let dns = {
                         let list = String::from("[") + dns.as_str() + "]";
-                        let list: Vec<IpAddr> = serde_yaml::from_str(list.as_str())?;
+                        let list: Vec<IpAddr> =
+                            serde_yaml::from_str(list.as_str()).map_err(|_| {
+                                ProxyError::ProxyFieldError(name.clone(), "Invalid DNS")
+                            })?;
                         let group: Vec<NameServerConfig> = list
                             .into_iter()
                             .map(|i| NameServerConfig::new(SocketAddr::new(i, 53), Protocol::Udp))
@@ -497,20 +523,20 @@ impl DispatchingBuilder {
         queued_groups: &mut HashSet<String>,
         wg_history: &mut HashMap<String, bool>,
         dup_as_error: bool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ConfigError> {
         if self.groups.contains_key(name)
             || self.proxies.contains_key(name)
             || queued_groups.contains(name)
         {
             return if dup_as_error {
-                Err(anyhow!("Duplicate group name {}", name))
+                Err(ProxyError::DuplicateProxy(name.to_string()).into())
             } else {
                 // has been processed, just skip
                 Ok(())
             };
         }
         if !proxy_group.roughly_validate() {
-            return Err(anyhow!("Invalid group {}", name));
+            return Err(ProxyError::Invalid(name.to_string()).into());
         }
         if let Some(chains) = &proxy_group.chains {
             // not proxy group, just chains
@@ -572,18 +598,17 @@ impl DispatchingBuilder {
                 let valid_proxies: Vec<&str> = match p {
                     RawProxyProviderOption::Name(name) => proxy_schema
                         .get(name)
-                        .ok_or_else(|| anyhow!("Provider {} not found", name))?
+                        .ok_or_else(|| ProviderError::Missing(name.clone()))?
                         .proxies
                         .iter()
                         .map(|entry| entry.name.as_str())
                         .collect(),
                     RawProxyProviderOption::Filter { name, filter } => {
-                        let regex = Regex::new(filter).map_err(|_| {
-                            anyhow!("provider {} has bad filter: '{}'", name, filter)
-                        })?;
+                        let regex = Regex::new(filter)
+                            .map_err(|_| ProviderError::BadFilter(name.clone(), filter.clone()))?;
                         proxy_schema
                             .get(name)
-                            .ok_or_else(|| anyhow!("Provider {} not found", name))?
+                            .ok_or_else(|| ProviderError::Missing(name.clone()))?
                             .proxies
                             .iter()
                             .filter_map(|entry| {
@@ -600,7 +625,11 @@ impl DispatchingBuilder {
                     let content = if let Some(single) = self.proxies.get(p) {
                         GeneralProxy::Single(single.clone())
                     } else {
-                        return Err(anyhow!("No [{}] in group [{}]", p, name));
+                        return Err(ProxyError::UnknownProxyInGroup {
+                            group: name.to_string(),
+                            proxy: p.to_string(),
+                        }
+                        .into());
                     };
                     if p == state.group_selection.get(name).unwrap_or(&String::new()) {
                         selection = Some(content.clone());
@@ -639,7 +668,7 @@ impl DispatchingBuilder {
         proxy_schema: &HashMap<String, ProxySchema>,
         queued_groups: &mut HashSet<String>,
         wg_history: &mut HashMap<String, bool>,
-    ) -> anyhow::Result<GeneralProxy> {
+    ) -> Result<GeneralProxy, ConfigError> {
         Ok(if let Some(single) = self.proxies.get(p) {
             GeneralProxy::Single(single.clone())
         } else if let Some(group) = self.groups.get(p) {
@@ -660,7 +689,11 @@ impl DispatchingBuilder {
                     true,
                 )?;
             } else {
-                return Err(anyhow!("No [{}] in group [{}]", p, name));
+                return Err(ProxyError::UnknownProxyInGroup {
+                    group: name.to_string(),
+                    proxy: p.to_string(),
+                }
+                .into());
             }
 
             queued_groups.remove(name);

@@ -1,8 +1,8 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
+use crate::config::ProxyError;
 use crate::proxy::NetworkAddr;
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
-use anyhow::anyhow;
 use arc_swap::ArcSwap;
 use shadowsocks::ServerAddr;
 use std::fmt::{Display, Formatter};
@@ -165,7 +165,7 @@ impl ProxyGroup {
         }
     }
 
-    pub fn set_selection(&self, name: &str) -> anyhow::Result<()> {
+    pub fn set_selection(&self, name: &str) -> Result<(), ProxyError> {
         for p in &self.proxies {
             match p {
                 GeneralProxy::Single(p) => {
@@ -184,7 +184,10 @@ impl ProxyGroup {
                 }
             }
         }
-        Err(anyhow!("Proxy not found"))
+        Err(ProxyError::UnknownProxyInGroup {
+            group: self.name.clone(),
+            proxy: name.to_string(),
+        })
     }
 }
 

@@ -1,5 +1,6 @@
 #[allow(clippy::module_inception)]
 mod config;
+mod error;
 mod file_path;
 mod inbound;
 mod interception;
@@ -11,8 +12,8 @@ mod rule_provider;
 mod state;
 
 use crate::platform::get_user_info;
-use anyhow::anyhow;
 pub use config::*;
+pub use error::*;
 pub(crate) use file_path::*;
 pub use inbound::*;
 pub use interception::*;
@@ -60,15 +61,15 @@ impl LoadedConfig {
         app_data_path.join("state.yml")
     }
 
-    pub async fn load_config(config_path: &Path, data_path: &Path) -> anyhow::Result<Self> {
+    pub async fn load_config(config_path: &Path, data_path: &Path) -> Result<Self, ConfigError> {
         let config_text = fs::read_to_string(config_path.join("config.yml"))
-            .map_err(|e| anyhow!("config.yml ({:?}): {}", config_path, e))?;
-        let mut raw_config: RawRootCfg =
-            serde_yaml::from_str(&config_text).map_err(|e| anyhow!("Read config.yml: {}", e))?;
+            .map_err(|e| FileError::Io("config.yml".to_string(), e))?;
+        let mut raw_config: RawRootCfg = serde_yaml::from_str(&config_text)
+            .map_err(|e| FileError::Serde("config.yml".to_string(), e))?;
         let state_text = fs::read_to_string(Self::state_path(data_path))
-            .map_err(|e| anyhow!("state.yml ({:?}): {}", data_path, e))?;
-        let raw_state: RawState =
-            serde_yaml::from_str(&state_text).map_err(|e| anyhow!("Read state.yml: {}", e))?;
+            .map_err(|e| FileError::Io("state.yml".to_string(), e))?;
+        let raw_state: RawState = serde_yaml::from_str(&state_text)
+            .map_err(|e| FileError::Serde("state.yml".to_string(), e))?;
 
         let module_schema =
             tokio::join!(read_module_schema(config_path, &raw_config.module, false)).0?;
@@ -117,26 +118,34 @@ impl LoadedConfig {
 }
 
 async fn load_remote_config<T>(
-    url: String,
-    path: String,
+    url: &str,
+    path: &str,
     root_path: impl AsRef<Path>,
     force_update: bool,
-) -> anyhow::Result<T>
+) -> Result<T, FileError>
 where
     T: serde::de::DeserializeOwned,
 {
-    let full_path = safe_join_path(root_path.as_ref(), &path)?;
+    let io_error = |e| FileError::Io(path.to_string(), e);
+    let serde_error = |e| FileError::Serde(path.to_string(), e);
+    let http_error = |e| FileError::Http(url.to_string(), e);
+    let full_path = safe_join_path(root_path.as_ref(), path).map_err(io_error)?;
     let content: T = if !force_update && full_path.as_path().exists() {
-        serde_yaml::from_str(fs::read_to_string(full_path.as_path())?.as_str())?
+        serde_yaml::from_str(
+            fs::read_to_string(full_path.as_path())
+                .map_err(io_error)?
+                .as_str(),
+        )
+        .map_err(serde_error)?
     } else {
         tracing::debug!("Downloading external resource from {}", url);
-        let resp = reqwest::get(url).await?;
-        let text = resp.text().await?;
-        let content: T = serde_yaml::from_str(text.as_str())?;
+        let resp = reqwest::get(url).await.map_err(http_error)?;
+        let text = resp.text().await.map_err(http_error)?;
+        let content: T = serde_yaml::from_str(text.as_str()).map_err(serde_error)?;
         // security: `full_path` should be (layers of) subdir of `root_path`,
         //           so arbitrary write should not happen
-        fs::write(full_path.as_path(), text)?;
-        set_real_ownership(&full_path)?;
+        fs::write(full_path.as_path(), text).map_err(io_error)?;
+        set_real_ownership(&full_path).map_err(io_error)?;
         content
     };
     Ok(content)
