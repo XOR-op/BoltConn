@@ -5,11 +5,11 @@ use crate::adapter::{
 use crate::common::{io_err, StreamOutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
+use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
-use io::Result;
 use shadowsocks::config::ServerType;
 use shadowsocks::context::SharedContext;
 use shadowsocks::crypto::CipherKind;
@@ -59,7 +59,7 @@ impl SSOutbound {
         }
     }
 
-    async fn get_server_addr(&self) -> Result<SocketAddr> {
+    async fn get_server_addr(&self) -> io::Result<SocketAddr> {
         Ok(match self.config.addr() {
             ServerAddr::SocketAddr(addr) => *addr,
             ServerAddr::DomainName(addr, port) => {
@@ -98,7 +98,7 @@ impl SSOutbound {
         outbound: S,
         server_addr: SocketAddr,
         abort_handle: ConnAbortHandle,
-    ) -> Result<()>
+    ) -> io::Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -116,7 +116,7 @@ impl SSOutbound {
         server_addr: SocketAddr,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         let (_, context, resolved_config) = self.create_internal(server_addr).await;
         let proxy_socket = ShadowsocksUdpAdapter::new(context, &resolved_config, adapter_or_socket);
         established_udp(
@@ -261,7 +261,7 @@ impl ShadowsocksUdpAdapter {
 
 #[async_trait]
 impl UdpSocketAdapter for ShadowsocksUdpAdapter {
-    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> Result<(), TransportError> {
         let ss_addr = match addr.clone() {
             NetworkAddr::Raw(s) => Address::SocketAddress(s),
             NetworkAddr::DomainName { domain_name, port } => {
@@ -289,7 +289,7 @@ impl UdpSocketAdapter for ShadowsocksUdpAdapter {
         Ok(())
     }
 
-    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+    async fn recv_from(&self, data: &mut [u8]) -> Result<(usize, NetworkAddr), TransportError> {
         let len = match &self.adapter_or_socket {
             AdapterOrSocket::Adapter(a) => a.recv_from(data).await?.0,
             AdapterOrSocket::Socket(s) => s.recv(data).await?,
@@ -300,7 +300,8 @@ impl UdpSocketAdapter for ShadowsocksUdpAdapter {
             &self.key,
             &mut data[..len],
             None,
-        )?;
+        )
+        .map_err(|_| TransportError::ShadowSocks("Decrypt client UDP payload"))?;
         Ok((
             decrypted_size,
             match addr {

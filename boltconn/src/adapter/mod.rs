@@ -27,6 +27,7 @@ pub use super::adapter::shadowsocks::*;
 
 use crate::common::{io_err, mut_buf, read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
+use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 pub use chain::*;
@@ -305,21 +306,21 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
 
 #[async_trait]
 impl UdpSocketAdapter for AddrConnectorWrapper {
-    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> Result<(), TransportError> {
         self.tx
             .send((Bytes::copy_from_slice(data), addr))
             .await
-            .map_err(|_| anyhow::anyhow!("Failed to send"))
+            .map_err(|_| TransportError::Internal("UDP mpsc channel full"))
     }
 
-    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+    async fn recv_from(&self, data: &mut [u8]) -> Result<(usize, NetworkAddr), TransportError> {
         let (buf, addr) = self
             .rx
             .lock()
             .await
             .recv()
             .await
-            .ok_or(anyhow::anyhow!("Nothing received"))?;
+            .ok_or(TransportError::Internal("UDP mpsc closed"))?;
         if data.len() < buf.len() {
             let len = data.len();
             data[..len].copy_from_slice(&buf[..len]);

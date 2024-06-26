@@ -6,6 +6,7 @@ use crate::common::async_ws_stream::AsyncWsStream;
 use crate::common::{as_io_err, io_err, StreamOutboundTrait};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
+use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::trojan::{
     encapsule_udp_packet, make_tls_config, TrojanAddr, TrojanCmd, TrojanConfig, TrojanReqInner,
@@ -272,12 +273,12 @@ impl<S> UdpSocketAdapter for TrojanUdpAdapter<S>
 where
     S: AsyncRead + AsyncWrite + Send,
 {
-    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> Result<(), TransportError> {
         self.socket.send_to(data, addr).await?;
         Ok(())
     }
 
-    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+    async fn recv_from(&self, data: &mut [u8]) -> Result<(usize, NetworkAddr), TransportError> {
         let (size, addr) = self.socket.recv_from(data).await?;
         Ok((size, addr))
     }

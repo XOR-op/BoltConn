@@ -1,5 +1,6 @@
 mod context;
 mod dispatcher;
+pub mod error;
 mod http_inbound;
 mod manager;
 mod mixed_inbound;

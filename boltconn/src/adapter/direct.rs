@@ -4,10 +4,10 @@ use crate::adapter::{
 use crate::common::StreamOutboundTrait;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
+use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
-use io::Result;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ impl DirectOutbound {
         }
     }
 
-    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> Result<()> {
+    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
         let dst_addr = if let Some(dst) = self.resolved_dst {
             dst
         } else {
@@ -49,7 +49,11 @@ impl DirectOutbound {
         Ok(())
     }
 
-    async fn run_udp(self, inbound: AddrConnector, abort_handle: ConnAbortHandle) -> Result<()> {
+    async fn run_udp(
+        self,
+        inbound: AddrConnector,
+        abort_handle: ConnAbortHandle,
+    ) -> io::Result<()> {
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         established_udp(
             inbound,
@@ -114,7 +118,7 @@ struct DirectUdpAdapter(Arc<UdpSocket>, Arc<Dns>);
 
 #[async_trait]
 impl UdpSocketAdapter for DirectUdpAdapter {
-    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> Result<(), TransportError> {
         let addr = match addr {
             NetworkAddr::Raw(s) => s,
             NetworkAddr::DomainName { domain_name, port } => {
@@ -129,7 +133,7 @@ impl UdpSocketAdapter for DirectUdpAdapter {
         Ok(())
     }
 
-    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+    async fn recv_from(&self, data: &mut [u8]) -> Result<(usize, NetworkAddr), TransportError> {
         let (len, addr) = self.0.recv_from(data).await?;
         Ok((len, NetworkAddr::Raw(addr)))
     }
