@@ -1,4 +1,5 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
+use crate::config::DnsConfigError;
 use crate::network::dns::parse_single_dns;
 use crate::network::dns::provider::IfaceProvider;
 use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
@@ -16,13 +17,13 @@ impl NameserverPolicies {
         policies: &HashMap<String, String>,
         bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
         outbound_iface: &str,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, DnsConfigError> {
         let mut builder: HashMap<(String, String), (HostMatcherBuilder, NameServerConfigGroup)> =
             HashMap::new();
         for (host, policy) in policies {
             let parts: Vec<&str> = policy.split(',').map(|s| s.trim()).collect();
             if parts.len() != 2 {
-                return Err(anyhow::anyhow!("Invalid dns format {}", policy));
+                return Err(DnsConfigError::Invalid(policy.clone()));
             }
             let key = (
                 parts.first().unwrap().to_string(),

@@ -9,6 +9,8 @@ pub enum TransportError {
     Internal(&'static str),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("DNS error: {0}")]
+    Dns(#[from] DnsError),
     #[error("ShadowSocks error: {0}")]
     ShadowSocks(&'static str),
     #[error("HTTP proxy error: {0}")]
@@ -21,6 +23,14 @@ pub enum TransportError {
     Trojan(&'static str),
     #[error("WireGuard error: {0}")]
     WireGuard(#[from] WireGuardError),
+}
+
+#[derive(Error, Debug)]
+pub enum DnsError {
+    #[error("Missing bootstrap DNS server for {0}")]
+    MissingBootstrap(String),
+    #[error("Failed to resolve dns server: {0}")]
+    ResolveServer(String),
 }
 
 #[derive(Error, Debug)]

@@ -4,8 +4,8 @@ use thiserror::Error;
 pub enum ConfigError {
     #[error("File error: {0}")]
     File(#[from] FileError),
-    #[error("DNS")]
-    Dns,
+    #[error("DNS error: {0}")]
+    Dns(#[from] DnsConfigError),
     #[error("Rule error: {0}")]
     Rule(#[from] RuleError),
     #[error("Proxy error: {0}")]
@@ -16,6 +16,18 @@ pub enum ConfigError {
     TaskJoin(#[from] tokio::task::JoinError),
     #[error("Script error: {0}")]
     Script(#[from] ScriptError),
+}
+
+#[derive(Error, Debug)]
+pub enum DnsConfigError {
+    #[error("Invalid DNS: {0}")]
+    Invalid(String),
+    #[error("Invalid DNS type: {0}")]
+    InvalidType(String),
+    #[error("Invalid DNS preset for {0}: {1}")]
+    InvalidPreset(&'static str, String),
+    #[error("Runtime error for configuration: {0}")]
+    ResolveRuntimeInfo(#[from] crate::proxy::error::DnsError),
 }
 
 #[derive(Error, Debug)]

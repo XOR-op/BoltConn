@@ -130,7 +130,7 @@ impl WireguardTunnel {
         smol_tx: &mut flume::Sender<BytesMut>,
         buf: &mut [u8; MAX_PKT_SIZE],
         wg_buf: &mut [u8; MAX_PKT_SIZE],
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool, TransportError> {
         let len = self.inner.outbound_recv(buf).await?;
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
@@ -142,13 +142,19 @@ impl WireguardTunnel {
         Ok(match result {
             TunnResult::WriteToTunnelV4(data, _addr) => {
                 let data = BytesMut::from_iter(data.iter());
-                smol_tx.send_async(data).await?;
+                smol_tx
+                    .send_async(data)
+                    .await
+                    .map_err(|_| TransportError::Internal("WireGuard inbound smol tx full"))?;
                 self.inner.smol_notify.notify_one();
                 true
             }
             TunnResult::WriteToTunnelV6(data, _addr) => {
                 let data = BytesMut::from_iter(data.iter());
-                smol_tx.send_async(data).await?;
+                smol_tx
+                    .send_async(data)
+                    .await
+                    .map_err(|_| TransportError::Internal("WireGuard inbound smol tx full"))?;
                 self.inner.smol_notify.notify_one();
                 true
             }
@@ -170,7 +176,7 @@ impl WireguardTunnel {
         &self,
         smol_rx: &mut flume::Receiver<BytesMut>,
         wg_buf: &mut [u8; MAX_PKT_SIZE],
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TransportError> {
         let data = smol_rx
             .recv_async()
             .await
@@ -193,7 +199,7 @@ impl WireguardTunnel {
 
     /// Used for ticking tunnel, keeping internal state healthy.
     /// Return whether sending any message
-    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> anyhow::Result<bool> {
+    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> Result<bool, TransportError> {
         let mut guard = self.tunnel.lock().await;
         match guard.update_timers(buf) {
             TunnResult::Done => {
@@ -239,7 +245,7 @@ impl WireguardTunnel {
 }
 
 impl WireguardTunnelInner {
-    async fn outbound_send(&self, data: &mut [u8]) -> anyhow::Result<usize> {
+    async fn outbound_send(&self, data: &mut [u8]) -> Result<usize, TransportError> {
         if data.len() >= 4 {
             if let Some(r) = &self.reserved {
                 data[1] = r[0];
@@ -256,7 +262,7 @@ impl WireguardTunnelInner {
         }
     }
 
-    async fn outbound_recv(&self, data: &mut [u8]) -> anyhow::Result<usize> {
+    async fn outbound_recv(&self, data: &mut [u8]) -> Result<usize, TransportError> {
         match &self.outbound {
             AdapterOrSocket::Adapter(a) => Ok(a.recv_from(data).await?.0),
             AdapterOrSocket::Socket(s) => Ok(s.recv(data).await?),
