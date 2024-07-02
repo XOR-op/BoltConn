@@ -16,6 +16,18 @@ pub enum ConfigError {
     TaskJoin(#[from] tokio::task::JoinError),
     #[error("Script error: {0}")]
     Script(#[from] ScriptError),
+    #[error("Interception error: {0}")]
+    Intercept(#[from] InterceptConfigError),
+}
+
+#[derive(Error, Debug)]
+pub enum InterceptConfigError {
+    #[error("Unknown rule: {0}")]
+    UnknownRule(String),
+    #[error("Bad url rule: {0}")]
+    BadUrl(String),
+    #[error("Bad header rule: {0}")]
+    BadHeader(String),
 }
 
 #[derive(Error, Debug)]
@@ -38,6 +50,8 @@ pub enum FileError {
     Serde(String, serde_yaml::Error),
     #[error("{0} serialization error: {1}")]
     Http(String, reqwest::Error),
+    #[error("Env variable error: {0}")]
+    Env(#[from] std::env::VarError),
 }
 
 #[derive(Error, Debug)]

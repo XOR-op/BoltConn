@@ -3,6 +3,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
 use crate::intercept::{HyperBody, ModifierContext};
+use crate::proxy::error::InterceptError;
 use crate::proxy::{ConnAbortHandle, ConnContext};
 use hyper::client::conn;
 use hyper::service::service_fn;
@@ -38,7 +39,7 @@ impl HttpIntercept {
         modifier: Arc<dyn Modifier>,
         req: Request<HyperBody>,
         ctx: ModifierContext,
-    ) -> anyhow::Result<Response<HyperBody>> {
+    ) -> Result<Response<HyperBody>, InterceptError> {
         let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
         if let Some(resp) = fake_resp {
             return Ok(resp);
@@ -47,9 +48,14 @@ impl HttpIntercept {
         let _handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
         let (mut sender, connection) = conn::http1::Builder::new()
             .handshake(TokioIo::new(DuplexChan::new(outbound)))
-            .await?;
+            .await
+            .map_err(InterceptError::Handshake)?;
         tokio::spawn(connection);
-        let (parts, resp_body) = sender.send_request(req).await?.into_parts();
+        let (parts, resp_body) = sender
+            .send_request(req)
+            .await
+            .map_err(InterceptError::SendRequest)?
+            .into_parts();
         let resp = modifier
             .modify_response(Response::from_parts(parts, HyperBody::new(resp_body)), &ctx)
             .await?;

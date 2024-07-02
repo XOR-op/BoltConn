@@ -1,7 +1,12 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum RuntimeError {}
+pub enum RuntimeError {
+    #[error("Transport error: {0}")]
+    Transport(#[from] TransportError),
+    #[error("Intercept error: {0}")]
+    Intercept(#[from] InterceptError),
+}
 
 #[derive(Error, Debug)]
 pub enum TransportError {
@@ -39,4 +44,34 @@ pub enum WireGuardError {
     BoringTun(&'static str),
     #[error("WireGuard error: {0}")]
     Others(&'static str),
+}
+
+#[derive(Error, Debug)]
+pub enum InterceptError {
+    #[error("No corresponding id: {0}")]
+    NoCorrespondingId(u64),
+    #[error("Wait response: {0}")]
+    WaitResponse(hyper::Error),
+    #[error("Invalid data")]
+    InvalidData,
+    #[error("Tls connect error: {0}")]
+    TlsConnect(std::io::Error),
+    #[error("Handshake error: {0}")]
+    Handshake(hyper::Error),
+    #[error("Send request error: {0}")]
+    SendRequest(hyper::Error),
+    #[error("Certificate error: {0}")]
+    Certificate(#[from] CertificateError),
+}
+
+#[derive(Error, Debug)]
+pub enum CertificateError {
+    #[error("No generated private key available")]
+    NoPrivateKey,
+    #[error("No generated certificate available")]
+    NoCert,
+    #[error("RcGen error: {0}")]
+    RcGen(#[from] rcgen::RcgenError),
+    #[error("PemFile error: {0}")]
+    PemFile(std::io::Error),
 }

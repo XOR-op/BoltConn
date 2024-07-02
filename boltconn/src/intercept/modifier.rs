@@ -1,9 +1,9 @@
 use crate::intercept::{HyperBody, InterceptionResult};
 use crate::platform::process::ProcessInfo;
+use crate::proxy::error::InterceptError;
 use crate::proxy::{
     CapturedBody, ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr,
 };
-use anyhow::anyhow;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use http_body_util::BodyExt;
@@ -26,58 +26,12 @@ pub trait Modifier: Send + Sync {
         &self,
         req: Request<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)>;
+    ) -> Result<(Request<HyperBody>, Option<Response<HyperBody>>), InterceptError>;
     async fn modify_response(
         &self,
         resp: Response<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<HyperBody>>;
-}
-
-#[derive(Default)]
-pub struct Logger;
-
-#[async_trait]
-impl Modifier for Logger {
-    async fn modify_request(
-        &self,
-        req: Request<HyperBody>,
-        _ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)> {
-        println!("{:?}", req);
-        Ok((req, None))
-    }
-
-    async fn modify_response(
-        &self,
-        resp: Response<HyperBody>,
-        _ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<HyperBody>> {
-        println!("{:?}", resp);
-        Ok(resp)
-    }
-}
-
-#[derive(Default)]
-pub struct Nooper;
-
-#[async_trait]
-impl Modifier for Nooper {
-    async fn modify_request(
-        &self,
-        req: Request<HyperBody>,
-        _ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)> {
-        Ok((req, None))
-    }
-
-    async fn modify_response(
-        &self,
-        resp: Response<HyperBody>,
-        _ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<HyperBody>> {
-        Ok(resp)
-    }
+    ) -> Result<Response<HyperBody>, InterceptError>;
 }
 
 pub struct Recorder {
@@ -102,9 +56,13 @@ impl Modifier for Recorder {
         &self,
         req: Request<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)> {
+    ) -> Result<(Request<HyperBody>, Option<Response<HyperBody>>), InterceptError> {
         let (parts, body) = req.into_parts();
-        let whole_body = body.collect().await?.to_bytes();
+        let whole_body = body
+            .collect()
+            .await
+            .map_err(InterceptError::WaitResponse)?
+            .to_bytes();
         let req_copy = DumpedRequest {
             uri: parts.uri.clone(),
             method: parts.method.clone(),
@@ -127,9 +85,13 @@ impl Modifier for Recorder {
         &self,
         resp: Response<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<HyperBody>> {
+    ) -> Result<Response<HyperBody>, InterceptError> {
         let (parts, body) = resp.into_parts();
-        let whole_body = body.collect().await?.to_bytes();
+        let whole_body = body
+            .collect()
+            .await
+            .map_err(InterceptError::WaitResponse)?
+            .to_bytes();
         let resp_copy = DumpedResponse {
             status: parts.status,
             version: parts.version,
@@ -140,7 +102,7 @@ impl Modifier for Recorder {
         let req = self
             .pending
             .remove(&ctx.tag)
-            .ok_or_else(|| anyhow!("no id"))?
+            .ok_or_else(|| InterceptError::NoCorrespondingId(ctx.tag))?
             .1;
         let host = match &ctx.conn_info.dest {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),

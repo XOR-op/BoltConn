@@ -7,6 +7,7 @@ mod modifier;
 mod script_engine;
 mod url_engine;
 
+use crate::proxy::error::CertificateError;
 use chrono::Datelike;
 pub use header_engine::*;
 pub use http_intercept::HttpIntercept;
@@ -29,17 +30,10 @@ pub use url_engine::*;
 
 pub(super) type HyperBody = http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>;
 
-// #[derive(Error, Debug)]
-// pub(super) enum HyperBodyError {
-//     Infallible(#[from] Infallible),
-//     Hyper(#[from] hyper::Error),
-// }
-//
-
 fn sign_site_cert(
     common_name: &str,
     ca_cert: &Certificate,
-) -> anyhow::Result<(Vec<RustlsCertificate<'static>>, RustlsPrivateKey<'static>)> {
+) -> Result<(Vec<RustlsCertificate<'static>>, RustlsPrivateKey<'static>), CertificateError> {
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::CommonName, common_name.to_string());
     distinguished_name.push(DnType::OrganizationName, "BoltConn-MITM");
@@ -63,11 +57,13 @@ fn sign_site_cert(
     let private_key = cert.serialize_private_key_pem();
     let res_cert = rustls_pemfile::certs(&mut cert_crt.as_bytes())
         .next()
-        .ok_or(anyhow::anyhow!("No generated cert available"))??;
+        .ok_or(CertificateError::NoCert)?
+        .map_err(CertificateError::PemFile)?;
     let res_key = RustlsPrivateKey::Pkcs8(
         rustls_pemfile::pkcs8_private_keys(&mut private_key.as_bytes())
             .next()
-            .ok_or(anyhow::anyhow!("No generated privkey available"))??,
+            .ok_or(CertificateError::NoPrivateKey)?
+            .map_err(CertificateError::PemFile)?,
     );
     Ok((vec![res_cert], res_key))
 }

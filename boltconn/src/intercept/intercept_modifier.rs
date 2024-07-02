@@ -2,8 +2,8 @@ use crate::intercept::intercept_manager::PayloadEntry;
 use crate::intercept::url_engine::UrlModType;
 use crate::intercept::{HyperBody, InterceptionResult, Modifier, ModifierContext};
 use crate::platform::process::ProcessInfo;
+use crate::proxy::error::InterceptError;
 use crate::proxy::{CapturedBody, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr};
-use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
@@ -90,11 +90,15 @@ impl InterceptModifier {
     }
 
     // From hyper::body::to_bytes, with some modifications
-    async fn read_at_most(mut body: HyperBody, size_limit: usize) -> anyhow::Result<ReadData> {
+    async fn read_at_most(
+        mut body: HyperBody,
+        size_limit: usize,
+    ) -> Result<ReadData, InterceptError> {
         // If there's only 1 chunk, we can just return Buf::to_bytes()
         let mut first = if let Some(buf) = body.frame().await {
-            buf?.into_data()
-                .map_err(|_| anyhow::anyhow!("Invalid data"))?
+            buf.map_err(InterceptError::WaitResponse)?
+                .into_data()
+                .map_err(|_| InterceptError::InvalidData)?
         } else {
             return Ok(ReadData::Full(Bytes::new()));
         };
@@ -108,8 +112,9 @@ impl InterceptModifier {
         }
 
         let second = if let Some(buf) = body.frame().await {
-            buf?.into_data()
-                .map_err(|_| anyhow::anyhow!("Invalid data"))?
+            buf.map_err(InterceptError::WaitResponse)?
+                .into_data()
+                .map_err(|_| InterceptError::InvalidData)?
         } else {
             return Ok(ReadData::Full(first.copy_to_bytes(first.remaining())));
         };
@@ -131,8 +136,9 @@ impl InterceptModifier {
             }
             if let Some(buf) = body.frame().await {
                 vec.put(
-                    buf?.into_data()
-                        .map_err(|_| anyhow::anyhow!("Invalid data"))?,
+                    buf.map_err(InterceptError::WaitResponse)?
+                        .into_data()
+                        .map_err(|_| InterceptError::InvalidData)?,
                 );
             } else {
                 break;
@@ -171,7 +177,7 @@ impl Modifier for InterceptModifier {
         &self,
         req: Request<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<(Request<HyperBody>, Option<Response<HyperBody>>)> {
+    ) -> Result<(Request<HyperBody>, Option<Response<HyperBody>>), InterceptError> {
         let (mut parts, body) = req.into_parts();
 
         let url = get_full_uri(
@@ -216,7 +222,11 @@ impl Modifier for InterceptModifier {
                                 };
                                 // record request and fake resp
                                 let (resp_parts, body) = resp.into_parts();
-                                let resp_body = body.collect().await?.to_bytes();
+                                let resp_body = body
+                                    .collect()
+                                    .await
+                                    .map_err(InterceptError::WaitResponse)?
+                                    .to_bytes();
 
                                 if self.result.capture_response {
                                     let resp_copy = DumpedResponse {
@@ -288,13 +298,13 @@ impl Modifier for InterceptModifier {
         &self,
         resp: Response<HyperBody>,
         ctx: &ModifierContext,
-    ) -> anyhow::Result<Response<HyperBody>> {
+    ) -> Result<Response<HyperBody>, InterceptError> {
         let (mut parts, body) = resp.into_parts();
         // FIXME: self.pending may leak if the connection is interrupted before getting a response
         let req = self
             .pending
             .remove(&ctx.tag)
-            .ok_or_else(|| anyhow!("no id"))?
+            .ok_or_else(|| InterceptError::NoCorrespondingId(ctx.tag))?
             .1;
 
         // For large body, we skip the manipulation
