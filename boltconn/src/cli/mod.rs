@@ -125,6 +125,8 @@ pub(crate) struct StartOptions {
     /// Path of certificate. Default to ${app_data}/cert
     #[arg(long)]
     pub cert: Option<PathBuf>,
+    #[arg(short = 't', long = "tun")]
+    pub enable_tun: Option<bool>,
 }
 
 #[derive(Debug, Args)]

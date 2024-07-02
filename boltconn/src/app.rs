@@ -48,6 +48,7 @@ impl App {
         config_path: PathBuf,
         data_path: PathBuf,
         cert_path: PathBuf,
+        enable_tun: Option<bool>,
     ) -> anyhow::Result<Self> {
         // tracing
         let stream_logger = StreamLoggerSend::new();
@@ -129,6 +130,7 @@ impl App {
         };
 
         // Create TUN
+        let will_enable_tun = enable_tun.unwrap_or(config.inbound.enable_tun);
         let (tun_udp_tx, tun_udp_rx) = flume::bounded(4096);
         let (udp_tun_tx, udp_tun_rx) = flume::bounded(4096);
         let tun = {
@@ -154,7 +156,7 @@ impl App {
                 fake_dns_server,
                 tun.get_name(),
             )));
-            if config.inbound.enable_tun {
+            if will_enable_tun {
                 tun_configure
                     .lock()
                     .unwrap()

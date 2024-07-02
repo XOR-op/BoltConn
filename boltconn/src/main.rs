@@ -100,7 +100,12 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    let app = match rt.block_on(App::create(config_path, data_path, cert_path)) {
+    let app = match rt.block_on(App::create(
+        config_path,
+        data_path,
+        cert_path,
+        cmds.enable_tun,
+    )) {
         Ok(app) => app,
         Err(e) => {
             eprintln!("{e}");
