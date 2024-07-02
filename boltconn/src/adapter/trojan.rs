@@ -13,7 +13,6 @@ use crate::transport::trojan::{
     TrojanRequest, TrojanUdpSocket,
 };
 use crate::transport::UdpSocketAdapter;
-use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{StatusCode, Uri};
@@ -155,15 +154,18 @@ impl TrojanOutbound {
         &self,
         stream: S,
         path: &str,
-    ) -> Result<AsyncWsStream<S>> {
+    ) -> Result<AsyncWsStream<S>, TransportError> {
         let uri = Uri::builder()
             .scheme("wss")
             .authority(self.config.sni.as_str())
             .path_and_query(path)
-            .build()?;
-        let (stream, resp) = client_async(uri, stream).await?;
+            .build()
+            .map_err(|_| TransportError::Trojan("Invalid wss uri"))?;
+        let (stream, resp) = client_async(uri, stream)
+            .await
+            .map_err(|_| TransportError::Trojan("Websocket client_sync failed"))?;
         if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
-            return Err(anyhow!("Bad status:{}", resp.status()));
+            return Err(TransportError::Trojan("Websocket upgrade failed"));
         }
         Ok(AsyncWsStream::new(stream))
     }

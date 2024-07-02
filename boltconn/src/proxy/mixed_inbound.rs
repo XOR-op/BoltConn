@@ -1,3 +1,4 @@
+use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, HttpInbound, Socks5Inbound};
 use std::collections::HashMap;
 use std::io;
@@ -62,7 +63,7 @@ impl MixedInbound {
         socks_auth: Arc<HashMap<String, String>>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TransportError> {
         let mut first_byte = [0u8; 1];
         socks_stream.read_exact(&mut first_byte).await?;
         const C_ASCII: u8 = b"C"[0];

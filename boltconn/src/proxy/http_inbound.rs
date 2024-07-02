@@ -1,6 +1,6 @@
 use crate::dispatch::{InboundIdentity, InboundInfo};
+use crate::proxy::error::TransportError;
 use crate::proxy::Dispatcher;
-use anyhow::anyhow;
 use base64::Engine;
 use httparse::Request;
 use std::collections::HashMap;
@@ -60,22 +60,24 @@ impl HttpInbound {
         addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
         first_byte: Option<String>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TransportError> {
         // get response
         let mut buf_reader = BufReader::new(socket);
         let mut req = first_byte.unwrap_or_default();
         while !req.ends_with("\r\n\r\n") {
             if buf_reader.read_line(&mut req).await? == 0 {
-                return Err(anyhow!("EOF"));
+                return Err(TransportError::Http("Connecting: EOF"));
             }
             if req.len() > 4096 {
-                return Err(anyhow!("Too long resp"));
+                return Err(TransportError::Http("Connecting: response too long"));
             }
         }
         let mut socket = buf_reader.into_inner();
         let mut buf = [httparse::EMPTY_HEADER; 16];
         let mut req_struct = Request::new(buf.as_mut());
-        req_struct.parse(req.as_bytes())?;
+        req_struct
+            .parse(req.as_bytes())
+            .map_err(|_| TransportError::Http("Failed to parse request header"))?;
         if req_struct.method.map_or(false, |m| m == "CONNECT")
             // HTTP/1.1
             && req_struct.version.map_or(false, |v| v == 1)
@@ -98,8 +100,13 @@ impl HttpInbound {
                                 let (left, right) = value.split_at(6);
                                 if left.eq_ignore_ascii_case("basic ") {
                                     let b64decoder = base64::engine::general_purpose::STANDARD;
-                                    let code = b64decoder.decode(right)?;
-                                    let text = std::str::from_utf8(code.as_slice())?;
+                                    let code = b64decoder.decode(right).map_err(|_| {
+                                        TransportError::Http("bad authorization encoding")
+                                    })?;
+                                    let text =
+                                        std::str::from_utf8(code.as_slice()).map_err(|_| {
+                                            TransportError::Http("bad authorization utf-8")
+                                        })?;
                                     let v: Vec<String> =
                                         text.split(':').map(|s| s.to_string()).collect();
                                     if v.len() == 2
@@ -120,7 +127,9 @@ impl HttpInbound {
                 };
                 if authorized.is_none() {
                     socket.write_all(Self::response403().as_bytes()).await?;
-                    return Err(anyhow!("Invalid CONNECT request"));
+                    return Err(TransportError::Http(
+                        "Invalid CONNECT request: unauthorized",
+                    ));
                 }
                 socket.write_all(Self::response200().as_bytes()).await?;
                 let _ = dispatcher
@@ -139,7 +148,7 @@ impl HttpInbound {
             }
         }
         socket.write_all(Self::response403().as_bytes()).await?;
-        Err(anyhow!("Invalid CONNECT request"))
+        Err(TransportError::Http("Invalid CONNECT request"))
     }
 
     const fn response403() -> &'static str {

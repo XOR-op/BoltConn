@@ -2,6 +2,8 @@ use crate::common::io_err;
 use crate::common::MAX_PKT_SIZE;
 use crate::config::DnsPreference;
 use crate::network::dns::Dns;
+use crate::proxy::error::TransportError;
+use crate::proxy::error::WireGuardError::BoringTun;
 use crate::proxy::NetworkAddr;
 use crate::transport::AdapterOrSocket;
 use boringtun::noise::errors::WireGuardError;
@@ -88,7 +90,7 @@ impl WireguardTunnel {
         config: &WireguardConfig,
         dns: Arc<Dns>,
         smol_notify: Arc<Notify>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, TransportError> {
         let endpoint = match config.endpoint {
             NetworkAddr::Raw(addr) => addr,
             NetworkAddr::DomainName {
@@ -110,7 +112,7 @@ impl WireguardTunnel {
             13,
             None,
         )
-        .map_err(|e| anyhow::anyhow!(e))?;
+        .map_err(|e| TransportError::WireGuard(BoringTun(e)))?;
         Ok(Self {
             tunnel: tokio::sync::Mutex::new(tunnel),
             inner: WireguardTunnelInner {

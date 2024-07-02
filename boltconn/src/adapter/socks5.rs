@@ -224,7 +224,7 @@ impl UdpSocketAdapter for Socks5UdpAdapter {
         let (size, _) = self.0.recv_from(&mut buf).await?;
         let (frag, target_addr, raw_data) = fast_socks5::parse_udp_request(&buf[..size]).await?;
         if frag != 0 {
-            return Err(TransportError::UnsupportedSocks5UdpFragment);
+            return Err(TransportError::Socks5Extra("UDP fragment not supported"));
         }
         data[..raw_data.len()].copy_from_slice(raw_data);
         Ok((raw_data.len(), target_addr.into()))
