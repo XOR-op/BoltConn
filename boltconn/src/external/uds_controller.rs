@@ -1,5 +1,7 @@
+use crate::common::as_io_err;
 use crate::external::Controller;
 use crate::platform::get_user_info;
+use crate::proxy::error::SystemError;
 use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::{ClientStreamServiceClient, ControlService};
 use boltapi::{
@@ -22,11 +24,12 @@ pub struct UnixListenerGuard {
 }
 
 impl UnixListenerGuard {
-    pub fn new<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, SystemError> {
         let path = path.as_ref().to_path_buf();
-        let listener = UnixListener::bind(&path)?;
+        let listener = UnixListener::bind(&path).map_err(SystemError::Controller)?;
         if let Some((_, uid, gid)) = get_user_info() {
-            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))?;
+            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))
+                .map_err(|e| SystemError::Controller(as_io_err(e)))?;
         }
         Ok(Self {
             path,

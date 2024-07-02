@@ -13,6 +13,7 @@ use crate::adapter::{Connector, Outbound};
 use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{Latency, Proxy, ProxyImpl};
+use crate::proxy::error::RuntimeError;
 use bytes::Bytes;
 pub use context::*;
 pub use dispatcher::*;
@@ -50,7 +51,7 @@ pub async fn latency_test(
     url: &str,
     timeout: Duration,
     iface: Option<String>,
-) -> anyhow::Result<JoinHandle<()>> {
+) -> Result<JoinHandle<()>, RuntimeError> {
     let tls_conector = create_tls_connector(None);
     let req = Request::builder()
         .method("GET")
@@ -58,18 +59,19 @@ pub async fn latency_test(
         .body(http_body_util::Empty::<Bytes>::new())
         .unwrap();
     let (inbound, outbound) = Connector::new_pair(10);
-    let parsed_url = url::Url::parse(url)?;
+    let parsed_url =
+        url::Url::parse(url).map_err(|_| RuntimeError::LatencyTest("Failed to parse test url"))?;
     let port = match parsed_url.port() {
         Some(p) => p,
         None => match parsed_url.scheme() {
             "https" => 443,
             "http" => 80,
-            _ => return Err(anyhow::anyhow!("Invalid test url scheme")),
+            _ => return Err(RuntimeError::LatencyTest("Invalid test url scheme")),
         },
     };
     let dst_addr = match parsed_url
         .host()
-        .ok_or(anyhow::anyhow!("No host in test url"))?
+        .ok_or(RuntimeError::LatencyTest("No host in test url"))?
     {
         Host::Domain(domain) => NetworkAddr::DomainName {
             domain_name: domain.to_string(),
@@ -83,7 +85,8 @@ pub async fn latency_test(
         NetworkAddr::DomainName {
             domain_name,
             port: _,
-        } => ServerName::try_from(domain_name.as_str())?,
+        } => ServerName::try_from(domain_name.as_str())
+            .map_err(|_| RuntimeError::LatencyTest("Failed to resolve test host"))?,
     }
     .to_owned();
     let mut rng = rand::rngs::SmallRng::seed_from_u64(
@@ -106,7 +109,7 @@ pub async fn latency_test(
                 Ok(o) => Box::new(o),
                 Err(_) => {
                     proxy.set_latency(Latency::Failed);
-                    return Err(anyhow::anyhow!("Create outbound failed"));
+                    return Err(RuntimeError::LatencyTest("Create outbound failed"));
                 }
             }
         }
@@ -121,7 +124,7 @@ pub async fn latency_test(
                 Ok((o, _)) => o,
                 Err(_) => {
                     proxy.set_latency(Latency::Failed);
-                    return Err(anyhow::anyhow!("Create outbound failed"));
+                    return Err(RuntimeError::LatencyTest("Create outbound failed"));
                 }
             };
             creator

@@ -18,6 +18,8 @@ pub enum ConfigError {
     Script(#[from] ScriptError),
     #[error("Interception error: {0}")]
     Intercept(#[from] InterceptConfigError),
+    #[error("Internal error: {0}")]
+    Internal(&'static str),
 }
 
 #[derive(Error, Debug)]

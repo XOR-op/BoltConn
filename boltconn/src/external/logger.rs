@@ -1,3 +1,4 @@
+use crate::config::ConfigError;
 use chrono::Timelike;
 use std::collections::VecDeque;
 use std::str::FromStr;
@@ -97,7 +98,7 @@ impl<'a> MakeWriter<'a> for LoggerMaker {
     }
 }
 
-pub fn init_tracing(logger: &StreamLoggerSend) -> anyhow::Result<()> {
+pub fn init_tracing(logger: &StreamLoggerSend) -> Result<(), ConfigError> {
     #[cfg(not(feature = "tokio-console"))]
     {
         let stdout_layer = fmt::layer()
@@ -115,7 +116,10 @@ pub fn init_tracing(logger: &StreamLoggerSend) -> anyhow::Result<()> {
             .with(stream_layer)
             .with(
                 EnvFilter::builder()
-                    .with_default_directive(Directive::from_str("boltconn=trace")?)
+                    .with_default_directive(
+                        Directive::from_str("boltconn=trace")
+                            .map_err(|_| ConfigError::Internal("Tracing filter"))?,
+                    )
                     .from_env_lossy(),
             )
             .init();

@@ -1,6 +1,6 @@
 use crate::platform::get_user_info;
+use crate::proxy::error::DatabaseError;
 use crate::proxy::{CapturedBody, ConnContext, HttpInterceptData};
-use anyhow::anyhow;
 use rusqlite::{params, Error, ErrorCode, OpenFlags};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -42,7 +42,7 @@ impl DatabaseHandle {
                     resp_body BLOB
                 )";
 
-    pub fn open(path: PathBuf) -> anyhow::Result<Self> {
+    pub fn open(path: PathBuf) -> Result<Self, DatabaseError> {
         let mut conn =
             match rusqlite::Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE) {
                 Ok(c) => {
@@ -50,7 +50,7 @@ impl DatabaseHandle {
                     c
                 }
                 Err(err) => {
-                    let Error::SqliteFailure(e, _) = err else {
+                    let Error::SqliteFailure(e, x) = err else {
                         Err(err)?
                     };
                     if e.code == ErrorCode::CannotOpen {
@@ -60,12 +60,13 @@ impl DatabaseHandle {
                             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
                         )?;
                         if let Some((_, uid, gid)) = get_user_info() {
-                            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))?;
+                            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))
+                                .map_err(DatabaseError::Chown)?;
                         }
                         Self::create_db_table(&conn)?;
                         conn
                     } else {
-                        Err(e)?
+                        Err(DatabaseError::RuSqlite(Error::SqliteFailure(e, x)))?
                     }
                 }
             };
@@ -77,7 +78,7 @@ impl DatabaseHandle {
                 .enable_time()
                 .build()
                 .expect("Failed to create database thread");
-            let result: anyhow::Result<()> = thread_rt.block_on(async move {
+            let result: Result<(), DatabaseError> = thread_rt.block_on(async move {
                 let conn_may_available = loop {
                     let s = tokio::time::sleep(Duration::from_secs(30 * 60));
                     tokio::select! {
@@ -122,7 +123,7 @@ impl DatabaseHandle {
         })
     }
 
-    fn verify(conn: &rusqlite::Connection) -> anyhow::Result<()> {
+    fn verify(conn: &rusqlite::Connection) -> Result<(), DatabaseError> {
         let mut stmt = conn.prepare("SELECT name,sql FROM sqlite_master WHERE type='table'")?;
         let result = stmt.query_map([], |row| {
             Ok((row.get::<usize, String>(0)?, row.get::<usize, String>(1)?))
@@ -134,13 +135,13 @@ impl DatabaseHandle {
             match name.as_str() {
                 "Conn" => {
                     if sql != Self::CONN_TABLE_SCHEMA {
-                        return Err(anyhow!("Invalid table schema 'Conn'"));
+                        return Err(DatabaseError::InvalidSchema("Conn"));
                     }
                     has_conn = true;
                 }
                 "Intercept" => {
                     if sql != Self::INTERCEPT_TABLE_SCHEMA {
-                        return Err(anyhow!("Invalid table schema 'Intercept'"));
+                        return Err(DatabaseError::InvalidSchema("Intercept"));
                     }
                     has_intercept = true;
                 }
@@ -148,21 +149,18 @@ impl DatabaseHandle {
             }
         }
         if !(has_conn && has_intercept) {
-            return Err(anyhow!(
-                "Missing table: {}",
-                if has_conn {
-                    "Intercept"
-                } else if has_intercept {
-                    "Conn"
-                } else {
-                    "Conn & Intercept"
-                }
-            ));
+            return Err(DatabaseError::MissingTable(if has_conn {
+                "Intercept"
+            } else if has_intercept {
+                "Conn"
+            } else {
+                "Conn & Intercept"
+            }));
         }
         Ok(())
     }
 
-    fn create_db_table(conn: &rusqlite::Connection) -> anyhow::Result<()> {
+    fn create_db_table(conn: &rusqlite::Connection) -> Result<(), DatabaseError> {
         conn.execute(Self::CONN_TABLE_SCHEMA, ())?;
         conn.execute(Self::INTERCEPT_TABLE_SCHEMA, ())?;
         Ok(())
@@ -177,7 +175,7 @@ impl DatabaseHandle {
     fn insert_connections(
         conn: &mut rusqlite::Connection,
         data: Vec<Arc<ConnContext>>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), DatabaseError> {
         let tx = conn.transaction()?;
         let mut stmt = tx
             .prepare_cached("INSERT INTO Conn (dest,protocol,proxy,process,upload,download,start_time) VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
@@ -200,7 +198,7 @@ impl DatabaseHandle {
     fn insert_interceptions(
         conn: &mut rusqlite::Connection,
         intes: Vec<HttpInterceptData>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), DatabaseError> {
         let tx = conn.transaction()?;
         let mut stmt = tx
             .prepare_cached("INSERT INTO Intercept (process,uri,method,status,size,time,req_header,req_body,resp_header,resp_body) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
