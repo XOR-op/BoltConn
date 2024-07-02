@@ -6,6 +6,7 @@ use crate::common::{as_io_err, io_err, StreamOutboundTrait};
 use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
+use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
@@ -13,7 +14,6 @@ use fast_socks5::client::Socks5Stream;
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{AuthenticationMethod, Socks5Command};
 use std::io;
-use std::io::Result;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -57,7 +57,7 @@ impl Socks5Outbound {
         }
     }
 
-    async fn connect_proxy<S>(&self, outbound: S) -> Result<Socks5Stream<S>>
+    async fn connect_proxy<S>(&self, outbound: S) -> io::Result<Socks5Stream<S>>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -73,7 +73,7 @@ impl Socks5Outbound {
         inbound: Connector,
         outbound: S,
         abort_handle: ConnAbortHandle,
-    ) -> Result<()>
+    ) -> io::Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -93,7 +93,7 @@ impl Socks5Outbound {
         outbound: S,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> Result<()>
+    ) -> io::Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -207,7 +207,7 @@ struct Socks5UdpAdapter(Arc<UdpSocket>);
 
 #[async_trait]
 impl UdpSocketAdapter for Socks5UdpAdapter {
-    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> anyhow::Result<()> {
+    async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> Result<(), TransportError> {
         let mut buf = match addr {
             NetworkAddr::Raw(s) => fast_socks5::new_udp_header(s)?,
             NetworkAddr::DomainName { domain_name, port } => {
@@ -219,12 +219,12 @@ impl UdpSocketAdapter for Socks5UdpAdapter {
         Ok(())
     }
 
-    async fn recv_from(&self, data: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+    async fn recv_from(&self, data: &mut [u8]) -> Result<(usize, NetworkAddr), TransportError> {
         let mut buf = [0u8; 0x10000];
         let (size, _) = self.0.recv_from(&mut buf).await?;
         let (frag, target_addr, raw_data) = fast_socks5::parse_udp_request(&buf[..size]).await?;
         if frag != 0 {
-            return Err(anyhow::anyhow!("Unsupported frag value."));
+            return Err(TransportError::Socks5Extra("UDP fragment not supported"));
         }
         data[..raw_data.len()].copy_from_slice(raw_data);
         Ok((raw_data.len(), target_addr.into()))

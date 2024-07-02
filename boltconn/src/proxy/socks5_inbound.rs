@@ -1,4 +1,5 @@
 use crate::dispatch::{InboundIdentity, InboundInfo};
+use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use fast_socks5::util::target_addr::{read_address, TargetAddr};
 use fast_socks5::{consts, read_exact, ReplyError, SocksError};
@@ -64,7 +65,7 @@ impl Socks5Inbound {
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
         first_byte: Option<u8>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TransportError> {
         let incoming_user = Self::process_auth(&mut socks_stream, &auth, first_byte).await?;
         let [version, cmd, _rsv, address_type] = read_exact!(socks_stream, [0u8; 4])?;
 
@@ -72,7 +73,10 @@ impl Socks5Inbound {
             Err(SocksError::UnsupportedSocksVersion(version))?;
         }
 
-        let target_addr = match read_address(&mut socks_stream, address_type).await? {
+        let target_addr = match read_address(&mut socks_stream, address_type)
+            .await
+            .map_err(|_| TransportError::Socks5Extra("Read connect address failed"))?
+        {
             TargetAddr::Ip(sa) => NetworkAddr::Raw(sa),
             TargetAddr::Domain(domain_name, port) => {
                 // Many clients will say they send domain name even if they actually send IP address.
@@ -142,7 +146,9 @@ impl Socks5Inbound {
                     indicator.store(false, Ordering::Relaxed)
                 };
             }
-            _ => Err(ReplyError::CommandNotSupported)?,
+            _ => Err(TransportError::Socks5(SocksError::ReplyError(
+                ReplyError::CommandNotSupported,
+            )))?,
         };
         Ok(())
     }
@@ -151,7 +157,7 @@ impl Socks5Inbound {
         socket: &mut TcpStream,
         auth: &HashMap<String, String>,
         first_byte: Option<u8>,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>, TransportError> {
         let [version, method_len] = if let Some(byte) = first_byte {
             [byte, read_exact!(socket, [0u8; 1])?[0]]
         } else {
@@ -205,8 +211,10 @@ impl Socks5Inbound {
             }
             let password = read_exact!(socket, vec![0u8; pass_len as usize])?;
 
-            let parsed_usr = String::from_utf8(username)?;
-            let parsed_pwd = String::from_utf8(password)?;
+            let parsed_usr = String::from_utf8(username)
+                .map_err(|_| TransportError::Socks5Extra("not UTF-8 encoded username"))?;
+            let parsed_pwd = String::from_utf8(password)
+                .map_err(|_| TransportError::Socks5Extra("not UTF-8 encoded password"))?;
             if auth.get(&parsed_usr).is_some_and(|pwd| *pwd == parsed_pwd) {
                 socket
                     .write_all(&[1, consts::SOCKS5_REPLY_SUCCEEDED])
@@ -221,7 +229,7 @@ impl Socks5Inbound {
         }
     }
 
-    async fn response_auth_error(socket: &mut TcpStream) -> anyhow::Result<()> {
+    async fn response_auth_error(socket: &mut TcpStream) -> Result<(), TransportError> {
         socket
             .write_all(&[1, consts::SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE])
             .await?;

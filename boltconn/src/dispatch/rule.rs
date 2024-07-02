@@ -1,3 +1,4 @@
+use crate::config::{ConfigError, ProxyError, RuleError};
 use crate::dispatch::action::{Action, LocalResolve};
 use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::{ConnInfo, GeneralProxy, InboundInfo, Proxy, ProxyGroup};
@@ -5,7 +6,6 @@ use crate::external::MmdbReader;
 use crate::network::dns::Dns;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
-use anyhow::anyhow;
 use ipnet::IpNet;
 use regex::Regex;
 use std::collections::HashMap;
@@ -207,27 +207,30 @@ impl RuleBuilder<'_> {
         self.buffer.push(rule_or_action)
     }
 
-    pub fn append_literal(&mut self, s: &str) -> anyhow::Result<()> {
+    pub fn append_literal(&mut self, s: &str) -> Result<(), ConfigError> {
         let r = self.parse_literal(s)?;
         self.buffer.push(RuleOrAction::Rule(r));
         Ok(())
     }
 
     #[allow(clippy::get_first)]
-    pub fn parse_literal(&mut self, s: &str) -> anyhow::Result<Rule<GeneralProxy>> {
+    pub fn parse_literal(&mut self, s: &str) -> Result<Rule<GeneralProxy>, ConfigError> {
+        let invalid_err = || RuleError::Invalid(s.to_string());
         let processed_str = "[".to_string() + s + "]";
-        let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
+        let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())
+            .map_err(|_| RuleError::Invalid(s.to_string()))?;
 
         // Normal rules
         if list.len() < 3 {
-            return Err(anyhow!("Invalid length"));
+            return Err(ConfigError::Rule(invalid_err()));
         }
         let (mut first, mut may_proxy) = list.split_at(list.len() - 1);
-        let mut may_proxy_str = retrive_string(may_proxy.get(0).unwrap())?;
+        let mut may_proxy_str =
+            retrive_string(may_proxy.get(0).unwrap()).ok_or_else(invalid_err)?;
         // e.g. IP-CIDR, #ip#, #proxy#, no-resolve
         if may_proxy_str.as_str() == "no-resolve" {
             (first, may_proxy) = first.split_at(first.len() - 1);
-            may_proxy_str = retrive_string(may_proxy.get(0).unwrap())?;
+            may_proxy_str = retrive_string(may_proxy.get(0).unwrap()).ok_or_else(invalid_err)?;
         }
 
         let general = {
@@ -236,36 +239,42 @@ impl RuleBuilder<'_> {
             } else if let Some(p) = self.groups.get(&may_proxy_str) {
                 GeneralProxy::Group(p.clone())
             } else {
-                return Err(anyhow!("Group not found"));
+                return Err(ProxyError::MissingProxy(may_proxy_str).into());
             }
         };
 
-        let rule = self.parse_sub_rule(first)?;
+        let rule = self.parse_sub_rule(first, s)?;
         Ok(Rule::new(rule, general))
     }
 
-    pub fn parse_incomplete(&mut self, s: &str) -> anyhow::Result<RuleImpl> {
+    pub fn parse_incomplete(&mut self, s: &str) -> Result<RuleImpl, RuleError> {
         let processed_str = "[".to_string() + s + "]";
-        let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())?;
+        let list: serde_yaml::Sequence = serde_yaml::from_str(processed_str.as_str())
+            .map_err(|_| RuleError::Invalid(s.to_string()))?;
         if list.len() < 2 {
-            return Err(anyhow!("Invalid length"));
+            return Err(RuleError::Invalid(s.to_string()));
         }
-        self.parse_sub_rule(list.as_slice())
+        self.parse_sub_rule(list.as_slice(), s)
     }
 
-    fn parse_sub_rule(&self, list: &[serde_yaml::Value]) -> anyhow::Result<RuleImpl> {
-        let prefix = retrive_string(list.first().unwrap())?;
+    fn parse_sub_rule(
+        &self,
+        list: &[serde_yaml::Value],
+        original_text: &str,
+    ) -> Result<RuleImpl, RuleError> {
+        let invalid_err = || RuleError::Invalid(original_text.to_string());
+        let prefix = retrive_string(list.first().unwrap()).ok_or_else(invalid_err)?;
         match prefix.as_str() {
             "AND" | "OR" => {
                 if list.len() <= 2 {
-                    return Err(anyhow!("Invalid length"));
+                    return Err(invalid_err());
                 }
                 let mut subs = vec![];
                 for val in list[1..].iter() {
                     let serde_yaml::Value::Sequence(seq) = val else {
-                        return Err(anyhow!("Invalid NOT rule"));
+                        return Err(invalid_err());
                     };
-                    subs.push(self.parse_sub_rule(seq)?);
+                    subs.push(self.parse_sub_rule(seq, original_text)?);
                 }
 
                 match prefix.as_str() {
@@ -279,15 +288,18 @@ impl RuleBuilder<'_> {
                     2 => match prefix.as_str() {
                         "NOT" => {
                             let serde_yaml::Value::Sequence(seq) = list.get(1).unwrap() else {
-                                return Err(anyhow!("Invalid NOT rule"));
+                                return Err(RuleError::Invalid(original_text.to_string()));
                             };
-                            Ok(RuleImpl::Not(Box::new(self.parse_sub_rule(seq)?)))
+                            Ok(RuleImpl::Not(Box::new(
+                                self.parse_sub_rule(seq, original_text)?,
+                            )))
                         }
                         _ => {
                             // all other rules
-                            let content = retrive_string(list.get(1).unwrap())?;
+                            let content =
+                                retrive_string(list.get(1).unwrap()).ok_or_else(invalid_err)?;
                             Self::parse(prefix, content, Some(self.rulesets), self.mmdb.as_ref())
-                                .ok_or_else(|| anyhow!("Failed to parse 2-length sub-rule"))
+                                .ok_or_else(invalid_err)
                         }
                     },
                     3 => {
@@ -297,31 +309,32 @@ impl RuleBuilder<'_> {
                                 if *list.get(2).unwrap()
                                     != serde_yaml::Value::String("no-resolve".to_string())
                                 {
-                                    return Err(anyhow!("Invalid length"));
+                                    return Err(invalid_err());
                                 }
-                                let content = retrive_string(list.get(1).unwrap())?;
+                                let content =
+                                    retrive_string(list.get(1).unwrap()).ok_or_else(invalid_err)?;
                                 Self::parse(
                                     prefix,
                                     content,
                                     Some(self.rulesets),
                                     self.mmdb.as_ref(),
                                 )
-                                .ok_or_else(|| anyhow!("Failed to parse 3-length sub-rule"))
+                                .ok_or_else(invalid_err)
                             }
-                            _ => Err(anyhow!("Invalid length")),
+                            _ => Err(invalid_err()),
                         }
                     }
-                    _ => Err(anyhow!("Invalid length")),
+                    _ => Err(invalid_err()),
                 }
             }
         }
     }
 
-    pub fn parse_fallback(&mut self, s: &str) -> anyhow::Result<GeneralProxy> {
+    pub fn parse_fallback(&mut self, s: &str) -> Result<GeneralProxy, ConfigError> {
         let processed_str: String = s.chars().filter(|c| *c != ' ').collect();
         let list: Vec<&str> = processed_str.split(',').collect();
         if list.len() != 2 || *list.first().unwrap() != "FALLBACK" {
-            return Err(anyhow!("Invalid FALLBACK rule"));
+            return Err(RuleError::Invalid(s.to_string()).into());
         }
         let general = {
             if let Some(p) = self.proxies.get(*list.get(1).unwrap()) {
@@ -329,7 +342,7 @@ impl RuleBuilder<'_> {
             } else if let Some(p) = self.groups.get(*list.get(1).unwrap()) {
                 GeneralProxy::Group(p.clone())
             } else {
-                return Err(anyhow!("Group not found"));
+                return Err(ProxyError::MissingGroup((*list.get(1).unwrap()).to_string()).into());
             }
         };
         Ok(general)
@@ -423,11 +436,11 @@ impl<T: Clone> Display for Rule<T> {
     }
 }
 
-fn retrive_string(val: &serde_yaml::Value) -> anyhow::Result<String> {
+fn retrive_string(val: &serde_yaml::Value) -> Option<String> {
     match val {
-        serde_yaml::Value::String(s) => Ok(s.clone()),
-        serde_yaml::Value::Number(n) => Ok(n.to_string()),
-        _ => Err(anyhow!("Not a valid string")),
+        serde_yaml::Value::String(s) => Some(s.clone()),
+        serde_yaml::Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 

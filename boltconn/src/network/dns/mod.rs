@@ -5,7 +5,9 @@ mod hosts;
 mod ns_policy;
 mod provider;
 
+use crate::config::DnsConfigError;
 use crate::network::dns::provider::IfaceProvider;
+use crate::proxy::error::DnsError;
 pub use dns::{Dns, GenericDns};
 use hickory_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
@@ -38,19 +40,16 @@ fn add_tls_server(
 async fn resolve_dns(
     bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
     dn: &str,
-) -> anyhow::Result<Vec<IpAddr>> {
+) -> Result<Vec<IpAddr>, DnsError> {
     let Some(resolver) = bootstrap else {
-        return Err(anyhow::anyhow!(
-            "DoT requires bootstrap udp DNS nameserver {}",
-            dn
-        ));
+        return Err(DnsError::MissingBootstrap(dn.to_string()));
     };
     let Ok(ips) = resolver.lookup_ip(dn).await else {
-        return Err(anyhow::anyhow!("Failed to resolve DNS {}", dn));
+        return Err(DnsError::ResolveServer(dn.to_string()));
     };
     let result: Vec<IpAddr> = ips.iter().collect();
     if result.is_empty() {
-        Err(anyhow::anyhow!("Failed to resolve DNS {}", dn))
+        Err(DnsError::ResolveServer(dn.to_string()))
     } else {
         Ok(result)
     }
@@ -59,7 +58,7 @@ async fn resolve_dns(
 pub fn new_bootstrap_resolver(
     iface_name: &str,
     addr: &[IpAddr],
-) -> anyhow::Result<AsyncResolver<GenericConnector<IfaceProvider>>> {
+) -> AsyncResolver<GenericConnector<IfaceProvider>> {
     let cfg = ResolverConfig::from_parts(
         None,
         vec![],
@@ -69,23 +68,22 @@ pub fn new_bootstrap_resolver(
                 .collect::<Vec<NameServerConfig>>(),
         ),
     );
-    let resolver = AsyncResolver::new(
+    AsyncResolver::new(
         cfg,
         ResolverOpts::default(),
         GenericConnector::new(IfaceProvider::new(iface_name)),
-    );
-    Ok(resolver)
+    )
 }
 
 pub async fn parse_dns_config(
     lines: impl Iterator<Item = &String>,
     bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
-) -> anyhow::Result<Vec<NameServerConfigGroup>> {
+) -> Result<Vec<NameServerConfigGroup>, DnsConfigError> {
     let mut arr = Vec::new();
     for l in lines {
         let parts: Vec<&str> = l.split(',').map(|s| s.trim()).collect();
         if parts.len() != 2 {
-            return Err(anyhow::anyhow!("Invalid dns format {}", l));
+            return Err(DnsConfigError::Invalid(l.clone()));
         }
         let (proto, content) = (
             parts.first().unwrap().to_string(),
@@ -100,10 +98,15 @@ pub async fn parse_single_dns(
     proto: &str,
     content: &str,
     bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
-) -> anyhow::Result<NameServerConfigGroup> {
+) -> Result<NameServerConfigGroup, DnsConfigError> {
     Ok(match proto {
         "udp" => NameServerConfigGroup::from(vec![NameServerConfig::new(
-            SocketAddr::new(content.parse::<IpAddr>()?, 53),
+            SocketAddr::new(
+                content
+                    .parse::<IpAddr>()
+                    .map_err(|_| DnsConfigError::Invalid(content.to_string()))?,
+                53,
+            ),
             Protocol::Udp,
         )]),
         "dot" => add_tls_server(
@@ -121,17 +124,15 @@ pub async fn parse_single_dns(
         "dot-preset" => match content {
             "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_tls(),
             "quad9" => NameServerConfigGroup::quad9_tls(),
-            _ => return Err(anyhow::anyhow!("Unknown DoT preset {}", content)),
+            _ => return Err(DnsConfigError::InvalidPreset("dot", content.to_string())),
         },
         "doh-preset" => match content {
             "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_https(),
             "quad9" => NameServerConfigGroup::quad9_https(),
             "google" => NameServerConfigGroup::google_https(),
-            _ => return Err(anyhow::anyhow!("Unknown DoH preset {}", content)),
+            _ => return Err(DnsConfigError::InvalidPreset("doh", content.to_string())),
         },
-        _ => {
-            return Err(anyhow::anyhow!("Unknown DNS type {}", proto));
-        }
+        _ => return Err(DnsConfigError::InvalidType(proto.to_string())),
     })
 }
 

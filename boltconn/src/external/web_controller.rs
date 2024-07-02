@@ -1,5 +1,7 @@
+use crate::common::as_io_err;
 use crate::dispatch::Dispatching;
 use crate::external::{Controller, StreamLoggerRecv};
+use crate::proxy::error::SystemError;
 use arc_swap::ArcSwap;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
@@ -30,7 +32,7 @@ impl WebController {
         Self { secret, controller }
     }
 
-    pub async fn run(self, port: u16, cors_allowed_list: &[String]) -> anyhow::Result<()> {
+    pub async fn run(self, port: u16, cors_allowed_list: &[String]) -> Result<(), SystemError> {
         let secret = Arc::new(self.secret.clone());
         let cors_vec = parse_cors_allow(cors_allowed_list);
         let wrapper = move |r| Self::auth(secret.clone(), r, cors_vec.clone());
@@ -78,8 +80,12 @@ impl WebController {
         }
 
         let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
-        let listener = TcpListener::bind(&addr).await?;
-        axum::serve(listener, app.into_make_service()).await?;
+        let listener = TcpListener::bind(&addr)
+            .await
+            .map_err(SystemError::Controller)?;
+        axum::serve(listener, app.into_make_service())
+            .await
+            .map_err(|e| SystemError::Controller(as_io_err(e)))?;
         Ok(())
     }
 

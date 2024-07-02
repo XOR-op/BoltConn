@@ -1,4 +1,4 @@
-use crate::config::{ActionConfig, InterceptionConfig};
+use crate::config::{ActionConfig, ConfigError, InterceptConfigError, InterceptionConfig};
 use crate::dispatch::{ConnInfo, Dispatching, DispatchingBuilder, ProxyImpl, RuleSetTable};
 use crate::external::MmdbReader;
 use crate::intercept::{HeaderEngine, ScriptEngine, UrlEngine};
@@ -20,7 +20,7 @@ struct InterceptionPayload {
 }
 
 impl InterceptionPayload {
-    fn parse_actions(actions: &[ActionConfig]) -> anyhow::Result<Self> {
+    fn parse_actions(actions: &[ActionConfig]) -> Result<Self, ConfigError> {
         let mut capture_request = false;
         let mut capture_response = false;
         let mut payloads = vec![];
@@ -29,15 +29,13 @@ impl InterceptionPayload {
                 ActionConfig::Standard(s) => {
                     if s.starts_with("url,") {
                         payloads.push(Arc::new(PayloadEntry::Url(
-                            UrlEngine::from_line(s).ok_or_else(|| {
-                                anyhow::anyhow!("Parse invalid url modifier rules: {}", s)
-                            })?,
+                            UrlEngine::from_line(s)
+                                .ok_or_else(|| InterceptConfigError::BadUrl(s.to_string()))?,
                         )));
                     } else if s.starts_with("header-req,") || s.starts_with("header-resp,") {
                         payloads.push(Arc::new(PayloadEntry::Header(
-                            HeaderEngine::from_line(s).ok_or_else(|| {
-                                anyhow::anyhow!("Parse invalid header modifier rules: {}", s)
-                            })?,
+                            HeaderEngine::from_line(s)
+                                .ok_or_else(|| InterceptConfigError::BadHeader(s.to_string()))?,
                         )));
                     } else if s == "capture" {
                         capture_request = true;
@@ -47,7 +45,9 @@ impl InterceptionPayload {
                     } else if s == "capture-response" {
                         capture_response = true;
                     } else {
-                        return Err(anyhow::anyhow!("Unexpected: {}", s));
+                        return Err(ConfigError::Intercept(InterceptConfigError::UnknownRule(
+                            s.to_string(),
+                        )));
                     }
                 }
                 ActionConfig::Script(cfg) => {
@@ -107,7 +107,7 @@ impl InterceptionManager {
         dns: Arc<Dns>,
         mmdb: Option<Arc<MmdbReader>>,
         rulesets: &RuleSetTable,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, ConfigError> {
         let mut res = vec![];
         for i in entries.iter() {
             if !i.enabled {

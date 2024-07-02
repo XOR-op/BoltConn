@@ -1,5 +1,5 @@
+use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
-use anyhow::anyhow;
 use bytes::Bytes;
 use sha2::{Digest, Sha224};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -188,7 +188,7 @@ where
         }
     }
 
-    pub async fn send_to(&self, data: &[u8], dest: NetworkAddr) -> anyhow::Result<()> {
+    pub async fn send_to(&self, data: &[u8], dest: NetworkAddr) -> Result<(), TransportError> {
         let data = encapsule_udp_packet(data, dest);
         self.write_half
             .lock()
@@ -198,7 +198,10 @@ where
         Ok(())
     }
 
-    pub async fn recv_from(&self, buffer: &mut [u8]) -> anyhow::Result<(usize, NetworkAddr)> {
+    pub async fn recv_from(
+        &self,
+        buffer: &mut [u8],
+    ) -> Result<(usize, NetworkAddr), TransportError> {
         let mut header_buf = [0u8; 256];
         let mut reader = self.read_half.lock().await;
         reader.read_exact(&mut header_buf[..1]).await?;
@@ -241,7 +244,7 @@ where
                     u16::from_be_bytes(port),
                 ))
             }
-            _ => return Err(anyhow!("Bad trojan udp format")),
+            _ => return Err(TransportError::Trojan("Bad trojan udp format")),
         };
 
         // read payload length and skip CRLF
@@ -250,7 +253,7 @@ where
         let len = u16::from_be_bytes(buf) as usize;
         reader.read_exact(&mut header_buf[..2]).await?;
         if len > buffer.len() {
-            return Err(anyhow!("Buffer too small"));
+            return Err(TransportError::Internal("Trojan buffer too small"));
         }
 
         // read payload

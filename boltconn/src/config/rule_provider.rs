@@ -1,5 +1,5 @@
 use crate::config;
-use crate::config::load_remote_config;
+use crate::config::{load_remote_config, ConfigError, FileError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -59,10 +59,10 @@ pub async fn read_rule_schema(
     config_path: &Path,
     providers: &HashMap<String, RuleProvider>,
     force_update: bool,
-) -> anyhow::Result<HashMap<String, RuleSchema>> {
+) -> Result<HashMap<String, RuleSchema>, ConfigError> {
     let mut table = HashMap::new();
     // concurrently download rules
-    let tasks: HashMap<String, JoinHandle<anyhow::Result<RuleSchema>>> = providers
+    let tasks: HashMap<String, JoinHandle<Result<RuleSchema, ConfigError>>> = providers
         .clone()
         .into_iter()
         .map(|(name, item)| {
@@ -70,12 +70,20 @@ pub async fn read_rule_schema(
             (
                 name,
                 tokio::spawn(async move {
+                    let io_error = |e| FileError::Io(root_path.to_string_lossy().to_string(), e);
+                    let serde_error =
+                        |e| FileError::Serde(root_path.to_string_lossy().to_string(), e);
+
                     match item.location {
                         RuleLocation::File { path } => {
                             let content: RawRuleSchema = serde_yaml::from_str(
-                                fs::read_to_string(config::safe_join_path(&root_path, &path)?)?
-                                    .as_str(),
-                            )?;
+                                fs::read_to_string(
+                                    config::safe_join_path(&root_path, &path).map_err(io_error)?,
+                                )
+                                .map_err(io_error)?
+                                .as_str(),
+                            )
+                            .map_err(serde_error)?;
                             Ok(RuleSchema {
                                 behavior: item.behavior,
                                 payload: content.payload,
@@ -83,7 +91,7 @@ pub async fn read_rule_schema(
                         }
                         RuleLocation::Http { url, path, .. } => {
                             let content: RawRuleSchema =
-                                load_remote_config(url, path, &root_path, force_update).await?;
+                                load_remote_config(&url, &path, &root_path, force_update).await?;
                             Ok(RuleSchema {
                                 behavior: item.behavior,
                                 payload: content.payload,
@@ -97,7 +105,7 @@ pub async fn read_rule_schema(
     for (name, task) in tasks {
         let content = match task.await? {
             Ok(c) => c,
-            Err(e) => return Err(anyhow::anyhow!("In rule provider {}: {}", name, e)),
+            Err(e) => return Err(e),
         };
         table.insert(name, content);
     }

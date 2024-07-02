@@ -3,6 +3,7 @@ use crate::network::packet::transport_layer::create_raw_udp_pkt;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::dispatcher::DispatchError;
+use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, NetworkAddr, SessionManager};
 use bytes::Bytes;
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, UdpPacket};
@@ -53,11 +54,13 @@ impl TunUdpInbound {
         mut back_chan: mpsc::Receiver<(Bytes, SocketAddr)>,
         tun_tx: flume::Sender<Bytes>,
         dst: SocketAddr,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), TransportError> {
         while let Some((data, src)) = back_chan.recv().await {
             let raw_data = create_raw_udp_pkt(data.as_ref(), src, dst);
             if !tun_tx.is_full() {
-                tun_tx.send(raw_data.freeze())?;
+                tun_tx
+                    .send(raw_data.freeze())
+                    .map_err(|_| TransportError::Internal("TUN UDP back channel full"))?;
             }
         }
         Ok(())

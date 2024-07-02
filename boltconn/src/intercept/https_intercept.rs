@@ -5,8 +5,8 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::id_gen::IdGenerator;
 use crate::intercept::modifier::Modifier;
 use crate::intercept::{sign_site_cert, HyperBody, ModifierContext};
+use crate::proxy::error::InterceptError;
 use crate::proxy::{ConnAbortHandle, ConnContext};
-use anyhow::Context;
 use hyper::client::conn::http2;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -39,7 +39,7 @@ impl HttpsIntercept {
         creator: Box<dyn Outbound>,
         conn_info: Arc<ConnContext>,
         parrot_fingerprint: bool,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, InterceptError> {
         let (cert, priv_key) = sign_site_cert(server_name.as_str(), ca_cert)?;
         Ok(Self {
             cert,
@@ -61,7 +61,7 @@ impl HttpsIntercept {
         modifier: Arc<dyn Modifier>,
         req: Request<HyperBody>,
         ctx: ModifierContext,
-    ) -> anyhow::Result<Response<HyperBody>> {
+    ) -> Result<Response<HyperBody>, InterceptError> {
         let (req, fake_resp) = modifier.modify_request(req, &ctx).await?;
         if let Some(resp) = fake_resp {
             return Ok(resp);
@@ -74,12 +74,13 @@ impl HttpsIntercept {
                     let _handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
                     let outbound = client_tls
                         .connect(server_name, DuplexChan::new(outbound))
-                        .await?;
+                        .await
+                        .map_err(InterceptError::TlsConnect)?;
                     let (sender, connection) =
                         http2::Builder::new(hyper_util::rt::TokioExecutor::new())
                             .handshake(TokioIo::new(outbound))
                             .await
-                            .context("Intercept h2 failed")?;
+                            .map_err(InterceptError::Handshake)?;
                     tokio::spawn(connection);
                     sender
                 });
@@ -87,7 +88,10 @@ impl HttpsIntercept {
             sender.as_mut().unwrap().send_request(req)
         };
 
-        let (parts, resp_body) = resp_future.await?.into_parts();
+        let (parts, resp_body) = resp_future
+            .await
+            .map_err(InterceptError::WaitResponse)?
+            .into_parts();
         let resp = modifier
             .modify_response(Response::from_parts(parts, HyperBody::new(resp_body)), &ctx)
             .await?;

@@ -6,6 +6,7 @@ use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
 use crate::common::{io_err, local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
+use crate::proxy::error::{TransportError, WireGuardError};
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
@@ -43,7 +44,7 @@ impl Endpoint {
         config: &WireguardConfig,
         endpoint_resolver: Arc<Dns>,
         timeout: Duration,
-    ) -> anyhow::Result<Arc<Self>> {
+    ) -> Result<Arc<Self>, TransportError> {
         let notify = Arc::new(Notify::new());
 
         // control conn
@@ -56,8 +57,12 @@ impl Endpoint {
         );
         let device = VirtualIpDevice::new(config.mtu, wg_smol_rx, smol_wg_tx);
         let smol_stack = {
-            let iface = InterfaceAddress::from_dual(config.ip_addr, config.ip_addr6)
-                .ok_or_else(|| anyhow::anyhow!("Smol interface without v4 & v6"))?;
+            let iface =
+                InterfaceAddress::from_dual(config.ip_addr, config.ip_addr6).ok_or_else(|| {
+                    TransportError::Internal(
+                        "Unexpected behavior: no ip address configured for WireGuard; should be checked during configuration",
+                    )
+                })?;
             Arc::new_cyclic(|me| {
                 // create dns
                 let resolver = {
@@ -264,7 +269,7 @@ impl WireguardManager {
         config: &WireguardConfig,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> anyhow::Result<Arc<Endpoint>> {
+    ) -> Result<Arc<Endpoint>, TransportError> {
         for _ in 0..10 {
             // get an existing conn, or create
             let mut guard = self.active_conn.lock().await;
@@ -307,7 +312,9 @@ impl WireguardManager {
                 return Ok(ep);
             }
         }
-        Err(anyhow::anyhow!("get_wg_conn: unexpected loop time"))
+        Err(TransportError::WireGuard(WireGuardError::Others(
+            "get_wg_conn: unexpected loop time",
+        )))
     }
 }
 

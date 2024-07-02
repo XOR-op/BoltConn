@@ -101,8 +101,7 @@ impl App {
         // initialize resources
         let dns = {
             let bootstrap =
-                new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice())
-                    .unwrap();
+                new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice());
             let group = match parse_dns_config(config.dns.nameserver.iter(), Some(&bootstrap)).await
             {
                 Ok(g) => {
@@ -366,7 +365,7 @@ impl App {
         }
 
         let bootstrap =
-            new_bootstrap_resolver(&self.outbound_iface, config.dns.bootstrap.as_slice())?;
+            new_bootstrap_resolver(&self.outbound_iface, config.dns.bootstrap.as_slice());
         let group = parse_dns_config(config.dns.nameserver.iter(), Some(&bootstrap)).await?;
         let ns_policy = NameserverPolicies::new(
             &config.dns.nameserver_policy,
