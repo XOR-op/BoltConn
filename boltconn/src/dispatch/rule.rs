@@ -60,6 +60,7 @@ pub enum RuleImpl {
     DomainSuffix(String),
     DomainKeyword(String),
     LocalIpCidr(IpNet),
+    SrcIpCidr(IpNet),
     IpCidr(IpNet),
     SrcPort(PortRule),
     DstPort(PortRule),
@@ -102,6 +103,7 @@ impl RuleImpl {
                 }
             }
             RuleImpl::LocalIpCidr(net) => info.local_ip.as_ref().map_or(false, |s| net.contains(s)),
+            RuleImpl::SrcIpCidr(net) => net.contains(&info.src.ip()),
             RuleImpl::IpCidr(net) => info.socketaddr().is_some_and(|s| net.contains(&s.ip())),
             RuleImpl::GeoIP(mmdb, country) => info
                 .socketaddr()
@@ -386,6 +388,9 @@ impl RuleBuilder<'_> {
             "LOCAL-IP-CIDR" => IpNet::from_str(content.as_str())
                 .ok()
                 .map(RuleImpl::LocalIpCidr),
+            "SRC-IP-CIDR" => IpNet::from_str(content.as_str())
+                .ok()
+                .map(RuleImpl::SrcIpCidr),
             "IP-CIDR" | "IP-CIDR6" => IpNet::from_str(content.as_str()).ok().map(RuleImpl::IpCidr),
             "GEOIP" => mmdb.map(|x| RuleImpl::GeoIP(x.clone(), content)),
             "ASN" => {

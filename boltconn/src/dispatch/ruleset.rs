@@ -104,6 +104,7 @@ pub struct RuleSetBuilder {
     domain: HostMatcherBuilder,
     domain_keyword: Vec<String>,
     ip_cidr: IpNetworkTable<()>,
+    src_ip_cidr: IpNetworkTable<()>,
     local_ip_cidr: IpNetworkTable<()>,
     process_name: HashSet<String>,
     process_keyword: Vec<String>,
@@ -127,6 +128,7 @@ impl RuleSetBuilder {
             domain: HostMatcher::builder(),
             domain_keyword: vec![],
             ip_cidr: Default::default(),
+            src_ip_cidr: Default::default(),
             local_ip_cidr: Default::default(),
             process_name: Default::default(),
             process_keyword: vec![],
@@ -187,6 +189,12 @@ impl RuleSetBuilder {
                                 ip_network::IpNetwork::new_truncate(ip.addr(), ip.prefix_len())
                                     .unwrap();
                             retval.local_ip_cidr.insert(ip, ());
+                        }
+                        RuleImpl::SrcIpCidr(ip) => {
+                            let ip =
+                                ip_network::IpNetwork::new_truncate(ip.addr(), ip.prefix_len())
+                                    .unwrap();
+                            retval.src_ip_cidr.insert(ip, ());
                         }
                         RuleImpl::IpCidr(ip) => {
                             let ip =
@@ -292,6 +300,7 @@ impl RuleSetBuilder {
             domain: HostMatcher::builder(),
             domain_keyword: vec![],
             ip_cidr: table,
+            src_ip_cidr: Default::default(),
             local_ip_cidr: Default::default(),
             process_name: Default::default(),
             process_keyword: vec![],
