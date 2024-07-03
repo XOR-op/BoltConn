@@ -1,14 +1,18 @@
 use super::config::default_true;
-use crate::config::SingleOrVec;
+use crate::config::{default_str_str_mapping, SingleOrVec};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum RawInboundServiceConfig {
     Simple(u16),
     Complex {
+        #[serde(default = "default_inbound_ip_addr")]
+        host: IpAddr,
         port: u16,
+        #[serde(default = "default_str_str_mapping")]
         auth: HashMap<String, String>,
     },
 }
@@ -44,6 +48,18 @@ socks5:
       alice: bob
       browser: none
     ";
+    let complex2 = "\
+enable-tun: false
+http: 1080
+socks5:
+  - 2000
+  - host: 0.0.0.0
+    port: 8080
+  - port: 3000
+    auth:
+      alice: bob
+      browser: none
+    ";
     let fail = "\
 enable-tun: false
 http: 1080
@@ -57,8 +73,13 @@ socks5:
     let n: RawInboundConfig = serde_yaml::from_str(nothing).unwrap();
     let s1: RawInboundConfig = serde_yaml::from_str(simple1).unwrap();
     let s2: RawInboundConfig = serde_yaml::from_str(simple2).unwrap();
-    let c: RawInboundConfig = serde_yaml::from_str(complex).unwrap();
+    let c1: RawInboundConfig = serde_yaml::from_str(complex).unwrap();
+    let c2: RawInboundConfig = serde_yaml::from_str(complex2).unwrap();
     let err: serde_yaml::Result<RawInboundConfig> = serde_yaml::from_str(fail);
     assert!(err.is_err());
-    println!("{:?}\n{:?}\n{:?}\n{:?}", n, s1, s2, c);
+    println!("{:?}\n{:?}\n{:?}\n{:?}\n{:?}", n, s1, s2, c1, c2);
+}
+
+pub(crate) fn default_inbound_ip_addr() -> IpAddr {
+    "127.0.0.1".parse().unwrap()
 }

@@ -2,13 +2,13 @@ use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, HttpInbound, Socks5Inbound};
 use std::collections::HashMap;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct MixedInbound {
-    port: u16,
+    sock_addr: SocketAddr,
     server: TcpListener,
     http_auth: Arc<HashMap<String, String>>,
     socks_auth: Arc<HashMap<String, String>>,
@@ -17,15 +17,14 @@ pub struct MixedInbound {
 
 impl MixedInbound {
     pub async fn new(
-        port: u16,
+        sock_addr: SocketAddr,
         http_auth: HashMap<String, String>,
         socks_auth: HashMap<String, String>,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
-        let server =
-            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)).await?;
+        let server = TcpListener::bind(sock_addr).await?;
         Ok(Self {
-            port,
+            sock_addr,
             server,
             http_auth: Arc::new(http_auth),
             socks_auth: Arc::new(socks_auth),
@@ -34,10 +33,7 @@ impl MixedInbound {
     }
 
     pub async fn run(self) {
-        tracing::info!(
-            "[Mixed] Listen proxy at 127.0.0.1:{}, running...",
-            self.port
-        );
+        tracing::info!("[Mixed] Listen proxy at {}, running...", self.sock_addr);
         loop {
             match self.server.accept().await {
                 Ok((socket, src_addr)) => {
@@ -45,7 +41,12 @@ impl MixedInbound {
                     let http_auth = self.http_auth.clone();
                     let socks_auth = self.socks_auth.clone();
                     tokio::spawn(Self::serve_connection(
-                        self.port, socket, http_auth, socks_auth, src_addr, disp,
+                        self.sock_addr.port(),
+                        socket,
+                        http_auth,
+                        socks_auth,
+                        src_addr,
+                        disp,
                     ));
                 }
                 Err(err) => {

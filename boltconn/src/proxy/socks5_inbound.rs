@@ -5,7 +5,7 @@ use fast_socks5::util::target_addr::{read_address, TargetAddr};
 use fast_socks5::{consts, read_exact, ReplyError, SocksError};
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 pub struct Socks5Inbound {
-    port: u16,
+    sock_addr: SocketAddr,
     server: TcpListener,
     auth: Arc<HashMap<String, String>>,
     dispatcher: Arc<Dispatcher>,
@@ -22,14 +22,13 @@ pub struct Socks5Inbound {
 
 impl Socks5Inbound {
     pub async fn new(
-        port: u16,
+        sock_addr: SocketAddr,
         auth: HashMap<String, String>,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
-        let server =
-            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)).await?;
+        let server = TcpListener::bind(sock_addr).await?;
         Ok(Self {
-            port,
+            sock_addr,
             server,
             auth: Arc::new(auth),
             dispatcher,
@@ -37,17 +36,19 @@ impl Socks5Inbound {
     }
 
     pub async fn run(self) {
-        tracing::info!(
-            "[Socks5] Listen proxy at 127.0.0.1:{}, running...",
-            self.port
-        );
+        tracing::info!("[Socks5] Listen proxy at {}, running...", self.sock_addr);
         loop {
             match self.server.accept().await {
                 Ok((socket, src_addr)) => {
                     let disp = self.dispatcher.clone();
                     let auth = self.auth.clone();
                     tokio::spawn(Self::serve_connection(
-                        self.port, socket, auth, src_addr, disp, None,
+                        self.sock_addr.port(),
+                        socket,
+                        auth,
+                        src_addr,
+                        disp,
+                        None,
                     ));
                 }
                 Err(err) => {

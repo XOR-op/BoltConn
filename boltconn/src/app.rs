@@ -1,5 +1,6 @@
 use crate::config::{
-    safe_join_path, LinkedState, LoadedConfig, RawInboundServiceConfig, SingleOrVec,
+    default_inbound_ip_addr, safe_join_path, LinkedState, LoadedConfig, RawInboundServiceConfig,
+    SingleOrVec,
 };
 use crate::dispatch::{DispatchingBuilder, RuleSetBuilder};
 use crate::external::{
@@ -253,14 +254,14 @@ impl App {
         tokio::spawn(async move { tun.run(nat_addr).await });
 
         // start http/socks5 inbound
-        for (port, http_auth, socks_auth) in
+        for (sock_addr, http_auth, socks_auth) in
             parse_two_inbound_service(&config.inbound.http, &config.inbound.socks5)
         {
             let dispatcher = dispatcher.clone();
             match (http_auth, socks_auth) {
                 (Some(http_auth), Some(socks_auth)) => {
                     tokio::spawn(async move {
-                        MixedInbound::new(port, http_auth, socks_auth, dispatcher)
+                        MixedInbound::new(sock_addr, http_auth, socks_auth, dispatcher)
                             .await?
                             .run()
                             .await;
@@ -269,13 +270,16 @@ impl App {
                 }
                 (Some(auth), None) => {
                     tokio::spawn(async move {
-                        HttpInbound::new(port, auth, dispatcher).await?.run().await;
+                        HttpInbound::new(sock_addr, auth, dispatcher)
+                            .await?
+                            .run()
+                            .await;
                         Ok::<(), io::Error>(())
                     });
                 }
                 (None, Some(auth)) => {
                     tokio::spawn(async move {
-                        Socks5Inbound::new(port, auth, dispatcher)
+                        Socks5Inbound::new(sock_addr, auth, dispatcher)
                             .await?
                             .run()
                             .await;
@@ -438,13 +442,13 @@ fn parse_two_inbound_service(
     http: &Option<SingleOrVec<RawInboundServiceConfig>>,
     socks5: &Option<SingleOrVec<RawInboundServiceConfig>>,
 ) -> Vec<(
-    u16,
+    SocketAddr,
     Option<HashMap<String, String>>,
     Option<HashMap<String, String>>,
 )> {
     fn parse_inbound_service(
         config: &Option<SingleOrVec<RawInboundServiceConfig>>,
-    ) -> HashMap<u16, HashMap<String, String>> {
+    ) -> HashMap<SocketAddr, HashMap<String, String>> {
         config
             .as_ref()
             .map(|v| {
@@ -452,8 +456,13 @@ fn parse_two_inbound_service(
                     .linearize()
                     .into_iter()
                     .map(|c| match c {
-                        RawInboundServiceConfig::Simple(p) => (p, HashMap::default()),
-                        RawInboundServiceConfig::Complex { port, auth } => (port, auth),
+                        RawInboundServiceConfig::Simple(p) => (
+                            SocketAddr::new(default_inbound_ip_addr(), p),
+                            HashMap::default(),
+                        ),
+                        RawInboundServiceConfig::Complex { host, port, auth } => {
+                            (SocketAddr::new(host, port), auth)
+                        }
                     })
                     .collect()
             })

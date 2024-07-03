@@ -5,14 +5,14 @@ use base64::Engine;
 use httparse::Request;
 use std::collections::HashMap;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct HttpInbound {
-    port: u16,
+    sock_addr: SocketAddr,
     server: TcpListener,
     auth: Arc<HashMap<String, String>>,
     dispatcher: Arc<Dispatcher>,
@@ -20,14 +20,13 @@ pub struct HttpInbound {
 
 impl HttpInbound {
     pub async fn new(
-        port: u16,
+        sock_addr: SocketAddr,
         auth: HashMap<String, String>,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
-        let server =
-            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)).await?;
+        let server = TcpListener::bind(sock_addr).await?;
         Ok(Self {
-            port,
+            sock_addr,
             server,
             auth: Arc::new(auth),
             dispatcher,
@@ -35,14 +34,19 @@ impl HttpInbound {
     }
 
     pub async fn run(self) {
-        tracing::info!("[HTTP] Listen proxy at 127.0.0.1:{}, running...", self.port);
+        tracing::info!("[HTTP] Listen proxy at {}, running...", self.sock_addr);
         loop {
             match self.server.accept().await {
                 Ok((socket, addr)) => {
                     let disp = self.dispatcher.clone();
                     let auth = self.auth.clone();
                     tokio::spawn(Self::serve_connection(
-                        self.port, socket, auth, addr, disp, None,
+                        self.sock_addr.port(),
+                        socket,
+                        auth,
+                        addr,
+                        disp,
+                        None,
                     ));
                 }
                 Err(err) => {
