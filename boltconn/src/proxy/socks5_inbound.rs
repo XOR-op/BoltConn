@@ -112,9 +112,8 @@ impl Socks5Inbound {
                     .await;
             }
             consts::SOCKS5_CMD_UDP_ASSOCIATE => {
-                let peer_sock =
-                    UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0))
-                        .await?;
+                let stream_local_addr = socks_stream.local_addr()?;
+                let peer_sock = UdpSocket::bind(SocketAddr::new(stream_local_addr.ip(), 0)).await?;
                 let reply_addr = peer_sock.local_addr()?;
                 socks_stream
                     .write_all(&Self::new_reply(&ReplyError::Succeeded, reply_addr))
