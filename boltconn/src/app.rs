@@ -290,9 +290,9 @@ impl App {
             }
         }
 
-        let uds_contoller = UdsController::new(controller.clone());
+        let uds_controller = UdsController::new(controller.clone());
         let uds_listener2 = uds_listener.clone();
-        tokio::spawn(async move { uds_contoller.run(uds_listener2).await });
+        tokio::spawn(async move { uds_controller.run(uds_listener2).await });
 
         // start web controller
         if let Some(web_cfg) = &config.web_controller {
