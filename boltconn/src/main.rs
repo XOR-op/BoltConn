@@ -27,6 +27,14 @@ mod platform;
 mod proxy;
 mod transport;
 
+// System default allocator (glibc) won't reclaim freed memory actively on Linux.
+// Without enough SWAP and RAM, this may cause OOM. Use MiMalloc to mitigate this issue.
+#[cfg(target_os = "linux")]
+use mimalloc::MiMalloc;
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 #[derive(Debug, Parser)]
 #[clap(name = "boltconn", about = "CLI interface of BoltConn", version = env!("CARGO_PKG_VERSION"))]
 struct ProgramArgs {
