@@ -32,7 +32,11 @@ impl WebController {
         Self { secret, controller }
     }
 
-    pub async fn run(self, port: u16, cors_allowed_list: &[String]) -> Result<(), SystemError> {
+    pub async fn run(
+        self,
+        listen_addr: SocketAddr,
+        cors_allowed_list: &[String],
+    ) -> Result<(), SystemError> {
         let secret = Arc::new(self.secret.clone());
         let cors_vec = parse_cors_allow(cors_allowed_list);
         let wrapper = move |r| Self::auth(secret.clone(), r, cors_vec.clone());
@@ -79,8 +83,7 @@ impl WebController {
             );
         }
 
-        let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
-        let listener = TcpListener::bind(&addr)
+        let listener = TcpListener::bind(&listen_addr)
             .await
             .map_err(SystemError::Controller)?;
         axum::serve(listener, app.into_make_service())

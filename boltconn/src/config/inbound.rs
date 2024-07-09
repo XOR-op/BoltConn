@@ -1,5 +1,5 @@
 use super::config::default_true;
-use crate::config::{default_str_str_mapping, SingleOrVec};
+use crate::config::{default_str_str_mapping, PortOrSocketAddr, SingleOrVec};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -7,7 +7,7 @@ use std::net::IpAddr;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum RawInboundServiceConfig {
-    Simple(u16),
+    Simple(PortOrSocketAddr),
     Complex {
         #[serde(default = "default_inbound_ip_addr")]
         host: IpAddr,

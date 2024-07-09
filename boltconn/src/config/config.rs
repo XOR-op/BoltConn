@@ -1,7 +1,9 @@
 use crate::config::inbound::RawInboundConfig;
 use crate::config::interception::InterceptionConfig;
 use crate::config::proxy_group::RawProxyGroupCfg;
-use crate::config::{AuthData, ModuleConfig, ProxyProvider, RuleConfigLine, RuleProvider};
+use crate::config::{
+    AuthData, ModuleConfig, PortOrSocketAddr, ProxyProvider, RuleConfigLine, RuleProvider,
+};
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -79,8 +81,8 @@ pub struct RawDnsConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawWebControllerConfig {
-    #[serde(alias = "api-port")]
-    pub api_port: u16,
+    #[serde(alias = "api-port", alias = "api-addr")]
+    pub api_addr: PortOrSocketAddr,
     #[serde(alias = "api-key")]
     pub api_key: Option<String>,
     #[serde(alias = "cors-allowed-list", default = "default_str_vec")]

@@ -1,6 +1,6 @@
 use crate::config::{
-    default_inbound_ip_addr, safe_join_path, LinkedState, LoadedConfig, RawInboundServiceConfig,
-    SingleOrVec,
+    default_inbound_ip_addr, safe_join_path, LinkedState, LoadedConfig, PortOrSocketAddr,
+    RawInboundServiceConfig, SingleOrVec,
 };
 use crate::dispatch::{DispatchingBuilder, RuleSetBuilder};
 use crate::external::{
@@ -296,10 +296,13 @@ impl App {
 
         // start web controller
         if let Some(web_cfg) = &config.web_controller {
-            let api_port = web_cfg.api_port;
+            let api_addr = match web_cfg.api_addr {
+                PortOrSocketAddr::Port(p) => SocketAddr::new(default_inbound_ip_addr(), p),
+                PortOrSocketAddr::SocketAddr(s) => s,
+            };
             let api_server = WebController::new(web_cfg.api_key.clone(), controller);
             let cors_domains = web_cfg.cors_allowed_list.clone();
-            tokio::spawn(async move { api_server.run(api_port, cors_domains.as_slice()).await });
+            tokio::spawn(async move { api_server.run(api_addr, cors_domains.as_slice()).await });
         }
 
         Ok(Self {
@@ -456,8 +459,13 @@ fn parse_two_inbound_service(
                     .linearize()
                     .into_iter()
                     .map(|c| match c {
-                        RawInboundServiceConfig::Simple(p) => (
-                            SocketAddr::new(default_inbound_ip_addr(), p),
+                        RawInboundServiceConfig::Simple(e) => (
+                            match e {
+                                PortOrSocketAddr::Port(p) => {
+                                    SocketAddr::new(default_inbound_ip_addr(), p)
+                                }
+                                PortOrSocketAddr::SocketAddr(s) => s,
+                            },
                             HashMap::default(),
                         ),
                         RawInboundServiceConfig::Complex { host, port, auth } => {

@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 pub use state::*;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
@@ -184,6 +185,13 @@ where
             SingleOrVec::List(v) => v,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[serde(untagged)]
+pub enum PortOrSocketAddr {
+    Port(u16),
+    SocketAddr(SocketAddr),
 }
 
 pub(in crate::config) fn default_true() -> bool {
