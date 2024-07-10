@@ -15,6 +15,15 @@ impl WebConnector {
         Ok(result)
     }
 
+    pub async fn get_proxy_for(&self, group: &str) -> Result<Option<GetGroupRespSchema>> {
+        let data = reqwest::get(self.route(format!("/proxies/{}", group).as_str()))
+            .await?
+            .text()
+            .await?;
+        let result: Vec<GetGroupRespSchema> = serde_json::from_str(data.as_str())?;
+        Ok(result.first().cloned())
+    }
+
     pub async fn set_proxy_for(&self, group: String, proxy: String) -> Result<bool> {
         let req = boltapi::SetGroupReqSchema { selected: proxy };
         let result = reqwest::Client::new()

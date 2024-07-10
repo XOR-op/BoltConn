@@ -57,6 +57,25 @@ impl Requester {
         Ok(())
     }
 
+    pub async fn get_group_proxy(&self, group: String) -> Result<()> {
+        let result = match &self.inner {
+            Inner::Web(c) => c.get_proxy_for(&group).await,
+            Inner::Uds(c) => c.get_proxy_for(&group).await,
+        }?;
+        match result {
+            Some(proxy) => {
+                println!("{}: {}", group.bold().green(), proxy.selected.blue());
+                for i in proxy.list {
+                    println!("  - {}", i.name)
+                }
+            }
+            None => {
+                println!("{}: {}", group.bold().green(), "Not found".red());
+            }
+        }
+        Ok(())
+    }
+
     pub async fn set_group_proxy(&self, group: String, proxy: String) -> Result<()> {
         let result = match &self.inner {
             Inner::Web(c) => c.set_proxy_for(group, proxy).await,

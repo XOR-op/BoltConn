@@ -47,6 +47,14 @@ impl UdsConnector {
         Ok(resp)
     }
 
+    pub async fn get_proxy_for(&self, group: &str) -> Result<Option<GetGroupRespSchema>> {
+        let resp = self
+            .client
+            .get_proxy_group(Context::current(), group.to_string())
+            .await?;
+        Ok(resp.first().cloned())
+    }
+
     pub async fn set_proxy_for(&self, group: String, proxy: String) -> Result<bool> {
         Ok(self
             .client
