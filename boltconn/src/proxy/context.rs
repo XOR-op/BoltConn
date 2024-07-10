@@ -272,7 +272,8 @@ pub struct ConnContext {
 
     // Will change
     pub session_proto: RwLock<SessionProtocol>,
-    pub rule: OutboundType,
+    pub outbound_name: String,
+    pub outbound_type: OutboundType,
     pub upload_traffic: AtomicU64,
     pub download_traffic: AtomicU64,
     pub done: AtomicBool,
@@ -290,7 +291,8 @@ impl ConnContext {
         dst: NetworkAddr,
         process_info: Option<ProcessInfo>,
         inbound_info: InboundInfo,
-        rule: OutboundType,
+        outbound_name: String,
+        outbound_type: OutboundType,
         network_type: NetworkType,
         // runtime handle
         abort_handle: ConnAbortHandle,
@@ -308,7 +310,8 @@ impl ConnContext {
                 NetworkType::Tcp => SessionProtocol::Tcp,
                 NetworkType::Udp => SessionProtocol::Udp,
             }),
-            rule,
+            outbound_name,
+            outbound_type,
             upload_traffic: AtomicU64::new(0),
             download_traffic: AtomicU64::new(0),
             done: AtomicBool::new(false),

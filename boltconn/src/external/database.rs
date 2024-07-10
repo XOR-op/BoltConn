@@ -183,7 +183,7 @@ impl DatabaseHandle {
             stmt.execute(params![
                 c.dest.to_string().as_str(),
                 c.session_proto.read().unwrap().to_string().as_str(),
-                format!("{:?}", c.rule).to_ascii_lowercase(),
+                format!("{:?}", c.outbound_type).to_ascii_lowercase(),
                 c.process_info.as_ref().map(|i| i.name.clone()),
                 c.upload_traffic.load(Ordering::Relaxed),
                 c.download_traffic.load(Ordering::Relaxed),

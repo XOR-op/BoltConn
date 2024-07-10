@@ -60,7 +60,7 @@ impl Dispatching {
         &self,
         info: &mut ConnInfo,
         verbose: bool,
-    ) -> (Arc<ProxyImpl>, Option<String>) {
+    ) -> (String, Arc<ProxyImpl>, Option<String>) {
         if let Some(r) = self.temporary_list.load().matches(info, verbose).await {
             r
         } else {
@@ -716,7 +716,7 @@ impl DispatchingSnippet {
         &self,
         info: &mut ConnInfo,
         verbose: bool,
-    ) -> (Arc<ProxyImpl>, Option<String>) {
+    ) -> (String, Arc<ProxyImpl>, Option<String>) {
         for v in &self.rules {
             match v {
                 RuleOrAction::Rule(v) => {
@@ -747,8 +747,9 @@ impl DispatchingSnippet {
         info: &ConnInfo,
         rule_str: &str,
         verbose: bool,
-    ) -> (Arc<ProxyImpl>, Option<String>) {
+    ) -> (String, Arc<ProxyImpl>, Option<String>) {
         let (proxy_impl, iface) = proxy.get_impl();
+        let name = proxy.selected_instance_name();
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
             if verbose {
                 tracing::info!(
@@ -760,7 +761,7 @@ impl DispatchingSnippet {
                     proxy,
                 );
             }
-            return (Arc::new(ProxyImpl::Reject), None);
+            return (name, Arc::new(ProxyImpl::Reject), None);
         }
         if verbose {
             tracing::info!(
@@ -772,6 +773,6 @@ impl DispatchingSnippet {
                 proxy,
             );
         }
-        (proxy_impl, iface)
+        (name, proxy_impl, iface)
     }
 }

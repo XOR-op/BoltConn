@@ -207,6 +207,13 @@ impl GeneralProxy {
             }
         }
     }
+
+    pub fn selected_instance_name(&self) -> String {
+        match self {
+            GeneralProxy::Single(p) => p.get_name(),
+            GeneralProxy::Group(g) => g.get_selection().selected_instance_name(),
+        }
+    }
 }
 
 impl Display for GeneralProxy {

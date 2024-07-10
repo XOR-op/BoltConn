@@ -114,7 +114,7 @@ impl Controller {
             inbound: info.inbound_info.to_string(),
             destination: info.dest.to_string(),
             protocol: info.session_proto.write().unwrap().to_string(),
-            proxy: format!("{:?}", info.rule).to_ascii_lowercase(),
+            proxy: info.outbound_name.clone(),
             process: info.process_info.as_ref().map(|i| ProcessSchema {
                 pid: i.pid,
                 path: i.path.clone(),

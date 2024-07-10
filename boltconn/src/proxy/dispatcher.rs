@@ -215,7 +215,8 @@ impl Dispatcher {
             process_info: process_info.clone(),
         };
         // match outbound proxy
-        let (proxy_config, iface) = self.dispatching.load().matches(&mut conn_info, true).await;
+        let (proxy_name, proxy_config, iface) =
+            self.dispatching.load().matches(&mut conn_info, true).await;
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
@@ -253,6 +254,7 @@ impl Dispatcher {
             dst_addr.clone(),
             process_info.clone(),
             inbound,
+            proxy_name,
             proxy_type,
             NetworkType::Tcp,
             abort_handle.clone(),
@@ -380,7 +382,8 @@ impl Dispatcher {
         dst_addr: NetworkAddr,
         mut conn_info: ConnInfo,
     ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), DispatchError> {
-        let (proxy_config, iface) = self.dispatching.load().matches(&mut conn_info, true).await;
+        let (proxy_name, proxy_config, iface) =
+            self.dispatching.load().matches(&mut conn_info, true).await;
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
@@ -411,6 +414,7 @@ impl Dispatcher {
             dst_addr,
             conn_info.process_info,
             conn_info.inbound,
+            proxy_name,
             proxy_type,
             NetworkType::Udp,
             abort_handle.clone(),
@@ -441,7 +445,7 @@ impl Dispatcher {
                 .load()
                 .matches(&mut conn_info, false)
                 .await
-                .0
+                .1
                 .as_ref(),
             ProxyImpl::Reject
         )

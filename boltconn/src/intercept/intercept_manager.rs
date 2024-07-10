@@ -76,7 +76,7 @@ struct InterceptionEntry {
 
 impl InterceptionEntry {
     async fn matches(&self, conn_info: &mut ConnInfo) -> Option<Arc<InterceptionPayload>> {
-        match self.filters.matches(conn_info, false).await.0.as_ref() {
+        match self.filters.matches(conn_info, false).await.1.as_ref() {
             ProxyImpl::Direct => Some(self.payload.clone()),
             _ => None,
         }

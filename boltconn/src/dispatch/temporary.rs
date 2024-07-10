@@ -20,7 +20,7 @@ impl TemporaryList {
         &self,
         info: &mut ConnInfo,
         verbose: bool,
-    ) -> Option<(Arc<ProxyImpl>, Option<String>)> {
+    ) -> Option<(String, Arc<ProxyImpl>, Option<String>)> {
         for v in &self.list {
             match v {
                 RuleOrAction::Rule(v) => {

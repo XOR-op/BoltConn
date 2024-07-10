@@ -46,7 +46,7 @@ impl SubDispatch {
         &self,
         info: &mut ConnInfo,
         verbose: bool,
-    ) -> Option<(Arc<ProxyImpl>, Option<String>)> {
+    ) -> Option<(String, Arc<ProxyImpl>, Option<String>)> {
         if self.rule.matches(info) {
             Some(self.snippet.matches(info, verbose).await)
         } else {
