@@ -33,8 +33,89 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex, Notify};
 
-const TCP_RECV_BUF_SIZE: usize = 1024 * 1024;
-const TCP_SEND_BUF_SIZE: usize = 256 * 1024;
+struct TcpTuning {
+    estimated_rtt: Duration,
+    last_time: Instant,
+    accum_bytes: usize,
+    window_size: usize,
+    // saturated usage of bandwidth in recent RTTs
+    recent_business: u32,
+}
+impl TcpTuning {
+    pub const TCP_REV_BUF_INIT: usize = 128 * 1024;
+    pub const TCP_RCV_BUF_MAX: usize = 4 * 1024 * 1024;
+    pub const TCP_SND_BUF_INIT: usize = 128 * 1024;
+    pub const DEFAULT_WINDOW_SCALE: u8 = 8;
+    const MULTI_GROW_THRESHOLD: usize = 1024 * 1024;
+    const LINEAR_GROW_STEP: usize = 1024 * 1024;
+
+    /// Based on current size and usage, compute whether there is a need to increase the buffer.
+    pub fn increase_tcp_rev_buf(
+        &mut self,
+        transferred_bytes: usize,
+        recv_buf_size: usize,
+    ) -> Option<usize> {
+        let elapsed = Instant::now() - self.last_time;
+        if elapsed < self.estimated_rtt {
+            self.accum_bytes += transferred_bytes;
+            return None;
+        }
+        let last_rtt_usage = self.accum_bytes;
+        self.accum_bytes = 0;
+        self.last_time = Instant::now();
+
+        // if buffer is small enough, grow it by 2x
+        if recv_buf_size < Self::MULTI_GROW_THRESHOLD {
+            if 3 * last_rtt_usage > recv_buf_size {
+                let new_size = recv_buf_size * 2;
+                tracing::debug!(
+                    "rwnd {}->{}, rtt={}",
+                    recv_buf_size,
+                    new_size,
+                    self.estimated_rtt.as_millis()
+                );
+                self.window_size = new_size;
+                return Some(new_size);
+            }
+        } else if recv_buf_size < Self::TCP_RCV_BUF_MAX {
+            if last_rtt_usage + Self::LINEAR_GROW_STEP > recv_buf_size && self.recent_business > 2 {
+                // if buffer is large enough, grow it only by 1MB instead of 2x
+                let new_size = recv_buf_size + Self::LINEAR_GROW_STEP;
+                tracing::debug!(
+                    "rwnd {}->{}, rtt={}",
+                    recv_buf_size,
+                    new_size,
+                    self.estimated_rtt.as_millis()
+                );
+                self.window_size = new_size;
+                self.recent_business = 0;
+                return Some(new_size);
+            } else if last_rtt_usage > recv_buf_size * 1 / 3 && self.recent_business < 4 {
+                // enough bandwidth usage means higher possibility of heavy traffic
+                self.recent_business += 1;
+            } else {
+                self.recent_business = self.recent_business.saturating_sub(2);
+            }
+        }
+        tracing::trace!(
+            "last_usage={}, rwnd {}, rtt={}",
+            last_rtt_usage,
+            recv_buf_size,
+            self.estimated_rtt.as_millis()
+        );
+        None
+    }
+
+    pub fn new(rtt: Duration) -> Self {
+        Self {
+            estimated_rtt: rtt,
+            last_time: Instant::now(),
+            accum_bytes: 0,
+            window_size: Self::TCP_REV_BUF_INIT,
+            recent_business: 0,
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone)]
 enum SmolError {
@@ -50,6 +131,7 @@ struct TcpConnTask {
     remain_to_send: Option<(Bytes, usize)>, // buffer, start_offset
     start_timestamp: Instant,
     half_close_timeout: Option<Instant>,
+    tcp_tuning: TcpTuning,
 }
 
 impl TcpConnTask {
@@ -79,6 +161,7 @@ impl TcpConnTask {
             remain_to_send: None,
             start_timestamp: Instant::now(),
             half_close_timeout: None,
+            tcp_tuning: TcpTuning::new(Duration::from_millis(50)),
         }
     }
 
@@ -118,18 +201,42 @@ impl TcpConnTask {
         Ok(has_activity)
     }
 
-    pub async fn try_recv(&self, socket: &mut SmolTcpSocket<'_>) -> bool {
+    pub async fn try_recv(&mut self, socket: &mut SmolTcpSocket<'_>) -> bool {
         // Receive data
         let mut has_activity = false;
+        let mut accum_bytes = 0;
         while socket.can_recv() && self.back_tx.capacity() > 0 {
             let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
             if let Ok(size) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
                 unsafe { buf.advance_mut(size) };
                 // must not fail because there is only 1 sender
                 let _ = self.back_tx.send(buf.freeze()).await;
+                accum_bytes += size;
                 has_activity = true;
             }
         }
+        if has_activity {
+            // try to increase rcv_buf size when possibilities of full buffer become significant
+            let cur_capacity = socket.recv_capacity();
+            if let Some(new_cap) = self
+                .tcp_tuning
+                .increase_tcp_rev_buf(accum_bytes, cur_capacity)
+            {
+                let new_buf = vec![0u8; new_cap];
+                if socket
+                    .replace_recv_buffer(TcpSocketBuffer::new(new_buf))
+                    .is_err()
+                {
+                    tracing::error!(
+                    "smol failed to increase TCP recv buffer size: old={}, new={}, window_scale={}",
+                    cur_capacity,
+                    new_cap,
+                    socket.local_recv_win_scale()
+                );
+                }
+            }
+        }
+
         has_activity
     }
 }
@@ -356,12 +463,16 @@ impl SmolStack {
         remote_addr: SocketAddr,
     ) -> io::Result<SocketHandle> {
         // create socket resource
-        let tx_buf = TcpSocketBuffer::new(vec![0u8; TCP_SEND_BUF_SIZE]);
-        let rx_buf = TcpSocketBuffer::new(vec![0u8; TCP_RECV_BUF_SIZE]);
+        let tx_buf = TcpSocketBuffer::new(vec![0u8; TcpTuning::TCP_SND_BUF_INIT]);
+        let rx_buf = TcpSocketBuffer::new(vec![0u8; TcpTuning::TCP_REV_BUF_INIT]);
         let mut client_socket = SmolTcpSocket::new(rx_buf, tx_buf);
         // Since we are behind kernel's TCP/IP stack, no second Nagle is needed.
         client_socket.set_nagle_enabled(false);
         client_socket.set_ack_delay(None);
+
+        client_socket
+            .set_local_recv_win_scale(TcpTuning::DEFAULT_WINDOW_SCALE)
+            .expect("set_local_recv_win_scale");
 
         // connect to remote
         client_socket
