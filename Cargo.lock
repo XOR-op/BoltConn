@@ -3481,7 +3481,7 @@ checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
 [[package]]
 name = "smoltcp"
 version = "0.11.0"
-source = "git+https://github.com/XOR-op/smoltcp.git?branch=resize-recv-buffer#c92074f7c3572fe11472cf783fbe11e0abe7470a"
+source = "git+https://github.com/XOR-op/smoltcp.git?branch=resize-recv-buffer#1555b5e0c1145df92bfbbb4221d550d73efb3b34"
 dependencies = [
  "bitflags 1.3.2",
  "byteorder",
