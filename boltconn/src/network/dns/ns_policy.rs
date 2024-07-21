@@ -1,7 +1,7 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::DnsConfigError;
 use crate::network::dns::parse_single_dns;
-use crate::network::dns::provider::IfaceProvider;
+use crate::network::dns::provider::{IfaceProvider, PlainProvider};
 use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::AsyncResolver;
@@ -9,7 +9,12 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 pub struct NameserverPolicies {
-    matchers: Vec<(HostMatcher, AsyncResolver<GenericConnector<IfaceProvider>>)>,
+    matchers: Vec<(HostMatcher, DispatchedDnsResolver)>,
+}
+
+pub(super) enum DispatchedDnsResolver {
+    Iface(AsyncResolver<GenericConnector<IfaceProvider>>),
+    Plain(AsyncResolver<GenericConnector<PlainProvider>>),
 }
 
 impl NameserverPolicies {
@@ -18,13 +23,24 @@ impl NameserverPolicies {
         bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
         outbound_iface: &str,
     ) -> Result<Self, DnsConfigError> {
-        let mut builder: HashMap<(String, String), (HostMatcherBuilder, NameServerConfigGroup)> =
-            HashMap::new();
+        let mut builder: HashMap<
+            (String, String),
+            (HostMatcherBuilder, NameServerConfigGroup, bool),
+        > = HashMap::new();
         for (host, policy) in policies {
             let parts: Vec<&str> = policy.split(',').map(|s| s.trim()).collect();
-            if parts.len() != 2 {
-                return Err(DnsConfigError::Invalid(policy.clone()));
-            }
+            let follow_tun = match parts.len() {
+                2 => false,
+                3 => {
+                    if *parts.get(2).unwrap() != "plain" {
+                        return Err(DnsConfigError::Invalid(policy.clone()));
+                    }
+                    true
+                }
+                _ => {
+                    return Err(DnsConfigError::Invalid(policy.clone()));
+                }
+            };
             let key = (
                 parts.first().unwrap().to_string(),
                 parts.get(1).unwrap().to_string(),
@@ -38,19 +54,27 @@ impl NameserverPolicies {
                         parse_single_dns(e.key().0.as_str(), e.key().1.as_str(), bootstrap).await?;
                     let mut matcher = HostMatcher::builder();
                     matcher.add_auto(host);
-                    e.insert((matcher, ns_config));
+                    e.insert((matcher, ns_config, follow_tun));
                 }
             }
         }
         let res = builder
             .into_iter()
-            .map(|(_, (m, c))| {
+            .map(|(_, (m, c, follow_tun))| {
                 let matcher = m.build();
-                let resolver = AsyncResolver::new(
-                    ResolverConfig::from_parts(None, vec![], c),
-                    ResolverOpts::default(),
-                    GenericConnector::new(IfaceProvider::new(outbound_iface)),
-                );
+                let resolver = if follow_tun {
+                    DispatchedDnsResolver::Plain(AsyncResolver::new(
+                        ResolverConfig::from_parts(None, vec![], c),
+                        ResolverOpts::default(),
+                        GenericConnector::new(PlainProvider::new()),
+                    ))
+                } else {
+                    DispatchedDnsResolver::Iface(AsyncResolver::new(
+                        ResolverConfig::from_parts(None, vec![], c),
+                        ResolverOpts::default(),
+                        GenericConnector::new(IfaceProvider::new(outbound_iface)),
+                    ))
+                };
                 (matcher, resolver)
             })
             .collect();
@@ -63,7 +87,7 @@ impl NameserverPolicies {
         }
     }
 
-    pub fn resolve(&self, host: &str) -> Option<&AsyncResolver<GenericConnector<IfaceProvider>>> {
+    pub(super) fn resolve(&self, host: &str) -> Option<&DispatchedDnsResolver> {
         for (matcher, resolver) in &self.matchers {
             if matcher.matches(host) {
                 return Some(resolver);

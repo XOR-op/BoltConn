@@ -1,7 +1,7 @@
 use crate::config::DnsPreference;
 use crate::network::dns::dns_table::DnsTable;
 use crate::network::dns::hosts::HostsResolver;
-use crate::network::dns::ns_policy::NameserverPolicies;
+use crate::network::dns::ns_policy::{DispatchedDnsResolver, NameserverPolicies};
 use crate::network::dns::provider::IfaceProvider;
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
@@ -161,26 +161,48 @@ impl<P: RuntimeProvider> GenericDns<P> {
         None
     }
 
+    async fn one_v4_wrapper(domain_name: &str, resolver: &DispatchedDnsResolver) -> Option<IpAddr> {
+        match resolver {
+            DispatchedDnsResolver::Iface(resolver) => {
+                Self::genuine_lookup_one_v4(domain_name, resolver).await
+            }
+            DispatchedDnsResolver::Plain(resolver) => {
+                Self::genuine_lookup_one_v4(domain_name, resolver).await
+            }
+        }
+    }
+
+    async fn one_v6_wrapper(domain_name: &str, resolver: &DispatchedDnsResolver) -> Option<IpAddr> {
+        match resolver {
+            DispatchedDnsResolver::Iface(resolver) => {
+                Self::genuine_lookup_one_v6(domain_name, resolver).await
+            }
+            DispatchedDnsResolver::Plain(resolver) => {
+                Self::genuine_lookup_one_v6(domain_name, resolver).await
+            }
+        }
+    }
+
     pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
         if let Some(ip) = self.host_resolver.load().resolve(domain_name) {
             return Some(ip);
         }
         if let Some(resolver) = self.ns_policy.load().resolve(domain_name) {
             return match self.preference {
-                DnsPreference::Ipv4Only => Self::genuine_lookup_one_v4(domain_name, resolver).await,
-                DnsPreference::Ipv6Only => Self::genuine_lookup_one_v6(domain_name, resolver).await,
+                DnsPreference::Ipv4Only => Self::one_v4_wrapper(domain_name, resolver).await,
+                DnsPreference::Ipv6Only => Self::one_v6_wrapper(domain_name, resolver).await,
                 DnsPreference::PreferIpv4 => {
-                    if let Some(a) = Self::genuine_lookup_one_v4(domain_name, resolver).await {
+                    if let Some(a) = Self::one_v4_wrapper(domain_name, resolver).await {
                         Some(a)
                     } else {
-                        Self::genuine_lookup_one_v6(domain_name, resolver).await
+                        Self::one_v6_wrapper(domain_name, resolver).await
                     }
                 }
                 DnsPreference::PreferIpv6 => {
-                    if let Some(a) = Self::genuine_lookup_one_v6(domain_name, resolver).await {
+                    if let Some(a) = Self::one_v6_wrapper(domain_name, resolver).await {
                         Some(a)
                     } else {
-                        Self::genuine_lookup_one_v4(domain_name, resolver).await
+                        Self::one_v4_wrapper(domain_name, resolver).await
                     }
                 }
             };

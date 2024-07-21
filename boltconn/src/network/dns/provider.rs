@@ -67,3 +67,49 @@ impl RuntimeProvider for IfaceProvider {
         })
     }
 }
+
+#[derive(Clone)]
+pub struct PlainProvider {
+    handle: TokioHandle,
+}
+
+impl PlainProvider {
+    pub fn new() -> Self {
+        Self {
+            handle: Default::default(),
+        }
+    }
+}
+
+impl RuntimeProvider for PlainProvider {
+    type Handle = TokioHandle;
+    type Timer = TokioTime;
+    type Udp = UdpSocket;
+    type Tcp = AsyncIoTokioAsStd<TcpStream>;
+
+    fn create_handle(&self) -> Self::Handle {
+        self.handle.clone()
+    }
+
+    fn connect_tcp(
+        &self,
+        server_addr: SocketAddr,
+    ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Tcp>>>> {
+        Box::pin(async move {
+            let tcp = TcpStream::connect(server_addr).await?;
+            Ok(AsyncIoTokioAsStd(tcp))
+        })
+    }
+
+    fn bind_udp(
+        &self,
+        local_addr: SocketAddr,
+        server_addr: SocketAddr,
+    ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Udp>>>> {
+        Box::pin(async move {
+            let udp = UdpSocket::bind(local_addr).await?;
+            udp.connect(server_addr).await?;
+            Ok(udp)
+        })
+    }
+}
