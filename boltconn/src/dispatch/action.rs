@@ -1,3 +1,4 @@
+use crate::dispatch::instrument::Instrument;
 use crate::dispatch::rule::RuleImpl;
 use crate::dispatch::{ConnInfo, DispatchingSnippet, ProxyImpl};
 use crate::network::dns::Dns;
@@ -9,8 +10,10 @@ use std::sync::Arc;
 pub enum Action {
     LocalResolve(LocalResolve),
     SubDispatch(SubDispatch),
+    Instrument(Instrument),
 }
 
+//----------------------------------------------------------------------
 pub struct LocalResolve {
     dns: Arc<Dns>,
 }
@@ -31,6 +34,7 @@ impl LocalResolve {
     }
 }
 
+//----------------------------------------------------------------------
 pub struct SubDispatch {
     rule: RuleImpl,
     snippet: DispatchingSnippet,

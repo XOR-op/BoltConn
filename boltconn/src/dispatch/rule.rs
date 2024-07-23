@@ -70,6 +70,8 @@ pub enum RuleImpl {
     And(Vec<RuleImpl>),
     Or(Vec<RuleImpl>),
     Not(Box<RuleImpl>),
+    Always,
+    Never,
 }
 
 impl RuleImpl {
@@ -104,12 +106,12 @@ impl RuleImpl {
             }
             RuleImpl::LocalIpCidr(net) => info.local_ip.as_ref().map_or(false, |s| net.contains(s)),
             RuleImpl::SrcIpCidr(net) => net.contains(&info.src.ip()),
-            RuleImpl::IpCidr(net) => info.socketaddr().is_some_and(|s| net.contains(&s.ip())),
+            RuleImpl::IpCidr(net) => info.dst_addr().is_some_and(|s| net.contains(&s.ip())),
             RuleImpl::GeoIP(mmdb, country) => info
-                .socketaddr()
+                .dst_addr()
                 .is_some_and(|s| mmdb.search_country(s.ip()).is_some_and(|c| c == country)),
             RuleImpl::Asn(mmdb, asn) => info
-                .socketaddr()
+                .dst_addr()
                 .is_some_and(|s| mmdb.search_asn(s.ip()).is_some_and(|a| a == *asn)),
             RuleImpl::SrcPort(port) => match port {
                 PortRule::Tcp(p) => {
@@ -168,6 +170,8 @@ impl RuleImpl {
                 false
             })(),
             RuleImpl::Not(r) => !r.matches(info),
+            RuleImpl::Always => true,
+            RuleImpl::Never => false,
         }
     }
 }
@@ -401,6 +405,8 @@ impl RuleBuilder<'_> {
             "RULE-SET" => rulesets
                 .and_then(|table| table.get(&content))
                 .map(|rs| RuleImpl::RuleSet(rs.clone())),
+            "ALWAYS" => Some(RuleImpl::Always),
+            "NEVER" => Some(RuleImpl::Never),
             _ => None,
         }
     }

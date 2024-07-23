@@ -16,10 +16,18 @@ pub enum ConfigError {
     TaskJoin(#[from] tokio::task::JoinError),
     #[error("Script error: {0}")]
     Script(#[from] ScriptError),
+    #[error("Instrument error: {0}")]
+    Instrument(#[from] InstrumentConfigError),
     #[error("Interception error: {0}")]
     Intercept(#[from] InterceptConfigError),
     #[error("Internal error: {0}")]
     Internal(&'static str),
+}
+
+#[derive(Error, Debug)]
+pub enum InstrumentConfigError {
+    #[error("Bad template {0}: {1}")]
+    BadTemplate(String, String),
 }
 
 #[derive(Error, Debug)]

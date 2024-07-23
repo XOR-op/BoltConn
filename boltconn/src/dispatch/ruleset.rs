@@ -86,7 +86,7 @@ impl RuleSet {
             }
         }
         if let Some((mmdb, asn, countries)) = &self.mmdb {
-            if info.socketaddr().is_some_and(|s| {
+            if info.dst_addr().is_some_and(|s| {
                 mmdb.search_asn(s.ip()).is_some_and(|a| asn.contains(&a))
                     || mmdb
                         .search_country(s.ip())
@@ -243,7 +243,9 @@ impl RuleSetBuilder {
                         | RuleImpl::And(..)
                         | RuleImpl::Or(..)
                         | RuleImpl::Not(_)
-                        | RuleImpl::ProcCmdRegex(_) => return None,
+                        | RuleImpl::ProcCmdRegex(_)
+                        | RuleImpl::Always
+                        | RuleImpl::Never => return None,
                     }
                 }
                 Some(retval)

@@ -40,6 +40,7 @@ impl TemporaryList {
                             return Some(r);
                         }
                     }
+                    Action::Instrument(_) => unimplemented!("TODO: Instrument"),
                 },
             }
         }

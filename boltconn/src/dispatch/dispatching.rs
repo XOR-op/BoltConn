@@ -38,7 +38,7 @@ pub struct ConnInfo {
 }
 
 impl ConnInfo {
-    pub fn socketaddr(&self) -> Option<&SocketAddr> {
+    pub fn dst_addr(&self) -> Option<&SocketAddr> {
         if let NetworkAddr::Raw(s) = &self.dst {
             Some(s)
         } else {
@@ -736,6 +736,7 @@ impl DispatchingSnippet {
                             return r;
                         }
                     }
+                    Action::Instrument(_) => unimplemented!("TODO: Instrument"),
                 },
             }
         }

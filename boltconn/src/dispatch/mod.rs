@@ -1,6 +1,7 @@
 mod action;
 mod dispatching;
 mod inbound;
+mod instrument;
 mod proxy;
 mod rule;
 mod ruleset;
