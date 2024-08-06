@@ -736,7 +736,7 @@ impl DispatchingSnippet {
                             return r;
                         }
                     }
-                    Action::Instrument(_) => unimplemented!("TODO: Instrument"),
+                    Action::Instrument(r) => r.execute(info).await,
                 },
             }
         }

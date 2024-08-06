@@ -1,14 +1,24 @@
 use crate::config::{ConfigError, InstrumentConfigError};
-use crate::dispatch::rule::RuleImpl;
+use crate::dispatch::RuleImpl;
 use crate::dispatch::{ConnInfo, InboundInfo};
 use interpolator::Formattable;
 use std::collections::HashMap;
 
 //----------------------------------------------------------------------
-pub struct Instrument {
+pub struct InstrumentAction {
     rule: RuleImpl,
     sub_id: u64,
     fmt_obj: FormattingObject,
+}
+
+impl InstrumentAction {
+    pub async fn execute(&self, info: &ConnInfo) {
+        if self.rule.matches(info) {
+            let _ = self.fmt_obj.format(info);
+            // TODO
+            todo!("InstrumentAction::execute");
+        }
+    }
 }
 
 struct FormattingObject {

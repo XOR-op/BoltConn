@@ -1,6 +1,6 @@
-use crate::dispatch::instrument::Instrument;
-use crate::dispatch::rule::RuleImpl;
+use crate::dispatch::RuleImpl;
 use crate::dispatch::{ConnInfo, DispatchingSnippet, ProxyImpl};
+use crate::instrument::action::InstrumentAction;
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
 use async_recursion::async_recursion;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub enum Action {
     LocalResolve(LocalResolve),
     SubDispatch(SubDispatch),
-    Instrument(Instrument),
+    Instrument(InstrumentAction),
 }
 
 //----------------------------------------------------------------------
