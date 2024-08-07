@@ -7,6 +7,7 @@ use crate::external::{
     Controller, DatabaseHandle, MmdbReader, SharedDispatching, StreamLoggerSend, UdsController,
     UnixListenerGuard, WebController,
 };
+use crate::instrument::bus::MessageBus;
 use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns, NameserverPolicies};
@@ -41,6 +42,7 @@ pub struct App {
     speedtest_url: Arc<std::sync::RwLock<String>>,
     receiver: tokio::sync::mpsc::Receiver<()>,
     uds_socket: Arc<UnixListenerGuard>,
+    msg_bus: Arc<MessageBus>,
 }
 
 impl App {
@@ -173,6 +175,9 @@ impl App {
             9961,
         );
 
+        // initialize instrumentation
+        let msg_bus = Arc::new(MessageBus::new());
+
         // dispatch
         let mut ruleset = HashMap::new();
         for (name, schema) in &loaded_config.rule_schema {
@@ -182,9 +187,15 @@ impl App {
             ruleset.insert(name.clone(), Arc::new(builder.build()?));
         }
         let dispatching = Arc::new(
-            DispatchingBuilder::new(dns.clone(), mmdb.clone(), &loaded_config, &ruleset)
-                .and_then(|b| b.build(&loaded_config))
-                .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
+            DispatchingBuilder::new(
+                dns.clone(),
+                mmdb.clone(),
+                &loaded_config,
+                &ruleset,
+                msg_bus.clone(),
+            )
+            .and_then(|b| b.build(&loaded_config))
+            .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
         );
         let dispatcher = {
             // tls mitm
@@ -196,6 +207,7 @@ impl App {
                     dns.clone(),
                     mmdb.clone(),
                     &ruleset,
+                    msg_bus.clone(),
                 )
                 .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
             );
@@ -317,6 +329,7 @@ impl App {
             speedtest_url,
             receiver: reload_receiver,
             uds_socket: uds_listener,
+            msg_bus,
         })
     }
 
@@ -383,8 +396,13 @@ impl App {
         )
         .await?;
         let dispatching = {
-            let builder =
-                DispatchingBuilder::new(self.dns.clone(), mmdb.clone(), &loaded_config, &ruleset)?;
+            let builder = DispatchingBuilder::new(
+                self.dns.clone(),
+                mmdb.clone(),
+                &loaded_config,
+                &ruleset,
+                self.msg_bus.clone(),
+            )?;
             Arc::new(builder.build(&loaded_config)?)
         };
 
@@ -394,6 +412,7 @@ impl App {
                 self.dns.clone(),
                 mmdb.clone(),
                 &ruleset,
+                self.msg_bus.clone(),
             )
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );

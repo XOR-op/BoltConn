@@ -7,11 +7,21 @@ pub struct SubDispatchConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InstrumentConfig {
+    #[serde(alias = "sub-id")]
+    pub id: u64,
+    pub matches: String,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RuleAction {
     #[serde(alias = ".LOCAL-RESOLVE")]
     LocalResolve,
     #[serde(alias = ".SUB-DISPATCH")]
     SubDispatch(SubDispatchConfig),
+    #[serde(alias = ".INSTRUMENT")]
+    Instrument(InstrumentConfig),
 }
 
 // Warning: order matters here; changing order may result in break

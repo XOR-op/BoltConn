@@ -1,6 +1,7 @@
 use crate::config::{ActionConfig, ConfigError, InterceptConfigError, InterceptionConfig};
 use crate::dispatch::{ConnInfo, Dispatching, DispatchingBuilder, ProxyImpl, RuleSetTable};
 use crate::external::MmdbReader;
+use crate::instrument::bus::MessageBus;
 use crate::intercept::{HeaderEngine, ScriptEngine, UrlEngine};
 use crate::network::dns::Dns;
 use std::sync::Arc;
@@ -107,13 +108,14 @@ impl InterceptionManager {
         dns: Arc<Dns>,
         mmdb: Option<Arc<MmdbReader>>,
         rulesets: &RuleSetTable,
+        msg_bus: Arc<MessageBus>,
     ) -> Result<Self, ConfigError> {
         let mut res = vec![];
         for i in entries.iter() {
             if !i.enabled {
                 continue;
             }
-            let filters = DispatchingBuilder::empty(dns.clone(), mmdb.clone())
+            let filters = DispatchingBuilder::empty(dns.clone(), mmdb.clone(), msg_bus.clone())
                 .build_filter(i.filters.as_slice(), rulesets)?;
             let payload = InterceptionPayload::parse_actions(i.actions.as_slice())?;
             res.push(InterceptionEntry {

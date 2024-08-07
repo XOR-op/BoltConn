@@ -3,16 +3,26 @@ use std::sync::Mutex;
 
 pub type SubId = u64;
 
-pub struct Bus {
+pub struct MessageBus {
     // Only used for cloning
     ingress_sender_handle: flume::Sender<BusMessage>,
     ingress_receiver: flume::Receiver<BusMessage>,
     egress_senders: Mutex<HashMap<SubId, flume::Sender<BusMessage>>>,
 }
 
-impl Bus {
+impl MessageBus {
+    pub fn new() -> Self {
+        let (ingress_sender, ingress_receiver) = flume::bounded(4096);
+        Self {
+            ingress_sender_handle: ingress_sender,
+            ingress_receiver,
+            egress_senders: Mutex::new(HashMap::new()),
+        }
+    }
+
     pub async fn run(&self) {
         while let Ok(msg) = self.ingress_receiver.recv_async().await {
+            tracing::debug!("[Message Bus {}] {:?} ", msg.sub_id, msg.msg);
             if let Some(sender) = self.egress_senders.lock().unwrap().get(&msg.sub_id) {
                 let _ = sender.try_send(msg);
             }
@@ -48,6 +58,12 @@ impl Bus {
 pub struct BusMessage {
     sub_id: SubId,
     msg: String,
+}
+
+impl BusMessage {
+    pub fn new(sub_id: SubId, msg: String) -> Self {
+        Self { sub_id, msg }
+    }
 }
 
 pub struct BusPublisher {

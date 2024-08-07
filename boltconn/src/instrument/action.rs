@@ -1,6 +1,7 @@
 use crate::config::{ConfigError, InstrumentConfigError};
 use crate::dispatch::RuleImpl;
 use crate::dispatch::{ConnInfo, InboundInfo};
+use crate::instrument::bus::{BusMessage, BusPublisher};
 use interpolator::Formattable;
 use std::collections::HashMap;
 
@@ -9,14 +10,30 @@ pub struct InstrumentAction {
     rule: RuleImpl,
     sub_id: u64,
     fmt_obj: FormattingObject,
+    bus_publisher: BusPublisher,
 }
 
 impl InstrumentAction {
+    pub fn new(
+        rule: RuleImpl,
+        sub_id: u64,
+        fmt_template: String,
+        bus_publisher: BusPublisher,
+    ) -> Result<Self, ConfigError> {
+        let fmt_obj = FormattingObject::new(fmt_template)?;
+        Ok(Self {
+            rule,
+            sub_id,
+            fmt_obj,
+            bus_publisher,
+        })
+    }
+
     pub async fn execute(&self, info: &ConnInfo) {
         if self.rule.matches(info) {
-            let _ = self.fmt_obj.format(info);
-            // TODO
-            todo!("InstrumentAction::execute");
+            let str = self.fmt_obj.format(info);
+            self.bus_publisher
+                .publish(BusMessage::new(self.sub_id, str));
         }
     }
 }
