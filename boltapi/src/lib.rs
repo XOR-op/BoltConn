@@ -1,3 +1,4 @@
+pub mod instrument;
 pub mod multiplex;
 pub mod rpc;
 mod schema;

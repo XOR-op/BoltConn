@@ -56,8 +56,8 @@ impl MessageBus {
 
 #[derive(Debug, Clone)]
 pub struct BusMessage {
-    sub_id: SubId,
-    msg: String,
+    pub sub_id: SubId,
+    pub msg: String,
 }
 
 impl BusMessage {
