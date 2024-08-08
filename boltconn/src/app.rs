@@ -265,6 +265,9 @@ impl App {
         tokio::spawn(async move { tun_inbound_udp.run().await });
         tokio::spawn(async move { tun.run(nat_addr).await });
 
+        let msg_bus2 = msg_bus.clone();
+        tokio::spawn(async move { msg_bus2.run().await });
+
         // start http/socks5 inbound
         for (sock_addr, http_auth, socks_auth) in
             parse_two_inbound_service(&config.inbound.http, &config.inbound.socks5)

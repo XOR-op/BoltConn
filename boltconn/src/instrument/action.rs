@@ -75,6 +75,12 @@ impl FormattingObject {
     fn format_inner(template: &str, info: &ConnInfo) -> Result<String, interpolator::Error> {
         let na_str = "N/A";
 
+        let now = chrono::Local::now();
+        let time_rfc3389 = now.to_rfc3339();
+        let time_hms_ms = now.format("%H:%M:%S%.3f").to_string();
+        let time_datetime = now.format("%Y-%m-%d %H:%M:%S").to_string();
+        let time_datetime_ms = now.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+
         let local_ip = info
             .local_ip
             .map_or_else(|| na_str.to_string(), |ip| ip.to_string());
@@ -145,6 +151,10 @@ impl FormattingObject {
             ("process.pid", Formattable::display(&process_pid)),
             ("process.ppid", Formattable::display(&process_ppid)),
             ("process.parent_name", Formattable::display(&process_pname)),
+            ("time.rfc3389", Formattable::display(&time_rfc3389)),
+            ("time.hms_ms", Formattable::display(&time_hms_ms)),
+            ("time.datetime", Formattable::display(&time_datetime)),
+            ("time.datetime_ms", Formattable::display(&time_datetime_ms)),
         ]
         .into_iter()
         .collect::<HashMap<_, _>>();
@@ -158,7 +168,8 @@ fn test_instrument_formatting() {
     local_ip: {ip.local}, conn_type: {conn.type}, \
      inbound_type: {inbound.type}, inbound_port: {inbound.port}, inbound_user: {inbound.user}, \
      process_name: {process.name}, process_cmdline: {process.cmdline}, process_path: {process.path}, \
-     process_pid: {process.pid}, process_ppid: {process.ppid}, process_parent_name: {process.parent_name}";
+     process_pid: {process.pid}, process_ppid: {process.ppid}, process_parent_name: {process.parent_name}\
+     time: [{time.rfc3389}, {time.hms_ms}, {time.datetime}, {time.datetime_ms}]";
     let info = ConnInfo {
         src: std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
             std::net::Ipv4Addr::new(192, 168, 0, 1),
