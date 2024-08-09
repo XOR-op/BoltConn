@@ -1,12 +1,15 @@
 use ipnet::Ipv4Net;
 use libc::{c_char, c_int};
-use socket2::{Domain, Socket, Type};
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr};
-use std::os::fd::AsRawFd;
 use std::process::{Command, Stdio};
 use std::{io, mem, ptr};
+#[cfg(not(target_os = "windows"))]
+use {
+    socket2::{Domain, Socket, Type},
+    std::os::fd::AsRawFd,
+};
 
 pub mod route;
 
@@ -64,6 +67,7 @@ where
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 unsafe fn create_req(name: &str) -> ffi::ifreq {
     let mut req: ffi::ifreq = mem::zeroed();
     ptr::copy_nonoverlapping(
@@ -74,6 +78,7 @@ unsafe fn create_req(name: &str) -> ffi::ifreq {
     req
 }
 
+#[cfg(not(target_os = "windows"))]
 pub fn interface_up(fd: c_int, name: &str) -> io::Result<()> {
     unsafe {
         let mut req = create_req(name);
@@ -88,6 +93,12 @@ pub fn interface_up(fd: c_int, name: &str) -> io::Result<()> {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn interface_up(_fd: c_int, _name: &str) -> io::Result<()> {
+    todo!()
+}
+
+#[cfg(not(target_os = "windows"))]
 pub(crate) unsafe fn get_sockaddr(v4: Ipv4Addr) -> libc::sockaddr_in {
     let mut addr = mem::zeroed::<libc::sockaddr_in>();
     addr.sin_family = libc::AF_INET as libc::sa_family_t;
@@ -114,6 +125,12 @@ unsafe fn set_dest(_fd: c_int, _name: &str, _addr: Ipv4Addr) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+unsafe fn set_dest(_fd: c_int, _name: &str, _addr: Ipv4Addr) -> io::Result<()> {
+    todo!()
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
     unsafe {
         let mut addr_req = create_req(name);
@@ -136,6 +153,12 @@ pub fn set_address(fd: c_int, name: &str, addr: Ipv4Net) -> io::Result<()> {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn set_address(_fd: c_int, _name: &str, _addr: Ipv4Net) -> io::Result<()> {
+    todo!()
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
     let ctl_socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
     let mut req = unsafe { create_req(iface_name) };
@@ -164,4 +187,9 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
             format!("No address found for iface {}", iface_name),
         )),
     }
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_iface_address(_iface_name: &str) -> io::Result<IpAddr> {
+    todo!()
 }
