@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -22,7 +23,6 @@ impl MessageBus {
 
     pub async fn run(&self) {
         while let Ok(msg) = self.ingress_receiver.recv_async().await {
-            tracing::debug!("[Message Bus {}] {:?} ", msg.sub_id, msg.msg);
             if let Some(sender) = self.egress_senders.lock().unwrap().get(&msg.sub_id) {
                 let _ = sender.try_send(msg);
             }
@@ -44,7 +44,16 @@ impl MessageBus {
         let mut egress_senders = self.egress_senders.lock().unwrap();
         for sub_id in iter2 {
             if egress_senders.contains_key(&sub_id) {
-                return None;
+                match egress_senders.entry(sub_id) {
+                    Entry::Occupied(e) => {
+                        if e.get().is_disconnected() {
+                            e.remove();
+                        } else {
+                            return None;
+                        }
+                    }
+                    Entry::Vacant(_) => unreachable!(),
+                }
             }
         }
         for sub_id in sub_ids {

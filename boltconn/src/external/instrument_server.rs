@@ -3,7 +3,7 @@ use crate::external::web_common::{get_cors_layer, parse_cors_allow, web_auth};
 use crate::instrument::bus::{BusSubscriber, MessageBus};
 use crate::proxy::error::{RuntimeError, SystemError};
 use axum::extract::ws::WebSocket;
-use axum::extract::{ws, Path, State, WebSocketUpgrade};
+use axum::extract::{ws, Query, State, WebSocketUpgrade};
 use axum::middleware::map_request;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::select;
 
 #[derive(Clone)]
 pub struct InstrumentServer {
@@ -59,7 +60,7 @@ impl InstrumentServer {
 
     async fn subscribe(
         State(server): State<Self>,
-        Path(params): Path<HashMap<String, String>>,
+        Query(params): Query<HashMap<String, String>>,
         ws: WebSocketUpgrade,
     ) -> impl IntoResponse {
         if let Some(secret) = server.secret.as_ref() {
@@ -71,12 +72,14 @@ impl InstrumentServer {
         let ids = {
             let mut arr = Vec::new();
             let Some(s) = params.get("id") else {
+                tracing::debug!("No id parameter in request");
                 return refusal_resp(http::StatusCode::BAD_REQUEST);
             };
             for id in s.split(',') {
-                if let Ok(val) = u64::from_str_radix(id, 10) {
+                if let Ok(val) = id.parse::<u64>() {
                     arr.push(val);
                 } else {
+                    tracing::debug!("Invalid id parameter in request: {} in {}", id, s);
                     return refusal_resp(http::StatusCode::BAD_REQUEST);
                 }
             }
@@ -85,22 +88,29 @@ impl InstrumentServer {
         let Some(sub) = server.msg_bus.create_subscriber(ids.iter().copied()) else {
             return refusal_resp(http::StatusCode::CONFLICT);
         };
-        ws.on_upgrade(move |socket| Self::subscribe_inner(socket, sub, ids))
+        ws.on_upgrade(move |socket| Self::subscribe_inner(socket, sub))
     }
 
-    async fn subscribe_inner(mut socket: WebSocket, sub: BusSubscriber, ids: Vec<u64>) {
-        while let Some(msg) = sub.recv().await {
+    async fn subscribe_inner(mut socket: WebSocket, sub: BusSubscriber) {
+        loop {
+            let msg = select! {
+                r = socket.recv() => {
+                    // client disconnected
+                    if r.is_none(){
+                        return;
+                    }
+                    // some messages, maybe error
+                    continue;
+                }
+                Some(msg) = sub.recv() => msg,
+            };
             let wire_msg = InstrumentData {
                 id: msg.sub_id,
                 message: msg.msg,
             };
-            if let Err(e) = socket
+            let _ = socket
                 .send(ws::Message::Text(wire_msg.encode_string()))
-                .await
-            {
-                tracing::warn!("Subscriber for {:?} failed to send: {}", ids, e);
-                break;
-            }
+                .await;
         }
     }
 }
