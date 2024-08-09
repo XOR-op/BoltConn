@@ -21,6 +21,10 @@ pub struct InstrumentServer {
 }
 
 impl InstrumentServer {
+    pub fn new(secret: Option<String>, msg_bus: Arc<MessageBus>) -> Self {
+        Self { secret, msg_bus }
+    }
+
     pub async fn run(
         self,
         listen_addr: SocketAddr,
@@ -38,9 +42,15 @@ impl InstrumentServer {
             app = app.layer(get_cors_layer(origin));
         }
 
-        let listener = TcpListener::bind(&listen_addr)
-            .await
-            .map_err(SystemError::InstrumentServer)?;
+        let listener = TcpListener::bind(&listen_addr).await.map_err(|e| {
+            tracing::error!(
+                "[Instrument] service failed to bind to {}: {}",
+                listen_addr,
+                e
+            );
+            SystemError::InstrumentServer(e)
+        })?;
+        tracing::info!("[Instrument] Listening on {}", listen_addr);
         axum::serve(listener, app.into_make_service())
             .await
             .map_err(|e| SystemError::InstrumentServer(as_io_err(e)))?;
@@ -64,7 +74,7 @@ impl InstrumentServer {
                 return refusal_resp(http::StatusCode::BAD_REQUEST);
             };
             for id in s.split(',') {
-                if let Ok(val) = u64::from_str_radix(id, 16) {
+                if let Ok(val) = u64::from_str_radix(id, 10) {
                     arr.push(val);
                 } else {
                     return refusal_resp(http::StatusCode::BAD_REQUEST);

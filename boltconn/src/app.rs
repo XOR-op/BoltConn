@@ -1,12 +1,12 @@
 use crate::config::{
-    default_inbound_ip_addr, safe_join_path, LinkedState, LoadedConfig, PortOrSocketAddr,
-    RawDnsConfig, RawInboundConfig, RawInboundServiceConfig, RawRootCfg, RawWebControllerConfig,
-    SingleOrVec,
+    default_inbound_ip_addr, safe_join_path, LinkedState, LoadedConfig, RawDnsConfig,
+    RawInboundConfig, RawInboundServiceConfig, RawInstrumentConfig, RawRootCfg,
+    RawWebControllerConfig, SingleOrVec,
 };
 use crate::dispatch::{DispatchingBuilder, RuleSet, RuleSetBuilder};
 use crate::external::{
-    Controller, DatabaseHandle, MmdbReader, SharedDispatching, StreamLoggerSend, UdsController,
-    UnixListenerGuard, WebController,
+    Controller, DatabaseHandle, InstrumentServer, MmdbReader, SharedDispatching, StreamLoggerSend,
+    UdsController, UnixListenerGuard, WebController,
 };
 use crate::instrument::bus::MessageBus;
 use crate::intercept::{InterceptModifier, InterceptionManager};
@@ -90,6 +90,8 @@ impl App {
         // initialize resources
         let dns = initialize_dns(&config.dns, outbound_iface.as_str()).await?;
         let manager = Arc::new(SessionManager::new());
+        // initialize instrumentation
+        let msg_bus = Arc::new(MessageBus::new());
 
         // Create TUN
         let will_enable_tun = enable_tun.unwrap_or(config.inbound.enable_tun);
@@ -134,9 +136,6 @@ impl App {
                 .map_err(|e| anyhow!("Failed to get tun address: {e}"))?,
             9961,
         );
-
-        // initialize instrumentation
-        let msg_bus = Arc::new(MessageBus::new());
 
         // dispatch
         let ruleset = load_rulesets(&loaded_config)?;
@@ -219,8 +218,7 @@ impl App {
             uds_listener.clone(),
         );
 
-        let msg_bus2 = msg_bus.clone();
-        tokio::spawn(async move { msg_bus2.run().await });
+        start_instrument_services(msg_bus.clone(), config.instrument.as_ref());
 
         Ok(Self {
             config_path,
@@ -379,6 +377,16 @@ async fn initialize_dns(config: &RawDnsConfig, outbound_iface: &str) -> anyhow::
     })
 }
 
+fn start_instrument_services(bus: Arc<MessageBus>, config: Option<&RawInstrumentConfig>) {
+    if let Some(config) = config {
+        let web_server = InstrumentServer::new(config.api_key.clone(), bus.clone());
+        let addr = config.api_addr.as_socket_addr(default_inbound_ip_addr);
+        let cors_allowed_list = config.cors_allowed_list.clone();
+        tokio::spawn(async move { web_server.run(addr, cors_allowed_list.as_slice()).await });
+    }
+    tokio::spawn(async move { bus.run().await });
+}
+
 fn start_tun_services(
     nat_addr: SocketAddr,
     manager: Arc<SessionManager>,
@@ -455,10 +463,7 @@ fn start_controller_services(
     tokio::spawn(async move { uds_controller.run(uds_listener2).await });
 
     if let Some(web_cfg) = config {
-        let api_addr = match web_cfg.api_addr {
-            PortOrSocketAddr::Port(p) => SocketAddr::new(default_inbound_ip_addr(), p),
-            PortOrSocketAddr::SocketAddr(s) => s,
-        };
+        let api_addr = web_cfg.api_addr.as_socket_addr(default_inbound_ip_addr);
         let api_server = WebController::new(web_cfg.api_key.clone(), controller);
         let cors_domains = web_cfg.cors_allowed_list.clone();
         tokio::spawn(async move { api_server.run(api_addr, cors_domains.as_slice()).await });
@@ -517,12 +522,7 @@ fn parse_two_inbound_service(
                     .into_iter()
                     .map(|c| match c {
                         RawInboundServiceConfig::Simple(e) => (
-                            match e {
-                                PortOrSocketAddr::Port(p) => {
-                                    SocketAddr::new(default_inbound_ip_addr(), p)
-                                }
-                                PortOrSocketAddr::SocketAddr(s) => s,
-                            },
+                            e.as_socket_addr(default_inbound_ip_addr),
                             HashMap::default(),
                         ),
                         RawInboundServiceConfig::Complex { host, port, auth } => {
