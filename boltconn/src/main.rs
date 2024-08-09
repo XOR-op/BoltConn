@@ -3,7 +3,7 @@
 extern crate core;
 
 use crate::app::App;
-use crate::cli::SubCommand;
+use crate::cli::{StartOptions, SubCommand};
 use crate::platform::set_maximum_opened_files;
 use clap::Parser;
 use is_root::is_root;
@@ -11,6 +11,7 @@ use network::{
     dns::Dns,
     packet::transport_layer::{TcpPkt, TransLayerPkt, UdpPkt},
 };
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -79,36 +80,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    let (config_path, data_path, cert_path) =
-        match config::parse_paths(&cmds.config, &cmds.app_data, &cmds.cert) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("Failed to load config and app data: {}", e);
-                return ExitCode::FAILURE;
-            }
-        };
-    // test if the paths exist
-    if !config_path.try_exists().is_ok_and(|x| x) {
-        eprintln!(
-            "Config path {} not found.\nDo you forget to run `boltconn init` first?",
-            config_path.to_string_lossy()
-        );
-        return ExitCode::FAILURE;
-    }
-    if !data_path.try_exists().is_ok_and(|x| x) {
-        eprintln!(
-            "Data path {} not found.\nDo you forget to run `boltconn init` first?",
-            data_path.to_string_lossy()
-        );
-        return ExitCode::FAILURE;
-    }
-    if !cert_path.try_exists().is_ok_and(|x| x) {
-        eprintln!(
-            "Certificate path {} not found.\nDo you forget to run `sudo boltconn init` first?",
-            cert_path.to_string_lossy()
-        );
-        return ExitCode::FAILURE;
-    }
+
+    let (config_path, data_path, cert_path) = match process_path(&cmds) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+
     let app = match rt.block_on(App::create(
         config_path,
         data_path,
@@ -125,6 +102,40 @@ fn main() -> ExitCode {
     tracing::info!("Exiting...");
     rt.shutdown_timeout(Duration::from_millis(300));
     ExitCode::SUCCESS
+}
+
+pub(crate) fn process_path(cmds: &StartOptions) -> Result<(PathBuf, PathBuf, PathBuf), ExitCode> {
+    let (config_path, data_path, cert_path) =
+        match config::parse_paths(&cmds.config, &cmds.app_data, &cmds.cert) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Failed to load config and app data: {}", e);
+                return Err(ExitCode::FAILURE);
+            }
+        };
+    // test if the paths exist
+    if !config_path.try_exists().is_ok_and(|x| x) {
+        eprintln!(
+            "Config path {} not found.\nDo you forget to run `boltconn init` first?",
+            config_path.to_string_lossy()
+        );
+        return Err(ExitCode::FAILURE);
+    }
+    if !data_path.try_exists().is_ok_and(|x| x) {
+        eprintln!(
+            "Data path {} not found.\nDo you forget to run `boltconn init` first?",
+            data_path.to_string_lossy()
+        );
+        return Err(ExitCode::FAILURE);
+    }
+    if !cert_path.try_exists().is_ok_and(|x| x) {
+        eprintln!(
+            "Certificate path {} not found.\nDo you forget to run `sudo boltconn init` first?",
+            cert_path.to_string_lossy()
+        );
+        return Err(ExitCode::FAILURE);
+    }
+    Ok((config_path, data_path, cert_path))
 }
 
 /// This function is a shortcut for testing things conveniently. Only for development use.

@@ -9,6 +9,7 @@ use crate::cli::streaming::ConnectionState;
 use crate::ProgramArgs;
 use anyhow::anyhow;
 use clap::{Args, CommandFactory, Subcommand, ValueHint};
+use colored::Colorize;
 use is_root::is_root;
 use std::path::PathBuf;
 use std::process::exit;
@@ -179,6 +180,8 @@ pub(crate) enum SubCommand {
     Start(StartOptions),
     /// Reload configurations
     Reload,
+    /// Validate configurations
+    Validate(StartOptions),
     /// Connection settings
     #[command(subcommand)]
     Conn(ConnOptions),
@@ -302,6 +305,20 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             state.stream_log().await.unwrap();
             exit(0)
         }
+        SubCommand::Validate(opt) => {
+            let (config_path, data_path, cert_path) = match crate::process_path(&opt) {
+                Ok(r) => r,
+                Err(_) => exit(-1),
+            };
+            if let Err(e) = crate::app::validate_config(&config_path, &data_path, &cert_path).await
+            {
+                eprintln!("{}", e);
+                exit(-1)
+            } else {
+                println!("{}", "Configuration is valid".green());
+                exit(0)
+            }
+        }
         _ => (),
     }
     let requester = match match args.url {
@@ -355,7 +372,11 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
             DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
         },
-        SubCommand::Start(_) | SubCommand::Generate(_) | SubCommand::Clean | SubCommand::Log => {
+        SubCommand::Start(_)
+        | SubCommand::Generate(_)
+        | SubCommand::Clean
+        | SubCommand::Log
+        | SubCommand::Validate(_) => {
             unreachable!()
         }
         #[cfg(feature = "internal-test")]

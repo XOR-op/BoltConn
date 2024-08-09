@@ -11,7 +11,9 @@ use crate::external::{
 use crate::instrument::bus::MessageBus;
 use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
-use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns, NameserverPolicies};
+use crate::network::dns::{
+    new_bootstrap_resolver, parse_dns_config, BootstrapResolver, Dns, NameserverPolicies,
+};
 use crate::network::tun_device::TunDevice;
 use crate::platform::get_default_v4_route;
 use crate::proxy::{
@@ -88,7 +90,9 @@ impl App {
         };
 
         // initialize resources
-        let dns = initialize_dns(&config.dns, outbound_iface.as_str()).await?;
+        let bootstrap =
+            new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice());
+        let dns = initialize_dns(bootstrap, &config.dns, outbound_iface.as_str()).await?;
         let manager = Arc::new(SessionManager::new());
         // initialize instrumentation
         let msg_bus = Arc::new(MessageBus::new());
@@ -279,10 +283,10 @@ impl App {
 
         let bootstrap =
             new_bootstrap_resolver(&self.outbound_iface, config.dns.bootstrap.as_slice());
-        let group = parse_dns_config(config.dns.nameserver.iter(), Some(&bootstrap)).await?;
+        let group = parse_dns_config(config.dns.nameserver.iter(), &bootstrap).await?;
         let ns_policy = NameserverPolicies::new(
             &config.dns.nameserver_policy,
-            Some(&bootstrap),
+            &bootstrap,
             self.outbound_iface.as_str(),
         )
         .await?;
@@ -329,6 +333,47 @@ impl App {
     }
 }
 
+pub async fn validate_config(
+    config_path: &Path,
+    data_path: &Path,
+    cert_path: &Path,
+) -> anyhow::Result<()> {
+    // Read initial config
+    let loaded_config = LoadedConfig::load_config(config_path, data_path)
+        .await
+        .map_err(|e| anyhow!("Load config from {:?} failed: {}", config_path, e))?;
+    let config = &loaded_config.config;
+    let mmdb = load_mmdb(config.geoip_db.as_ref(), config_path)?;
+    let outbound_iface = detect_interface(config)?;
+    // initialize resources
+    let _bootstrap =
+        new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice());
+    let dns = initialize_dns(
+        BootstrapResolver::mocked(),
+        &config.dns,
+        outbound_iface.as_str(),
+    )
+    .await?;
+    let msg_bus = Arc::new(MessageBus::new());
+    let _cert = load_cert_and_key(cert_path)
+        .map_err(|e| anyhow!("Load certs from path {:?} failed: {}", cert_path, e))?;
+    // dispatch
+    let ruleset = load_rulesets(&loaded_config)?;
+    let _dispatching = DispatchingBuilder::new(
+        dns.clone(),
+        mmdb.clone(),
+        &loaded_config,
+        &ruleset,
+        msg_bus.clone(),
+    )
+    .and_then(|b| b.build(&loaded_config))
+    .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?;
+    let _interception_mgr =
+        InterceptionManager::new(config.interception.as_slice(), dns, mmdb, &ruleset, msg_bus)
+            .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
+    Ok(())
+}
+
 fn load_mmdb(db_path: Option<&String>, cfg_path: &Path) -> anyhow::Result<Option<Arc<MmdbReader>>> {
     Ok(match db_path {
         None => None,
@@ -351,10 +396,13 @@ fn detect_interface(config: &RawRootCfg) -> anyhow::Result<String> {
     })
 }
 
-async fn initialize_dns(config: &RawDnsConfig, outbound_iface: &str) -> anyhow::Result<Arc<Dns>> {
+async fn initialize_dns(
+    bootstrap: BootstrapResolver,
+    config: &RawDnsConfig,
+    outbound_iface: &str,
+) -> anyhow::Result<Arc<Dns>> {
     Ok({
-        let bootstrap = new_bootstrap_resolver(outbound_iface, config.bootstrap.as_slice());
-        let group = match parse_dns_config(config.nameserver.iter(), Some(&bootstrap)).await {
+        let group = match parse_dns_config(config.nameserver.iter(), &bootstrap).await {
             Ok(g) => {
                 if g.is_empty() {
                     return Err(anyhow!("No DNS specified"));
@@ -364,7 +412,7 @@ async fn initialize_dns(config: &RawDnsConfig, outbound_iface: &str) -> anyhow::
             Err(e) => return Err(anyhow!("Parse dns config failed: {e}")),
         };
         let ns_policy =
-            NameserverPolicies::new(&config.nameserver_policy, Some(&bootstrap), outbound_iface)
+            NameserverPolicies::new(&config.nameserver_policy, &bootstrap, outbound_iface)
                 .await
                 .map_err(|e| anyhow!("Parse nameserver policy failed: {e}"))?;
         Arc::new(Dns::with_config(

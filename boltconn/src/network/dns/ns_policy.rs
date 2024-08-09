@@ -1,5 +1,6 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::DnsConfigError;
+use crate::network::dns::bootstrap::BootstrapResolver;
 use crate::network::dns::parse_single_dns;
 use crate::network::dns::provider::{IfaceProvider, PlainProvider};
 use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
@@ -20,7 +21,7 @@ pub(super) enum DispatchedDnsResolver {
 impl NameserverPolicies {
     pub async fn new(
         policies: &HashMap<String, String>,
-        bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
+        bootstrap: &BootstrapResolver,
         outbound_iface: &str,
     ) -> Result<Self, DnsConfigError> {
         let mut builder: HashMap<

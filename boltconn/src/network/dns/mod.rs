@@ -1,3 +1,4 @@
+mod bootstrap;
 #[allow(clippy::module_inception)]
 mod dns;
 mod dns_table;
@@ -6,8 +7,8 @@ mod ns_policy;
 mod provider;
 
 use crate::config::DnsConfigError;
-use crate::network::dns::provider::IfaceProvider;
 use crate::proxy::error::DnsError;
+pub use bootstrap::BootstrapResolver;
 pub use dns::{Dns, GenericDns};
 use hickory_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
@@ -15,6 +16,7 @@ use hickory_resolver::config::{
 use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::AsyncResolver;
 pub use ns_policy::NameserverPolicies;
+use provider::IfaceProvider;
 use std::net::{IpAddr, SocketAddr};
 
 fn add_tls_server(
@@ -37,28 +39,18 @@ fn add_tls_server(
     NameServerConfigGroup::from(arr)
 }
 
-async fn resolve_dns(
-    bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
-    dn: &str,
-) -> Result<Vec<IpAddr>, DnsError> {
-    let Some(resolver) = bootstrap else {
-        return Err(DnsError::MissingBootstrap(dn.to_string()));
-    };
-    let Ok(ips) = resolver.lookup_ip(dn).await else {
+async fn resolve_dns(bootstrap: &BootstrapResolver, dn: &str) -> Result<Vec<IpAddr>, DnsError> {
+    let Ok(ips) = bootstrap.lookup_ip(dn).await else {
         return Err(DnsError::ResolveServer(dn.to_string()));
     };
-    let result: Vec<IpAddr> = ips.iter().collect();
-    if result.is_empty() {
+    if ips.is_empty() {
         Err(DnsError::ResolveServer(dn.to_string()))
     } else {
-        Ok(result)
+        Ok(ips)
     }
 }
 
-pub fn new_bootstrap_resolver(
-    iface_name: &str,
-    addr: &[IpAddr],
-) -> AsyncResolver<GenericConnector<IfaceProvider>> {
+pub fn new_bootstrap_resolver(iface_name: &str, addr: &[IpAddr]) -> BootstrapResolver {
     let cfg = ResolverConfig::from_parts(
         None,
         vec![],
@@ -68,16 +60,16 @@ pub fn new_bootstrap_resolver(
                 .collect::<Vec<NameServerConfig>>(),
         ),
     );
-    AsyncResolver::new(
+    BootstrapResolver::new(AsyncResolver::new(
         cfg,
         ResolverOpts::default(),
         GenericConnector::new(IfaceProvider::new(iface_name)),
-    )
+    ))
 }
 
 pub async fn parse_dns_config(
     lines: impl Iterator<Item = &String>,
-    bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
+    bootstrap: &BootstrapResolver,
 ) -> Result<Vec<NameServerConfigGroup>, DnsConfigError> {
     let mut arr = Vec::new();
     for l in lines {
@@ -97,7 +89,7 @@ pub async fn parse_dns_config(
 pub async fn parse_single_dns(
     proto: &str,
     content: &str,
-    bootstrap: Option<&AsyncResolver<GenericConnector<IfaceProvider>>>,
+    bootstrap: &BootstrapResolver,
 ) -> Result<NameServerConfigGroup, DnsConfigError> {
     Ok(match proto {
         "udp" => NameServerConfigGroup::from(vec![NameServerConfig::new(
