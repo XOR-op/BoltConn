@@ -26,7 +26,6 @@ flume = "0.11.0"
 futures = "0.3.25"
 http = "1.1.0"
 httparse = "1.8.0"
-ioctl-sys = "0.8.0"
 ipnet = "2.5.1"
 ip_network = "0.4.1"
 ip_network_table = "0.2.0"
@@ -93,6 +92,9 @@ russh = "0.45.0"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.52.0", features = ["Win32", "Win32_Foundation", "Win32_NetworkManagement", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Wdk", "Wdk_System", "Wdk_System_Threading", "Win32_System", "Win32_System_Threading","Win32_System_Kernel", "Win32_System_ProcessStatus"] }
 wintun = { version = "0.3.2", features = ["panic_on_unsent_packets"] }
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+ioctl-sys = "0.8.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libproc = "0.13.0"
