@@ -85,7 +85,7 @@ pub enum CertificateError {
     #[error("No generated certificate available")]
     NoCert,
     #[error("RcGen error: {0}")]
-    RcGen(#[from] rcgen::RcgenError),
+    RcGen(#[from] rcgen::Error),
     #[error("PemFile error: {0}")]
     PemFile(std::io::Error),
 }
