@@ -17,6 +17,8 @@ pub struct RawRootCfg {
     pub inbound: RawInboundConfig,
     #[serde(alias = "web-controller")]
     pub web_controller: Option<RawWebControllerConfig>,
+    #[serde(alias = "instrument")]
+    pub instrument: Option<RawInstrumentConfig>,
     #[serde(default = "default_false")]
     pub enable_dump: bool,
     // From now on, all the configs should be reloaded properly
@@ -81,6 +83,16 @@ pub struct RawDnsConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawWebControllerConfig {
+    #[serde(alias = "api-port", alias = "api-addr")]
+    pub api_addr: PortOrSocketAddr,
+    #[serde(alias = "api-key")]
+    pub api_key: Option<String>,
+    #[serde(alias = "cors-allowed-list", default = "default_str_vec")]
+    pub cors_allowed_list: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RawInstrumentConfig {
     #[serde(alias = "api-port", alias = "api-addr")]
     pub api_addr: PortOrSocketAddr,
     #[serde(alias = "api-key")]

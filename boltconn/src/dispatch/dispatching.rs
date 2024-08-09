@@ -11,6 +11,8 @@ use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::temporary::TemporaryList;
 use crate::dispatch::{GeneralProxy, InboundInfo, Proxy, ProxyGroup, RuleSetTable};
 use crate::external::MmdbReader;
+use crate::instrument::action::InstrumentAction;
+use crate::instrument::bus::MessageBus;
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
@@ -38,7 +40,7 @@ pub struct ConnInfo {
 }
 
 impl ConnInfo {
-    pub fn socketaddr(&self) -> Option<&SocketAddr> {
+    pub fn dst_addr(&self) -> Option<&SocketAddr> {
         if let NetworkAddr::Raw(s) = &self.dst {
             Some(s)
         } else {
@@ -103,10 +105,11 @@ pub struct DispatchingBuilder {
     group_order: Vec<String>,
     dns: Arc<Dns>,
     mmdb: Option<Arc<MmdbReader>>,
+    msg_bus: Arc<MessageBus>,
 }
 
 impl DispatchingBuilder {
-    pub fn empty(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>) -> Self {
+    pub fn empty(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>, msg_bus: Arc<MessageBus>) -> Self {
         let mut builder = Self {
             proxies: Default::default(),
             groups: Default::default(),
@@ -114,6 +117,7 @@ impl DispatchingBuilder {
             group_order: Default::default(),
             dns,
             mmdb,
+            msg_bus,
         };
         builder.proxies.insert(
             "DIRECT".into(),
@@ -135,8 +139,9 @@ impl DispatchingBuilder {
         mmdb: Option<Arc<MmdbReader>>,
         loaded_config: &LoadedConfig,
         ruleset: &RuleSetTable,
+        msg_bus: Arc<MessageBus>,
     ) -> Result<Self, ConfigError> {
-        let mut builder = Self::empty(dns, mmdb);
+        let mut builder = Self::empty(dns, mmdb, msg_bus);
         // start init
         let LoadedConfig {
             config,
@@ -237,6 +242,17 @@ impl DispatchingBuilder {
                                     fallback: sub_fallback,
                                 },
                             ),
+                        )))
+                    }
+                    RuleAction::Instrument(ins) => {
+                        let matches = rule_builder.parse_incomplete(ins.matches.as_str())?;
+                        rule_builder.append(RuleOrAction::Action(Action::Instrument(
+                            InstrumentAction::new(
+                                matches,
+                                ins.id,
+                                ins.message.clone(),
+                                self.msg_bus.create_publisher(ins.id),
+                            )?,
                         )))
                     }
                 },
@@ -736,6 +752,7 @@ impl DispatchingSnippet {
                             return r;
                         }
                     }
+                    Action::Instrument(r) => r.execute(info).await,
                 },
             }
         }

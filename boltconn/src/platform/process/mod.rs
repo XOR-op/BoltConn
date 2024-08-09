@@ -16,6 +16,15 @@ pub enum NetworkType {
     Udp,
 }
 
+impl std::fmt::Display for NetworkType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkType::Tcp => write!(f, "tcp"),
+            NetworkType::Udp => write!(f, "udp"),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ProcessInfo {
     pub pid: i32,

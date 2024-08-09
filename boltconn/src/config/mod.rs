@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub use state::*;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
@@ -192,6 +192,18 @@ where
 pub enum PortOrSocketAddr {
     Port(u16),
     SocketAddr(SocketAddr),
+}
+
+impl PortOrSocketAddr {
+    pub fn as_socket_addr<F>(&self, default_fn: F) -> SocketAddr
+    where
+        F: FnOnce() -> IpAddr,
+    {
+        match self {
+            PortOrSocketAddr::Port(port) => SocketAddr::from((default_fn(), *port)),
+            PortOrSocketAddr::SocketAddr(addr) => *addr,
+        }
+    }
 }
 
 pub(in crate::config) fn default_true() -> bool {

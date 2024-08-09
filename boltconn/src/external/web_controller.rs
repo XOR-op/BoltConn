@@ -1,5 +1,6 @@
 use crate::common::as_io_err;
 use crate::dispatch::Dispatching;
+use crate::external::web_common::{get_cors_layer, parse_cors_allow, web_auth};
 use crate::external::{Controller, StreamLoggerRecv};
 use crate::proxy::error::SystemError;
 use arc_swap::ArcSwap;
@@ -10,14 +11,14 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use boltapi::{GetInterceptRangeReq, SetGroupReqSchema, TrafficResp, TunStatusSchema};
-use http::{HeaderValue, Method};
+use http::HeaderValue;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
+use tower_http::cors::AllowOrigin;
 
 pub type SharedDispatching = Arc<ArcSwap<Dispatching>>;
 
@@ -39,7 +40,7 @@ impl WebController {
     ) -> Result<(), SystemError> {
         let secret = Arc::new(self.secret.clone());
         let cors_vec = parse_cors_allow(cors_allowed_list);
-        let wrapper = move |r| Self::auth(secret.clone(), r, cors_vec.clone());
+        let wrapper = move |r| web_auth(secret.clone(), r, cors_vec.clone());
 
         let mut app = Router::new()
             .route("/ws/traffic", get(Self::ws_get_traffic))
@@ -75,12 +76,7 @@ impl WebController {
             .route_layer(map_request(wrapper))
             .with_state(self);
         if let Some(origin) = parse_api_cors_origin(cors_allowed_list) {
-            app = app.layer(
-                CorsLayer::new()
-                    .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-                    .allow_origin(origin)
-                    .allow_headers(AllowHeaders::any()),
-            );
+            app = app.layer(get_cors_layer(origin));
         }
 
         let listener = TcpListener::bind(&listen_addr)
@@ -90,41 +86,6 @@ impl WebController {
             .await
             .map_err(|e| SystemError::Controller(as_io_err(e)))?;
         Ok(())
-    }
-
-    async fn auth<B>(
-        auth: Arc<Option<String>>,
-        request: http::Request<B>,
-        cors_allow: CorsAllow,
-    ) -> Result<http::Request<B>, http::StatusCode> {
-        // Validate websocket origin
-        // The `origin` header will be set automatically by browser
-        if request.headers().contains_key("Upgrade")
-            && request.headers().contains_key("origin")
-            && !cors_allow.validate(
-                request
-                    .headers()
-                    .get("origin")
-                    .unwrap()
-                    .to_str()
-                    .map_err(|_| http::StatusCode::UNAUTHORIZED)?,
-            )
-        {
-            return Err(http::StatusCode::UNAUTHORIZED);
-        }
-
-        if let Some(auth) = auth.as_ref() {
-            let auth_header = request
-                .headers()
-                .get("api-key")
-                .and_then(|h| h.to_str().ok());
-            match auth_header {
-                Some(header_val) if header_val == auth => Ok(request),
-                _ => Err(http::StatusCode::UNAUTHORIZED),
-            }
-        } else {
-            Ok(request)
-        }
     }
 
     async fn get_tun_configure(State(server): State<Self>) -> Json<serde_json::Value> {
@@ -356,7 +317,7 @@ impl WebController {
     }
 }
 
-fn parse_api_cors_origin(cors_allowed_list: &[String]) -> Option<AllowOrigin> {
+pub(super) fn parse_api_cors_origin(cors_allowed_list: &[String]) -> Option<AllowOrigin> {
     if !cors_allowed_list.is_empty() {
         let mut list = vec![];
         for i in cors_allowed_list.iter() {
@@ -369,46 +330,5 @@ fn parse_api_cors_origin(cors_allowed_list: &[String]) -> Option<AllowOrigin> {
         Some(AllowOrigin::list(list))
     } else {
         None
-    }
-}
-
-#[derive(Debug, Clone)]
-enum CorsAllow {
-    Any,
-    None,
-    Some(Arc<HashSet<String>>),
-}
-
-impl CorsAllow {
-    fn validate(&self, source: &str) -> bool {
-        match self {
-            CorsAllow::Any => true,
-            CorsAllow::None => Self::is_local(source),
-            CorsAllow::Some(set) => set.contains(source) || Self::is_local(source),
-        }
-    }
-
-    fn is_local(source: &str) -> bool {
-        source.starts_with("http://localhost")
-            || source.starts_with("http://127.0.0.1")
-            || source.starts_with("file://")
-            || source.starts_with("https://localhost")
-            || source.starts_with("https://127.0.0.1")
-    }
-}
-
-fn parse_cors_allow(cors_allowed_list: &[String]) -> CorsAllow {
-    if !cors_allowed_list.is_empty() {
-        let mut list = HashSet::new();
-        for i in cors_allowed_list.iter() {
-            if i == "*" {
-                return CorsAllow::Any;
-            } else {
-                list.insert(i.clone());
-            }
-        }
-        CorsAllow::Some(Arc::new(list))
-    } else {
-        CorsAllow::None
     }
 }

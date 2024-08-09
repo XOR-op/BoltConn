@@ -1,12 +1,14 @@
 use crate::config::{
-    default_inbound_ip_addr, safe_join_path, LinkedState, LoadedConfig, PortOrSocketAddr,
-    RawInboundServiceConfig, SingleOrVec,
+    default_inbound_ip_addr, safe_join_path, LinkedState, LoadedConfig, RawDnsConfig,
+    RawInboundConfig, RawInboundServiceConfig, RawInstrumentConfig, RawRootCfg,
+    RawWebControllerConfig, SingleOrVec,
 };
-use crate::dispatch::{DispatchingBuilder, RuleSetBuilder};
+use crate::dispatch::{DispatchingBuilder, RuleSet, RuleSetBuilder};
 use crate::external::{
-    Controller, DatabaseHandle, MmdbReader, SharedDispatching, StreamLoggerSend, UdsController,
-    UnixListenerGuard, WebController,
+    Controller, DatabaseHandle, InstrumentServer, MmdbReader, SharedDispatching, StreamLoggerSend,
+    UdsController, UnixListenerGuard, WebController,
 };
+use crate::instrument::bus::MessageBus;
 use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{new_bootstrap_resolver, parse_dns_config, Dns, NameserverPolicies};
@@ -19,6 +21,7 @@ use crate::proxy::{
 use crate::{external, platform};
 use anyhow::anyhow;
 use arc_swap::ArcSwap;
+use bytes::Bytes;
 use ipnet::Ipv4Net;
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use std::collections::HashMap;
@@ -41,6 +44,7 @@ pub struct App {
     speedtest_url: Arc<std::sync::RwLock<String>>,
     receiver: tokio::sync::mpsc::Receiver<()>,
     uds_socket: Arc<UnixListenerGuard>,
+    msg_bus: Arc<MessageBus>,
 }
 
 impl App {
@@ -63,28 +67,11 @@ impl App {
             .await
             .map_err(|e| anyhow!("Load config from {:?} failed: {}", &config_path, e))?;
         let config = &loaded_config.config;
-        let mmdb = match config.geoip_db.as_ref() {
-            None => None,
-            Some(p) => {
-                let path = safe_join_path(&config_path, p)?;
-                Some(Arc::new(MmdbReader::read_from_file(path)?))
-            }
-        };
+        let mmdb = load_mmdb(config.geoip_db.as_ref(), &config_path)?;
 
-        let fake_dns_server = "198.18.99.88".parse().unwrap();
+        let outbound_iface = detect_interface(config)?;
 
-        let outbound_iface = if config.interface != "auto" {
-            tracing::info!("Use pre-configured interface: {}", config.interface);
-            config.interface.clone()
-        } else {
-            let (_, real_iface_name) = get_default_v4_route()
-                .map_err(|e| anyhow!("Failed to get default route: {}", e))?;
-            tracing::info!("Auto detected interface: {}", real_iface_name);
-            real_iface_name
-        };
-
-        let manager = Arc::new(SessionManager::new());
-        let (stat_center, http_capturer) = {
+        let (ctx_manager, http_capturer) = {
             let conn_handle = if config.enable_dump {
                 Some(open_database_handle(data_path.as_path())?)
             } else {
@@ -101,39 +88,16 @@ impl App {
         };
 
         // initialize resources
-        let dns = {
-            let bootstrap =
-                new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice());
-            let group = match parse_dns_config(config.dns.nameserver.iter(), Some(&bootstrap)).await
-            {
-                Ok(g) => {
-                    if g.is_empty() {
-                        return Err(anyhow!("No DNS specified"));
-                    }
-                    g
-                }
-                Err(e) => return Err(anyhow!("Parse dns config failed: {e}")),
-            };
-            let ns_policy = NameserverPolicies::new(
-                &config.dns.nameserver_policy,
-                Some(&bootstrap),
-                outbound_iface.as_str(),
-            )
-            .await
-            .map_err(|e| anyhow!("Parse nameserver policy failed: {e}"))?;
-            Arc::new(Dns::with_config(
-                outbound_iface.as_str(),
-                config.dns.preference,
-                &config.dns.hosts,
-                ns_policy,
-                group,
-            ))
-        };
+        let dns = initialize_dns(&config.dns, outbound_iface.as_str()).await?;
+        let manager = Arc::new(SessionManager::new());
+        // initialize instrumentation
+        let msg_bus = Arc::new(MessageBus::new());
 
         // Create TUN
         let will_enable_tun = enable_tun.unwrap_or(config.inbound.enable_tun);
         let (tun_udp_tx, tun_udp_rx) = flume::bounded(4096);
         let (udp_tun_tx, udp_tun_rx) = flume::bounded(4096);
+        let fake_dns_server = "198.18.99.88".parse().unwrap();
         let tun = {
             let mut tun = TunDevice::open(
                 manager.clone(),
@@ -174,17 +138,17 @@ impl App {
         );
 
         // dispatch
-        let mut ruleset = HashMap::new();
-        for (name, schema) in &loaded_config.rule_schema {
-            let Some(builder) = RuleSetBuilder::new(name.as_str(), schema) else {
-                return Err(anyhow!("Filter: failed to parse provider {}", name));
-            };
-            ruleset.insert(name.clone(), Arc::new(builder.build()?));
-        }
+        let ruleset = load_rulesets(&loaded_config)?;
         let dispatching = Arc::new(
-            DispatchingBuilder::new(dns.clone(), mmdb.clone(), &loaded_config, &ruleset)
-                .and_then(|b| b.build(&loaded_config))
-                .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
+            DispatchingBuilder::new(
+                dns.clone(),
+                mmdb.clone(),
+                &loaded_config,
+                &ruleset,
+                msg_bus.clone(),
+            )
+            .and_then(|b| b.build(&loaded_config))
+            .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
         );
         let dispatcher = {
             // tls mitm
@@ -196,6 +160,7 @@ impl App {
                     dns.clone(),
                     mmdb.clone(),
                     &ruleset,
+                    msg_bus.clone(),
                 )
                 .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
             );
@@ -203,7 +168,7 @@ impl App {
             Arc::new(Dispatcher::new(
                 outbound_iface.as_str(),
                 dns.clone(),
-                stat_center.clone(),
+                ctx_manager.clone(),
                 dispatching.clone(),
                 cert,
                 Box::new(move |result, proc_info| {
@@ -220,7 +185,7 @@ impl App {
         let controller = Arc::new(Controller::new(
             manager.clone(),
             dns.clone(),
-            stat_center,
+            ctx_manager,
             Some(http_capturer.clone()),
             dispatcher.clone(),
             api_dispatching_handler.clone(),
@@ -234,76 +199,26 @@ impl App {
             speedtest_url.clone(),
         ));
 
-        // start tun
-        let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
+        // start tun & L7 inbound services
+        start_tun_services(
             nat_addr,
             manager.clone(),
             dispatcher.clone(),
             dns.clone(),
-        ));
-        let tun_inbound_udp = TunUdpInbound::new(
+            tun,
             tun_udp_rx,
             udp_tun_tx,
-            dispatcher.clone(),
-            manager.clone(),
-            dns.clone(),
         );
-        manager.flush_with_interval(Duration::from_secs(30));
-        tokio::spawn(async move { tun_inbound_tcp.run().await });
-        tokio::spawn(async move { tun_inbound_udp.run().await });
-        tokio::spawn(async move { tun.run(nat_addr).await });
+        start_inbound_services(&config.inbound, dispatcher.clone());
 
-        // start http/socks5 inbound
-        for (sock_addr, http_auth, socks_auth) in
-            parse_two_inbound_service(&config.inbound.http, &config.inbound.socks5)
-        {
-            let dispatcher = dispatcher.clone();
-            match (http_auth, socks_auth) {
-                (Some(http_auth), Some(socks_auth)) => {
-                    tokio::spawn(async move {
-                        MixedInbound::new(sock_addr, http_auth, socks_auth, dispatcher)
-                            .await?
-                            .run()
-                            .await;
-                        Ok::<(), io::Error>(())
-                    });
-                }
-                (Some(auth), None) => {
-                    tokio::spawn(async move {
-                        HttpInbound::new(sock_addr, auth, dispatcher)
-                            .await?
-                            .run()
-                            .await;
-                        Ok::<(), io::Error>(())
-                    });
-                }
-                (None, Some(auth)) => {
-                    tokio::spawn(async move {
-                        Socks5Inbound::new(sock_addr, auth, dispatcher)
-                            .await?
-                            .run()
-                            .await;
-                        Ok::<(), io::Error>(())
-                    });
-                }
-                _ => unreachable!(),
-            }
-        }
+        // start controller service
+        start_controller_services(
+            config.web_controller.as_ref(),
+            controller,
+            uds_listener.clone(),
+        );
 
-        let uds_controller = UdsController::new(controller.clone());
-        let uds_listener2 = uds_listener.clone();
-        tokio::spawn(async move { uds_controller.run(uds_listener2).await });
-
-        // start web controller
-        if let Some(web_cfg) = &config.web_controller {
-            let api_addr = match web_cfg.api_addr {
-                PortOrSocketAddr::Port(p) => SocketAddr::new(default_inbound_ip_addr(), p),
-                PortOrSocketAddr::SocketAddr(s) => s,
-            };
-            let api_server = WebController::new(web_cfg.api_key.clone(), controller);
-            let cors_domains = web_cfg.cors_allowed_list.clone();
-            tokio::spawn(async move { api_server.run(api_addr, cors_domains.as_slice()).await });
-        }
+        start_instrument_services(msg_bus.clone(), config.instrument.as_ref());
 
         Ok(Self {
             config_path,
@@ -317,6 +232,7 @@ impl App {
             speedtest_url,
             receiver: reload_receiver,
             uds_socket: uds_listener,
+            msg_bus,
         })
     }
 
@@ -358,20 +274,8 @@ impl App {
         // reload parsing
         let loaded_config = LoadedConfig::load_config(&self.config_path, &self.data_path).await?;
         let config = &loaded_config.config;
-        let mmdb = match config.geoip_db.as_ref() {
-            None => None,
-            Some(p) => {
-                let path = safe_join_path(&self.config_path, p)?;
-                Some(Arc::new(MmdbReader::read_from_file(path)?))
-            }
-        };
-        let mut ruleset = HashMap::new();
-        for (name, schema) in &loaded_config.rule_schema {
-            let Some(builder) = RuleSetBuilder::new(name.as_str(), schema) else {
-                return Err(anyhow!("Filter: failed to parse provider {}", name));
-            };
-            ruleset.insert(name.clone(), Arc::new(builder.build()?));
-        }
+        let mmdb = load_mmdb(config.geoip_db.as_ref(), &self.config_path)?;
+        let ruleset = load_rulesets(&loaded_config)?;
 
         let bootstrap =
             new_bootstrap_resolver(&self.outbound_iface, config.dns.bootstrap.as_slice());
@@ -383,8 +287,13 @@ impl App {
         )
         .await?;
         let dispatching = {
-            let builder =
-                DispatchingBuilder::new(self.dns.clone(), mmdb.clone(), &loaded_config, &ruleset)?;
+            let builder = DispatchingBuilder::new(
+                self.dns.clone(),
+                mmdb.clone(),
+                &loaded_config,
+                &ruleset,
+                self.msg_bus.clone(),
+            )?;
             Arc::new(builder.build(&loaded_config)?)
         };
 
@@ -394,6 +303,7 @@ impl App {
                 self.dns.clone(),
                 mmdb.clone(),
                 &ruleset,
+                self.msg_bus.clone(),
             )
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );
@@ -417,6 +327,158 @@ impl App {
             .clone_from(&config.speedtest_url);
         Ok(())
     }
+}
+
+fn load_mmdb(db_path: Option<&String>, cfg_path: &Path) -> anyhow::Result<Option<Arc<MmdbReader>>> {
+    Ok(match db_path {
+        None => None,
+        Some(p) => {
+            let path = safe_join_path(cfg_path, p)?;
+            Some(Arc::new(MmdbReader::read_from_file(path)?))
+        }
+    })
+}
+
+fn detect_interface(config: &RawRootCfg) -> anyhow::Result<String> {
+    Ok(if config.interface != "auto" {
+        tracing::info!("Use pre-configured interface: {}", config.interface);
+        config.interface.clone()
+    } else {
+        let (_, real_iface_name) =
+            get_default_v4_route().map_err(|e| anyhow!("Failed to get default route: {}", e))?;
+        tracing::info!("Auto detected interface: {}", real_iface_name);
+        real_iface_name
+    })
+}
+
+async fn initialize_dns(config: &RawDnsConfig, outbound_iface: &str) -> anyhow::Result<Arc<Dns>> {
+    Ok({
+        let bootstrap = new_bootstrap_resolver(outbound_iface, config.bootstrap.as_slice());
+        let group = match parse_dns_config(config.nameserver.iter(), Some(&bootstrap)).await {
+            Ok(g) => {
+                if g.is_empty() {
+                    return Err(anyhow!("No DNS specified"));
+                }
+                g
+            }
+            Err(e) => return Err(anyhow!("Parse dns config failed: {e}")),
+        };
+        let ns_policy =
+            NameserverPolicies::new(&config.nameserver_policy, Some(&bootstrap), outbound_iface)
+                .await
+                .map_err(|e| anyhow!("Parse nameserver policy failed: {e}"))?;
+        Arc::new(Dns::with_config(
+            outbound_iface,
+            config.preference,
+            &config.hosts,
+            ns_policy,
+            group,
+        ))
+    })
+}
+
+fn start_instrument_services(bus: Arc<MessageBus>, config: Option<&RawInstrumentConfig>) {
+    if let Some(config) = config {
+        let web_server = InstrumentServer::new(config.api_key.clone(), bus.clone());
+        let addr = config.api_addr.as_socket_addr(default_inbound_ip_addr);
+        let cors_allowed_list = config.cors_allowed_list.clone();
+        tokio::spawn(async move { web_server.run(addr, cors_allowed_list.as_slice()).await });
+    }
+    tokio::spawn(async move { bus.run().await });
+}
+
+fn start_tun_services(
+    nat_addr: SocketAddr,
+    manager: Arc<SessionManager>,
+    dispatcher: Arc<Dispatcher>,
+    dns: Arc<Dns>,
+    tun: TunDevice,
+    tun_udp_rx: flume::Receiver<Bytes>,
+    udp_tun_tx: flume::Sender<Bytes>,
+) {
+    let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
+        nat_addr,
+        manager.clone(),
+        dispatcher.clone(),
+        dns.clone(),
+    ));
+    let tun_inbound_udp = TunUdpInbound::new(
+        tun_udp_rx,
+        udp_tun_tx,
+        dispatcher.clone(),
+        manager.clone(),
+        dns.clone(),
+    );
+    manager.flush_with_interval(Duration::from_secs(30));
+    tokio::spawn(async move { tun_inbound_tcp.run().await });
+    tokio::spawn(async move { tun_inbound_udp.run().await });
+    tokio::spawn(async move { tun.run(nat_addr).await });
+}
+
+fn start_inbound_services(config: &RawInboundConfig, dispatcher: Arc<Dispatcher>) {
+    for (sock_addr, http_auth, socks_auth) in
+        parse_two_inbound_service(&config.http, &config.socks5)
+    {
+        let dispatcher = dispatcher.clone();
+        match (http_auth, socks_auth) {
+            (Some(http_auth), Some(socks_auth)) => {
+                tokio::spawn(async move {
+                    MixedInbound::new(sock_addr, http_auth, socks_auth, dispatcher)
+                        .await?
+                        .run()
+                        .await;
+                    Ok::<(), io::Error>(())
+                });
+            }
+            (Some(auth), None) => {
+                tokio::spawn(async move {
+                    HttpInbound::new(sock_addr, auth, dispatcher)
+                        .await?
+                        .run()
+                        .await;
+                    Ok::<(), io::Error>(())
+                });
+            }
+            (None, Some(auth)) => {
+                tokio::spawn(async move {
+                    Socks5Inbound::new(sock_addr, auth, dispatcher)
+                        .await?
+                        .run()
+                        .await;
+                    Ok::<(), io::Error>(())
+                });
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn start_controller_services(
+    config: Option<&RawWebControllerConfig>,
+    controller: Arc<Controller>,
+    uds_listener: Arc<UnixListenerGuard>,
+) {
+    let uds_controller = UdsController::new(controller.clone());
+    let uds_listener2 = uds_listener.clone();
+    tokio::spawn(async move { uds_controller.run(uds_listener2).await });
+
+    if let Some(web_cfg) = config {
+        let api_addr = web_cfg.api_addr.as_socket_addr(default_inbound_ip_addr);
+        let api_server = WebController::new(web_cfg.api_key.clone(), controller);
+        let cors_domains = web_cfg.cors_allowed_list.clone();
+        tokio::spawn(async move { api_server.run(api_addr, cors_domains.as_slice()).await });
+    }
+}
+
+fn load_rulesets(loaded_config: &LoadedConfig) -> anyhow::Result<HashMap<String, Arc<RuleSet>>> {
+    let mut ruleset = HashMap::new();
+    for (name, schema) in &loaded_config.rule_schema {
+        let Some(builder) = RuleSetBuilder::new(name.as_str(), schema) else {
+            return Err(anyhow!("Filter: failed to parse provider {}", name));
+        };
+        ruleset.insert(name.clone(), Arc::new(builder.build()?));
+    }
+    Ok(ruleset)
 }
 
 fn load_cert_and_key(cert_path: &Path) -> anyhow::Result<Certificate> {
@@ -460,12 +522,7 @@ fn parse_two_inbound_service(
                     .into_iter()
                     .map(|c| match c {
                         RawInboundServiceConfig::Simple(e) => (
-                            match e {
-                                PortOrSocketAddr::Port(p) => {
-                                    SocketAddr::new(default_inbound_ip_addr(), p)
-                                }
-                                PortOrSocketAddr::SocketAddr(s) => s,
-                            },
+                            e.as_socket_addr(default_inbound_ip_addr),
                             HashMap::default(),
                         ),
                         RawInboundServiceConfig::Complex { host, port, auth } => {

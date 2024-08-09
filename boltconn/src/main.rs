@@ -21,6 +21,7 @@ mod common;
 mod config;
 mod dispatch;
 mod external;
+mod instrument;
 mod intercept;
 mod network;
 mod platform;

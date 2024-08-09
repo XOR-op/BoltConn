@@ -40,6 +40,7 @@ impl TemporaryList {
                             return Some(r);
                         }
                     }
+                    Action::Instrument(r) => r.execute(info).await,
                 },
             }
         }

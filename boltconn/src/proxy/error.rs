@@ -18,6 +18,8 @@ pub enum RuntimeError {
 pub enum SystemError {
     #[error("Controller error: {0}")]
     Controller(std::io::Error),
+    #[error("Instrument server error: {0}")]
+    InstrumentServer(std::io::Error),
 }
 
 #[derive(Error, Debug)]
