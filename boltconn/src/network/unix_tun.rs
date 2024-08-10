@@ -2,6 +2,7 @@ use crate::common::async_raw_fd::AsyncRawFd;
 use crate::common::async_socket::AsyncRawSocket;
 use crate::network::packet::ip::IPPkt;
 use crate::platform;
+use crate::platform::errno_err;
 use ipnet::Ipv4Net;
 use std::io;
 use std::io::ErrorKind;
@@ -23,10 +24,13 @@ impl TunInstance {
             }
             fd
         };
-        Self {
-            fd: Some(fd),
-            ctl_fd,
-        }
+        Ok((
+            Self {
+                fd: Some(AsyncRawFd::try_from(fd)?),
+                ctl_fd,
+            },
+            name,
+        ))
     }
 
     pub fn take_fd(&mut self) -> Option<AsyncRawFd> {
