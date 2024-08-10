@@ -15,7 +15,7 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::os::fd::IntoRawFd;
-use std::os::unix::io::RawFd;
+use std::os::fd::RawFd;
 use std::sync::Arc;
 use tokio::io::{split, AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};

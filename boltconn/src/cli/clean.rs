@@ -15,6 +15,8 @@ fn delete_route_entry(addr: Ipv4Net) {
         cmd.args(["route", "delete", &format!("{}", addr)]);
         cmd
     };
+    #[cfg(target_os = "windows")]
+    let mut cmd = { todo!() };
     if let Ok(mut handle) = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())

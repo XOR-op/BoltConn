@@ -41,7 +41,7 @@ pub fn get_default_v4_route() -> io::Result<(IpAddr, String)> {
 
 pub struct SystemDnsHandle {}
 
-pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
+pub fn get_user_info() -> Option<UserInfo> {
     todo!()
 }
 

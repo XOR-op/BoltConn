@@ -3,7 +3,7 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER},
         NetworkManagement::IpHelper::{
-            GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP_STATE_ESTAB, TCP_TABLE_CLASS,
+            GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP_STATE_ESTAB,
             TCP_TABLE_OWNER_PID_CONNECTIONS, UDP_TABLE_OWNER_PID,
         },
         Networking::WinSock::{ADDRESS_FAMILY, AF_INET, AF_INET6},
@@ -19,15 +19,15 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> std::io::Result<libc::pid_t> {
+pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> std::io::Result<i32> {
     let family = match addr {
         SocketAddr::V4(_) => AF_INET,
         SocketAddr::V6(_) => AF_INET6,
     };
 
     let data = get_table(family, net_type)?;
-    let pid = RecordSearcher::new(&addr, NetworkType).search(&data, addr)?;
-    Ok(pid as libc::pid_t)
+    let pid = RecordSearcher::new(&addr, net_type).search(&data, addr)?;
+    Ok(pid as i32)
 }
 
 fn get_table(family: ADDRESS_FAMILY, net_type: NetworkType) -> std::io::Result<Vec<u8>> {
