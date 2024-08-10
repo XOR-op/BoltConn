@@ -8,17 +8,6 @@ use windows::Win32::Networking::WinSock::SOCKET_ERROR;
 
 use crate::common::io_err;
 
-pub unsafe fn open_tun() -> io::Result<(i32, String)> {
-    let name = "utun13";
-    let Ok(module) = wintun::load() else {
-        tracing::error!("Failed to load wintun. Check if wintun.dll exists");
-        return Err(io_err("Failed to load wintun.dll"));
-    };
-    let device = wintun::Adapter::create(&module, name, "utun", None)
-        .map_err(|e| io_err(format!("Failed to create wintun adapter: {}", e).as_str()))?;
-    todo!()
-}
-
 pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
     todo!()
 }

@@ -1,4 +1,5 @@
 use crate::common::io_err;
+#[cfg(not(target_os = "windows"))]
 use crate::platform;
 use crate::platform::get_iface_address;
 use socket2::{Domain, SockAddr, Socket, Type};
