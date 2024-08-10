@@ -4,6 +4,7 @@ use crate::platform::get_iface_address;
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::io::Result;
 use std::net::{IpAddr, SocketAddr};
+#[cfg(not(target_os = "windows"))]
 use std::os::unix::io::AsRawFd;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
@@ -39,13 +40,29 @@ impl Egress {
 
     async fn tcpv4_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v4()?;
+        #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
+        #[cfg(target_os = "windows")]
+        {
+            let IpAddr::V4(local_addr) = get_iface_address(self.iface_name.as_str())? else {
+                return Err(io_err("not ipv4"));
+            };
+            socket.bind(SocketAddr::new(local_addr.into(), 0))?;
+        }
         socket.connect(addr).await
     }
 
     async fn tcpv6_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v6()?;
+        #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
+        #[cfg(target_os = "windows")]
+        {
+            let IpAddr::V6(local_addr) = get_iface_address(self.iface_name.as_str())? else {
+                return Err(io_err("not ipv6"));
+            };
+            socket.bind(SocketAddr::new(local_addr.into(), 0))?;
+        }
         socket.connect(addr).await
     }
 
@@ -54,6 +71,7 @@ impl Egress {
             return Err(io_err("not ipv4"));
         };
         let std_udp_sock = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
+        #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(std_udp_sock.as_raw_fd(), self.iface_name.as_str())?;
         std_udp_sock.bind(&SockAddr::from(SocketAddr::new(local_addr.into(), 0)))?;
         std_udp_sock.set_nonblocking(true)?;
@@ -66,6 +84,7 @@ impl Egress {
             return Err(io_err("not ipv4"));
         };
         let std_udp_sock = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
+        #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(std_udp_sock.as_raw_fd(), self.iface_name.as_str())?;
         std_udp_sock.bind(&SockAddr::from(SocketAddr::new(local_addr.into(), 0)))?;
         std_udp_sock.set_nonblocking(true)?;
