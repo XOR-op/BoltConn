@@ -1,10 +1,10 @@
 use crate::common::async_raw_fd::AsyncRawFd;
-use crate::common::async_socket::AsyncRawSocket;
 use crate::common::MAX_PKT_SIZE;
 use crate::network;
 use crate::network::packet::icmp::Icmpv4Pkt;
+use crate::network::unix_tun::TunInstance;
 use crate::platform;
-use crate::platform::{errno_err, interface_up, set_address};
+use crate::platform::errno_err;
 use crate::proxy::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -14,8 +14,6 @@ use smoltcp::wire::IpProtocol;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
-use std::os::fd::IntoRawFd;
-use std::os::fd::RawFd;
 use std::sync::Arc;
 use tokio::io::{split, AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -24,8 +22,7 @@ const ETH_P_IP: u16 = 0x0800;
 const ETH_P_IPV6: u16 = 0x86DD;
 
 pub struct TunDevice {
-    fd: Option<AsyncRawFd>,
-    ctl_fd: RawFd,
+    inner: TunInstance,
     dev_name: String,
     gw_name: String,
     // (addr, mask)
@@ -54,8 +51,7 @@ impl TunDevice {
         };
 
         Ok(TunDevice {
-            fd: Some(AsyncRawFd::try_from(fd)?),
-            ctl_fd,
+            inner: TunInstance::new(AsyncRawFd::try_from(fd)?, ctl_fd),
             dev_name: name,
             gw_name: outbound_iface.parse().unwrap(),
             addr: None,
@@ -111,7 +107,7 @@ impl TunDevice {
     /// See https://man7.org/linux/man-pages/man7/netdevice.7.html
     pub fn set_network_address(&mut self, addr: Ipv4Net) -> io::Result<()> {
         self.addr = Some(addr);
-        set_address(self.ctl_fd, self.get_name(), addr)
+        self.inner.set_address(self.get_name(), addr)
     }
 
     pub fn up(&self) -> io::Result<()> {
@@ -121,7 +117,7 @@ impl TunDevice {
                 "No available address to up iface",
             ));
         }
-        interface_up(self.ctl_fd, self.get_name())?;
+        self.inner.interface_up(self.get_name())?;
         tracing::event!(
             tracing::Level::INFO,
             "TUN Device {} is up.",
@@ -130,40 +126,8 @@ impl TunDevice {
         Ok(())
     }
 
-    async fn send_outbound(&mut self, pkt: &IPPkt) -> io::Result<()> {
-        match pkt {
-            IPPkt::V4(_) => {
-                let fd = socket2::Socket::new(
-                    socket2::Domain::IPV4,
-                    socket2::Type::DGRAM,
-                    Some(socket2::Protocol::from(libc::IPPROTO_RAW)),
-                )?
-                .into_raw_fd();
-                platform::bind_to_device(fd, self.gw_name.as_str()).map_err(|e| {
-                    io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
-                })?;
-                let mut outbound = AsyncRawSocket::create(fd, pkt.dst_addr())?;
-                let _ = outbound.write(pkt.packet_data()).await?;
-            }
-            IPPkt::V6(_) => {
-                if self.ipv6_enabled {
-                    let fd = socket2::Socket::new(
-                        socket2::Domain::IPV6,
-                        socket2::Type::DGRAM,
-                        Some(socket2::Protocol::from(libc::IPPROTO_RAW)),
-                    )?
-                    .into_raw_fd();
-                    platform::bind_to_device(fd, self.gw_name.as_str()).map_err(|e| {
-                        io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
-                    })?;
-                    let mut outbound = AsyncRawSocket::create(fd, pkt.dst_addr())?;
-                    let _ = outbound.write(pkt.packet_data()).await?;
-                } else {
-                    tracing::trace!("Drop IPv6 packets: IPv6 disabled");
-                }
-            }
-        }
-        Ok(())
+    async fn send_outbound(&self, pkt: &IPPkt) -> io::Result<()> {
+        TunInstance::send_outbound(pkt, self.gw_name.as_str(), self.ipv6_enabled).await
     }
 
     pub async fn run(mut self, nat_addr: SocketAddr) -> io::Result<()> {
@@ -172,7 +136,7 @@ impl TunDevice {
         } else {
             panic!("v6 nat not supported")
         };
-        let (mut fd_read, mut fd_write) = split(self.fd.take().unwrap());
+        let (mut fd_read, mut fd_write) = split(self.inner.take_fd().unwrap());
         tracing::info!("[TUN] Running...");
         loop {
             // read a ip packet from tun device
