@@ -93,5 +93,5 @@ pub enum DatabaseError {
     #[error("Invalid table schema {0}")]
     InvalidSchema(&'static str),
     #[error("Chown error: {0}")]
-    Chown(nix::Error),
+    Chown(std::io::Error),
 }

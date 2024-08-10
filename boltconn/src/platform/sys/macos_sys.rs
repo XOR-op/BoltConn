@@ -1,6 +1,10 @@
 use super::macos_ffi::*;
 use crate::common::io_err;
-use crate::platform::{errno_err, get_command_output, run_command, run_command_with_args};
+use crate::platform::sys::ffi;
+use crate::platform::sys::unix_sys::create_req;
+use crate::platform::{
+    errno_err, get_command_output, get_sockaddr, run_command, run_command_with_args, UserInfo,
+};
 use ipnet::IpNet;
 use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
 use std::collections::HashMap;
@@ -217,7 +221,7 @@ impl Drop for SystemDnsHandle {
     }
 }
 
-pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
+pub fn get_user_info() -> Option<UserInfo> {
     let name = match std::env::var("SUDO_USER") {
         Ok(name) => name,
         Err(_) => return None,
@@ -227,7 +231,7 @@ pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
         _ => return None,
     };
 
-    Some((name, uid, gid))
+    Some(UserInfo { name, uid, gid })
 }
 
 pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
@@ -275,4 +279,13 @@ pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
 
         Ok(rlim.rlim_cur as u32)
     }
+}
+
+pub(crate) unsafe fn set_dest(fd: c_int, name: &str, addr: Ipv4Addr) -> io::Result<()> {
+    let mut addr_req = create_req(name);
+    addr_req.ifru.dstaddr = mem::transmute::<libc::sockaddr_in, libc::sockaddr>(get_sockaddr(addr));
+    if ffi::siocsifdstaddr(fd, &addr_req) < 0 {
+        return Err(errno_err("Failed to set tun dst addr"));
+    }
+    Ok(())
 }

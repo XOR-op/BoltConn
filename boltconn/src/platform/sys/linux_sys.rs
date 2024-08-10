@@ -1,7 +1,8 @@
 use super::linux_ffi::*;
 use crate::common::io_err;
+use crate::platform::sys::unix_sys::create_req;
 use crate::platform::{
-    create_req, get_command_output, linux_ffi, run_command, run_command_with_args,
+    get_command_output, linux_ffi, run_command, run_command_with_args, UserInfo,
 };
 use ipnet::IpNet;
 use libc::{c_int, socklen_t, O_RDWR};
@@ -136,7 +137,7 @@ impl Drop for SystemDnsHandle {
     }
 }
 
-pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
+pub fn get_user_info() -> Option<UserInfo> {
     let (name, user_info) = if let Ok(n) = std::env::var("SUDO_USER") {
         let user_info = unsafe { libc::getpwnam(n.as_ptr() as *const i8) };
         (n, user_info)
@@ -156,7 +157,7 @@ pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
     }
     let uid = unsafe { (*user_info).pw_uid };
     let gid = unsafe { (*user_info).pw_gid };
-    Some((name, uid, gid))
+    Some(UserInfo { name, uid, gid })
 }
 
 pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
@@ -180,4 +181,9 @@ pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
 
         Ok(rlim.rlim_cur as u32)
     }
+}
+
+pub(crate) unsafe fn set_dest(_fd: c_int, _name: &str, _addr: Ipv4Addr) -> io::Result<()> {
+    // nop
+    Ok(())
 }

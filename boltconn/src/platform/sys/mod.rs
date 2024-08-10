@@ -19,6 +19,12 @@ pub use linux_ffi as ffi;
 #[cfg(target_os = "linux")]
 pub use linux_sys::*;
 
+#[cfg(not(target_os = "windows"))]
+mod unix_sys;
+
+#[cfg(not(target_os = "windows"))]
+pub use unix_sys::*;
+
 #[cfg(target_os = "windows")]
 pub mod windows_ffi;
 #[cfg(target_os = "windows")]

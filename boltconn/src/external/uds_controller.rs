@@ -27,8 +27,9 @@ impl UnixListenerGuard {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, SystemError> {
         let path = path.as_ref().to_path_buf();
         let listener = UnixListener::bind(&path).map_err(SystemError::Controller)?;
-        if let Some((_, uid, gid)) = get_user_info() {
-            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))
+        if let Some(user_info) = get_user_info() {
+            user_info
+                .chown(&path)
                 .map_err(|e| SystemError::Controller(as_io_err(e)))?;
         }
         Ok(Self {

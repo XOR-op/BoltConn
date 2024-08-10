@@ -1,7 +1,7 @@
-use std::{io, net::IpAddr};
-
-use ipnet::IpNet;
+use ipnet::{IpNet, Ipv4Net};
 use libc::c_int;
+use std::net::Ipv4Addr;
+use std::{io, net::IpAddr};
 
 use crate::common::io_err;
 
@@ -47,4 +47,37 @@ pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
 
 pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
     todo!()
+}
+
+pub fn interface_up(_fd: c_int, _name: &str) -> io::Result<()> {
+    todo!()
+}
+
+pub fn set_address(_fd: c_int, _name: &str, _addr: Ipv4Net) -> io::Result<()> {
+    todo!()
+}
+
+pub fn get_iface_address(_iface_name: &str) -> io::Result<IpAddr> {
+    todo!()
+}
+
+unsafe fn set_dest(_fd: c_int, _name: &str, _addr: Ipv4Addr) -> io::Result<()> {
+    todo!()
+}
+
+#[derive(Debug, Clone)]
+pub struct UserInfo {
+    pub name: String,
+}
+
+impl UserInfo {
+    pub fn chown(&self, _path: &std::path::Path) -> io::Result<()> {
+        todo!()
+    }
+
+    pub fn root() -> UserInfo {
+        UserInfo {
+            name: "root".to_string(),
+        }
+    }
 }
