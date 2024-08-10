@@ -40,7 +40,7 @@ fn get_table(family: ADDRESS_FAMILY, net_type: NetworkType) -> std::io::Result<V
                     Some(buf.as_mut_ptr() as *mut _),
                     (&mut buf_size) as *mut _,
                     false,
-                    family,
+                    family.0 as u32,
                     TCP_TABLE_OWNER_PID_CONNECTIONS,
                     0,
                 )
@@ -50,15 +50,16 @@ fn get_table(family: ADDRESS_FAMILY, net_type: NetworkType) -> std::io::Result<V
                     Some(buf.as_mut_ptr() as *mut _),
                     (&mut buf_size) as *mut _,
                     false,
-                    family,
+                    family.0 as u32,
                     UDP_TABLE_OWNER_PID,
                     0,
                 )
             },
         };
+        const ERR_INSUFFICIENT_BUF: u32 = ERROR_INSUFFICIENT_BUFFER.0;
         match err_no {
             0 => return Ok(buf),
-            ERROR_INSUFFICIENT_BUFFER => continue,
+            ERR_INSUFFICIENT_BUF => continue,
             other => return Err(std::io::Error::from_raw_os_error(other as i32)),
         }
     }
@@ -91,7 +92,8 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
         4 => return Some((0, "".to_string(), ":System".to_string(), "".to_string())),
         _ => {}
     }
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let handle =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid as u32) }.ok()?;
     const INFO_SIZE: usize = std::mem::size_of::<PROCESS_BASIC_INFORMATION>();
     let mut proc_basic_info: PROCESS_BASIC_INFORMATION = unsafe { mem::zeroed() };
     let mut out_len_unused = 0u32;
@@ -99,7 +101,7 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
         NtQueryInformationProcess(
             handle,
             ProcessBasicInformation,
-            proc_basic_info.as_mut_ptr() as *mut _,
+            &mut proc_basic_info as *mut _ as *mut _,
             INFO_SIZE as u32,
             &mut out_len_unused as *mut u32,
         )
@@ -112,13 +114,13 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
     let parameters = unsafe { *(*proc_basic_info.PebBaseAddress).ProcessParameters };
     let cmdline = String::from_utf16_lossy(unsafe {
         std::slice::from_raw_parts(
-            parameters.CommandLine.Buffer,
+            parameters.CommandLine.Buffer.0,
             parameters.CommandLine.Length as usize / 2,
         )
     });
     let path = String::from_utf16_lossy(unsafe {
         std::slice::from_raw_parts(
-            parameters.ImagePathName.Buffer,
+            parameters.ImagePathName.Buffer.0,
             parameters.ImagePathName.Length as usize / 2,
         )
     });
@@ -179,21 +181,22 @@ impl RecordSearcher {
 
 impl RecordSearcher {
     fn search(&self, data: &[u8], addr: SocketAddr) -> std::io::Result<u32> {
-        let record_cnt =
-            u32::from_ne_bytes(data.get(0..4).ok_or_else(|| std::io::ErrorKind::NotFound)?);
-        for i in 0..record_cnt {
+        if data.len() < 4 {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        let record_cnt = slice_to_u32(&data[0..4]);
+        for i in 0..(record_cnt as usize) {
             let record = data
-                .get((4 + i * self.item_size)..(4 + i * (self.item_size + 1)))
+                .get((4 + i * self.item_size)..(4 + (i + 1) * self.item_size))
                 .ok_or_else(|| std::io::ErrorKind::NotFound)?;
             // only check established TCP record
             if let Some(tcp_state_offset) = self.tcp_state {
-                let tcp_state = u32::from_ne_bytes(record[tcp_state_offset..tcp_state_offset + 4]);
-                if tcp_state != MIB_TCP_STATE_ESTAB {
+                let tcp_state = slice_to_u32(&record[tcp_state_offset..tcp_state_offset + 4]);
+                if tcp_state != MIB_TCP_STATE_ESTAB.0 as u32 {
                     continue;
                 }
             }
-            let src_port =
-                u16::from_be(u32::from_ne_bytes(record[self.port..self.port + 4]) as u16);
+            let src_port = u16::from_be(slice_to_u32(&record[self.port..self.port + 4]) as u16);
             if src_port != addr.port() {
                 continue;
             }
@@ -214,8 +217,12 @@ impl RecordSearcher {
             if ip != addr.ip() && !(addr.ip().is_unspecified() && self.tcp_state.is_none()) {
                 continue;
             }
-            return Ok(u32::from_ne_bytes(record[self.pid..self.pid + 4]));
+            return Ok(slice_to_u32(&record[self.pid..self.pid + 4]));
         }
         Err(std::io::ErrorKind::NotFound.into())
     }
+}
+
+fn slice_to_u32(slice: &[u8]) -> u32 {
+    u32::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]])
 }
