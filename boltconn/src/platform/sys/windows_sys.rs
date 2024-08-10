@@ -15,7 +15,8 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
         return Err(io_err("Failed to load wintun.dll"));
     };
     let device = wintun::Adapter::create(&module, name, "utun", None)
-        .map_err(io_err("Failed to create wintun adapter"))?;
+        .map_err(|e| io_err(format!("Failed to create wintun adapter: {}", e).as_str()))?;
+    todo!()
 }
 
 pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
@@ -44,6 +45,12 @@ pub fn get_default_v4_route() -> io::Result<(IpAddr, String)> {
 
 pub struct SystemDnsHandle {}
 
+impl SystemDnsHandle {
+    pub fn new(dns_addr: Ipv4Addr) -> io::Result<Self> {
+        todo!()
+    }
+}
+
 pub fn get_user_info() -> Option<UserInfo> {
     todo!()
 }
@@ -70,12 +77,12 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
         IpNetwork::V4(ipv4) => Some(ipv4.ip()),
         _ => None,
     }) {
-        Ok(ip)
+        Ok(ip.into())
     } else if let Some(ip) = iface.ips.iter().find_map(|ip| match ip {
         IpNetwork::V6(ipv6) => Some(ipv6.ip()),
         _ => None,
     }) {
-        Ok(ip)
+        Ok(ip.into())
     } else {
         Err(io_err("no ip address found"))
     }

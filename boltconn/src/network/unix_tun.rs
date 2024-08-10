@@ -14,7 +14,15 @@ pub(super) struct TunInstance {
 }
 
 impl TunInstance {
-    pub fn new(fd: AsyncRawFd, ctl_fd: RawFd) -> Self {
+    pub fn new() -> io::Result<(Self, String)> {
+        let (fd, name) = unsafe { platform::open_tun()? };
+        let ctl_fd = {
+            let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+            if fd < 0 {
+                return Err(errno_err("Unable to open control fd"));
+            }
+            fd
+        };
         Self {
             fd: Some(fd),
             ctl_fd,

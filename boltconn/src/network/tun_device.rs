@@ -1,10 +1,7 @@
-use crate::common::async_raw_fd::AsyncRawFd;
 use crate::common::MAX_PKT_SIZE;
 use crate::network;
 use crate::network::packet::icmp::Icmpv4Pkt;
-use crate::network::unix_tun::TunInstance;
-use crate::platform;
-use crate::platform::errno_err;
+use crate::network::TunInstance;
 use crate::proxy::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -41,17 +38,9 @@ impl TunDevice {
         udp_rx: flume::Receiver<Bytes>,
         ipv6_enabled: bool,
     ) -> io::Result<TunDevice> {
-        let (fd, name) = unsafe { platform::open_tun()? };
-        let ctl_fd = {
-            let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
-            if fd < 0 {
-                return Err(errno_err("Unable to open control fd"));
-            }
-            fd
-        };
-
+        let (inner, name) = TunInstance::new()?;
         Ok(TunDevice {
-            inner: TunInstance::new(AsyncRawFd::try_from(fd)?, ctl_fd),
+            inner,
             dev_name: name,
             gw_name: outbound_iface.parse().unwrap(),
             addr: None,
@@ -86,7 +75,7 @@ impl TunDevice {
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
         let start_offset = 4;
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         let start_offset = 0;
         match handle[start_offset] >> 4 {
             4 => Ok(IPPkt::from_v4(handle, start_offset)),
@@ -156,7 +145,7 @@ impl TunDevice {
     }
 
     async fn backwarding_udp_v4<T: AsyncWrite>(packet: Bytes, fd_write: &mut WriteHalf<T>) {
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "macos"))]
         let _ = fd_write.write_all(packet.as_ref()).await;
         #[cfg(target_os = "macos")]
         {
@@ -223,7 +212,7 @@ impl TunDevice {
                 let pkt = {
                     #[cfg(target_os = "macos")]
                     let start_offset = 4;
-                    #[cfg(target_os = "linux")]
+                    #[cfg(not(target_os = "macos"))]
                     let start_offset = 0;
                     pkt.into_bytes_mut().freeze().slice(start_offset..)
                 };

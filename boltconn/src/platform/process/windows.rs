@@ -80,8 +80,15 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
 
 fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
     match pid {
-        0 => return (0, "", ":System Idle Process", ""),
-        4 => return (0, "", ":System", ""),
+        0 => {
+            return Some((
+                0,
+                "".to_string(),
+                ":System Idle Process".to_string(),
+                "".to_string(),
+            ))
+        }
+        4 => return Some((0, "".to_string(), ":System".to_string(), "".to_string())),
         _ => {}
     }
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;

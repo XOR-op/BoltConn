@@ -7,7 +7,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadHalf};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+#[cfg(not(target_os = "windows"))]
 pub mod async_raw_fd;
+#[cfg(not(target_os = "windows"))]
 pub mod async_socket;
 pub mod async_ws_stream;
 pub mod client_hello;
