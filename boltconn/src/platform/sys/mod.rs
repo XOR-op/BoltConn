@@ -26,11 +26,7 @@ mod unix_sys;
 pub use unix_sys::*;
 
 #[cfg(target_os = "windows")]
-pub mod windows_ffi;
-#[cfg(target_os = "windows")]
 mod windows_sys;
 
-#[cfg(target_os = "windows")]
-pub use windows_ffi as ffi;
 #[cfg(target_os = "windows")]
 pub use windows_sys::*;

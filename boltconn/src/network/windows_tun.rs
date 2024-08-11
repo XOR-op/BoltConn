@@ -1,11 +1,16 @@
-use crate::common::{async_session::AsyncSession, io_err};
+use crate::{
+    common::{async_session::AsyncSession, io_err},
+    platform::get_iface_address,
+};
 
 use super::packet::ip::IPPkt;
 use ipnet::Ipv4Net;
-use std::io;
+use std::{io, net::SocketAddr, sync::Arc};
+use windows::Win32::Networking::WinSock::IPPROTO_IP;
 
 pub(super) struct TunInstance {
     session: Option<AsyncSession>,
+    adapter: Arc<wintun::Adapter>,
 }
 
 impl TunInstance {
@@ -26,6 +31,7 @@ impl TunInstance {
         Ok((
             Self {
                 session: Some(AsyncSession::new(session)),
+                adapter: device,
             },
             name.to_string(),
         ))
@@ -35,15 +41,37 @@ impl TunInstance {
         self.session.take()
     }
 
-    pub fn interface_up(&self, name: &str) -> io::Result<()> {
-        todo!()
+    pub fn interface_up(&self, _name: &str) -> io::Result<()> {
+        Ok(())
     }
 
-    pub fn set_address(&self, name: &str, addr: Ipv4Net) -> io::Result<()> {
-        todo!()
+    pub fn set_address(&self, _name: &str, addr: Ipv4Net) -> io::Result<()> {
+        self.adapter.set_address(addr.addr()).map_err(|e| match e {
+            wintun::Error::Io(e) => e,
+            _ => io_err("Failed to set address"),
+        })
     }
 
     pub async fn send_outbound(pkt: &IPPkt, gw_name: &str, ipv6_enabled: bool) -> io::Result<()> {
-        todo!()
+        let addr = get_iface_address(gw_name)?;
+        match pkt {
+            IPPkt::V4(_) => {
+                let sock = socket2::Socket::new(
+                    socket2::Domain::IPV4,
+                    socket2::Type::RAW,
+                    Some(socket2::Protocol::from(IPPROTO_IP.0)),
+                )?;
+                sock.bind(&SocketAddr::new(addr, 0).into())?;
+                todo!()
+            }
+            IPPkt::V6(_) => {
+                if ipv6_enabled {
+                    todo!()
+                } else {
+                    tracing::trace!("Drop IPv6 packets: IPv6 disabled");
+                }
+            }
+        }
+        Ok(())
     }
 }

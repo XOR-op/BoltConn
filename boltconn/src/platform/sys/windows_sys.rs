@@ -1,35 +1,65 @@
-use ipnet::{IpNet, Ipv4Net};
-use libc::c_int;
+use ipnet::IpNet;
 use pnet::ipnetwork::IpNetwork;
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::os::windows::raw::HANDLE;
+use std::process::Command;
 use std::{io, net::IpAddr};
-use windows::Win32::Networking::WinSock::SOCKET_ERROR;
 
 use crate::common::io_err;
+use crate::platform::{get_command_output, run_command};
 
 pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
-    todo!()
-}
-
-pub fn add_route_entry_via_gateway(dst: IpAddr, gw: IpAddr, name: &str) -> io::Result<()> {
-    todo!()
+    let iface_addr = get_iface_address(name)?;
+    run_command(ip_command_by_net(&subnet).args([
+        "add",
+        &format!("{}", subnet.addr()),
+        "mask",
+        &format!("{}", subnet.netmask()),
+        &format!("{}", iface_addr),
+    ]))
 }
 
 pub fn delete_route_entry(addr: IpNet) -> io::Result<()> {
-    todo!()
-}
-
-pub fn get_default_route() -> io::Result<(IpAddr, String)> {
-    todo!()
-}
-
-pub fn bind_to_device(fd: HANDLE, dst_iface_name: &str) -> io::Result<()> {
-    Ok(())
+    run_command(ip_command_by_net(&addr).args([
+        "delete",
+        &format!("{}", addr.addr()),
+        "mask",
+        &format!("{}", addr.netmask()),
+    ]))
 }
 
 pub fn get_default_v4_route() -> io::Result<(IpAddr, String)> {
-    todo!()
+    let kv: HashMap<String, String> = get_command_output(
+        "powershell",
+        [
+            "-noprofile",
+            "-commmand",
+            "Find-NetRoute -RemoteIPAddress 1.1.1.1",
+        ],
+    )?
+    .split('\n')
+    .map(|s| s.to_string())
+    .filter_map(|l| {
+        let vec: Vec<&str> = l.split(": ").collect();
+        if vec.len() == 2 {
+            Some((vec[0].trim().to_string(), vec[1].to_string()))
+        } else {
+            None
+        }
+    })
+    .collect();
+    if kv.contains_key("IPAddress") && kv.contains_key("InterfaceIndex") {
+        let iface_addr: IpAddr = kv
+            .get("IPAddress")
+            .unwrap()
+            .parse()
+            .map_err(|_| io_err("Invalid interface address"))?;
+        let iface_index = kv.get("InterfaceIndex").unwrap().to_string();
+        tracing::debug!("default route: {:?} {:?}", iface_addr, iface_index);
+        Ok((iface_addr, iface_index))
+    } else {
+        Err(io_err("Missing interface"))
+    }
 }
 
 pub struct SystemDnsHandle {}
@@ -45,14 +75,6 @@ pub fn get_user_info() -> Option<UserInfo> {
 }
 
 pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
-    todo!()
-}
-
-pub fn interface_up(_fd: c_int, _name: &str) -> io::Result<()> {
-    todo!()
-}
-
-pub fn set_address(_fd: c_int, _name: &str, _addr: Ipv4Net) -> io::Result<()> {
     todo!()
 }
 
@@ -77,10 +99,6 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
     }
 }
 
-unsafe fn set_dest(_fd: c_int, _name: &str, _addr: Ipv4Addr) -> io::Result<()> {
-    todo!()
-}
-
 #[derive(Debug, Clone)]
 pub struct UserInfo {
     pub name: String,
@@ -96,4 +114,20 @@ impl UserInfo {
             name: "root".to_string(),
         }
     }
+}
+
+fn ip_command_by_addr(addr: &IpAddr) -> Command {
+    let mut cmd = Command::new("route");
+    if matches!(addr, IpAddr::V6(_)) {
+        cmd.arg("-6");
+    }
+    cmd
+}
+
+fn ip_command_by_net(addr: &IpNet) -> Command {
+    let mut cmd = Command::new("route");
+    if matches!(addr, IpNet::V6(_)) {
+        cmd.arg("-6");
+    }
+    cmd
 }

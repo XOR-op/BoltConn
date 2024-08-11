@@ -38,7 +38,7 @@ where
     run_command(Command::new(cmd).args(args))
 }
 
-fn get_command_output<I, S>(cmd: &str, args: I) -> io::Result<String>
+pub(super) fn get_command_output<I, S>(cmd: &str, args: I) -> io::Result<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
