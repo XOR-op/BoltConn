@@ -42,7 +42,7 @@ impl Controller {
         dispatching: SharedDispatching,
         global_setting: Arc<std::sync::Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
-        state: LinkedState,
+        state: Arc<std::sync::Mutex<LinkedState>>,
         stream_logger: StreamLoggerSend,
         speedtest_url: Arc<std::sync::RwLock<String>>,
     ) -> Self {
@@ -55,7 +55,7 @@ impl Controller {
             dispatcher,
             dispatching,
             reload_sender: Arc::new(reload_sender),
-            state: Arc::new(std::sync::Mutex::new(state)),
+            state,
             stream_logger,
             speedtest_url,
         }

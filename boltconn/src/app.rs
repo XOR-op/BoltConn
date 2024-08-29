@@ -43,6 +43,7 @@ pub struct App {
     api_dispatching_handler: SharedDispatching,
     tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
     http_capturer: Arc<HttpCapturer>,
+    linked_state: Arc<std::sync::Mutex<LinkedState>>,
     speedtest_url: Arc<std::sync::RwLock<String>>,
     receiver: tokio::sync::mpsc::Receiver<()>,
     uds_socket: Arc<UnixListenerGuard>,
@@ -186,6 +187,10 @@ impl App {
         let api_dispatching_handler = Arc::new(ArcSwap::new(dispatching));
         let (reload_sender, reload_receiver) = tokio::sync::mpsc::channel::<()>(1);
         let speedtest_url = Arc::new(std::sync::RwLock::new(config.speedtest_url.clone()));
+        let linked_state = Arc::new(std::sync::Mutex::new(LinkedState {
+            state_path: LoadedConfig::state_path(&data_path),
+            state: loaded_config.state,
+        }));
         let controller = Arc::new(Controller::new(
             manager.clone(),
             dns.clone(),
@@ -195,10 +200,7 @@ impl App {
             api_dispatching_handler.clone(),
             tun_configure.clone(),
             reload_sender,
-            LinkedState {
-                state_path: LoadedConfig::state_path(&data_path),
-                state: loaded_config.state,
-            },
+            linked_state.clone(),
             stream_logger,
             speedtest_url.clone(),
         ));
@@ -233,6 +235,7 @@ impl App {
             api_dispatching_handler,
             tun_configure,
             http_capturer,
+            linked_state,
             speedtest_url,
             receiver: reload_receiver,
             uds_socket: uds_listener,
@@ -311,6 +314,8 @@ impl App {
             )
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );
+
+        self.linked_state.lock().unwrap().state = loaded_config.state;
 
         self.dns.replace_resolvers(&self.outbound_iface, group);
         self.dns.replace_ns_policy(ns_policy);
