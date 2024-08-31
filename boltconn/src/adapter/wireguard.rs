@@ -6,7 +6,7 @@ use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
 use crate::common::{io_err, local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
-use crate::proxy::error::{TransportError, WireGuardError};
+use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
@@ -312,9 +312,9 @@ impl WireguardManager {
                 return Ok(ep);
             }
         }
-        Err(TransportError::WireGuard(WireGuardError::Others(
+        Err(TransportError::WireGuard(
             "get_wg_conn: unexpected loop time",
-        )))
+        ))
     }
 }
 

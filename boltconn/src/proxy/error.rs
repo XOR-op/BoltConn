@@ -41,7 +41,7 @@ pub enum TransportError {
     #[error("Trojan error: {0}")]
     Trojan(&'static str),
     #[error("WireGuard error: {0}")]
-    WireGuard(#[from] WireGuardError),
+    WireGuard(&'static str),
 }
 
 #[derive(Error, Debug)]
@@ -50,14 +50,6 @@ pub enum DnsError {
     MissingBootstrap(String),
     #[error("Failed to resolve dns server: {0}")]
     ResolveServer(String),
-}
-
-#[derive(Error, Debug)]
-pub enum WireGuardError {
-    #[error("WireGuard BoringTun error: {0}")]
-    BoringTun(&'static str),
-    #[error("WireGuard error: {0}")]
-    Others(&'static str),
 }
 
 #[derive(Error, Debug)]
