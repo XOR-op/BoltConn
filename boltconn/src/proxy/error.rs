@@ -42,6 +42,8 @@ pub enum TransportError {
     Trojan(&'static str),
     #[error("WireGuard error: {0}")]
     WireGuard(&'static str),
+    #[error("SSH error: {0}")]
+    Ssh(#[from] russh::Error),
 }
 
 #[derive(Error, Debug)]

@@ -16,6 +16,7 @@ mod direct;
 mod http;
 mod shadowsocks;
 mod socks5;
+mod ssh;
 mod tcp_adapter;
 mod trojan;
 mod udp_adapter;
