@@ -2,6 +2,7 @@ use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, O
 use std::collections::HashMap;
 use std::future::Future;
 
+use crate::adapter;
 use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
 use crate::common::{io_err, local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::{Dns, GenericDns};
@@ -249,7 +250,7 @@ impl Endpoint {
 pub struct WireguardManager {
     iface: String,
     // We use an async wrapper to avoid deadlock in DashMap
-    active_conn: tokio::sync::Mutex<HashMap<WireguardConfig, Arc<Endpoint>>>,
+    active_conn: Mutex<HashMap<WireguardConfig, Arc<Endpoint>>>,
     endpoint_resolver: Arc<Dns>,
     timeout: Duration,
 }
@@ -283,24 +284,33 @@ impl WireguardManager {
                 }
             } else {
                 let _ = ret_tx.send(true);
-                let server_addr = get_dst(&self.endpoint_resolver, &config.endpoint).await?;
-                let outbound = adapter.unwrap_or(if config.over_tcp {
-                    let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
-                    AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(stream, server_addr)?))
-                } else {
-                    AdapterOrSocket::Socket(match server_addr {
-                        SocketAddr::V4(_) => {
-                            let socket = Egress::new(&self.iface).udpv4_socket().await?;
-                            socket.connect(server_addr).await?;
-                            socket
+                let server_addr =
+                    adapter::get_dst(&self.endpoint_resolver, &config.endpoint).await?;
+                let outbound = match adapter {
+                    Some(a) => a,
+                    None => {
+                        if config.over_tcp {
+                            let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
+                            AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(
+                                stream,
+                                server_addr,
+                            )?))
+                        } else {
+                            AdapterOrSocket::Socket(match server_addr {
+                                SocketAddr::V4(_) => {
+                                    let socket = Egress::new(&self.iface).udpv4_socket().await?;
+                                    socket.connect(server_addr).await?;
+                                    socket
+                                }
+                                SocketAddr::V6(_) => {
+                                    let socket = Egress::new(&self.iface).udpv6_socket().await?;
+                                    socket.connect(server_addr).await?;
+                                    socket
+                                }
+                            })
                         }
-                        SocketAddr::V6(_) => {
-                            let socket = Egress::new(&self.iface).udpv6_socket().await?;
-                            socket.connect(server_addr).await?;
-                            socket
-                        }
-                    })
-                });
+                    }
+                };
                 let ep = Endpoint::new(
                     outbound,
                     config,
@@ -476,21 +486,6 @@ impl Outbound for WireguardHandle {
             .await
             .map_err(|_| ErrorKind::ConnectionAborted.into())
     }
-}
-
-async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAddr> {
-    Ok(match dst {
-        NetworkAddr::DomainName { domain_name, port } => {
-            // translate fake ip
-            SocketAddr::new(
-                dns.genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or_else(|| io_err("DNS failed"))?,
-                *port,
-            )
-        }
-        NetworkAddr::Raw(s) => *s,
-    })
 }
 
 impl DnsUdpSocket for AddrConnectorWrapper {

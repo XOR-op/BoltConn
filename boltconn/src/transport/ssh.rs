@@ -2,9 +2,10 @@ use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
 use async_trait::async_trait;
 use russh::client::{connect_stream, Handle, Msg};
-use russh::keys::key::KeyPair;
-use russh::ChannelStream;
-use std::sync::atomic::AtomicU16;
+use russh::keys::key::{KeyPair, PublicKey};
+use russh::{ChannelStream, SshId};
+use std::hash::Hash;
+use std::sync::atomic::{AtomicBool, AtomicU16};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -16,18 +17,23 @@ pub enum SshAuthentication {
 
 #[derive(Debug, Clone)]
 pub struct SshConfig {
-    internal_cfg: Arc<russh::client::Config>,
-    user: String,
-    auth: SshAuthentication,
+    pub server: NetworkAddr,
+    pub user: String,
+    pub auth: SshAuthentication,
+    pub host_pubkey: Option<PublicKey>,
 }
 
-impl SshConfig {
-    pub fn new(user: String, auth: SshAuthentication) -> Self {
-        Self {
-            internal_cfg: Arc::new(russh::client::Config::default()),
-            user,
-            auth,
-        }
+impl PartialEq for SshConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.server == other.server && self.user == other.user
+    }
+}
+
+impl Eq for SshConfig {}
+impl Hash for SshConfig {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.server.hash(state);
+        self.user.hash(state);
     }
 }
 
@@ -40,16 +46,22 @@ impl russh::client::Handler for Client {
 pub struct SshTunnel {
     client: Handle<Client>,
     port_counter: AtomicU16,
+    is_active: AtomicBool,
 }
 
 impl SshTunnel {
-    pub fn new<S>(config: SshConfig, outbound: S) -> Result<Self, TransportError>
+    pub async fn new<S>(config: &SshConfig, outbound: S) -> Result<Self, TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        let ru_config = Arc::new(russh::client::Config {
+            client_id: SshId::Standard("SSH-2.0-OpenSSH_8.2p1".to_string()),
+            ..Default::default()
+        });
         Ok(Self {
-            client: connect_ssh_tunnel(&config, outbound)?,
+            client: connect_ssh_tunnel(config, ru_config, outbound).await?,
             port_counter: AtomicU16::new(1025),
+            is_active: AtomicBool::new(true),
         })
     }
 
@@ -74,17 +86,22 @@ impl SshTunnel {
             .map_err(TransportError::Ssh)?;
         Ok(channel.into_stream())
     }
+
+    pub fn is_active(&self) -> bool {
+        self.is_active.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 async fn connect_ssh_tunnel<S>(
     config: &SshConfig,
+    ru_config: Arc<russh::client::Config>,
     outbound: S,
 ) -> Result<Handle<Client>, TransportError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let ssh_handler = Client {};
-    let mut handle = connect_stream(config.internal_cfg.clone(), outbound, ssh_handler).await?;
+    let mut handle = connect_stream(ru_config, outbound, ssh_handler).await?;
     if !(match config.auth {
         SshAuthentication::Password(ref p) => handle.authenticate_password(&config.user, p).await,
         SshAuthentication::PrivateKey(ref k) => {

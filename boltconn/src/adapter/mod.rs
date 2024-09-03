@@ -416,3 +416,18 @@ async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
         }
     })
 }
+
+pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAddr> {
+    Ok(match dst {
+        NetworkAddr::DomainName { domain_name, port } => {
+            // translate fake ip
+            SocketAddr::new(
+                dns.genuine_lookup(domain_name.as_str())
+                    .await
+                    .ok_or_else(|| io_err("DNS failed"))?,
+                *port,
+            )
+        }
+        NetworkAddr::Raw(s) => *s,
+    })
+}
