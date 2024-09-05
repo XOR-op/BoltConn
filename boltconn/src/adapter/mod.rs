@@ -34,6 +34,8 @@ use crate::transport::UdpSocketAdapter;
 pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
+use std::future::Future;
+use std::io::ErrorKind;
 pub use tcp_adapter::*;
 pub use trojan::*;
 pub use udp_adapter::*;
@@ -102,6 +104,7 @@ pub enum OutboundType {
     Trojan,
     Wireguard,
     Chain,
+    Ssh,
 }
 
 impl Display for OutboundType {
@@ -114,6 +117,7 @@ impl Display for OutboundType {
             OutboundType::Trojan => "trojan",
             OutboundType::Wireguard => "wireguard",
             OutboundType::Chain => "chain",
+            OutboundType::Ssh => "ssh",
         })
     }
 }
@@ -142,6 +146,7 @@ impl OutboundType {
             | OutboundType::Trojan => TcpTransferType::Tcp,
             OutboundType::Wireguard => TcpTransferType::TcpOverUdp,
             OutboundType::Chain => TcpTransferType::NotApplicable,
+            OutboundType::Ssh => TcpTransferType::Tcp,
         }
     }
 
@@ -154,6 +159,7 @@ impl OutboundType {
             OutboundType::Trojan => UdpTransferType::UdpOverTcp,
             OutboundType::Wireguard => UdpTransferType::Udp,
             OutboundType::Chain => UdpTransferType::NotApplicable,
+            OutboundType::Ssh => UdpTransferType::NotApplicable,
         }
     }
 }
@@ -430,4 +436,16 @@ pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAd
         }
         NetworkAddr::Raw(s) => *s,
     })
+}
+
+pub(super) async fn connect_timeout<F: Future<Output = io::Result<()>>>(
+    future: F,
+    component_str: &str,
+) -> io::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), future)
+        .await
+        .unwrap_or_else(|_| {
+            tracing::debug!("{} timeout after 10s", component_str);
+            Err(ErrorKind::TimedOut.into())
+        })
 }

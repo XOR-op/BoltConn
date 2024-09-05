@@ -20,6 +20,7 @@ pub struct SshConfig {
     pub server: NetworkAddr,
     pub user: String,
     pub auth: SshAuthentication,
+    // todo: check host pubkey
     pub host_pubkey: Option<PublicKey>,
 }
 
