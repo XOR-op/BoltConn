@@ -3,6 +3,7 @@ use crate::config::interception::InterceptionConfig;
 use crate::config::proxy_group::RawProxyGroupCfg;
 use crate::config::{
     AuthData, ModuleConfig, PortOrSocketAddr, ProxyProvider, RuleConfigLine, RuleProvider,
+    SingleOrVec,
 };
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
@@ -174,7 +175,7 @@ pub enum RawProxyLocalCfg {
         #[serde(alias = "key-passphrase")]
         key_passphrase: Option<String>,
         #[serde(alias = "host-pubkey")]
-        host_pubkey: Option<String>,
+        host_pubkey: Option<SingleOrVec<String>>,
     },
 }
 

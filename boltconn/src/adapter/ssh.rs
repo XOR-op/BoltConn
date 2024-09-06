@@ -14,7 +14,6 @@ use futures::TryFutureExt;
 use std::collections::HashMap;
 use std::io;
 use std::io::ErrorKind;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -52,10 +51,30 @@ impl SshOutboundHandle {
         abort_handle: ConnAbortHandle,
         completion_tx: tokio::sync::oneshot::Sender<bool>,
     ) -> Result<(), TransportError> {
-        let master_conn = self
-            .manager
-            .get_ssh_conn(&self.config, outbound, completion_tx)
-            .await?;
+        let master_conn = match tokio::time::timeout(
+            Duration::from_secs(10),
+            self.manager
+                .get_ssh_conn(&self.config, outbound, completion_tx),
+        )
+        .await
+        {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => {
+                tracing::trace!(
+                    "Failed to establish SSH proxy connection to {}: {:?}",
+                    self.config.server,
+                    e
+                );
+                return Err(e);
+            }
+            Err(_) => {
+                tracing::trace!(
+                    "Failed to establish SSH proxy connection to {}: timeout",
+                    self.config.server
+                );
+                return Err(TransportError::Ssh(russh::Error::ConnectionTimeout));
+            }
+        };
         let channel = master_conn.new_mapped_connection(self.dst.clone()).await?;
         established_tcp(inbound, channel, abort_handle).await;
         Ok(())
@@ -74,12 +93,11 @@ impl Outbound for SshOutboundHandle {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<std::io::Result<()>> {
         let (tx, _) = tokio::sync::oneshot::channel();
-        tokio::spawn(adapter::connect_timeout(
+        tokio::spawn(
             self.clone()
                 .attach_tcp(inbound, None, abort_handle, tx)
                 .map_err(|e| io_err(format!("SSH TCP spawn error: {:?}", e).as_str())),
-            "SSH TCP",
-        ))
+        )
     }
 
     async fn spawn_tcp_with_outbound(
@@ -170,18 +188,7 @@ impl SshManager {
                     None => {
                         let server_addr =
                             adapter::get_dst(&self.server_resolver, &config.server).await?;
-                        let stream = match server_addr {
-                            SocketAddr::V4(_) => {
-                                Egress::new(self.iface.as_str())
-                                    .tcpv4_stream(server_addr)
-                                    .await?
-                            }
-                            SocketAddr::V6(_) => {
-                                Egress::new(self.iface.as_str())
-                                    .tcpv6_stream(server_addr)
-                                    .await?
-                            }
-                        };
+                        let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
                         SshTunnel::new(config, stream).await?
                     }
                 });

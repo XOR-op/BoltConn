@@ -22,7 +22,7 @@ pub struct SshConfig {
     pub auth: SshAuthentication,
     // todo: check host pubkey
     // (algo, pubkey)
-    pub host_pubkey: Option<(String, PublicKey)>,
+    pub host_pubkey: Option<Vec<(String, PublicKey)>>,
 }
 
 impl PartialEq for SshConfig {
@@ -39,12 +39,31 @@ impl Hash for SshConfig {
     }
 }
 
-struct Client {}
+struct Client {
+    expected_server_key: Option<Vec<PublicKey>>,
+}
 
 #[async_trait]
 impl russh::client::Handler for Client {
     type Error = TransportError;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKey,
+    ) -> Result<bool, Self::Error> {
+        if let Some(ref expected) = self.expected_server_key {
+            for k in expected {
+                if k == server_public_key {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
 }
+
 pub struct SshTunnel {
     client: Handle<Client>,
     port_counter: AtomicU16,
@@ -102,7 +121,12 @@ async fn connect_ssh_tunnel<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let ssh_handler = Client {};
+    let ssh_handler = Client {
+        expected_server_key: config
+            .host_pubkey
+            .as_ref()
+            .map(|v| v.iter().map(|(_, k)| k.clone()).collect::<Vec<PublicKey>>()),
+    };
     let mut handle = connect_stream(ru_config, outbound, ssh_handler).await?;
     if !(match config.auth {
         SshAuthentication::Password(ref p) => handle.authenticate_password(&config.user, p).await,

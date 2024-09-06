@@ -2,7 +2,7 @@ use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
     ConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema, RawProxyGroupCfg,
     RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr, RawServerSockAddr, RawState,
-    RuleAction, RuleConfigLine, RuleError,
+    RuleAction, RuleConfigLine, RuleError, SingleOrVec,
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
@@ -24,6 +24,7 @@ use base64::Engine;
 use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
+use russh::keys::key::PublicKey;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
@@ -568,21 +569,18 @@ impl DispatchingBuilder {
                     };
                     // validate server's identity
                     let host_pubkey = if let Some(pubkey) = host_pubkey {
-                        let (key_type, content) = pubkey.split_once(' ').ok_or_else(|| {
-                            ProxyError::ProxyFieldError(
-                                name.clone(),
-                                "Invalid host public key format; expect '<key-type> <base64-data>'",
-                            )
-                        })?;
-                        Some((
-                            key_type.to_string(),
-                            russh::keys::parse_public_key_base64(content).map_err(|_| {
-                                ProxyError::ProxyFieldError(
-                                name.clone(),
-                                "Invalid host public key format; expect '<key-type> <base64-data>'",
-                            )
-                            })?,
-                        ))
+                        Some(match pubkey {
+                            SingleOrVec::Single(k) => {
+                                vec![parse_pubkey(k.as_str(), name.as_str())?]
+                            }
+                            SingleOrVec::List(v) => {
+                                let mut keys = Vec::new();
+                                for k in v {
+                                    keys.push(parse_pubkey(k.as_str(), name.as_str())?);
+                                }
+                                keys
+                            }
+                        })
                     } else {
                         None
                     };
@@ -878,4 +876,22 @@ fn get_file_path(config_path: &Path, path: &Path) -> Option<PathBuf> {
     } else {
         config_path.join(path)
     })
+}
+
+fn parse_pubkey(pubkey: &str, name: &str) -> Result<(String, PublicKey), ProxyError> {
+    let (key_type, content) = pubkey.split_once(' ').ok_or_else(|| {
+        ProxyError::ProxyFieldError(
+            name.to_string(),
+            "Invalid host public key format; expect '<key-type> <base64-data>'",
+        )
+    })?;
+    Ok((
+        key_type.to_string(),
+        russh::keys::parse_public_key_base64(content).map_err(|_| {
+            ProxyError::ProxyFieldError(
+                name.to_string(),
+                "Invalid host public key format; expect '<key-type> <base64-data>'",
+            )
+        })?,
+    ))
 }
