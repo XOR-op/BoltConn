@@ -37,13 +37,13 @@ impl Egress {
         }
     }
 
-    pub async fn tcpv4_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
+    async fn tcpv4_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v4()?;
         platform::bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
         socket.connect(addr).await
     }
 
-    pub async fn tcpv6_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
+    async fn tcpv6_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v6()?;
         platform::bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
         socket.connect(addr).await

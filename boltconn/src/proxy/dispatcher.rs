@@ -1,7 +1,7 @@
 use crate::adapter::{
     AddrConnector, ChainOutbound, Connector, DirectOutbound, HttpOutbound, Outbound, OutboundType,
-    SSOutbound, Socks5Outbound, StandardUdpAdapter, TcpAdapter, TrojanOutbound, TunUdpAdapter,
-    WireguardHandle, WireguardManager,
+    SSOutbound, Socks5Outbound, SshManager, SshOutboundHandle, StandardUdpAdapter, TcpAdapter,
+    TrojanOutbound, TunUdpAdapter, WireguardHandle, WireguardManager,
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{
@@ -38,6 +38,7 @@ pub struct Dispatcher {
     modifier: ArcSwap<ModifierClosure>,
     intercept_mgr: ArcSwap<InterceptionManager>,
     wireguard_mgr: Arc<WireguardManager>,
+    ssh_mgr: Arc<SshManager>,
 }
 
 impl Dispatcher {
@@ -52,6 +53,7 @@ impl Dispatcher {
         intercept_mgr: Arc<InterceptionManager>,
     ) -> Self {
         let wg_mgr = WireguardManager::new(iface_name, dns.clone(), Duration::from_secs(180));
+        let ssh_mgr = SshManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         Self {
             iface_name: iface_name.into(),
             dns,
@@ -61,6 +63,7 @@ impl Dispatcher {
             modifier: ArcSwap::new(Arc::new(modifier)),
             intercept_mgr: ArcSwap::new(intercept_mgr),
             wireguard_mgr: Arc::new(wg_mgr),
+            ssh_mgr: Arc::new(ssh_mgr),
         }
     }
 
@@ -143,6 +146,16 @@ impl Dispatcher {
                     Arc::new(cfg.dns.clone()),
                 )),
                 OutboundType::Wireguard,
+            ),
+            ProxyImpl::Ssh(cfg) => (
+                Box::new(SshOutboundHandle::new(
+                    iface_name,
+                    dst_addr.clone(),
+                    self.dns.clone(),
+                    cfg.clone(),
+                    self.ssh_mgr.clone(),
+                )),
+                OutboundType::Ssh,
             ),
             ProxyImpl::Chain(_) => {
                 tracing::warn!("Nested chain unsupported");

@@ -1,12 +1,12 @@
 use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, OutboundType};
 use std::collections::HashMap;
-use std::future::Future;
 
+use crate::adapter;
 use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
 use crate::common::{io_err, local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
-use crate::proxy::error::{TransportError, WireGuardError};
+use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
@@ -249,7 +249,7 @@ impl Endpoint {
 pub struct WireguardManager {
     iface: String,
     // We use an async wrapper to avoid deadlock in DashMap
-    active_conn: tokio::sync::Mutex<HashMap<WireguardConfig, Arc<Endpoint>>>,
+    active_conn: Mutex<HashMap<WireguardConfig, Arc<Endpoint>>>,
     endpoint_resolver: Arc<Dns>,
     timeout: Duration,
 }
@@ -283,24 +283,33 @@ impl WireguardManager {
                 }
             } else {
                 let _ = ret_tx.send(true);
-                let server_addr = get_dst(&self.endpoint_resolver, &config.endpoint).await?;
-                let outbound = adapter.unwrap_or(if config.over_tcp {
-                    let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
-                    AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(stream, server_addr)?))
-                } else {
-                    AdapterOrSocket::Socket(match server_addr {
-                        SocketAddr::V4(_) => {
-                            let socket = Egress::new(&self.iface).udpv4_socket().await?;
-                            socket.connect(server_addr).await?;
-                            socket
+                let server_addr =
+                    adapter::get_dst(&self.endpoint_resolver, &config.endpoint).await?;
+                let outbound = match adapter {
+                    Some(a) => a,
+                    None => {
+                        if config.over_tcp {
+                            let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
+                            AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(
+                                stream,
+                                server_addr,
+                            )?))
+                        } else {
+                            AdapterOrSocket::Socket(match server_addr {
+                                SocketAddr::V4(_) => {
+                                    let socket = Egress::new(&self.iface).udpv4_socket().await?;
+                                    socket.connect(server_addr).await?;
+                                    socket
+                                }
+                                SocketAddr::V6(_) => {
+                                    let socket = Egress::new(&self.iface).udpv6_socket().await?;
+                                    socket.connect(server_addr).await?;
+                                    socket
+                                }
+                            })
                         }
-                        SocketAddr::V6(_) => {
-                            let socket = Egress::new(&self.iface).udpv6_socket().await?;
-                            socket.connect(server_addr).await?;
-                            socket
-                        }
-                    })
-                });
+                    }
+                };
                 let ep = Endpoint::new(
                     outbound,
                     config,
@@ -312,9 +321,9 @@ impl WireguardManager {
                 return Ok(ep);
             }
         }
-        Err(TransportError::WireGuard(WireGuardError::Others(
+        Err(TransportError::WireGuard(
             "get_wg_conn: unexpected loop time",
-        )))
+        ))
     }
 }
 
@@ -405,12 +414,10 @@ impl Outbound for WireguardHandle {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<io::Result<()>> {
         let (tx, _) = tokio::sync::oneshot::channel();
-        tokio::spawn(wireguard_timeout(self.clone().attach_tcp(
-            inbound,
-            abort_handle,
-            None,
-            tx,
-        )))
+        tokio::spawn(adapter::connect_timeout(
+            self.clone().attach_tcp(inbound, abort_handle, None, tx),
+            "WireGuard TCP",
+        ))
     }
 
     async fn spawn_tcp_with_outbound(
@@ -426,12 +433,15 @@ impl Outbound for WireguardHandle {
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(wireguard_timeout(self.clone().attach_tcp(
-            inbound,
-            abort_handle,
-            Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-            ret_tx,
-        )));
+        tokio::spawn(adapter::connect_timeout(
+            self.clone().attach_tcp(
+                inbound,
+                abort_handle,
+                Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
+                ret_tx,
+            ),
+            "WireGuard TCP multi-hop",
+        ));
         ret_rx
             .await
             .map_err(|_| ErrorKind::ConnectionAborted.into())
@@ -444,12 +454,10 @@ impl Outbound for WireguardHandle {
         _tunnel_only: bool,
     ) -> JoinHandle<io::Result<()>> {
         let (ret_tx, _) = tokio::sync::oneshot::channel();
-        tokio::spawn(wireguard_timeout(self.clone().attach_udp(
-            inbound,
-            abort_handle,
-            None,
-            ret_tx,
-        )))
+        tokio::spawn(adapter::connect_timeout(
+            self.clone().attach_udp(inbound, abort_handle, None, ret_tx),
+            "WireGuard UDP",
+        ))
     }
 
     async fn spawn_udp_with_outbound(
@@ -466,31 +474,19 @@ impl Outbound for WireguardHandle {
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(wireguard_timeout(self.clone().attach_udp(
-            inbound,
-            abort_handle,
-            Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-            ret_tx,
-        )));
+        tokio::spawn(adapter::connect_timeout(
+            self.clone().attach_udp(
+                inbound,
+                abort_handle,
+                Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
+                ret_tx,
+            ),
+            "WireGuard UDP multi-hop",
+        ));
         ret_rx
             .await
             .map_err(|_| ErrorKind::ConnectionAborted.into())
     }
-}
-
-async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAddr> {
-    Ok(match dst {
-        NetworkAddr::DomainName { domain_name, port } => {
-            // translate fake ip
-            SocketAddr::new(
-                dns.genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or_else(|| io_err("DNS failed"))?,
-                *port,
-            )
-        }
-        NetworkAddr::Raw(s) => *s,
-    })
 }
 
 impl DnsUdpSocket for AddrConnectorWrapper {
@@ -549,16 +545,6 @@ impl DnsUdpSocket for AddrConnectorWrapper {
         {
             Ok(_) => Poll::Ready(Ok(len)),
             Err(_) => Poll::Pending,
-        }
-    }
-}
-
-async fn wireguard_timeout<F: Future<Output = io::Result<()>>>(future: F) -> io::Result<()> {
-    match tokio::time::timeout(Duration::from_secs(10), future).await {
-        Ok(r) => r,
-        Err(_) => {
-            tracing::debug!("WireGuard timeout after 10s");
-            Err(ErrorKind::TimedOut.into())
         }
     }
 }

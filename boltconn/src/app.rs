@@ -146,6 +146,7 @@ impl App {
         let ruleset = load_rulesets(&loaded_config)?;
         let dispatching = Arc::new(
             DispatchingBuilder::new(
+                config_path.as_path(),
                 dns.clone(),
                 mmdb.clone(),
                 &loaded_config,
@@ -161,6 +162,7 @@ impl App {
                 .map_err(|e| anyhow!("Load certs from path {:?} failed: {}", cert_path, e))?;
             let interception_mgr = Arc::new(
                 InterceptionManager::new(
+                    config_path.as_path(),
                     config.interception.as_slice(),
                     dns.clone(),
                     mmdb.clone(),
@@ -295,6 +297,7 @@ impl App {
         .await?;
         let dispatching = {
             let builder = DispatchingBuilder::new(
+                self.config_path.as_path(),
                 self.dns.clone(),
                 mmdb.clone(),
                 &loaded_config,
@@ -306,6 +309,7 @@ impl App {
 
         let interception_mgr = Arc::new(
             InterceptionManager::new(
+                self.config_path.as_path(),
                 config.interception.as_slice(),
                 self.dns.clone(),
                 mmdb.clone(),
@@ -365,6 +369,7 @@ pub async fn validate_config(
     // dispatch
     let ruleset = load_rulesets(&loaded_config)?;
     let _dispatching = DispatchingBuilder::new(
+        config_path,
         dns.clone(),
         mmdb.clone(),
         &loaded_config,
@@ -373,9 +378,15 @@ pub async fn validate_config(
     )
     .and_then(|b| b.build(&loaded_config))
     .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?;
-    let _interception_mgr =
-        InterceptionManager::new(config.interception.as_slice(), dns, mmdb, &ruleset, msg_bus)
-            .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
+    let _interception_mgr = InterceptionManager::new(
+        config_path,
+        config.interception.as_slice(),
+        dns,
+        mmdb,
+        &ruleset,
+        msg_bus,
+    )
+    .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
     Ok(())
 }
 
