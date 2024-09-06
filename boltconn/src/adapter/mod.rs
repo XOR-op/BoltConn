@@ -34,6 +34,7 @@ use crate::transport::UdpSocketAdapter;
 pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
+pub use ssh::*;
 use std::future::Future;
 use std::io::ErrorKind;
 pub use tcp_adapter::*;

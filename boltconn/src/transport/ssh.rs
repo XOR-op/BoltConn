@@ -21,7 +21,8 @@ pub struct SshConfig {
     pub user: String,
     pub auth: SshAuthentication,
     // todo: check host pubkey
-    pub host_pubkey: Option<PublicKey>,
+    // (algo, pubkey)
+    pub host_pubkey: Option<(String, PublicKey)>,
 }
 
 impl PartialEq for SshConfig {

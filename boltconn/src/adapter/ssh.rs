@@ -24,7 +24,7 @@ pub struct SshOutboundHandle {
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
-    config: Arc<SshConfig>,
+    config: SshConfig,
     manager: Arc<SshManager>,
 }
 
@@ -33,7 +33,7 @@ impl SshOutboundHandle {
         iface_name: &str,
         dst: NetworkAddr,
         dns: Arc<Dns>,
-        config: Arc<SshConfig>,
+        config: SshConfig,
         manager: Arc<SshManager>,
     ) -> Self {
         Self {
@@ -54,7 +54,7 @@ impl SshOutboundHandle {
     ) -> Result<(), TransportError> {
         let master_conn = self
             .manager
-            .get_ssh_conn(self.config.as_ref(), outbound, completion_tx)
+            .get_ssh_conn(&self.config, outbound, completion_tx)
             .await?;
         let channel = master_conn.new_mapped_connection(self.dst.clone()).await?;
         established_tcp(inbound, channel, abort_handle).await;

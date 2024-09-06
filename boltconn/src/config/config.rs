@@ -8,6 +8,7 @@ use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -161,6 +162,19 @@ pub enum RawProxyLocalCfg {
         reserved: Option<[u8; 3]>,
         #[serde(alias = "over-tcp", default = "default_false")]
         over_tcp: bool,
+    },
+    #[serde(alias = "ssh")]
+    Ssh {
+        server: RawServerAddr,
+        port: u16,
+        user: String,
+        password: Option<String>,
+        #[serde(alias = "private-key")]
+        private_key: Option<PathBuf>,
+        #[serde(alias = "key-passphrase")]
+        key_passphrase: Option<String>,
+        #[serde(alias = "host-pubkey")]
+        host_pubkey: Option<String>,
     },
 }
 
