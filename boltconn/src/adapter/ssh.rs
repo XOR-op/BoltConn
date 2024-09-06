@@ -10,7 +10,6 @@ use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::ssh::{SshConfig, SshTunnel};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
-use futures::TryFutureExt;
 use std::collections::HashMap;
 use std::io;
 use std::io::ErrorKind;
@@ -93,11 +92,16 @@ impl Outbound for SshOutboundHandle {
         abort_handle: ConnAbortHandle,
     ) -> JoinHandle<std::io::Result<()>> {
         let (tx, _) = tokio::sync::oneshot::channel();
-        tokio::spawn(
-            self.clone()
-                .attach_tcp(inbound, None, abort_handle, tx)
-                .map_err(|e| io_err(format!("SSH TCP spawn error: {:?}", e).as_str())),
-        )
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            let abort_handle2 = abort_handle.clone();
+            let r = self_clone.attach_tcp(inbound, None, abort_handle, tx).await;
+            if let Err(e) = r {
+                abort_handle2.cancel();
+                return Err(io_err(format!("SSH TCP spawn error: {:?}", e).as_str()));
+            }
+            Ok(())
+        })
     }
 
     async fn spawn_tcp_with_outbound(
@@ -112,12 +116,18 @@ impl Outbound for SshOutboundHandle {
             return Err(io::ErrorKind::InvalidData.into());
         }
         let (comp_tx, comp_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(adapter::connect_timeout(
-            self.clone()
-                .attach_tcp(inbound, None, abort_handle, comp_tx)
-                .map_err(|e| io_err(format!("SSH TCP spawn error: {:?}", e).as_str())),
-            "SSH TCP multi-hop",
-        ));
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            let abort_handle2 = abort_handle.clone();
+            let r = self_clone
+                .attach_tcp(inbound, tcp_outbound, abort_handle, comp_tx)
+                .await;
+            if let Err(e) = r {
+                abort_handle2.cancel();
+                return Err(io_err(format!("SSH TCP spawn error: {:?}", e).as_str()));
+            }
+            Ok(())
+        });
         comp_rx
             .await
             .map_err(|_| ErrorKind::ConnectionAborted.into())
