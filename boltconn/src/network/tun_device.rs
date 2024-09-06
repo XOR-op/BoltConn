@@ -115,9 +115,9 @@ impl TunDevice {
         Ok(())
     }
 
-    async fn send_outbound(&self, pkt: &IPPkt) -> io::Result<()> {
-        TunInstance::send_outbound(pkt, self.gw_name.as_str(), self.ipv6_enabled).await
-    }
+    // async fn send_outbound(&self, pkt: &IPPkt) -> io::Result<()> {
+    //     TunInstance::send_outbound(pkt, self.gw_name.as_str(), self.ipv6_enabled).await
+    // }
 
     pub async fn run(mut self, nat_addr: SocketAddr) -> io::Result<()> {
         let nat_addr = if let SocketAddr::V4(addr) = nat_addr {

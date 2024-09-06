@@ -1,12 +1,8 @@
-use crate::{
-    common::{async_session::AsyncSession, io_err},
-    platform::get_iface_address,
-};
-
-use super::packet::ip::IPPkt;
 use ipnet::Ipv4Net;
-use std::{io, net::SocketAddr, sync::Arc};
-use windows::Win32::Networking::WinSock::IPPROTO_IP;
+
+use crate::common::{async_session::AsyncSession, io_err};
+
+use std::{io, sync::Arc};
 
 pub(super) struct TunInstance {
     session: Option<AsyncSession>,
@@ -52,26 +48,26 @@ impl TunInstance {
         })
     }
 
-    pub async fn send_outbound(pkt: &IPPkt, gw_name: &str, ipv6_enabled: bool) -> io::Result<()> {
-        let addr = get_iface_address(gw_name)?;
-        match pkt {
-            IPPkt::V4(_) => {
-                let sock = socket2::Socket::new(
-                    socket2::Domain::IPV4,
-                    socket2::Type::RAW,
-                    Some(socket2::Protocol::from(IPPROTO_IP.0)),
-                )?;
-                sock.bind(&SocketAddr::new(addr, 0).into())?;
-                todo!()
-            }
-            IPPkt::V6(_) => {
-                if ipv6_enabled {
-                    todo!()
-                } else {
-                    tracing::trace!("Drop IPv6 packets: IPv6 disabled");
-                }
-            }
-        }
-        Ok(())
-    }
+    // pub async fn send_outbound(pkt: &IPPkt, gw_name: &str, ipv6_enabled: bool) -> io::Result<()> {
+    //     let addr = get_iface_address(gw_name)?;
+    //     match pkt {
+    //         IPPkt::V4(_) => {
+    //             let sock = socket2::Socket::new(
+    //                 socket2::Domain::IPV4,
+    //                 socket2::Type::RAW,
+    //                 Some(socket2::Protocol::from(IPPROTO_IP.0)),
+    //             )?;
+    //             sock.bind(&SocketAddr::new(addr, 0).into())?;
+    //             todo!()
+    //         }
+    //         IPPkt::V6(_) => {
+    //             if ipv6_enabled {
+    //                 todo!()
+    //             } else {
+    //                 tracing::trace!("Drop IPv6 packets: IPv6 disabled");
+    //             }
+    //         }
+    //     }
+    //     Ok(())
+    // }
 }

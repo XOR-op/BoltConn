@@ -74,8 +74,9 @@ pub fn get_user_info() -> Option<UserInfo> {
     todo!()
 }
 
-pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
-    todo!()
+pub fn set_maximum_opened_files(_target_size: u32) -> io::Result<u32> {
+    tracing::debug!("set_maximum_opened_files does nothing on windows");
+    Ok(())
 }
 
 pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
