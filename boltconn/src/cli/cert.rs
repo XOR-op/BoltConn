@@ -4,14 +4,17 @@ use rcgen::{
     IsCa, KeyUsagePurpose,
 };
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 fn safe_write(path: PathBuf, content: &str) -> anyhow::Result<()> {
     fs::write(path.as_path(), content)?;
     UserInfo::root().chown(&path)?;
-    let perm = fs::Permissions::from_mode(0o600);
-    fs::set_permissions(&path, perm)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perm = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&path, perm)?;
+    }
     Ok(())
 }
 
