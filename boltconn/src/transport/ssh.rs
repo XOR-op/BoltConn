@@ -67,7 +67,7 @@ impl russh::client::Handler for Client {
 pub struct SshTunnel {
     client: Handle<Client>,
     port_counter: AtomicU16,
-    is_active: AtomicBool,
+    is_active: Arc<AtomicBool>,
 }
 
 impl SshTunnel {
@@ -82,7 +82,7 @@ impl SshTunnel {
         Ok(Self {
             client: connect_ssh_tunnel(config, ru_config, outbound).await?,
             port_counter: AtomicU16::new(1025),
-            is_active: AtomicBool::new(true),
+            is_active: Arc::new(AtomicBool::new(true)),
         })
     }
 
@@ -91,7 +91,7 @@ impl SshTunnel {
         dst: NetworkAddr,
     ) -> Result<ChannelStream<Msg>, TransportError> {
         let dst_port = dst.port();
-        let channel = self
+        let channel = match self
             .client
             .channel_open_direct_tcpip(
                 match dst {
@@ -104,7 +104,15 @@ impl SshTunnel {
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u32,
             )
             .await
-            .map_err(TransportError::Ssh)?;
+            .map_err(TransportError::Ssh)
+        {
+            Ok(c) => c,
+            Err(e) => {
+                self.is_active
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                return Err(e);
+            }
+        };
         Ok(channel.into_stream())
     }
 
