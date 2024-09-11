@@ -1,4 +1,4 @@
-use crate::common::{as_io_err, StreamOutboundTrait};
+use crate::common::{as_io_err, StreamOutboundTrait, UnwrapInfallible};
 use crate::external::Controller;
 use crate::proxy::error::SystemError;
 use boltapi::multiplex::rpc_multiplex_twoway;
@@ -7,9 +7,9 @@ use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
     HttpInterceptSchema, TrafficResp, TunStatusSchema,
 };
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{io, mem};
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel};
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
@@ -21,6 +21,7 @@ use tokio_serde::formats::Cbor;
 
 pub struct UnixListenerGuard {
     path: String,
+    // The option is used only for destruction. It's not possible to move out of the listener.
     #[cfg(unix)]
     listener: Option<UnixListener>,
     #[cfg(windows)]
@@ -32,9 +33,9 @@ impl UnixListenerGuard {
         #[cfg(unix)]
         {
             use crate::platform::get_user_info;
-            use std::path::{Path, PathBuf};
+            use std::path::PathBuf;
             use std::str::FromStr;
-            let path = PathBuf::from_str(path).map_err(SystemError::Controller)?;
+            let path = PathBuf::from_str(path).infallible();
             let listener = UnixListener::bind(&path).map_err(SystemError::Controller)?;
             if let Some(user_info) = get_user_info() {
                 user_info
@@ -64,6 +65,7 @@ impl UnixListenerGuard {
         return Ok(self.listener.as_ref().unwrap().accept().await?.0);
         #[cfg(windows)]
         {
+            use std::mem;
             let mut listener_guard = self.listener.lock().await;
             listener_guard.connect().await?;
             // ensure there are always at least one server alive
