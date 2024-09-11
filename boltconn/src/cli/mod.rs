@@ -295,7 +295,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 eprintln!("Log command does not support remote connection");
                 exit(-1)
             }
-            let state = match ConnectionState::new(PathBuf::from(default_uds_path)).await {
+            let state = match ConnectionState::new(default_uds_path).await {
                 Ok(s) => s,
                 Err(err) => {
                     eprintln!("{}", err);
@@ -322,7 +322,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         _ => (),
     }
     let requester = match match args.url {
-        None => request::Requester::new_uds(PathBuf::from(default_uds_path)).await,
+        None => request::Requester::new_uds(default_uds_path).await,
         Some(url) => request::Requester::new_web(url),
     } {
         Ok(r) => r,

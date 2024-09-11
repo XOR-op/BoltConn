@@ -1,6 +1,5 @@
-use crate::common::as_io_err;
+use crate::common::{as_io_err, StreamOutboundTrait};
 use crate::external::Controller;
-use crate::platform::get_user_info;
 use crate::proxy::error::SystemError;
 use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::{ClientStreamServiceClient, ControlService};
@@ -8,45 +7,82 @@ use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
     HttpInterceptSchema, TrafficResp, TunStatusSchema,
 };
-use std::io;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{io, mem};
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel};
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+#[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio_serde::formats::Cbor;
 
 pub struct UnixListenerGuard {
-    path: PathBuf,
+    path: String,
+    #[cfg(unix)]
     listener: Option<UnixListener>,
+    #[cfg(windows)]
+    listener: tokio::sync::Mutex<NamedPipeServer>,
 }
 
 impl UnixListenerGuard {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, SystemError> {
-        let path = path.as_ref().to_path_buf();
-        let listener = UnixListener::bind(&path).map_err(SystemError::Controller)?;
-        if let Some(user_info) = get_user_info() {
-            user_info
-                .chown(&path)
-                .map_err(|e| SystemError::Controller(as_io_err(e)))?;
+    pub fn new(path: &str) -> Result<Self, SystemError> {
+        #[cfg(unix)]
+        {
+            use crate::platform::get_user_info;
+            use std::path::{Path, PathBuf};
+            use std::str::FromStr;
+            let path = PathBuf::from_str(path).map_err(SystemError::Controller)?;
+            let listener = UnixListener::bind(&path).map_err(SystemError::Controller)?;
+            if let Some(user_info) = get_user_info() {
+                user_info
+                    .chown(&path)
+                    .map_err(|e| SystemError::Controller(as_io_err(e)))?;
+            }
+            return Ok(Self {
+                path: path.to_string_lossy().to_string(),
+                listener: Some(listener),
+            });
         }
-        Ok(Self {
-            path,
-            listener: Some(listener),
-        })
+        #[cfg(windows)]
+        {
+            let listener = ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(path)
+                .map_err(SystemError::Controller)?;
+            return Ok(Self {
+                path: path.to_string(),
+                listener: tokio::sync::Mutex::new(listener),
+            });
+        }
     }
-    pub fn get_listener(&self) -> &UnixListener {
-        self.listener.as_ref().unwrap()
+
+    pub async fn accept(&self) -> io::Result<impl StreamOutboundTrait> {
+        #[cfg(unix)]
+        return Ok(self.listener.as_ref().unwrap().accept().await?.0);
+        #[cfg(windows)]
+        {
+            let mut listener_guard = self.listener.lock().await;
+            listener_guard.connect().await?;
+            // ensure there are always at least one server alive
+            let mut new_listener = ServerOptions::new().create(&self.path)?;
+            // swap the listener so the established connection can be returned
+            mem::swap(&mut *listener_guard, &mut new_listener);
+            Ok(new_listener)
+        }
     }
 }
 
 impl Drop for UnixListenerGuard {
     fn drop(&mut self) {
-        self.listener = None;
-        if let Err(e) = std::fs::remove_file(&self.path) {
-            tracing::error!("Error when removing unix domain socket: {}", e)
+        #[cfg(unix)]
+        {
+            self.listener = None;
+            if let Err(e) = std::fs::remove_file(&self.path) {
+                tracing::error!("Error when removing unix domain socket: {}", e)
+            }
         }
     }
 }
@@ -65,7 +101,7 @@ impl UdsController {
         let mut codec_builder = LengthDelimitedCodec::builder();
         codec_builder.max_frame_length(boltapi::rpc::MAX_CODEC_FRAME_LENGTH);
         loop {
-            let (conn, _addr) = listener.get_listener().accept().await?;
+            let conn = listener.accept().await?;
             let framed = codec_builder.new_framed(conn);
             let transport = tarpc::serde_transport::new(framed, Cbor::default());
             let (server_t, client_t, in_task, out_task) = rpc_multiplex_twoway(transport);

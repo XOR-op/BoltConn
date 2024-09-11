@@ -5,10 +5,12 @@ use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
     TunStatusSchema,
 };
-use std::path::PathBuf;
 use tarpc::context::Context;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tarpc::transport::channel::UnboundedChannel;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::ClientOptions;
+#[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio_serde::formats::Cbor;
 
@@ -18,7 +20,7 @@ pub struct UdsConnector {
 
 impl UdsConnector {
     pub async fn new(
-        bind_addr: PathBuf,
+        bind_addr: &str,
     ) -> Result<(
         Self,
         UnboundedChannel<
@@ -26,7 +28,10 @@ impl UdsConnector {
             tarpc::Response<ClientStreamServiceResponse>,
         >,
     )> {
+        #[cfg(unix)]
         let conn = UnixStream::connect(bind_addr).await?;
+        #[cfg(windows)]
+        let conn = ClientOptions::new().open(bind_addr)?;
         let transport = tarpc::serde_transport::new(
             LengthDelimitedCodec::builder()
                 .max_frame_length(boltapi::rpc::MAX_CODEC_FRAME_LENGTH)

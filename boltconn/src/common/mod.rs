@@ -36,6 +36,9 @@ where
 
 pub trait StreamOutboundTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 
+#[cfg(target_os = "windows")]
+impl StreamOutboundTrait for tokio::net::windows::named_pipe::NamedPipeServer {}
+
 pub const MAX_PKT_SIZE: usize = 65576;
 
 pub async fn read_to_bytes_mut(
