@@ -137,14 +137,20 @@ impl Drop for SystemDnsHandle {
 }
 
 pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
-    let user_name = unsafe { libc::getlogin() };
-    if user_name.is_null() {
-        return None;
-    }
-    let name = unsafe { CStr::from_ptr(user_name) }
-        .to_string_lossy()
-        .into_owned();
-    let user_info = unsafe { libc::getpwnam(user_name) };
+    let (name, user_info) = if let Ok(n) = std::env::var("USER") {
+        let user_info = unsafe { libc::getpwnam(n.as_ptr() as *const i8) };
+        (n, user_info)
+    } else {
+        let user_name = unsafe { libc::getlogin() };
+        if user_name.is_null() {
+            return None;
+        }
+        let name = unsafe { CStr::from_ptr(user_name) }
+            .to_string_lossy()
+            .into_owned();
+        let user_info = unsafe { libc::getpwnam(user_name) };
+        (name, user_info)
+    };
     if user_info.is_null() {
         return None;
     }
