@@ -67,7 +67,8 @@ pub(crate) unsafe fn get_sockaddr(v4: Ipv4Addr) -> libc::sockaddr_in {
     addr
 }
 
-pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
+#[deprecated]
+fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
     let ctl_socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
     let mut req = unsafe { create_req(iface_name) };
     req.ifru.addr.sa_family = libc::AF_INET as libc::sa_family_t;

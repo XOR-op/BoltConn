@@ -1,5 +1,5 @@
-use std::convert::Infallible;
 use bytes::{BufMut, BytesMut};
+use std::convert::Infallible;
 use std::error::Error;
 use std::intrinsics::transmute;
 use std::io;

@@ -196,27 +196,6 @@ pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
     Ok(target_size)
 }
 
-pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
-    let iface = pnet::datalink::interfaces()
-        .into_iter()
-        .find(|iface| iface.name == iface_name)
-        .ok_or_else(|| io_err("interface not found"))?;
-    // find v4 first, otherwise v6
-    if let Some(ip) = iface.ips.iter().find_map(|ip| match ip {
-        IpNetwork::V4(ipv4) => Some(ipv4.ip()),
-        _ => None,
-    }) {
-        Ok(ip.into())
-    } else if let Some(ip) = iface.ips.iter().find_map(|ip| match ip {
-        IpNetwork::V6(ipv6) => Some(ipv6.ip()),
-        _ => None,
-    }) {
-        Ok(ip.into())
-    } else {
-        Err(io_err("no ip address found"))
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct UserInfo {
     pub name: String,
