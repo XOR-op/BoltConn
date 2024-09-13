@@ -65,7 +65,7 @@ impl App {
         external::init_tracing(&stream_logger)?;
 
         // setup Unix socket
-        let uds_listener = Arc::new(UnixListenerGuard::new("/var/run/boltconn.sock")?);
+        let uds_listener = Arc::new(UnixListenerGuard::new(app_uds_addr())?);
 
         // Read initial config
         let loaded_config = LoadedConfig::load_config(&config_path, &data_path)
@@ -623,4 +623,15 @@ fn parse_two_inbound_service(
         .into_iter()
         .for_each(|(port, socks5_auth)| result.push((port, None, Some(socks5_auth))));
     result
+}
+
+fn app_uds_addr() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        r"\\.\pipe\boltconn"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "/var/run/boltconn.sock"
+    }
 }

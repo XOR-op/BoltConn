@@ -40,7 +40,7 @@ pub fn get_default_v4_route() -> io::Result<(IpAddr, String)> {
         "powershell",
         [
             "-noprofile",
-            "-commmand",
+            "-command",
             "Find-NetRoute -RemoteIPAddress 1.1.1.1",
         ],
     )?
@@ -49,19 +49,21 @@ pub fn get_default_v4_route() -> io::Result<(IpAddr, String)> {
     .filter_map(|l| {
         let vec: Vec<&str> = l.split(": ").collect();
         if vec.len() == 2 {
-            Some((vec[0].trim().to_string(), vec[1].to_string()))
+            Some((vec[0].trim().to_string(), vec[1].trim().to_string()))
         } else {
             None
         }
     })
     .collect();
-    if kv.contains_key("IPAddress") && kv.contains_key("InterfaceIndex") {
+    let name_key = "InterfaceAlias";
+    // let name_key = "InterfaceIndex";
+    if kv.contains_key("IPAddress") && kv.contains_key(name_key) {
         let iface_addr: IpAddr = kv
             .get("IPAddress")
             .unwrap()
             .parse()
             .map_err(|_| io_err("Invalid interface address"))?;
-        let iface_index = kv.get("InterfaceIndex").unwrap().to_string();
+        let iface_index = kv.get(name_key).unwrap().to_string();
         tracing::debug!("default route: {:?} {:?}", iface_addr, iface_index);
         Ok((iface_addr, iface_index))
     } else {
