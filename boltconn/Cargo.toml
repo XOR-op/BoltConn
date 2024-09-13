@@ -122,7 +122,6 @@ console-subscriber = { version = "0.1.10", optional = true }
 russh = "0.45.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-pnet = "0.35.0"
 windows = { version = "0.58.0", features = [
     "Win32",
     "Win32_Foundation",

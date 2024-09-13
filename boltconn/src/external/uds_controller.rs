@@ -1,4 +1,4 @@
-use crate::common::{as_io_err, StreamOutboundTrait, UnwrapInfallible};
+use crate::common::StreamOutboundTrait;
 use crate::external::Controller;
 use crate::proxy::error::SystemError;
 use boltapi::multiplex::rpc_multiplex_twoway;
@@ -32,6 +32,7 @@ impl UnixListenerGuard {
     pub fn new(path: &str) -> Result<Self, SystemError> {
         #[cfg(unix)]
         {
+            use crate::common::{as_io_err, UnwrapInfallible};
             use crate::platform::get_user_info;
             use std::path::PathBuf;
             use std::str::FromStr;

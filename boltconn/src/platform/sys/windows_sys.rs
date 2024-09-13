@@ -1,5 +1,4 @@
 use ipnet::IpNet;
-use pnet::ipnetwork::IpNetwork;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::Ipv4Addr;
@@ -17,7 +16,7 @@ use crate::common::io_err;
 use crate::platform::{get_command_output, run_command};
 
 pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
-    let iface_addr = get_iface_address(name)?;
+    let iface_addr = super::get_iface_address(name)?;
     run_command(ip_command_by_net(&subnet).args([
         "add",
         &format!("{}", subnet.addr()),
