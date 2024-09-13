@@ -1,14 +1,18 @@
 use windows::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
-        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER},
+        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, UNICODE_STRING},
         NetworkManagement::IpHelper::{
             GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP_STATE_ESTAB,
             TCP_TABLE_OWNER_PID_CONNECTIONS, UDP_TABLE_OWNER_PID,
         },
         Networking::WinSock::{ADDRESS_FAMILY, AF_INET, AF_INET6},
-        System::Threading::{
-            OpenProcess, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+        System::{
+            Diagnostics::Debug::ReadProcessMemory,
+            Threading::{
+                OpenProcess, PEB, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
+                PROCESS_VM_READ, RTL_USER_PROCESS_PARAMETERS,
+            },
         },
     },
 };
@@ -92,8 +96,14 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
         4 => return Some((0, "".to_string(), ":System".to_string(), "".to_string())),
         _ => {}
     }
-    let handle =
-        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid as u32) }.ok()?;
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+            false,
+            pid as u32,
+        )
+    }
+    .ok()?;
     const INFO_SIZE: usize = std::mem::size_of::<PROCESS_BASIC_INFORMATION>();
     let mut proc_basic_info: PROCESS_BASIC_INFORMATION = unsafe { mem::zeroed() };
     let mut out_len_unused = 0u32;
@@ -111,22 +121,47 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
         return None;
     }
     let ppid = proc_basic_info.InheritedFromUniqueProcessId as i32;
-    let parameters = unsafe { *(*proc_basic_info.PebBaseAddress).ProcessParameters };
-    let cmdline = String::from_utf16_lossy(unsafe {
-        std::slice::from_raw_parts(
-            parameters.CommandLine.Buffer.0,
-            parameters.CommandLine.Length as usize / 2,
-        )
-    });
-    let path = String::from_utf16_lossy(unsafe {
-        std::slice::from_raw_parts(
-            parameters.ImagePathName.Buffer.0,
-            parameters.ImagePathName.Length as usize / 2,
-        )
-    });
-    let name = path.rsplit('\\').next().unwrap_or("").to_owned();
+    let parameters = unsafe {
+        let peb: PEB = read_from_process(handle, proc_basic_info.PebBaseAddress)?;
+        let parameters: RTL_USER_PROCESS_PARAMETERS =
+            read_from_process(handle, peb.ProcessParameters)?;
+        parameters
+    };
+    let cmdline =
+        unsafe { read_utf16_from_process(handle, &parameters.CommandLine) }.unwrap_or_default();
+    let path =
+        unsafe { read_utf16_from_process(handle, &parameters.ImagePathName) }.unwrap_or_default();
+    let name = path.rsplit('\\').next().unwrap_or("UNKNOWN").to_owned();
     let _ = unsafe { CloseHandle(handle) };
     Some((ppid, path, name, cmdline))
+}
+
+unsafe fn read_from_process<T: Sized>(handle: HANDLE, addr: *const T) -> Option<T> {
+    let mut buf = mem::zeroed();
+    ReadProcessMemory(
+        handle,
+        addr as *const _,
+        &mut buf as *mut _ as *mut _,
+        mem::size_of::<T>(),
+        None,
+    )
+    .ok()?;
+    Some(buf)
+}
+
+unsafe fn read_utf16_from_process(handle: HANDLE, u16str: &UNICODE_STRING) -> Option<String> {
+    let byte_len = u16str.Length as usize;
+    let mut buffer = vec![0u8; byte_len];
+    ReadProcessMemory(
+        handle,
+        u16str.Buffer.0 as *const _,
+        buffer.as_mut_ptr() as *mut _,
+        byte_len,
+        None,
+    )
+    .ok()?;
+    let slice = std::slice::from_raw_parts(buffer.as_ptr() as *const _, byte_len / 2);
+    Some(String::from_utf16_lossy(slice))
 }
 
 // Search for the data returned by GetExtented*Table.
