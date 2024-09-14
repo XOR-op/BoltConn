@@ -16,6 +16,7 @@ use hickory_resolver::config::{
 };
 use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::AsyncResolver;
+pub use hijack_ctrl::DnsHijackController;
 pub use ns_policy::NameserverPolicies;
 use provider::IfaceProvider;
 use std::net::{IpAddr, SocketAddr};

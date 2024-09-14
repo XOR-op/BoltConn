@@ -12,7 +12,8 @@ use crate::instrument::bus::MessageBus;
 use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{
-    new_bootstrap_resolver, parse_dns_config, BootstrapResolver, Dns, NameserverPolicies,
+    new_bootstrap_resolver, parse_dns_config, BootstrapResolver, Dns, DnsHijackController,
+    NameserverPolicies,
 };
 use crate::network::tun_device::TunDevice;
 use crate::platform::get_default_v4_route;
@@ -102,13 +103,11 @@ impl App {
         let will_enable_tun = enable_tun.unwrap_or(config.inbound.enable_tun);
         let (tun_udp_tx, tun_udp_rx) = flume::bounded(4096);
         let (udp_tun_tx, udp_tun_rx) = flume::bounded(4096);
-        let fake_dns_server = "198.18.99.88".parse().unwrap();
+        let fake_dns_server = Ipv4Addr::new(198, 18, 99, 88);
         let tun = {
             let mut tun = TunDevice::open(
                 manager.clone(),
                 outbound_iface.as_str(),
-                dns.clone(),
-                fake_dns_server,
                 tun_udp_tx,
                 udp_tun_rx,
                 false, // TODO: load from configuration
@@ -135,6 +134,11 @@ impl App {
             }
             tun_configure
         };
+        let dns_hijack = Arc::new(DnsHijackController::new(
+            config.dns.tun_bypass_list.clone(),
+            config.dns.tun_hijack_list.clone(),
+            SocketAddr::new(fake_dns_server.into(), 53),
+        ));
 
         let nat_addr = SocketAddr::new(
             platform::get_iface_address(tun.get_name())
@@ -216,6 +220,7 @@ impl App {
             tun,
             tun_udp_rx,
             udp_tun_tx,
+            dns_hijack.clone(),
         );
         start_inbound_services(&config.inbound, dispatcher.clone());
 
@@ -451,6 +456,7 @@ fn start_instrument_services(bus: Arc<MessageBus>, config: Option<&RawInstrument
     tokio::spawn(async move { bus.run().await });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_tun_services(
     nat_addr: SocketAddr,
     manager: Arc<SessionManager>,
@@ -459,6 +465,7 @@ fn start_tun_services(
     tun: TunDevice,
     tun_udp_rx: flume::Receiver<Bytes>,
     udp_tun_tx: flume::Sender<Bytes>,
+    hijack_ctrl: Arc<DnsHijackController>,
 ) {
     let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
         nat_addr,
@@ -472,6 +479,7 @@ fn start_tun_services(
         dispatcher.clone(),
         manager.clone(),
         dns.clone(),
+        hijack_ctrl,
     );
     manager.flush_with_interval(Duration::from_secs(30));
     tokio::spawn(async move { tun_inbound_tcp.run().await });
