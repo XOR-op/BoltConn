@@ -40,6 +40,7 @@ pub struct App {
     data_path: PathBuf,
     outbound_iface: String,
     dns: Arc<Dns>,
+    dns_hijack_ctrl: Arc<DnsHijackController>,
     dispatcher: Arc<Dispatcher>,
     api_dispatching_handler: SharedDispatching,
     tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
@@ -238,6 +239,7 @@ impl App {
             data_path,
             outbound_iface,
             dns,
+            dns_hijack_ctrl: dns_hijack,
             dispatcher,
             api_dispatching_handler,
             tun_configure,
@@ -329,6 +331,11 @@ impl App {
         self.dns.replace_resolvers(&self.outbound_iface, group);
         self.dns.replace_ns_policy(ns_policy);
         self.dns.replace_hosts(&config.dns.hosts);
+        self.dns_hijack_ctrl.update(
+            config.dns.tun_hijack_list.clone(),
+            config.dns.tun_bypass_list.clone(),
+            SocketAddr::new(Ipv4Addr::new(198, 18, 99, 88).into(), 53),
+        );
 
         // start atomic replacing
         self.api_dispatching_handler.store(dispatching.clone());

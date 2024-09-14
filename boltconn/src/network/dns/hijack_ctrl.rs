@@ -1,7 +1,9 @@
 use crate::config::PortOrSocketAddr;
+use arc_swap::ArcSwap;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 enum AddressType {
     All,
@@ -9,6 +11,10 @@ enum AddressType {
 }
 
 pub struct DnsHijackController {
+    inner: ArcSwap<DnsHijackControllerInner>,
+}
+
+struct DnsHijackControllerInner {
     hijack_list: HashMap<u16, AddressType>,
     bypass_list: HashMap<u16, AddressType>,
     fake_server: SocketAddr,
@@ -21,17 +27,20 @@ impl DnsHijackController {
         fake_server: SocketAddr,
     ) -> Self {
         Self {
-            hijack_list: hijack_list.map_or_else(HashMap::new, parse_list),
-            bypass_list: bypass_list.map_or_else(HashMap::new, parse_list),
-            fake_server,
+            inner: ArcSwap::new(Arc::new(DnsHijackControllerInner {
+                hijack_list: hijack_list.map_or_else(HashMap::new, parse_list),
+                bypass_list: bypass_list.map_or_else(HashMap::new, parse_list),
+                fake_server,
+            })),
         }
     }
 
     pub fn should_hijack(&self, addr: &SocketAddr) -> bool {
-        if *addr == self.fake_server {
+        let inner = self.inner.load();
+        if *addr == inner.fake_server {
             return true;
         }
-        if let Some(addr_type) = self.bypass_list.get(&addr.port()) {
+        if let Some(addr_type) = inner.bypass_list.get(&addr.port()) {
             match addr_type {
                 AddressType::All => return false,
                 AddressType::Limited(addrs) => {
@@ -41,7 +50,7 @@ impl DnsHijackController {
                 }
             }
         }
-        if let Some(addr_type) = self.hijack_list.get(&addr.port()) {
+        if let Some(addr_type) = inner.hijack_list.get(&addr.port()) {
             match addr_type {
                 AddressType::All => true,
                 AddressType::Limited(addrs) => addrs.contains(&addr.ip()),
@@ -49,6 +58,19 @@ impl DnsHijackController {
         } else {
             false
         }
+    }
+
+    pub fn update(
+        &self,
+        hijack_list: Option<Vec<PortOrSocketAddr>>,
+        bypass_list: Option<Vec<PortOrSocketAddr>>,
+        fake_server: SocketAddr,
+    ) {
+        self.inner.store(Arc::new(DnsHijackControllerInner {
+            hijack_list: hijack_list.map_or_else(HashMap::new, parse_list),
+            bypass_list: bypass_list.map_or_else(HashMap::new, parse_list),
+            fake_server,
+        }));
     }
 }
 
