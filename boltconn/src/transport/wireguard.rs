@@ -3,7 +3,6 @@ use crate::common::MAX_PKT_SIZE;
 use crate::config::DnsPreference;
 use crate::network::dns::Dns;
 use crate::proxy::error::TransportError;
-use crate::proxy::error::WireGuardError::BoringTun;
 use crate::proxy::NetworkAddr;
 use crate::transport::AdapterOrSocket;
 use boringtun::noise::errors::WireGuardError;
@@ -111,8 +110,7 @@ impl WireguardTunnel {
             config.keepalive,
             13,
             None,
-        )
-        .map_err(|e| TransportError::WireGuard(BoringTun(e)))?;
+        );
         Ok(Self {
             tunnel: tokio::sync::Mutex::new(tunnel),
             inner: WireguardTunnelInner {

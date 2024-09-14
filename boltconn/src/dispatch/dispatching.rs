@@ -2,7 +2,7 @@ use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
     ConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema, RawProxyGroupCfg,
     RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr, RawServerSockAddr, RawState,
-    RuleAction, RuleConfigLine, RuleError,
+    RuleAction, RuleConfigLine, RuleError, SingleOrVec,
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
@@ -16,6 +16,7 @@ use crate::instrument::bus::MessageBus;
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
+use crate::transport::ssh::{SshAuthentication, SshConfig};
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use arc_swap::ArcSwap;
@@ -23,10 +24,12 @@ use base64::Engine;
 use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
+use russh::keys::key::PublicKey;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct ConnInfo {
@@ -99,6 +102,7 @@ fn stringfy_process(info: &ConnInfo) -> &str {
 
 #[derive(Clone)]
 pub struct DispatchingBuilder {
+    config_path: PathBuf,
     proxies: HashMap<String, Arc<Proxy>>,
     groups: HashMap<String, Arc<ProxyGroup>>,
     rulesets: HashMap<String, Arc<RuleSet>>,
@@ -109,8 +113,14 @@ pub struct DispatchingBuilder {
 }
 
 impl DispatchingBuilder {
-    pub fn empty(dns: Arc<Dns>, mmdb: Option<Arc<MmdbReader>>, msg_bus: Arc<MessageBus>) -> Self {
+    pub fn empty(
+        config_path: &Path,
+        dns: Arc<Dns>,
+        mmdb: Option<Arc<MmdbReader>>,
+        msg_bus: Arc<MessageBus>,
+    ) -> Self {
         let mut builder = Self {
+            config_path: config_path.to_path_buf(),
             proxies: Default::default(),
             groups: Default::default(),
             rulesets: Default::default(),
@@ -135,13 +145,14 @@ impl DispatchingBuilder {
     }
 
     pub fn new(
+        config_path: &Path,
         dns: Arc<Dns>,
         mmdb: Option<Arc<MmdbReader>>,
         loaded_config: &LoadedConfig,
         ruleset: &RuleSetTable,
         msg_bus: Arc<MessageBus>,
     ) -> Result<Self, ConfigError> {
-        let mut builder = Self::empty(dns, mmdb, msg_bus);
+        let mut builder = Self::empty(config_path, dns, mmdb, msg_bus);
         // start init
         let LoadedConfig {
             config,
@@ -521,6 +532,68 @@ impl DispatchingBuilder {
                         }),
                     ))
                 }
+                RawProxyLocalCfg::Ssh {
+                    server,
+                    port,
+                    user,
+                    password,
+                    private_key,
+                    key_passphrase,
+                    host_pubkey,
+                } => {
+                    // construct authentication data
+                    let auth = if let Some(key_path) = private_key {
+                        let key_content = russh::keys::load_secret_key(
+                            get_file_path(self.config_path.as_path(), key_path).ok_or_else(
+                                || {
+                                    ProxyError::ProxyFieldError(
+                                        name.clone(),
+                                        "Invalid private key path",
+                                    )
+                                },
+                            )?,
+                            key_passphrase.as_ref().map(|s| s.as_str()),
+                        )
+                        .map_err(|_| {
+                            ProxyError::ProxyFieldError(name.clone(), "Load private key file")
+                        })?;
+                        SshAuthentication::PrivateKey(Arc::new(key_content))
+                    } else if let Some(passwd) = password {
+                        SshAuthentication::Password(passwd.clone())
+                    } else {
+                        return Err(ProxyError::ProxyFieldError(
+                            name.clone(),
+                            "No authentication method configured for the SSH outbound",
+                        )
+                        .into());
+                    };
+                    // validate server's identity
+                    let host_pubkey = if let Some(pubkey) = host_pubkey {
+                        Some(match pubkey {
+                            SingleOrVec::Single(k) => {
+                                vec![parse_pubkey(k.as_str(), name.as_str())?]
+                            }
+                            SingleOrVec::List(v) => {
+                                let mut keys = Vec::new();
+                                for k in v {
+                                    keys.push(parse_pubkey(k.as_str(), name.as_str())?);
+                                }
+                                keys
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    Arc::new(Proxy::new(
+                        name.clone(),
+                        ProxyImpl::Ssh(SshConfig {
+                            server: NetworkAddr::from(server, *port),
+                            user: user.clone(),
+                            auth,
+                            host_pubkey,
+                        }),
+                    ))
+                }
             };
             self.proxies.insert(name.to_string(), p);
         }
@@ -792,4 +865,33 @@ impl DispatchingSnippet {
         }
         (name, proxy_impl, iface)
     }
+}
+
+fn get_file_path(config_path: &Path, path: &Path) -> Option<PathBuf> {
+    Some(if path.is_absolute() {
+        path.to_path_buf()
+    } else if path.to_string_lossy().starts_with("~/") {
+        let home = PathBuf::from(std::env::var("HOME").ok()?);
+        home.join(path.to_string_lossy().strip_prefix("~/")?)
+    } else {
+        config_path.join(path)
+    })
+}
+
+fn parse_pubkey(pubkey: &str, name: &str) -> Result<(String, PublicKey), ProxyError> {
+    let (key_type, content) = pubkey.split_once(' ').ok_or_else(|| {
+        ProxyError::ProxyFieldError(
+            name.to_string(),
+            "Invalid host public key format; expect '<key-type> <base64-data>'",
+        )
+    })?;
+    Ok((
+        key_type.to_string(),
+        russh::keys::parse_public_key_base64(content).map_err(|_| {
+            ProxyError::ProxyFieldError(
+                name.to_string(),
+                "Invalid host public key format; expect '<key-type> <base64-data>'",
+            )
+        })?,
+    ))
 }

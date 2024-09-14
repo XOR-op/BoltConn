@@ -17,3 +17,5 @@ debug = true
 [patch.crates-io]
 rustls = { git = "https://github.com/XOR-op/rustls.delta.git", branch = "unofficial-rel-0.23" }
 smoltcp = { git = "https://github.com/XOR-op/smoltcp.git", branch = "resize-recv-buffer" }
+# Only used to bump x25519-dalek; will be removed once 0.6.1 is released
+boringtun = { git = "https://github.com/XOR-op/boringtun", branch = "master"}

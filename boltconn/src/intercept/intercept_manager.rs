@@ -4,6 +4,7 @@ use crate::external::MmdbReader;
 use crate::instrument::bus::MessageBus;
 use crate::intercept::{HeaderEngine, ScriptEngine, UrlEngine};
 use crate::network::dns::Dns;
+use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -104,6 +105,7 @@ pub struct InterceptionManager {
 
 impl InterceptionManager {
     pub fn new(
+        config_path: &Path,
         entries: &[InterceptionConfig],
         dns: Arc<Dns>,
         mmdb: Option<Arc<MmdbReader>>,
@@ -115,8 +117,9 @@ impl InterceptionManager {
             if !i.enabled {
                 continue;
             }
-            let filters = DispatchingBuilder::empty(dns.clone(), mmdb.clone(), msg_bus.clone())
-                .build_filter(i.filters.as_slice(), rulesets)?;
+            let filters =
+                DispatchingBuilder::empty(config_path, dns.clone(), mmdb.clone(), msg_bus.clone())
+                    .build_filter(i.filters.as_slice(), rulesets)?;
             let payload = InterceptionPayload::parse_actions(i.actions.as_slice())?;
             res.push(InterceptionEntry {
                 filters,

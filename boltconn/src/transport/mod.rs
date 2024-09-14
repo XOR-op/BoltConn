@@ -5,6 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 pub mod smol;
+pub mod ssh;
 pub mod trojan;
 pub mod wireguard;
 

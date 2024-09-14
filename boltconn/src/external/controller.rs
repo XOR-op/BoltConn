@@ -11,6 +11,7 @@ use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
     HttpInterceptSchema, ProcessSchema, ProxyData, SessionSchema, TrafficResp, TunStatusSchema,
 };
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -42,7 +43,7 @@ impl Controller {
         dispatching: SharedDispatching,
         global_setting: Arc<std::sync::Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
-        state: LinkedState,
+        state: Arc<std::sync::Mutex<LinkedState>>,
         stream_logger: StreamLoggerSend,
         speedtest_url: Arc<std::sync::RwLock<String>>,
     ) -> Self {
@@ -55,7 +56,7 @@ impl Controller {
             dispatcher,
             dispatching,
             reload_sender: Arc::new(reload_sender),
-            state: Arc::new(std::sync::Mutex::new(state)),
+            state,
             stream_logger,
             speedtest_url,
         }
@@ -420,7 +421,7 @@ impl Controller {
     }
 
     pub async fn update_latency(&self, group: String) {
-        tracing::debug!("Start speedtest for group {}", group);
+        tracing::trace!("Start speedtest for group {}", group);
         let speedtest_url = self.speedtest_url.read().unwrap().clone();
         let list = self.dispatching.load().get_group_list();
         for g in list.iter() {
@@ -428,21 +429,28 @@ impl Controller {
                 let iface = g.get_direct_interface();
                 // update all latency inside the group
                 let mut handles = vec![];
+                let mut tested_proxy = HashSet::new();
                 for p in g.get_members() {
-                    if let GeneralProxy::Single(p) = p {
-                        if let Ok(h) = latency_test(
-                            self.dispatcher.as_ref(),
-                            p.clone(),
-                            speedtest_url.as_str(),
-                            Duration::from_secs(2),
-                            iface.clone(),
-                        )
-                        .await
-                        {
-                            handles.push(h);
-                        } else {
-                            p.set_latency(Latency::Failed)
-                        }
+                    let p = match p {
+                        GeneralProxy::Single(p) => p,
+                        GeneralProxy::Group(g) => &g.get_proxy(),
+                    };
+                    if tested_proxy.contains(&p.get_name()) {
+                        continue;
+                    }
+                    tested_proxy.insert(p.get_name());
+                    if let Ok(h) = latency_test(
+                        self.dispatcher.as_ref(),
+                        p.clone(),
+                        speedtest_url.as_str(),
+                        Duration::from_secs(2),
+                        iface.clone(),
+                    )
+                    .await
+                    {
+                        handles.push(h);
+                    } else {
+                        p.set_latency(Latency::Failed)
                     }
                 }
                 for h in handles {
@@ -459,20 +467,21 @@ impl Controller {
 }
 
 fn pretty_proxy(g: &GeneralProxy) -> ProxyData {
+    let latency_to_str = |latency: Latency| match latency {
+        Latency::Unknown => None,
+        Latency::Value(ms) => Some(format!("{ms} ms")),
+        Latency::Failed => Some("Failed".to_string()),
+    };
     match g {
         GeneralProxy::Single(p) => ProxyData {
             name: p.get_name(),
             proto: p.get_impl().simple_description(),
-            latency: match p.get_latency() {
-                Latency::Unknown => None,
-                Latency::Value(ms) => Some(format!("{ms} ms")),
-                Latency::Failed => Some("Failed".to_string()),
-            },
+            latency: latency_to_str(p.get_latency()),
         },
         GeneralProxy::Group(g) => ProxyData {
             name: g.get_name(),
             proto: "group".to_string(),
-            latency: None,
+            latency: latency_to_str(g.get_proxy().get_latency()),
         },
     }
 }

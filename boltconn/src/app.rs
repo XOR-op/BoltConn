@@ -43,6 +43,7 @@ pub struct App {
     api_dispatching_handler: SharedDispatching,
     tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
     http_capturer: Arc<HttpCapturer>,
+    linked_state: Arc<std::sync::Mutex<LinkedState>>,
     speedtest_url: Arc<std::sync::RwLock<String>>,
     receiver: tokio::sync::mpsc::Receiver<()>,
     uds_socket: Arc<UnixListenerGuard>,
@@ -145,6 +146,7 @@ impl App {
         let ruleset = load_rulesets(&loaded_config)?;
         let dispatching = Arc::new(
             DispatchingBuilder::new(
+                config_path.as_path(),
                 dns.clone(),
                 mmdb.clone(),
                 &loaded_config,
@@ -160,6 +162,7 @@ impl App {
                 .map_err(|e| anyhow!("Load certs from path {:?} failed: {}", cert_path, e))?;
             let interception_mgr = Arc::new(
                 InterceptionManager::new(
+                    config_path.as_path(),
                     config.interception.as_slice(),
                     dns.clone(),
                     mmdb.clone(),
@@ -186,6 +189,10 @@ impl App {
         let api_dispatching_handler = Arc::new(ArcSwap::new(dispatching));
         let (reload_sender, reload_receiver) = tokio::sync::mpsc::channel::<()>(1);
         let speedtest_url = Arc::new(std::sync::RwLock::new(config.speedtest_url.clone()));
+        let linked_state = Arc::new(std::sync::Mutex::new(LinkedState {
+            state_path: LoadedConfig::state_path(&data_path),
+            state: loaded_config.state,
+        }));
         let controller = Arc::new(Controller::new(
             manager.clone(),
             dns.clone(),
@@ -195,10 +202,7 @@ impl App {
             api_dispatching_handler.clone(),
             tun_configure.clone(),
             reload_sender,
-            LinkedState {
-                state_path: LoadedConfig::state_path(&data_path),
-                state: loaded_config.state,
-            },
+            linked_state.clone(),
             stream_logger,
             speedtest_url.clone(),
         ));
@@ -233,6 +237,7 @@ impl App {
             api_dispatching_handler,
             tun_configure,
             http_capturer,
+            linked_state,
             speedtest_url,
             receiver: reload_receiver,
             uds_socket: uds_listener,
@@ -292,6 +297,7 @@ impl App {
         .await?;
         let dispatching = {
             let builder = DispatchingBuilder::new(
+                self.config_path.as_path(),
                 self.dns.clone(),
                 mmdb.clone(),
                 &loaded_config,
@@ -303,6 +309,7 @@ impl App {
 
         let interception_mgr = Arc::new(
             InterceptionManager::new(
+                self.config_path.as_path(),
                 config.interception.as_slice(),
                 self.dns.clone(),
                 mmdb.clone(),
@@ -311,6 +318,8 @@ impl App {
             )
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );
+
+        self.linked_state.lock().unwrap().state = loaded_config.state;
 
         self.dns.replace_resolvers(&self.outbound_iface, group);
         self.dns.replace_ns_policy(ns_policy);
@@ -360,6 +369,7 @@ pub async fn validate_config(
     // dispatch
     let ruleset = load_rulesets(&loaded_config)?;
     let _dispatching = DispatchingBuilder::new(
+        config_path,
         dns.clone(),
         mmdb.clone(),
         &loaded_config,
@@ -368,9 +378,15 @@ pub async fn validate_config(
     )
     .and_then(|b| b.build(&loaded_config))
     .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?;
-    let _interception_mgr =
-        InterceptionManager::new(config.interception.as_slice(), dns, mmdb, &ruleset, msg_bus)
-            .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
+    let _interception_mgr = InterceptionManager::new(
+        config_path,
+        config.interception.as_slice(),
+        dns,
+        mmdb,
+        &ruleset,
+        msg_bus,
+    )
+    .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
     Ok(())
 }
 
