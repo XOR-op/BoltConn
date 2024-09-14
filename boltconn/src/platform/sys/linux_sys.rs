@@ -137,7 +137,7 @@ impl Drop for SystemDnsHandle {
 }
 
 pub fn get_user_info() -> Option<(String, libc::uid_t, libc::gid_t)> {
-    let (name, user_info) = if let Ok(n) = std::env::var("USER") {
+    let (name, user_info) = if let Ok(n) = std::env::var("SUDO_USER") {
         let user_info = unsafe { libc::getpwnam(n.as_ptr() as *const i8) };
         (n, user_info)
     } else {
