@@ -1,99 +1,358 @@
-```text
-  ___           __ _                    _   _
- / __|___ _ _  / _(_)__ _ _  _ _ _ __ _| |_(_)___ _ _
-| (__/ _ \ ' \|  _| / _` | || | '_/ _` |  _| / _ \ ' \
- \___\___/_||_|_| |_\__, |\_,_|_| \__,_|\__|_\___/_||_|
-                    |___/
+## Inbound Connection configuration
 
-```
+The `inbound:` mapping is optional, and if warranted informs BoltConn about configuration parameters
+for inbound connections. It is also unfortunately, where configuration of BoltConn becomes a bit
+confusing. This confusion is because yaml is flexible and can describe the same data in numerous ways. 
 
-## Configuration
-
-Since BoltConn itself will need to be ran with suid permissions, it is assummed that all commands in
-this documentation wherein are ran either with `sudo` or as the root user. So it may behove the user
-to use `sudo su` to become root user while performing the configuration process. Furthermore,
-becuase of the requirement to run BoltConn with suid permissions, the configuration files will need
-to be placed in the `.config` directory of the root user. If you desire to place them elsewhere, you
-will need to designate their location with the `--config` flag for every command that is to be
-executed. 
-
-### Creating the default configuration file.
-
-To create all the default configuration file required to run BoltConn, the user will need to
-run the `BoltConn generate init` command. When done as root or with sudo, this will create the
-default configuration file in `/root/.config/boltconn/config.yml`. Which should look like so:
+In the configuration of inbound connection settings this is chiefly evident when defining connection
+types of http and socks5. As both use different syntax to define the same type of data, which is the
+port number that will be used.
 
 ```yaml
-interface: auto
+# An http connection will simply designate it is a http type with a mapping followed by the value
+# of the port. It will not use a scalar.
 inbound:
-  http: 9961
-dns:
-  bootstrap:
-    - 1.1.1.1
-  nameserver:
-    - doh, 1.1.1.1
-
-proxy-group:
-  Default:
-    proxies:
-      - DIRECT
-
-rule-local:
-  - FALLBACK, Default  
+	http: 8080
+# Where a connection that is of type socks5, will use a scalar to define a port.
+inbound:
+	socks5:
+		- 8901
 ```
 
-#### Breaking down the parts of the default configuration
+Regardless of connection type, the inbound connection setting can include an optional boolean
+setting of whether to enable a tunnel on the inbound connection or disable it. By default, this
+tunnel is enabled, and the setting can be completely left out if not needed.
 
-Let’s take a moment now to work through each section of the default configuration file to gain a
-better understanding on how to configure BoltConn for our specific purposes. 
+The inbound configuration can be completely be excluded from the BoltConn configuration, it can be
+configured to use either of the two connection types, or it can be configured to use both connection
+types within the same inbound configuration. 
 
-* interface: By default this can be set to auto, to acquire which network interface to use based on
-  network subnet.
-* inbound: Is used to designate inbound ports that BoltConn will listen for.
-  * http: Designates that BoltConn should listen for connections using the http protocol on port
-    9961.
-* dns: Designates settings that specifically define how BoltConn manages and manipulates dns
-  queries.
-  * bootstrap: defines the dns servers that will be used at startup to resolve hostnames for the
-    primary domain name servers that will be used by BoltConn during it’s runtime.
-	* 1.1.1.1: Is the domain name server for Cloudflare, and here it is being used as the server to
-      bootstrap further dns queries to.
-  * nameserver: defines the dns name server for use by BoltConn after initial startup.
-	* doh, 1.1.1.1: Tells boltconn to use the Dns Over HTTPS protocol for the domain name server
-      1.1.1.1 to resolve dns queries to. 
-* proxy-group: Designates a group of proxies who BoltConn will forward traffic through to the world
-  wide web.
-  * Default: In this example servers as the label for the first proxy-group and it’s definitions.
-	* proxies: Is a directive that tells BoltConn the next nested entries under it are proxy
-      definitions.
-	  * DIRECT: Is a proxy type keyword that informs BoltConn that the connection is direct and will
-        not use a proxy to forward connections through.
-* rule-local: Designates the beginning of a rules section for local connections.
-  * FALLBACK, Default: Are both special keywords that tell BoltConn to use the FALLBACK rule set,
-    and that the rule set is the default one to use.
+We will next take a look at the two different connections types that can be defined in the inbound
+connection configuration.
 
-### Configuring BoltConn
+#### Http
 
-Now that we have created the default configuration file for BoltConn and reviewed what the different
-parts mean, it is time to work on creating our on configuration to fulfill are particular needs. 
+Defining a http type inbound connection is the simplest of the two. All that is needed is to
+define `http:` as a mapping, followed by the value of the port to use.
 
-Please keep in mind, BoltConn follows the standardized yaml specifications. For more information on
-this specification one can visit [the official yaml site](https://www.yaml.org) or 
-[Tina Muller’s site](https://www.yaml.info/index.html) on the yaml specification.
+```yaml
+inbound:
+	http: 8080 
+```
 
-#### Crash Course in Yaml
+#### Socks5
 
-> To yaml or not yaml, that is... not really a question. Just yaml.
+Socks5 connection types provide more settings for configuration, so defining them is more
+involved. Numerous ports can be included in the connection definition, along with numerous methods
+of authentication for the connection. It is probably the best just to demonstrate a few examples.
 
-A lot of applications these days use yaml for their configurations, so having a firm understanding
-of how yaml structures data will provide any user of information systems with a background they can
-then apply to other areas of their career.
+```yaml
+# Simple socks5
+inbound:
+	socks5:
+		- 8901
 
-Yaml provides a hierarchical structure for data to use to provide meaning and allow computational
-systems to then use the data contained within the yaml structure efficiently. 
+# Complex socks5
+inbound:
+	socks5:
+		- 2000
+		- host: 0.0.0.0
+		  port: 8080
+		- port: 3000
+		  auth:
+			  <?USERNAME1>: <?PASSWORD1>
+			  <?USERNAME2>: <?PASSWORD2>
+```
 
-At the top of this hierarchical structure is the "mapping", which derives it name from the fact that
-values which contain data are "mapped" to it. Mappings can either directly refer to values or they
-can be "mapped" to sequences of data, called scalar sequence. Here it is important to understand,
-that although the term "sequence" normally refers to more than one object in succession with one
-another, a scalar sequence can contain only one entry. So don’t get fooled by this label.
+#### Both
+
+Just to show that an inbound configuration can use both types of connections, we will add such an
+example below.
+
+```yaml
+inbound:
+	enable-tun: false
+	http: 1080
+	socks5:
+		- port: 8080
+		auth:
+			<?USERNAME>: <?PASSWORD>
+```
+
+### DNS Configuration
+
+Required DNS settings are both bootstrap and nameserver, all other settings are optional and not
+required. For bootstrap and nameserver, the mapping is declared followed by a scalar definition on
+the next line, indented, and beginning with a `-`. If a protocol needs to be declared, it should
+preceed the address on the same line as the address, and separated with a comma. For example, 
+`- udp, 8.8.8.8` would be a scalar defining the udp protocol should be used to contact the
+nameserver at "8.8.8.8".
+
+The preference setting is optional, and has a limited amount of values that are valid. They are:
+* ipv4-only
+* ipv6-only
+* prefer-ipv4
+* prefer-ipv6
+
+Host designation follows the same convention as bootstrap and nameserver, that is entries are entered in
+a scalar on the next line.
+
+Nameserver policy follows a different convention. As each policy is ascribed a label that is
+used for a mapping, and the policy definition is defined as a scalar that is tied to the above mapping.
+
+```yaml
+dns:
+	preference: <$PREFERENCE>
+	bootstrap: 
+		- <$PROTOCOL>, <$ADDRESS>
+	nameserver:
+		- <$PROTOCOL>, <$ADDRESS>
+	hosts:
+		- <$HOST>, <$ADDRESS>
+	nameserver_policy:
+		<$POLICY LABEL>:
+			- <$POLICY DEFINITION>
+```
+
+### Local Proxy Configuration
+
+Here is the introduction to local proxy configurations
+
+#### Proxy Declaration
+
+All proxy settings are defined by first assigning an identifier or name to the proxy, followed by a designation of
+proxy type. The supported proxy types that may be used in the "type" designation are:
+
+* http
+* socks5
+* shadowsocks
+* trojan
+* wireguard
+
+After designating a proxy type, only then can further descriptors be used to define the settings for
+the proxy.
+
+```yaml
+# HTTP
+local-proxy:
+	{$Name}:
+		type: http
+		server:
+		port:
+		auth:
+
+# Socks5
+local-proxy:
+	{$Name}:
+		type: socks5
+		server: Server address
+		port: Port to run on
+		auth: authentication to use
+		udp: yes or no
+
+# ShadowSocks
+local-proxy:
+	{$Name}:
+		type: shadowsocks
+		server:
+		port:
+		password:
+		cipher:
+		upd:
+
+# Trojan
+local-proxy:
+	{$Name}:
+		type: trojan
+		server:
+		port:
+		password:
+		sni:
+		skip_cert_verify:
+		websocket_path:
+		udp:
+
+# Wireguard
+local-proxy:
+	{$Name}:
+		type: wireguard
+		local_addr:
+		local_addr_v6:
+		private_key:
+		public_key:
+		endpoint:
+		dns:
+		dns_preference:
+		mtu:
+		preshared_key:
+		keepalive:
+		reserved:
+		over_tcp:
+```
+
+### Proxy Provider
+
+In the BoltConn configuration file a proxy provider identifies a resource for BoltConn to read into
+to further define connection parameters regarding the configuration of proxies. This provider can
+either be of type file or of type http. Both are first indicated by ascribing an identifier / name
+to the resource followed by a value mapping to the type of resource the provider is. Afterwards,
+further configuration is dependent on type. A provider of type file is followed by a value mapping
+of the file’s path, and a provider of type http is followed by a value mapping of the resources url
+and interval for continual reading of that url.
+
+Both can be defined as follows:
+
+```yaml
+proxy-provider:
+	# File provider
+	<?NAME>:
+		type: file
+		path: <?PATH/TO/FILE>
+	# http provider
+	<?NAME>
+		type: http
+		path: <?URL PATH>
+		interval: 30
+```
+
+#### Provider File
+
+File providers must follow a format and use a syntax that enables BoltConn to read them. Because
+providers are concerned with accessing remote resources they are stored in the `Remote` folder, and
+are written in yaml. The mapping of `proxies:` is first given to indicate the following articles of
+data are used to define proxy definitions, then each definition is defined in a scalar on the next
+following line. 
+
+```yaml
+proxies:
+	- {name: <?LABEL>, server: <?SERVER>, port: <?PORT>, type: <?TYPE>, cipher: <?CIPHER>, password: <?password>, udp: <? T or F>}
+```
+
+Like so.
+
+### Proxy Groups
+
+The directive `proxy-group` is as the name would indicate, used to define groups of proxies, and
+provide BoltConn with a means of grouping different proxy configurations together that share a
+common trait or characteristic. Proxy grouping also provides ease for creating definitions for
+connection rulesets. 
+
+Proxy groups can contain proxies, proxy providers, proxy provider splices, proxy definitions, proxy
+chains, and interface definitions. Pretty much allowing any number of items to be grouped together
+under a single unifying identifier. 
+
+Below is a robust example of several proxy group definitions.
+
+```yaml
+proxy-group:
+  Relay:
+    proxies:
+      - lan_http
+      - lan_socks
+      - Chain
+      - DIRECT
+      - VPN
+    providers:
+      - US
+  Home:
+    proxies:
+      - local-chain
+      - DIRECT
+  US:
+    providers:
+      - US
+  SanJose:
+    providers:
+      - name: US
+        filter: '.*View.*'
+  VPN:
+    proxies:
+      - DIRECT
+    interface: tun1
+  local-chain:
+    chains:
+      - lan_http
+      - lan_socks
+  Chain:
+    chains:
+      - lan_socks
+      - US
+```
+
+
+### Local Rules
+
+Local rules determine how BoltConn is to structure network traffic and controls what is done with
+that traffic within it’s capable framework. To do so it utilizes a predefined set of directives that
+begin each rule statement, followed by the value required to fulfill the directive, and if required an
+action statement to inform BoltConn of what needs to be performed for each match of rule.
+
+<!-- Right here needs an explanation why some rule statements require a third value, while other -->
+<!-- statements do not. -->
+
+| Keyword           | Type   | Definition | Example |
+|:------------------|:-------|:-----------|:--------|
+| INBOUND           | string |            |         |
+| DOMAIN-SUFFIX     |        |            |         |
+| DOMAIN-KEYWORD    |        |            |         |
+| DOMAIN            |        |            |         |
+| PROCESS-NAME      |        |            |         |
+| PROCESS-KEYWORD   |        |            |         |
+| PROC-PATH-KEYWORD |        |            |         |
+| PROC-CMD-REGEX    |        |            |         |
+| LOCAL-IP-CIDR     |        |            |         |
+| SRC-IP-CIDR       |        |            |         |
+| IP-CIDR           |        |            |         |
+| GEOIP             |        |            |         |
+| ASN               |        |            |         |
+| SRC-PORT          |        |            |         |
+| DST-PORT          |        |            |         |
+| RULE-SET          |        |            |         |
+| ALWAYS            |        |            |         |
+| NEVER             |        |            |         |
+
+
+#### Examples
+
+<!-- Right here should be a swanky example of how to use these keywords, so newbs don’t ask too many -->
+<!-- questions. -->
+
+
+### Interception
+
+```yaml
+interception:
+    name: <%NAME>
+        - 
+```
+
+### Modules
+
+In BoltConn, a module allows users to cohesively group a set of rules, intercepts, providers, and
+rewrite statements into an associative unit for handlings packets that originate from or are destined to
+a specific domain or network subnet.
+
+Modules are stored in a subdirectory of the BoltConn configuration directory titled `Module`, and
+each module is contained within its own yaml file, and that yaml file follows the same convention as
+the BoltConn configuration. Yaml mappings define sections of the module file, and identify what
+information will be provided in the following sequence. 
+
+#### Rewrites
+
+The rewrite mapping is specifically unique to the module file, and is not used anywhere else in the
+BoltConn configuration. Rewrites function in BoltConn just like rewrites function in webservers,
+that is, they internally redirect the datastream to a different destination. This redirection can be
+perform on urls, header-req, and header-resp.
+
+```yaml
+rule-local:
+	- DOMAIN-SUFFIX, foobar.com, Relay
+	
+intercept-rule:
+	- DOMAIN-SUFFIX, foobar.com
+	- DOMAIN-SUFFIX, foobar.food
+	
+rewrite:
+	- url, ^https://foobar.food(.*)$, 302, https://foobar.com
+	- url, ^https://bar.foobar.com, 404
+```
