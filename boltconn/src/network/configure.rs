@@ -23,9 +23,9 @@ impl TunConfigure {
     }
 
     pub fn enable(&mut self) -> io::Result<()> {
-        self.enable_dns()?;
+        // self.enable_dns()?;
         if let Err(e) = self.enable_routing_table() {
-            self.disable_dns();
+            // self.disable_dns();
             return Err(e);
         }
         tracing::info!("Tun mode has been enabled");
@@ -34,7 +34,7 @@ impl TunConfigure {
 
     pub fn disable(&mut self, show_log: bool) {
         self.disable_routing_table();
-        self.disable_dns();
+        // self.disable_dns();
         if show_log {
             tracing::info!("Tun mode has been disabled");
         }

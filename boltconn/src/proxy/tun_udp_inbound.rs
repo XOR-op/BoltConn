@@ -102,8 +102,16 @@ impl TunUdpInbound {
         while let Ok(data) = self.pkt_chan.recv_async().await {
             let (src, dst, offset) = Self::extract_addr(data.as_ref());
             let payload = data.slice(offset..);
-            if !self.send_payload(src, dst, payload.clone()).await {
-                self.send_payload(src, dst, payload.clone()).await;
+            if dst.port() == 53 {
+                // hijack dns
+                if let Ok(answer) = self.dns.respond_to_query(payload.as_ref()) {
+                    let raw_data = create_raw_udp_pkt(answer.as_ref(), dst, src);
+                    let _ = self.tun_tx.send(raw_data.freeze());
+                }
+            } else {
+                if !self.send_payload(src, dst, payload.clone()).await {
+                    self.send_payload(src, dst, payload.clone()).await;
+                }
             }
         }
     }

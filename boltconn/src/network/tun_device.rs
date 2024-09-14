@@ -263,26 +263,26 @@ impl TunDevice {
                     return;
                 }
                 let pkt = UdpPkt::new(pkt);
-                if pkt.dst_port() == 53 && dst == self.fake_dns_addr {
-                    // fake ip
-                    if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload()) {
-                        let mut new_pkt = pkt.set_payload(answer.as_slice());
-                        new_pkt.rewrite_addr(
-                            SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
-                            SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
-                        );
-                        let _ = Self::send_ip(fd_write, new_pkt.ip_pkt()).await;
-                    }
-                } else {
-                    let pkt = {
-                        #[cfg(target_os = "macos")]
-                        let start_offset = 4;
-                        #[cfg(target_os = "linux")]
-                        let start_offset = 0;
-                        pkt.into_bytes_mut().freeze().slice(start_offset..)
-                    };
-                    let _ = self.udp_tx.send_async(pkt).await;
-                }
+                // if pkt.dst_port() == 53 && dst == self.fake_dns_addr {
+                //     // fake ip
+                //     if let Ok(answer) = self.dns_resolver.respond_to_query(pkt.packet_payload()) {
+                //         let mut new_pkt = pkt.set_payload(answer.as_slice());
+                //         new_pkt.rewrite_addr(
+                //             SocketAddr::new(IpAddr::from(dst), new_pkt.dst_port()),
+                //             SocketAddr::new(IpAddr::from(src), new_pkt.src_port()),
+                //         );
+                //         let _ = Self::send_ip(fd_write, new_pkt.ip_pkt()).await;
+                //     }
+                // } else {
+                let pkt = {
+                    #[cfg(target_os = "macos")]
+                    let start_offset = 4;
+                    #[cfg(target_os = "linux")]
+                    let start_offset = 0;
+                    pkt.into_bytes_mut().freeze().slice(start_offset..)
+                };
+                let _ = self.udp_tx.send_async(pkt).await;
+                // }
             }
             IpProtocol::Icmp => {
                 // just echo now
@@ -291,7 +291,6 @@ impl TunDevice {
                 let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
             }
             _ => {
-                tracing::debug!("[TUN] {} packet: {} -> {}", pkt.protocol(), src, dst);
                 // discarded
             }
         }

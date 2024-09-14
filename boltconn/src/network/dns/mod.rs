@@ -2,6 +2,7 @@ mod bootstrap;
 #[allow(clippy::module_inception)]
 mod dns;
 mod dns_table;
+mod hijack_ctrl;
 mod hosts;
 mod ns_policy;
 mod provider;
