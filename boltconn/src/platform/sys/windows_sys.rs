@@ -82,7 +82,7 @@ pub struct SystemDnsHandle {
 }
 
 impl SystemDnsHandle {
-    pub fn new(dns_addr: Ipv4Addr) -> io::Result<Self> {
+    pub fn new(dns_addr: Ipv4Addr, _tun_name: &str, outbound_name: &str) -> io::Result<Self> {
         // From https://github.com/dandyvica/resolver/blob/main/src/lib.rs
         let mut list: Vec<DnsRecord> = Vec::new();
 
@@ -118,6 +118,12 @@ impl SystemDnsHandle {
                         // get info an network interface
                         let iface_name = (*p).FriendlyName.display().to_string();
                         let iface_index = (*p).Ipv6IfIndex;
+
+                        // skip non-outbound interfaces
+                        if !(iface_name == outbound_name) {
+                            p = (*p).Next;
+                            continue;
+                        }
 
                         // now get all DNS ips for this interface
                         let mut ip_list: Vec<IpAddr> = Vec::new();

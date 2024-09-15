@@ -117,7 +117,7 @@ pub struct SystemDnsHandle {}
 impl SystemDnsHandle {
     const PATH: &'static str = "/tmp/fake_resolv.conf";
     const RESOLV: &'static str = "/etc/resolv.conf";
-    pub fn new(ip: Ipv4Addr) -> io::Result<Self> {
+    pub fn new(ip: Ipv4Addr, _tun_name: &str, _outbound_name: &str) -> io::Result<Self> {
         let mut output = File::create(Self::PATH).unwrap_or(
             OpenOptions::new()
                 .read(true)

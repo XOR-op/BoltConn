@@ -125,6 +125,7 @@ impl App {
             let tun_configure = Arc::new(std::sync::Mutex::new(TunConfigure::new(
                 fake_dns_server,
                 tun.get_name(),
+                &outbound_iface,
             )));
             if will_enable_tun {
                 tun_configure

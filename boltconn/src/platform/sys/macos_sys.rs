@@ -172,7 +172,7 @@ pub struct SystemDnsHandle {
 }
 
 impl SystemDnsHandle {
-    pub fn new(ip: Ipv4Addr) -> io::Result<Self> {
+    pub fn new(ip: Ipv4Addr, _tun_name: &str, _outbound_name: &str) -> io::Result<Self> {
         let services: Vec<String> =
             get_command_output("networksetup", ["-listallnetworkservices"])?
                 .split('\n')
