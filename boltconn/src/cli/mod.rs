@@ -213,7 +213,10 @@ pub(crate) enum SubCommand {
 }
 
 pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
+    #[cfg(unix)]
     let default_uds_path = "/var/run/boltconn.sock";
+    #[cfg(windows)]
+    let default_uds_path = r"\\.\pipe\boltconn";
     match args.cmd {
         SubCommand::Generate(GenerateOptions::Init(init)) => {
             fn create(init: InitOptions) -> anyhow::Result<()> {
