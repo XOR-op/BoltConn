@@ -287,7 +287,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 resp.add_answer(ans);
                 Ok(resp.to_vec()?)
             }
-            RecordType::AAAA => Ok(resp.to_vec()?),
+            RecordType::AAAA | RecordType::PTR => Ok(resp.to_vec()?),
             _ => err,
         }
     }
