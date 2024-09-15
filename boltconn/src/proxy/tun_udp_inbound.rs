@@ -1,4 +1,4 @@
-use crate::network::dns::Dns;
+use crate::network::dns::{Dns, DnsHijackController};
 use crate::network::packet::transport_layer::create_raw_udp_pkt;
 use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -30,6 +30,7 @@ pub struct TunUdpInbound {
     mapping: HashMap<SocketAddr, UdpSession>,
     session_mgr: Arc<SessionManager>,
     dns: Arc<Dns>,
+    dns_hijack_ctrl: Arc<DnsHijackController>,
 }
 
 impl TunUdpInbound {
@@ -39,6 +40,7 @@ impl TunUdpInbound {
         dispatcher: Arc<Dispatcher>,
         session_mgr: Arc<SessionManager>,
         dns: Arc<Dns>,
+        hijack_ctrl: Arc<DnsHijackController>,
     ) -> Self {
         Self {
             pkt_chan,
@@ -47,6 +49,7 @@ impl TunUdpInbound {
             mapping: Default::default(),
             session_mgr,
             dns,
+            dns_hijack_ctrl: hijack_ctrl,
         }
     }
 
@@ -102,8 +105,17 @@ impl TunUdpInbound {
         while let Ok(data) = self.pkt_chan.recv_async().await {
             let (src, dst, offset) = Self::extract_addr(data.as_ref());
             let payload = data.slice(offset..);
-            if !self.send_payload(src, dst, payload.clone()).await {
-                self.send_payload(src, dst, payload.clone()).await;
+            if self.dns_hijack_ctrl.should_hijack(&dst) {
+                // hijack dns
+                if let Ok(answer) = self.dns.respond_to_query(payload.as_ref()) {
+                    let raw_data = create_raw_udp_pkt(answer.as_ref(), dst, src);
+                    let _ = self.tun_tx.send(raw_data.freeze());
+                }
+            } else {
+                // retry once
+                if !self.send_payload(src, dst, payload.clone()).await {
+                    self.send_payload(src, dst, payload.clone()).await;
+                }
             }
         }
     }

@@ -2,6 +2,7 @@ mod bootstrap;
 #[allow(clippy::module_inception)]
 mod dns;
 mod dns_table;
+mod hijack_ctrl;
 mod hosts;
 mod ns_policy;
 mod provider;
@@ -15,6 +16,7 @@ use hickory_resolver::config::{
 };
 use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::AsyncResolver;
+pub use hijack_ctrl::DnsHijackController;
 pub use ns_policy::NameserverPolicies;
 use provider::IfaceProvider;
 use std::net::{IpAddr, SocketAddr};

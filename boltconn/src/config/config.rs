@@ -81,6 +81,10 @@ pub struct RawDnsConfig {
     pub hosts: HashMap<String, IpAddr>,
     #[serde(alias = "nameserver-policy", default = "default_str_str_mapping")]
     pub nameserver_policy: HashMap<String, String>,
+    #[serde(alias = "tun-hijack-list")]
+    pub tun_hijack_list: Option<Vec<PortOrSocketAddr>>,
+    #[serde(alias = "tun-bypass-list")]
+    pub tun_bypass_list: Option<Vec<PortOrSocketAddr>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
