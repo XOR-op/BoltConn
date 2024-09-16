@@ -2,6 +2,7 @@ use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector};
 
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::{mut_buf, MAX_PKT_SIZE};
+use crate::config::DnsPreference;
 use crate::network::dns::GenericDns;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::InterfaceAddress;
@@ -240,12 +241,28 @@ impl Drop for TcpConnTask {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+enum IPVersion {
+    V4,
+    V6,
+}
+
+impl IPVersion {
+    pub fn from_addr(addr: &IpAddr) -> Self {
+        match addr {
+            IpAddr::V4(_) => Self::V4,
+            IpAddr::V6(_) => Self::V6,
+        }
+    }
+}
+
 struct UdpConnTask {
     back_tx: mpsc::Sender<(Bytes, NetworkAddr)>,
     rx: flume::Receiver<(Bytes, SocketAddr)>,
     handle: SocketHandle,
     abort_handle: ConnAbortHandle,
     last_active: Instant,
+    socket_version: IPVersion,
 }
 
 impl UdpConnTask {
@@ -255,6 +272,7 @@ impl UdpConnTask {
         abort_handle: ConnAbortHandle,
         dns: Arc<GenericDns<SmolDnsProvider>>,
         notify: Arc<Notify>,
+        socket_version: IPVersion,
     ) -> Self {
         let AddrConnector {
             tx: back_tx,
@@ -264,9 +282,28 @@ impl UdpConnTask {
         tokio::spawn(async move {
             while let Some((buf, dst)) = back_rx.recv().await {
                 if let Some(dst) = match dst {
-                    NetworkAddr::Raw(s) => Some(s),
+                    NetworkAddr::Raw(s) => {
+                        if (s.is_ipv4() && socket_version == IPVersion::V4)
+                            || (s.is_ipv6() && socket_version == IPVersion::V6)
+                        {
+                            Some(s)
+                        } else {
+                            tracing::warn!(
+                                "smol: {} sent from mismatched IP version: {:?}",
+                                s,
+                                socket_version
+                            );
+                            None
+                        }
+                    }
                     NetworkAddr::DomainName { domain_name, port } => dns
-                        .genuine_lookup(domain_name.as_str())
+                        .genuine_lookup_with(
+                            domain_name.as_str(),
+                            match socket_version {
+                                IPVersion::V4 => DnsPreference::Ipv4Only,
+                                IPVersion::V6 => DnsPreference::Ipv6Only,
+                            },
+                        )
                         .await
                         .map(|ip| SocketAddr::new(ip, port)),
                 } {
@@ -281,6 +318,7 @@ impl UdpConnTask {
             handle,
             abort_handle,
             last_active: Instant::now(),
+            socket_version,
         }
     }
 
@@ -293,6 +331,14 @@ impl UdpConnTask {
                 // todo: full-cone NAT
                 Ok((buf, addr)) => {
                     has_activity = true;
+                    if IPVersion::from_addr(&addr.ip()) != self.socket_version {
+                        tracing::warn!(
+                            "smol: {} sent from mismatched IP version: {:?}",
+                            addr,
+                            self.socket_version
+                        );
+                        continue;
+                    }
                     if socket
                         .send_slice(buf.as_ref(), IpEndpoint::from(addr))
                         .is_ok()
@@ -518,6 +564,7 @@ impl SmolStack {
                             abort_handle,
                             self.dns.clone(),
                             notify,
+                            IPVersion::from_addr(&local_addr.ip()),
                         ));
                         return Ok(());
                     }
@@ -542,6 +589,7 @@ impl SmolStack {
                         abort_handle,
                         self.dns.clone(),
                         notify,
+                        IPVersion::from_addr(&local_addr.ip()),
                     ));
                     Ok(())
                 }

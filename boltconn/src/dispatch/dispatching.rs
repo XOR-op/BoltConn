@@ -855,11 +855,16 @@ impl DispatchingSnippet {
         }
         if verbose {
             tracing::info!(
-                "[{}]({},{}) {} => {}",
+                "[{}]({},{}) {}{} => {}",
                 rule_str,
                 stringfy_process(info),
                 info.inbound,
                 info.dst,
+                if info.connection_type == NetworkType::Udp {
+                    "(UDP)"
+                } else {
+                    ""
+                },
                 proxy,
             );
         }

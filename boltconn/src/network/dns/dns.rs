@@ -184,11 +184,23 @@ impl<P: RuntimeProvider> GenericDns<P> {
     }
 
     pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
+        self.genuine_lookup_with(domain_name, self.preference).await
+    }
+
+    pub async fn genuine_lookup_with(
+        &self,
+        domain_name: &str,
+        pref: DnsPreference,
+    ) -> Option<IpAddr> {
         if let Some(ip) = self.host_resolver.load().resolve(domain_name) {
-            return Some(ip);
+            if (matches!(pref, DnsPreference::Ipv6Only) && ip.is_ipv6())
+                || (matches!(pref, DnsPreference::Ipv4Only) && ip.is_ipv4())
+            {
+                return Some(ip);
+            }
         }
         if let Some(resolver) = self.ns_policy.load().resolve(domain_name) {
-            return match self.preference {
+            return match pref {
                 DnsPreference::Ipv4Only => Self::one_v4_wrapper(domain_name, resolver).await,
                 DnsPreference::Ipv6Only => Self::one_v6_wrapper(domain_name, resolver).await,
                 DnsPreference::PreferIpv4 => {
@@ -207,7 +219,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 }
             };
         }
-        match self.preference {
+        match pref {
             DnsPreference::Ipv4Only => self.genuine_lookup_v4(domain_name).await,
             DnsPreference::Ipv6Only => self.genuine_lookup_v6(domain_name).await,
             DnsPreference::PreferIpv4 => {
