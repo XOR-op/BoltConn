@@ -224,7 +224,7 @@ impl RecordSearcher {
         for i in 0..(record_cnt as usize) {
             let record = data
                 .get((4 + i * self.item_size)..(4 + (i + 1) * self.item_size))
-                .ok_or_else(|| std::io::ErrorKind::NotFound)?;
+                .ok_or(std::io::ErrorKind::NotFound)?;
             // only check established TCP record
             if let Some(tcp_state_offset) = self.tcp_state {
                 let tcp_state = slice_to_u32(&record[tcp_state_offset..tcp_state_offset + 4]);

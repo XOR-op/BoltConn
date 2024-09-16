@@ -495,13 +495,13 @@ async fn start_tun_services(
     #[cfg(unix)]
     let tcp_listener = tokio::net::TcpListener::bind(tun_inbound_tcp.nat_addr())
         .await
-        .or_else(|e| {
+        .map_err(|e| {
             tracing::error!(
                 "Failed to start NAT at {}: {}",
                 tun_inbound_tcp.nat_addr(),
                 e
             );
-            Err(e)
+            e
         })?;
     #[cfg(windows)]
     let tcp_listener = {

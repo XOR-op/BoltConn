@@ -43,10 +43,10 @@ impl UnixListenerGuard {
                     .chown(&path)
                     .map_err(|e| SystemError::Controller(as_io_err(e)))?;
             }
-            return Ok(Self {
+            Ok(Self {
                 path: path.to_string_lossy().to_string(),
                 listener: Some(listener),
-            });
+            })
         }
         #[cfg(windows)]
         {
@@ -54,10 +54,10 @@ impl UnixListenerGuard {
                 .first_pipe_instance(true)
                 .create(path)
                 .map_err(SystemError::Controller)?;
-            return Ok(Self {
+            Ok(Self {
                 path: path.to_string(),
                 listener: tokio::sync::Mutex::new(listener),
-            });
+            })
         }
     }
 

@@ -186,7 +186,7 @@ impl SystemDnsHandle {
 impl Drop for SystemDnsHandle {
     fn drop(&mut self) {
         for record in self.old_dns.iter() {
-            if let Some(dns) = record.dns_server.get(0) {
+            if let Some(dns) = record.dns_server.first() {
                 let _ = run_command(Command::new("netsh").args([
                     "interface",
                     "ipv4",
@@ -194,7 +194,7 @@ impl Drop for SystemDnsHandle {
                     "dnsservers",
                     &format!("name={}", record.iface_name),
                     "source=static",
-                    &format!("address={}", dns.to_string()),
+                    &format!("address={}", dns),
                     "register=none",
                     "validate=no",
                 ]));
