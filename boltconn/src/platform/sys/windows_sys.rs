@@ -274,7 +274,7 @@ fn from_sockaddr(sockaddr: *const SOCKADDR) -> io::Result<IpAddr> {
     }
 }
 
-fn get_iface_index(iface_name: &str) -> io::Result<u32> {
+pub(crate) fn get_iface_index(iface_name: &str) -> io::Result<u32> {
     use network_interface::NetworkInterfaceConfig;
     network_interface::NetworkInterface::show()
         .map(|interfaces| {
