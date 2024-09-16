@@ -16,13 +16,21 @@ use crate::common::io_err;
 use crate::platform::{get_command_output, run_command};
 
 pub fn add_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
-    let iface_addr = super::get_iface_address(name)?;
+    let iface_index = match get_iface_index(name) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("Failed to get iface index for {}", name);
+            return Err(e);
+        }
+    };
     run_command(ip_command_by_net(&subnet).args([
         "add",
         &format!("{}", subnet.addr()),
         "mask",
         &format!("{}", subnet.netmask()),
-        &format!("{}", iface_addr),
+        "0.0.0.0",
+        "if",
+        &format!("{}", iface_index),
     ]))
 }
 
@@ -168,6 +176,7 @@ impl SystemDnsHandle {
                 "source=static",
                 &format!("address={}", dns_string),
                 "register=primary",
+                "validate=no",
             ]))?;
         }
         Ok(Self { old_dns: list })
@@ -187,6 +196,7 @@ impl Drop for SystemDnsHandle {
                     "source=static",
                     &format!("address={}", dns.to_string()),
                     "register=none",
+                    "validate=no",
                 ]));
             }
         }
@@ -262,4 +272,22 @@ fn from_sockaddr(sockaddr: *const SOCKADDR) -> io::Result<IpAddr> {
             _ => Err(ErrorKind::Unsupported.into()),
         }
     }
+}
+
+fn get_iface_index(iface_name: &str) -> io::Result<u32> {
+    use network_interface::NetworkInterfaceConfig;
+    network_interface::NetworkInterface::show()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .find(|iface| iface.name == iface_name)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "interface not found"))
+                .map(|iface| iface.index)
+        })
+        .unwrap_or_else(|_| {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "failed to get list",
+            ))
+        })
 }

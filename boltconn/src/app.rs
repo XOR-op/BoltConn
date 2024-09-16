@@ -128,6 +128,7 @@ impl App {
                 &outbound_iface,
             )));
             if will_enable_tun {
+                // tokio::time::sleep(Duration::from_secs(10)).await;
                 tun_configure
                     .lock()
                     .unwrap()

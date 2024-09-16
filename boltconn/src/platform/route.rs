@@ -41,25 +41,7 @@ pub fn ipv4_private_addresses() -> Vec<Ipv4Net> {
 /// We only bypass 0.0.0.0/8 and 127.0.0.0/8
 #[allow(dead_code)]
 pub fn ipv4_relay_addresses() -> Vec<Ipv4Net> {
-    Ipv4Net::aggregate(&vec![
-        "1.0.0.0/8".parse::<Ipv4Net>().unwrap(),
-        "2.0.0.0/7".parse().unwrap(),
-        "4.0.0.0/6".parse().unwrap(),
-        "8.0.0.0/5".parse().unwrap(),
-        "16.0.0.0/4".parse().unwrap(),
-        "32.0.0.0/3".parse().unwrap(),
-        "64.0.0.0/2".parse().unwrap(),
-        // "128.0.0.0/1".parse().unwrap(),
-        "96.0.0.0/3".parse().unwrap(),
-        // "112.0.0.0/5".parse().unwrap(),
-        // "120.0.0.0/6".parse().unwrap(),
-        // "124.0.0.0/7".parse().unwrap(),
-        // "126.0.0.0/8".parse().unwrap(),
-        "128.0.0.0/2".parse().unwrap(),
-        "192.0.0.0/3".parse().unwrap(),
-        // Not sure if multicast is needed
-        // "224.0.0.0/4".parse().unwrap(),
-    ])
+    vec!["0.0.0.0/1".parse().unwrap(), "128.0.0.0/1".parse().unwrap()]
 }
 
 /// Common private IPv6 addresses
