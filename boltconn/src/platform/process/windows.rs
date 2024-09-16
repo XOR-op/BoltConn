@@ -219,6 +219,7 @@ impl RecordSearcher {
         if data.len() < 4 {
             return Err(std::io::ErrorKind::NotFound.into());
         }
+        let mut possible_udp = None;
         let record_cnt = slice_to_u32(&data[0..4]);
         for i in 0..(record_cnt as usize) {
             let record = data
@@ -250,9 +251,16 @@ impl RecordSearcher {
             };
             // the second clause only happens to 0.0.0.0/[::] UDP
             if ip != addr.ip() && !(addr.ip().is_unspecified() && self.tcp_state.is_none()) {
+                if self.tcp_state.is_none() {
+                    possible_udp = Some(slice_to_u32(&record[self.pid..self.pid + 4]));
+                    continue;
+                }
                 continue;
             }
             return Ok(slice_to_u32(&record[self.pid..self.pid + 4]));
+        }
+        if let Some(pid) = possible_udp {
+            return Ok(pid);
         }
         Err(std::io::ErrorKind::NotFound.into())
     }
