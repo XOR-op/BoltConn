@@ -129,7 +129,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 }
             }
         } else {
-            tracing::debug!("DNS lookup for {domain_name} timeout");
+            tracing::debug!("DNS v4 lookup for {domain_name} timeout: 5s");
         }
         None
     }
@@ -156,7 +156,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 }
             }
         } else {
-            tracing::debug!("DNS lookup for {domain_name} timeout");
+            tracing::debug!("DNS v6 lookup for {domain_name} timeout: 5s");
         }
         None
     }
