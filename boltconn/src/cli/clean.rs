@@ -1,28 +1,10 @@
 use ipnet::Ipv4Net;
 use std::path::Path;
-use std::process::{Command, Stdio};
+
+use crate::platform;
 
 fn delete_route_entry(addr: Ipv4Net) {
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let mut cmd = Command::new("route");
-        cmd.args(["-n", "delete", &format!("{}", addr)]);
-        cmd
-    };
-    #[cfg(target_os = "linux")]
-    let mut cmd = {
-        let mut cmd = Command::new("ip");
-        cmd.args(["route", "delete", &format!("{}", addr)]);
-        cmd
-    };
-    if let Ok(mut handle) = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        let _ = handle.wait();
-    }
+    let _ = platform::delete_route_entry(addr.into());
 }
 
 fn ipv4_relay_addresses() -> Vec<Ipv4Net> {

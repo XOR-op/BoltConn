@@ -1,17 +1,20 @@
-use nix::unistd::{Gid, Uid};
+use crate::platform::UserInfo;
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     IsCa, KeyUsagePurpose,
 };
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 fn safe_write(path: PathBuf, content: &str) -> anyhow::Result<()> {
     fs::write(path.as_path(), content)?;
-    nix::unistd::chown(&path, Some(Uid::from(0)), Some(Gid::from(0)))?;
-    let perm = fs::Permissions::from_mode(0o600);
-    fs::set_permissions(&path, perm)?;
+    UserInfo::root().chown(&path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perm = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&path, perm)?;
+    }
     Ok(())
 }
 

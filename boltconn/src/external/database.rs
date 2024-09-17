@@ -59,9 +59,8 @@ impl DatabaseHandle {
                             &path,
                             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
                         )?;
-                        if let Some((_, uid, gid)) = get_user_info() {
-                            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))
-                                .map_err(DatabaseError::Chown)?;
+                        if let Some(user_info) = get_user_info() {
+                            user_info.chown(&path).map_err(DatabaseError::Chown)?;
                         }
                         Self::create_db_table(&conn)?;
                         conn

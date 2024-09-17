@@ -4,7 +4,6 @@ use anyhow::{anyhow, Result};
 use boltapi::CapturedBodySchema;
 use colored::Colorize;
 use std::ops::Add;
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tabular::{Row, Table};
 
@@ -27,7 +26,7 @@ impl Requester {
         })
     }
 
-    pub async fn new_uds(path: PathBuf) -> Result<Self> {
+    pub async fn new_uds(path: &str) -> Result<Self> {
         Ok(Self {
             inner: Inner::Uds(UdsConnector::new(path).await?.0),
         })

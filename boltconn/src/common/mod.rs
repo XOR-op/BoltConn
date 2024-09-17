@@ -1,4 +1,5 @@
 use bytes::{BufMut, BytesMut};
+use std::convert::Infallible;
 use std::error::Error;
 use std::intrinsics::transmute;
 use std::io;
@@ -7,7 +8,11 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadHalf};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+#[cfg(not(target_os = "windows"))]
 pub mod async_raw_fd;
+#[cfg(target_os = "windows")]
+pub mod async_session;
+#[cfg(not(target_os = "windows"))]
 pub mod async_socket;
 pub mod async_ws_stream;
 pub mod client_hello;
@@ -31,6 +36,11 @@ where
 }
 
 pub trait StreamOutboundTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
+
+#[cfg(target_os = "windows")]
+impl StreamOutboundTrait for tokio::net::windows::named_pipe::NamedPipeServer {}
+#[cfg(not(target_os = "windows"))]
+impl StreamOutboundTrait for tokio::net::UnixStream {}
 
 pub const MAX_PKT_SIZE: usize = 65576;
 
@@ -63,4 +73,18 @@ pub fn create_tls_connector(hello_override: Option<Arc<dyn ClientHelloOverride>>
         dangerous_cfg.set_hello_override(hello_override);
     }
     TlsConnector::from(Arc::new(client_cfg))
+}
+
+pub trait UnwrapInfallible {
+    type Ok;
+    fn infallible(self) -> Self::Ok;
+}
+impl<T> UnwrapInfallible for Result<T, Infallible> {
+    type Ok = T;
+    fn infallible(self) -> T {
+        match self {
+            Ok(val) => val,
+            Err(never) => match never {},
+        }
+    }
 }

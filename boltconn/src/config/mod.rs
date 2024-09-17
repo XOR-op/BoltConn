@@ -159,8 +159,8 @@ pub struct AuthData {
 }
 
 pub(super) fn set_real_ownership(path: &Path) -> io::Result<()> {
-    if let Some((_, uid, gid)) = get_user_info() {
-        nix::unistd::chown(path, Some(uid.into()), Some(gid.into()))?;
+    if let Some(user_info) = get_user_info() {
+        user_info.chown(path)?;
     }
     Ok(())
 }

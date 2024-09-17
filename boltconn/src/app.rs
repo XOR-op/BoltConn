@@ -65,7 +65,7 @@ impl App {
         external::init_tracing(&stream_logger)?;
 
         // setup Unix socket
-        let uds_listener = Arc::new(UnixListenerGuard::new("/var/run/boltconn.sock")?);
+        let uds_listener = Arc::new(UnixListenerGuard::new(app_uds_addr())?);
 
         // Read initial config
         let loaded_config = LoadedConfig::load_config(&config_path, &data_path)
@@ -125,8 +125,10 @@ impl App {
             let tun_configure = Arc::new(std::sync::Mutex::new(TunConfigure::new(
                 fake_dns_server,
                 tun.get_name(),
+                &outbound_iface,
             )));
             if will_enable_tun {
+                // tokio::time::sleep(Duration::from_secs(5)).await;
                 tun_configure
                     .lock()
                     .unwrap()
@@ -222,7 +224,8 @@ impl App {
             tun_udp_rx,
             udp_tun_tx,
             dns_hijack.clone(),
-        );
+        )
+        .await?;
         start_inbound_services(&config.inbound, dispatcher.clone());
 
         // start controller service
@@ -464,7 +467,7 @@ fn start_instrument_services(bus: Arc<MessageBus>, config: Option<&RawInstrument
 }
 
 #[allow(clippy::too_many_arguments)]
-fn start_tun_services(
+async fn start_tun_services(
     nat_addr: SocketAddr,
     manager: Arc<SessionManager>,
     dispatcher: Arc<Dispatcher>,
@@ -473,7 +476,7 @@ fn start_tun_services(
     tun_udp_rx: flume::Receiver<Bytes>,
     udp_tun_tx: flume::Sender<Bytes>,
     hijack_ctrl: Arc<DnsHijackController>,
-) {
+) -> io::Result<()> {
     let tun_inbound_tcp = Arc::new(TunTcpInbound::new(
         nat_addr,
         manager.clone(),
@@ -489,9 +492,47 @@ fn start_tun_services(
         hijack_ctrl,
     );
     manager.flush_with_interval(Duration::from_secs(30));
-    tokio::spawn(async move { tun_inbound_tcp.run().await });
+    #[cfg(unix)]
+    let tcp_listener = tokio::net::TcpListener::bind(tun_inbound_tcp.nat_addr())
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to start NAT at {}: {}",
+                tun_inbound_tcp.nat_addr(),
+                e
+            );
+            e
+        })?;
+    #[cfg(windows)]
+    let tcp_listener = {
+        let start_time = Instant::now();
+        tracing::info!(
+            "Starting NAT at {}, requires a few seconds...",
+            tun_inbound_tcp.nat_addr()
+        );
+        loop {
+            match tokio::net::TcpListener::bind(tun_inbound_tcp.nat_addr()).await {
+                Ok(l) => break l,
+                Err(e) => {
+                    if e.raw_os_error() == Some(10049) && start_time.elapsed().as_secs() < 15 {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    } else {
+                        tracing::error!(
+                            "Failed to start NAT at {}: {}",
+                            tun_inbound_tcp.nat_addr(),
+                            e
+                        );
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    };
+    tokio::spawn(async move { tun_inbound_tcp.run(tcp_listener).await });
     tokio::spawn(async move { tun_inbound_udp.run().await });
     tokio::spawn(async move { tun.run(nat_addr).await });
+    Ok(())
 }
 
 fn start_inbound_services(config: &RawInboundConfig, dispatcher: Arc<Dispatcher>) {
@@ -623,4 +664,15 @@ fn parse_two_inbound_service(
         .into_iter()
         .for_each(|(port, socks5_auth)| result.push((port, None, Some(socks5_auth))));
     result
+}
+
+fn app_uds_addr() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        r"\\.\pipe\boltconn"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "/var/run/boltconn.sock"
+    }
 }

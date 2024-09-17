@@ -3,7 +3,6 @@ use boltapi::rpc::ClientStreamService;
 use boltapi::{ConnectionSchema, TrafficResp};
 use colored::Colorize;
 use serde::Deserialize;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel};
@@ -69,7 +68,7 @@ pub struct ConnectionState {
 }
 
 impl ConnectionState {
-    pub async fn new(bind_addr: PathBuf) -> anyhow::Result<Self> {
+    pub async fn new(bind_addr: &str) -> anyhow::Result<Self> {
         let (client, server_chan) = UdsConnector::new(bind_addr).await?;
         let traffic = Arc::new(RwLock::new(None));
         let logs = Arc::new(RwLock::new(None));

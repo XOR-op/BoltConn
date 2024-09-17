@@ -8,15 +8,17 @@ use std::net::Ipv4Addr;
 pub struct TunConfigure {
     dns_addr: Ipv4Addr,
     device_name: String,
+    outbound_name: String,
     dns_handle: Option<SystemDnsHandle>,
     routing_table_flag: bool,
 }
 
 impl TunConfigure {
-    pub fn new(dns_addr: Ipv4Addr, device_name: &str) -> Self {
+    pub fn new(dns_addr: Ipv4Addr, device_name: &str, outbound_name: &str) -> Self {
         Self {
             dns_addr,
             device_name: device_name.to_string(),
+            outbound_name: outbound_name.to_string(),
             dns_handle: None,
             routing_table_flag: false,
         }
@@ -46,7 +48,11 @@ impl TunConfigure {
 
     fn enable_dns(&mut self) -> io::Result<()> {
         if self.dns_handle.is_none() {
-            self.dns_handle = Some(SystemDnsHandle::new(self.dns_addr)?)
+            self.dns_handle = Some(SystemDnsHandle::new(
+                self.dns_addr,
+                &self.device_name,
+                &self.outbound_name,
+            )?)
         }
         Ok(())
     }
