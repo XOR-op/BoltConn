@@ -4,6 +4,7 @@ use crate::adapter::{
     TrojanOutbound, TunUdpAdapter, WireguardHandle, WireguardManager,
 };
 use crate::common::duplex_chan::DuplexChan;
+use crate::common::StreamOutboundTrait;
 use crate::dispatch::{
     ConnInfo, Dispatching, GeneralProxy, InboundIdentity, InboundInfo, ProxyImpl,
 };
@@ -19,7 +20,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
 pub(crate) enum DispatchError {
@@ -208,13 +209,13 @@ impl Dispatcher {
         Ok(ChainOutbound::new(res))
     }
 
-    pub async fn submit_tcp(
+    pub async fn submit_tcp<S: StreamOutboundTrait>(
         &self,
         inbound: InboundInfo,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         indicator: Arc<AtomicU8>,
-        stream: TcpStream,
+        stream: S,
     ) -> Result<(), DispatchError> {
         let process_info = process::get_pid(src_addr, process::NetworkType::Tcp)
             .map_or(None, process::get_process_info);

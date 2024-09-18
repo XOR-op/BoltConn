@@ -37,6 +37,8 @@ where
 
 pub trait StreamOutboundTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 
+impl StreamOutboundTrait for tokio::net::TcpStream {}
+
 #[cfg(target_os = "windows")]
 impl StreamOutboundTrait for tokio::net::windows::named_pipe::NamedPipeServer {}
 #[cfg(not(target_os = "windows"))]

@@ -1,5 +1,5 @@
 use crate::adapter::{Connector, DuplexCloseGuard, TcpIndicatorGuard, TcpStatus};
-use crate::common::{read_to_bytes_mut, MAX_PKT_SIZE};
+use crate::common::{read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
 use bytes::BytesMut;
 use io::Result;
@@ -8,17 +8,16 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
-pub struct TcpAdapter {
+pub struct TcpAdapter<S> {
     stat: TcpStatus,
     info: Arc<ConnContext>,
-    inbound: TcpStream,
+    inbound: S,
     connector: Connector,
     abort_handle: ConnAbortHandle,
 }
 
-impl TcpAdapter {
+impl<S: StreamOutboundTrait> TcpAdapter<S> {
     const BUF_SIZE: usize = 65536;
 
     #[allow(clippy::too_many_arguments)]
@@ -26,7 +25,7 @@ impl TcpAdapter {
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         info: Arc<ConnContext>,
-        inbound: TcpStream,
+        inbound: S,
         available: Arc<AtomicU8>,
         connector: Connector,
         abort_handle: ConnAbortHandle,

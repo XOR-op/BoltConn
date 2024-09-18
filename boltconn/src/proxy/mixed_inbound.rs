@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct MixedInbound {
@@ -59,7 +58,7 @@ impl MixedInbound {
 
     async fn serve_connection(
         self_port: u16,
-        mut socks_stream: TcpStream,
+        socks_stream: TcpStream,
         http_auth: Arc<HashMap<String, String>>,
         socks_auth: Arc<HashMap<String, String>>,
         src_addr: SocketAddr,
