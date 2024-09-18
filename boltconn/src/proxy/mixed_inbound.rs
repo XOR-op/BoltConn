@@ -66,7 +66,7 @@ impl MixedInbound {
         dispatcher: Arc<Dispatcher>,
     ) -> Result<(), TransportError> {
         let mut first_byte = [0u8; 1];
-        socks_stream.read_exact(&mut first_byte).await?;
+        socks_stream.peek(&mut first_byte).await?;
         const C_ASCII: u8 = b"C"[0];
         match first_byte[0] {
             4u8 => {
@@ -79,7 +79,6 @@ impl MixedInbound {
                     socks_auth,
                     src_addr,
                     dispatcher,
-                    Some(5u8),
                 )
                 .await?
             }
@@ -91,7 +90,6 @@ impl MixedInbound {
                     http_auth,
                     src_addr,
                     dispatcher,
-                    Some("C".to_string()),
                 )
                 .await?
             }

@@ -48,7 +48,6 @@ impl Socks5Inbound {
                         auth,
                         src_addr,
                         disp,
-                        None,
                     ));
                 }
                 Err(err) => {
@@ -65,9 +64,8 @@ impl Socks5Inbound {
         auth: Arc<HashMap<String, String>>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
-        first_byte: Option<u8>,
     ) -> Result<(), TransportError> {
-        let incoming_user = Self::process_auth(&mut socks_stream, &auth, first_byte).await?;
+        let incoming_user = Self::process_auth(&mut socks_stream, &auth).await?;
         let [version, cmd, _rsv, address_type] = read_exact!(socks_stream, [0u8; 4])?;
 
         if version != consts::SOCKS5_VERSION {
@@ -156,13 +154,8 @@ impl Socks5Inbound {
     async fn process_auth(
         socket: &mut TcpStream,
         auth: &HashMap<String, String>,
-        first_byte: Option<u8>,
     ) -> Result<Option<String>, TransportError> {
-        let [version, method_len] = if let Some(byte) = first_byte {
-            [byte, read_exact!(socket, [0u8; 1])?[0]]
-        } else {
-            read_exact!(socket, [0u8; 2])?
-        };
+        let [version, method_len] = read_exact!(socket, [0u8; 2])?;
         if version != consts::SOCKS5_VERSION {
             Err(SocksError::UnsupportedSocksVersion(version))?;
         }

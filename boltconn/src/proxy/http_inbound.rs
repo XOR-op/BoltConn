@@ -46,7 +46,6 @@ impl HttpInbound {
                         auth,
                         addr,
                         disp,
-                        None,
                     ));
                 }
                 Err(err) => {
@@ -63,7 +62,6 @@ impl HttpInbound {
         auth: Arc<HashMap<String, String>>,
         addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
-        first_byte: Option<String>,
     ) -> Result<(), TransportError> {
         // get response
         let mut buf_reader = BufReader::new(socket);
