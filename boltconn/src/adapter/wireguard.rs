@@ -149,15 +149,14 @@ impl Endpoint {
                                 tracing::warn!("[WireGuard] Close connection #{} for {}", name, e);
                                 return;
                             }
-                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            tokio::time::sleep(Duration::from_millis(30)).await;
                         }
                         Ok(has_sent) => {
                             if has_sent {
                                 continuous_err_cnt = 0;
                             }
-                            // <del>From boringtun, the recommended interval is 100ms.</del>
-                            // Comments from Tunn::update_timers says one second interval is enough.
-                            tokio::time::sleep(Duration::from_millis(1000)).await;
+                            // From boringtun, the recommended interval is 100ms.
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                         }
                     }
                 }
