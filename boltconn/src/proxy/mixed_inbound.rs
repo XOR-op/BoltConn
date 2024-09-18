@@ -93,7 +93,14 @@ impl MixedInbound {
                 .await?
             }
             _ => {
-                // Unknown, drop
+                HttpInbound::serve_legacy_connection(
+                    self_port,
+                    socks_stream,
+                    http_auth,
+                    src_addr,
+                    dispatcher,
+                )
+                .await?
             }
         }
         Ok(())
