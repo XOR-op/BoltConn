@@ -1,6 +1,6 @@
 use crate::adapter::{Connector, Outbound};
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::id_gen::IdGenerator;
+use crate::common::utils::IdGenerator;
 use crate::intercept::modifier::Modifier;
 use crate::intercept::{HyperBody, ModifierContext};
 use crate::proxy::error::InterceptError;
