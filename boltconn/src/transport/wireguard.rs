@@ -1,13 +1,13 @@
-use crate::common::io_err;
-use crate::common::MAX_PKT_SIZE;
+use crate::common::{io_err, mut_buf};
+use crate::common::{local_async_run, MAX_PKT_SIZE};
 use crate::config::DnsPreference;
 use crate::network::dns::Dns;
 use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
-use crate::transport::AdapterOrSocket;
+use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
 use boringtun::noise::errors::WireGuardError;
 use boringtun::noise::{Tunn, TunnResult};
-use bytes::BytesMut;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use hickory_resolver::config::ResolverConfig;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
@@ -69,6 +69,11 @@ impl Hash for WireguardConfig {
     }
 }
 
+enum AdapterOrChannel {
+    Adapter(Arc<dyn UdpSocketAdapter>),
+    Channel(flume::Sender<Bytes>, flume::Receiver<Bytes>),
+}
+
 /// Wireguard Tunnel, with only one peer.
 pub struct WireguardTunnel {
     tunnel: tokio::sync::Mutex<Tunn>,
@@ -76,7 +81,7 @@ pub struct WireguardTunnel {
 }
 
 struct WireguardTunnelInner {
-    outbound: AdapterOrSocket,
+    outbound: AdapterOrChannel,
     /// remote address on the genuine Internet
     endpoint: SocketAddr,
     smol_notify: Arc<Notify>,
@@ -114,7 +119,36 @@ impl WireguardTunnel {
         Ok(Self {
             tunnel: tokio::sync::Mutex::new(tunnel),
             inner: WireguardTunnelInner {
-                outbound,
+                outbound: match outbound {
+                    AdapterOrSocket::Adapter(a) => AdapterOrChannel::Adapter(a),
+                    AdapterOrSocket::Socket(s) => {
+                        let (out_tx, out_rx) = flume::bounded::<Bytes>(4096);
+                        let (in_tx, in_rx) = flume::bounded(4096);
+                        let socket = Arc::new(s);
+                        let socket_clone = socket.clone();
+                        local_async_run(async move {
+                            // dedicated to poll UDP from small kernel buffer
+                            loop {
+                                let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+                                let Ok(len) = socket.recv(unsafe { mut_buf(&mut buf) }).await
+                                else {
+                                    break;
+                                };
+                                unsafe { buf.advance_mut(len) };
+                                if in_tx.try_send(buf.freeze()).is_err() {
+                                    tracing::warn!("channel full, dropping packet");
+                                }
+                            }
+                        });
+                        tokio::spawn(async move {
+                            while let Ok(data) = out_rx.recv_async().await {
+                                socket_clone.send(&data).await?;
+                            }
+                            Ok::<(), io::Error>(())
+                        });
+                        AdapterOrChannel::Channel(out_tx, in_rx)
+                    }
+                },
                 endpoint,
                 smol_notify,
                 reserved: config.reserved,
@@ -252,18 +286,31 @@ impl WireguardTunnelInner {
             }
         }
         match &self.outbound {
-            AdapterOrSocket::Adapter(a) => {
+            AdapterOrChannel::Adapter(a) => {
                 a.send_to(data, NetworkAddr::Raw(self.endpoint)).await?;
                 Ok(data.len())
             }
-            AdapterOrSocket::Socket(s) => Ok(s.send(data).await?),
+            AdapterOrChannel::Channel(c, _) => {
+                let data = Bytes::copy_from_slice(data);
+                let len = data.len();
+                let _ = c.send(data);
+                Ok(len)
+            }
         }
     }
 
     async fn outbound_recv(&self, data: &mut [u8]) -> Result<usize, TransportError> {
         match &self.outbound {
-            AdapterOrSocket::Adapter(a) => Ok(a.recv_from(data).await?.0),
-            AdapterOrSocket::Socket(s) => Ok(s.recv(data).await?),
+            AdapterOrChannel::Adapter(a) => Ok(a.recv_from(data).await?.0),
+            AdapterOrChannel::Channel(_, c) => {
+                let d = c
+                    .recv_async()
+                    .await
+                    .map_err(|_| io_err("WireGuard outbound channel closed"))?;
+                let len = d.len();
+                (data[..len]).copy_from_slice(&d);
+                Ok(len)
+            }
         }
     }
 }

@@ -19,8 +19,8 @@ pub mod client_hello;
 pub mod duplex_chan;
 pub mod evictable_vec;
 pub mod host_matcher;
-pub mod id_gen;
 mod sync;
+pub mod utils;
 
 pub use sync::{local_async_run, AbortCanary};
 
