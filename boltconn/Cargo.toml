@@ -39,9 +39,10 @@ network-interface = "2.0.0"
 nix = { version = "0.29.0", features = ["user", "fs"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
 regex = "1.7.0"
+sharded-slab = "0.1.7"
 socket2 = { version = "0.5.1", features = ["all"] }
 thiserror = "1.0.37"
-tokio = { version = "1.32.0", features = [
+tokio = { version = "1.40.0", features = [
     "rt",
     "rt-multi-thread",
     "net",

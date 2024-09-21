@@ -1,5 +1,4 @@
-use crate::common::{io_err, mut_buf};
-use crate::common::{local_async_run, MAX_PKT_SIZE};
+use crate::common::{io_err, local_async_run, MAX_PKT_SIZE, MAX_UDP_PKT_SIZE};
 use crate::config::DnsPreference;
 use crate::network::dns::Dns;
 use crate::proxy::error::TransportError;
@@ -7,8 +6,9 @@ use crate::proxy::NetworkAddr;
 use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
 use boringtun::noise::errors::WireGuardError;
 use boringtun::noise::{Tunn, TunnResult};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use hickory_resolver::config::ResolverConfig;
+use sharded_slab::Pool;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -71,7 +71,12 @@ impl Hash for WireguardConfig {
 
 enum AdapterOrChannel {
     Adapter(Arc<dyn UdpSocketAdapter>),
-    Channel(flume::Sender<Bytes>, flume::Receiver<Bytes>),
+    Channel(flume::Sender<Bytes>, flume::Receiver<BufferIndex<Vec<u8>>>),
+}
+
+enum BufferIndex<T> {
+    Pool(usize),
+    Raw(T),
 }
 
 /// Wireguard Tunnel, with only one peer.
@@ -85,7 +90,9 @@ struct WireguardTunnelInner {
     /// remote address on the genuine Internet
     endpoint: SocketAddr,
     smol_notify: Arc<Notify>,
+    inbound_buf_pool: Arc<Pool<Vec<u8>>>,
     reserved: Option<[u8; 3]>,
+    metric: crate::common::utils::TputMeasurement,
 }
 
 impl WireguardTunnel {
@@ -116,6 +123,23 @@ impl WireguardTunnel {
             13,
             None,
         );
+        let buf_pool = Arc::new({
+            let pool = Pool::<Vec<u8>>::new();
+            // allocate memory in advance
+            const INIT_POOL_SIZE: usize = 4096;
+            let mut index_arr = [0; INIT_POOL_SIZE];
+            for entry in index_arr.iter_mut() {
+                *entry = pool
+                    .create_with(|x| {
+                        x.resize(MAX_PKT_SIZE, 0);
+                    })
+                    .expect("slab pool initialization failed");
+            }
+            for entry in index_arr.iter() {
+                pool.clear(*entry);
+            }
+            pool
+        });
         Ok(Self {
             tunnel: tokio::sync::Mutex::new(tunnel),
             inner: WireguardTunnelInner {
@@ -123,19 +147,36 @@ impl WireguardTunnel {
                     AdapterOrSocket::Adapter(a) => AdapterOrChannel::Adapter(a),
                     AdapterOrSocket::Socket(s) => {
                         let (out_tx, out_rx) = flume::bounded::<Bytes>(4096);
-                        let (in_tx, in_rx) = flume::bounded(4096);
+                        let (in_tx, in_rx) = flume::bounded::<BufferIndex<Vec<u8>>>(4096);
                         let socket = Arc::new(s);
                         let socket_clone = socket.clone();
+                        let pool = buf_pool.clone();
                         local_async_run(async move {
                             // dedicated to poll UDP from small kernel buffer
                             loop {
-                                let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
-                                let Ok(len) = socket.recv(unsafe { mut_buf(&mut buf) }).await
-                                else {
-                                    break;
+                                let key = match pool.clone().create_owned() {
+                                    Some(mut buf) => {
+                                        let key = BufferIndex::Pool(buf.key());
+                                        buf.resize(MAX_UDP_PKT_SIZE, 0);
+                                        let Ok(len) = socket.recv(&mut buf).await else {
+                                            break;
+                                        };
+                                        buf.resize(len, 0);
+                                        key
+                                    }
+                                    None => {
+                                        let mut buf = vec![0; MAX_UDP_PKT_SIZE];
+                                        let Ok(len) = socket.recv(&mut buf).await else {
+                                            break;
+                                        };
+                                        buf.resize(len, 0);
+                                        BufferIndex::Raw(buf)
+                                    }
                                 };
-                                unsafe { buf.advance_mut(len) };
-                                if in_tx.try_send(buf.freeze()).is_err() {
+                                if let Err(err) = in_tx.try_send(key) {
+                                    if let BufferIndex::Pool(key) = err.into_inner() {
+                                        pool.clear(key);
+                                    }
                                     tracing::warn!("channel full, dropping packet");
                                 }
                             }
@@ -151,7 +192,11 @@ impl WireguardTunnel {
                 },
                 endpoint,
                 smol_notify,
+                inbound_buf_pool: buf_pool,
                 reserved: config.reserved,
+                metric: crate::common::utils::TputMeasurement::new(std::time::Duration::from_secs(
+                    1,
+                )),
             },
         })
     }
@@ -166,6 +211,9 @@ impl WireguardTunnel {
         let len = self.inner.outbound_recv(buf).await?;
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
+        if let Some(tput) = self.inner.metric.update_to_mbps(len) {
+            // tracing::debug!("WireGuard inbound throughput: {:.2} Mbps", tput);
+        }
         let result = self
             .tunnel
             .lock()
@@ -303,13 +351,25 @@ impl WireguardTunnelInner {
         match &self.outbound {
             AdapterOrChannel::Adapter(a) => Ok(a.recv_from(data).await?.0),
             AdapterOrChannel::Channel(_, c) => {
-                let d = c
+                let index = c
                     .recv_async()
                     .await
                     .map_err(|_| io_err("WireGuard outbound channel closed"))?;
-                let len = d.len();
-                (data[..len]).copy_from_slice(&d);
-                Ok(len)
+                Ok(match index {
+                    BufferIndex::Pool(key) => {
+                        // panic safety: if key is invalid, there will be an obvious bug in the code, so we need to panic.
+                        let buf = self.inbound_buf_pool.get(key).expect("pool key not found");
+                        let len = buf.len();
+                        (data[..len]).copy_from_slice(&buf);
+                        self.inbound_buf_pool.clear(key);
+                        len
+                    }
+                    BufferIndex::Raw(buf) => {
+                        let len = buf.len();
+                        (data[..len]).copy_from_slice(&buf);
+                        len
+                    }
+                })
             }
         }
     }
