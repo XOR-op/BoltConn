@@ -15,7 +15,7 @@ use hickory_proto::TokioTime;
 use hickory_resolver::name_server::RuntimeProvider;
 use hickory_resolver::TokioHandle;
 use rand::Rng;
-use smoltcp::iface::{Interface, SocketHandle, SocketSet};
+use smoltcp::iface::{Interface, PollResult, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::{
     tcp::Socket as SmolTcpSocket, udp::PacketBuffer as UdpSocketBuffer,
@@ -427,7 +427,7 @@ impl SmolStack {
         }
     }
 
-    pub fn drive_iface(&mut self) -> bool {
+    pub fn drive_iface(&mut self) -> PollResult {
         self.iface.poll(
             SmolInstant::now(),
             &mut self.ip_device,
@@ -750,6 +750,7 @@ impl Device for VirtualIpDevice {
                 VirtualRxToken { buf: item },
                 VirtualTxToken {
                     sender: self.outbound.clone(),
+                    buf: BytesMut::with_capacity(self.mtu),
                 },
             )),
             Err(_) => None,
@@ -764,8 +765,10 @@ impl Device for VirtualIpDevice {
         {
             Some(VirtualTxToken {
                 sender: self.outbound.clone(),
+                buf: BytesMut::with_capacity(self.mtu),
             })
         } else {
+            tracing::trace!("smol: VirtIP Device allocate TxToken failed");
             None
         }
     }
@@ -783,24 +786,29 @@ pub struct VirtualRxToken {
 }
 
 impl RxToken for VirtualRxToken {
-    fn consume<R, F: FnOnce(&mut [u8]) -> R>(mut self, f: F) -> R {
+    fn consume<R, F: FnOnce(&[u8]) -> R>(mut self, f: F) -> R {
         f(&mut self.buf)
     }
 }
 
 pub struct VirtualTxToken {
     sender: flume::Sender<BytesMut>,
+    buf: BytesMut,
 }
 
 impl TxToken for VirtualTxToken {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
-        let mut buf = BytesMut::with_capacity(len);
+        let mut buf = self.buf;
+        debug_assert!(len <= buf.capacity());
         // Safety: f exactly writes _len_ bytes, so all bytes are initialized.
         unsafe {
             buf.set_len(len);
         }
         let r = f(&mut buf);
-        let _ = self.sender.send(buf);
+        let send_result = self.sender.try_send(buf);
+        if send_result.is_err() {
+            tracing::trace!("smol: VirtIP Device Tx send failed");
+        }
         r
     }
 }

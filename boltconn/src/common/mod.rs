@@ -19,8 +19,8 @@ pub mod client_hello;
 pub mod duplex_chan;
 pub mod evictable_vec;
 pub mod host_matcher;
-pub mod id_gen;
 mod sync;
+pub mod utils;
 
 pub use sync::{local_async_run, AbortCanary};
 
@@ -45,6 +45,7 @@ impl StreamOutboundTrait for tokio::net::windows::named_pipe::NamedPipeServer {}
 impl StreamOutboundTrait for tokio::net::UnixStream {}
 
 pub const MAX_PKT_SIZE: usize = 65576;
+pub const MAX_UDP_PKT_SIZE: usize = 1518;
 
 pub async fn read_to_bytes_mut(
     buf: &mut BytesMut,

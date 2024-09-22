@@ -2,7 +2,7 @@ use crate::adapter::{Connector, Outbound};
 use crate::common::client_hello::get_overrider;
 use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::id_gen::IdGenerator;
+use crate::common::utils::IdGenerator;
 use crate::intercept::modifier::Modifier;
 use crate::intercept::{sign_site_cert, HyperBody, ModifierContext};
 use crate::proxy::error::InterceptError;
