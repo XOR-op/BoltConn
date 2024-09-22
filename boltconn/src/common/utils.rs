@@ -10,6 +10,7 @@ impl IdGenerator {
     }
 }
 
+#[allow(unused)]
 pub struct TputMeasurement {
     inner: std::sync::Mutex<TputMeasurementInner>,
 }
@@ -36,7 +37,7 @@ impl TputMeasurement {
         inner.accum_bytes += bytes as u64;
         let now = Instant::now();
         let elapsed = now - inner.last_time;
-        if elapsed >= inner.interval || inner.accum_bytes > 1024 * 1024 {
+        if elapsed >= inner.interval {
             let tput = inner.accum_bytes as f64 / elapsed.as_secs_f64();
             inner.accum_bytes = 0;
             inner.last_time = now;

@@ -15,7 +15,7 @@ use hickory_proto::TokioTime;
 use hickory_resolver::name_server::RuntimeProvider;
 use hickory_resolver::TokioHandle;
 use rand::Rng;
-use smoltcp::iface::{Interface, SocketHandle, SocketSet};
+use smoltcp::iface::{Interface, PollResult, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::{
     tcp::Socket as SmolTcpSocket, udp::PacketBuffer as UdpSocketBuffer,
@@ -427,7 +427,7 @@ impl SmolStack {
         }
     }
 
-    pub fn drive_iface(&mut self) -> bool {
+    pub fn drive_iface(&mut self) -> PollResult {
         self.iface.poll(
             SmolInstant::now(),
             &mut self.ip_device,
@@ -786,7 +786,7 @@ pub struct VirtualRxToken {
 }
 
 impl RxToken for VirtualRxToken {
-    fn consume<R, F: FnOnce(&mut [u8]) -> R>(mut self, f: F) -> R {
+    fn consume<R, F: FnOnce(&[u8]) -> R>(mut self, f: F) -> R {
         f(&mut self.buf)
     }
 }

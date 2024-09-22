@@ -92,7 +92,6 @@ struct WireguardTunnelInner {
     smol_notify: Arc<Notify>,
     inbound_buf_pool: Arc<Pool<Vec<u8>>>,
     reserved: Option<[u8; 3]>,
-    metric: crate::common::utils::TputMeasurement,
 }
 
 impl WireguardTunnel {
@@ -194,9 +193,6 @@ impl WireguardTunnel {
                 smol_notify,
                 inbound_buf_pool: buf_pool,
                 reserved: config.reserved,
-                metric: crate::common::utils::TputMeasurement::new(std::time::Duration::from_secs(
-                    1,
-                )),
             },
         })
     }
@@ -211,9 +207,6 @@ impl WireguardTunnel {
         let len = self.inner.outbound_recv(buf).await?;
         // Indeed we can achieve zero-copy with the implementation of ring,
         // but there is no hard guarantee for that, so we just manually copy buffer.
-        if let Some(tput) = self.inner.metric.update_to_mbps(len) {
-            // tracing::debug!("WireGuard inbound throughput: {:.2} Mbps", tput);
-        }
         let result = self
             .tunnel
             .lock()
