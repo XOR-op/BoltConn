@@ -41,6 +41,7 @@ impl Socks5Config {
 
 #[derive(Clone)]
 pub struct Socks5Outbound {
+    name: String,
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
@@ -48,8 +49,15 @@ pub struct Socks5Outbound {
 }
 
 impl Socks5Outbound {
-    pub fn new(iface_name: &str, dst: NetworkAddr, dns: Arc<Dns>, config: Socks5Config) -> Self {
+    pub fn new(
+        name: &str,
+        iface_name: &str,
+        dst: NetworkAddr,
+        dns: Arc<Dns>,
+        config: Socks5Config,
+    ) -> Self {
         Self {
+            name: name.to_string(),
             iface_name: iface_name.to_string(),
             dst,
             dns,
@@ -130,6 +138,10 @@ impl Socks5Outbound {
 
 #[async_trait]
 impl Outbound for Socks5Outbound {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Socks5
     }

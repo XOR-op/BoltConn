@@ -24,6 +24,7 @@ pub struct HttpConfig {
 
 #[derive(Clone)]
 pub struct HttpOutbound {
+    name: String,
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
@@ -31,8 +32,15 @@ pub struct HttpOutbound {
 }
 
 impl HttpOutbound {
-    pub fn new(iface_name: &str, dst: NetworkAddr, dns: Arc<Dns>, config: HttpConfig) -> Self {
+    pub fn new(
+        name: &str,
+        iface_name: &str,
+        dst: NetworkAddr,
+        dns: Arc<Dns>,
+        config: HttpConfig,
+    ) -> Self {
         Self {
+            name: name.to_string(),
             iface_name: iface_name.to_string(),
             dst,
             dns,
@@ -96,6 +104,10 @@ impl HttpOutbound {
 
 #[async_trait]
 impl Outbound for HttpOutbound {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Http
     }

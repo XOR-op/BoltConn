@@ -14,12 +14,14 @@ use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct ChainOutbound {
+    name: String,
     chains: Vec<Arc<dyn Outbound>>,
 }
 
 impl ChainOutbound {
-    pub fn new(chains: Vec<Box<dyn Outbound>>) -> Self {
+    pub fn new(name: &str, chains: Vec<Box<dyn Outbound>>) -> Self {
         Self {
+            name: name.to_string(),
             chains: chains.into_iter().map(Arc::from).collect(),
         }
     }
@@ -122,6 +124,10 @@ impl ChainOutbound {
 
 #[async_trait]
 impl Outbound for ChainOutbound {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Chain
     }

@@ -328,6 +328,7 @@ impl WireguardManager {
 
 #[derive(Clone)]
 pub struct WireguardHandle {
+    name: String,
     src: SocketAddr,
     dst: NetworkAddr,
     config: Arc<WireguardConfig>,
@@ -337,6 +338,7 @@ pub struct WireguardHandle {
 
 impl WireguardHandle {
     pub fn new(
+        name: &str,
         src: SocketAddr,
         dst: NetworkAddr,
         config: WireguardConfig,
@@ -344,6 +346,7 @@ impl WireguardHandle {
         dns_config: Arc<ResolverConfig>,
     ) -> Self {
         Self {
+            name: name.to_string(),
             src,
             dst,
             config: Arc::new(config),
@@ -403,6 +406,10 @@ impl WireguardHandle {
 
 #[async_trait]
 impl Outbound for WireguardHandle {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Wireguard
     }

@@ -68,6 +68,10 @@ impl DirectOutbound {
 
 #[async_trait]
 impl Outbound for DirectOutbound {
+    fn id(&self) -> String {
+        "DIRECT".to_string()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Direct
     }

@@ -19,6 +19,7 @@ use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct SshOutboundHandle {
+    name: String,
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
@@ -28,6 +29,7 @@ pub struct SshOutboundHandle {
 
 impl SshOutboundHandle {
     pub fn new(
+        name: &str,
         iface_name: &str,
         dst: NetworkAddr,
         dns: Arc<Dns>,
@@ -35,6 +37,7 @@ impl SshOutboundHandle {
         manager: Arc<SshManager>,
     ) -> Self {
         Self {
+            name: name.to_string(),
             iface_name: iface_name.to_string(),
             dst,
             dns,
@@ -82,6 +85,10 @@ impl SshOutboundHandle {
 
 #[async_trait]
 impl Outbound for SshOutboundHandle {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Ssh
     }

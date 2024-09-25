@@ -167,6 +167,10 @@ impl OutboundType {
 
 #[async_trait]
 pub trait Outbound: Send + Sync {
+    /// Get the globally unique id of the outbound to distinguish it
+    /// even from others with the same type.
+    fn id(&self) -> String;
+
     fn outbound_type(&self) -> OutboundType;
 
     /// Run with tokio::spawn.

@@ -38,6 +38,7 @@ impl From<ShadowSocksConfig> for ServerConfig {
 
 #[derive(Clone)]
 pub struct SSOutbound {
+    name: String,
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
@@ -46,12 +47,14 @@ pub struct SSOutbound {
 
 impl SSOutbound {
     pub fn new(
+        name: &str,
         iface_name: &str,
         dst: NetworkAddr,
         dns: Arc<Dns>,
         config: ShadowSocksConfig,
     ) -> Self {
         Self {
+            name: name.to_string(),
             iface_name: iface_name.to_string(),
             dst,
             dns,
@@ -132,6 +135,10 @@ impl SSOutbound {
 
 #[async_trait]
 impl Outbound for SSOutbound {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Shadowsocks
     }
