@@ -213,20 +213,25 @@ fn empty_handle() -> JoinHandle<io::Result<()>> {
 }
 
 #[tracing::instrument(skip_all)]
-async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)
-where
+async fn established_tcp<T>(
+    name: String,
+    inbound: Connector,
+    outbound: T,
+    abort_handle: ConnAbortHandle,
+) where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let abort_handle2 = abort_handle.clone();
+    let name2 = name.clone();
     let _guard = DuplexCloseGuard::new(
         tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
                 let res = out_write.write_all(buf.as_ref()).await;
                 if let Err(err) = res {
-                    tracing::debug!("write to outbound failed: {}", err);
+                    tracing::debug!("[{}] write to outbound failed: {}", name2, err);
                     abort_handle2.cancel();
                     break;
                 }
@@ -252,7 +257,7 @@ where
                     }
                 }
                 Err(err) => {
-                    tracing::debug!("outbound read error: {}", err);
+                    tracing::debug!("[{}] outbound read error: {}", name, err);
                     abort_handle.cancel();
                     break;
                 }
@@ -263,6 +268,7 @@ where
 
 #[tracing::instrument(skip_all)]
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
+    name: String,
     inbound: AddrConnector,
     outbound: S,
     tunnel_addr: Option<NetworkAddr>,
@@ -274,6 +280,7 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     let tunnel_addr2 = tunnel_addr.clone();
     let AddrConnector { tx, mut rx } = inbound;
     let abort_handle2 = abort_handle.clone();
+    let name2 = name.clone();
     let _guard = UdpDropGuard(tokio::spawn(async move {
         // recv from outbound and send to inbound
         loop {
@@ -292,12 +299,12 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                         }
                     }
                     if tx.send((buf.freeze(), addr)).await.is_err() {
-                        tracing::debug!("write to inbound failed");
+                        tracing::debug!("[{}] write to inbound failed", name);
                         break;
                     }
                 }
                 Err(err) => {
-                    tracing::debug!("outbound read error: {}", err);
+                    tracing::debug!("[{}] outbound read error: {}", name, err);
                     break;
                 }
             }
@@ -309,7 +316,7 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
         let addr = tunnel_addr2.clone().unwrap_or(addr);
         let res = outbound2.send_to(buf.as_ref(), addr).await;
         if let Err(err) = res {
-            tracing::debug!("write to outbound failed: {}", err);
+            tracing::debug!("[{}] write to outbound failed: {}", name2, err);
             break;
         }
     }

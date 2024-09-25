@@ -108,7 +108,7 @@ impl SSOutbound {
         let (target_addr, context, resolved_config) = self.create_internal(server_addr).await;
         let ss_stream =
             ProxyClientStream::from_stream(context, outbound, &resolved_config, target_addr);
-        established_tcp(inbound, ss_stream, abort_handle).await;
+        established_tcp(self.name, inbound, ss_stream, abort_handle).await;
         Ok(())
     }
 
@@ -123,6 +123,7 @@ impl SSOutbound {
         let (_, context, resolved_config) = self.create_internal(server_addr).await;
         let proxy_socket = ShadowsocksUdpAdapter::new(context, &resolved_config, adapter_or_socket);
         established_udp(
+            self.name,
             inbound,
             proxy_socket,
             if tunnel_only { Some(self.dst) } else { None },

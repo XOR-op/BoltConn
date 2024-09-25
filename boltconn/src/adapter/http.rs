@@ -92,7 +92,7 @@ impl HttpOutbound {
             .map_err(|_| io_err("Parse response failed"))?;
         if let Some(200) = resp_struct.code {
             let tcp_stream = buf_reader.into_inner();
-            established_tcp(inbound, tcp_stream, abort_handle).await;
+            established_tcp(self.name, inbound, tcp_stream, abort_handle).await;
             Ok(())
         } else {
             Err(io_err(

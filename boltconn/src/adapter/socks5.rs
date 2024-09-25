@@ -91,7 +91,7 @@ impl Socks5Outbound {
             .request(Socks5Command::TCPConnect, target)
             .await
             .map_err(as_io_err)?;
-        established_tcp(inbound, socks_stream, abort_handle).await;
+        established_tcp(self.name, inbound, socks_stream, abort_handle).await;
         Ok(())
     }
 
@@ -126,6 +126,7 @@ impl Socks5Outbound {
             .unwrap();
         out_sock.connect(bound_addr).await?;
         established_udp(
+            self.name,
             inbound,
             Socks5UdpAdapter(out_sock),
             if tunnel_only { Some(self.dst) } else { None },

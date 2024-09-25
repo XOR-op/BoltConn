@@ -45,7 +45,7 @@ impl DirectOutbound {
         };
         let outbound = Egress::new(&self.iface_name).tcp_stream(dst_addr).await?;
 
-        established_tcp(inbound, outbound, abort_handle).await;
+        established_tcp(self.id(), inbound, outbound, abort_handle).await;
         Ok(())
     }
 
@@ -56,6 +56,7 @@ impl DirectOutbound {
     ) -> io::Result<()> {
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         established_udp(
+            self.id(),
             inbound,
             DirectUdpAdapter(outbound, self.dns.clone()),
             None,

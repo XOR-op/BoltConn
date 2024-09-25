@@ -69,11 +69,11 @@ impl TrojanOutbound {
                 .map_err(|e| io_err(e.to_string().as_str()))?;
             self.first_packet(first_packet, TrojanCmd::Connect, &mut stream)
                 .await?;
-            established_tcp(inbound, stream, abort_handle).await;
+            established_tcp(self.name, inbound, stream, abort_handle).await;
         } else {
             self.first_packet(first_packet, TrojanCmd::Connect, &mut stream)
                 .await?;
-            established_tcp(inbound, stream, abort_handle).await;
+            established_tcp(self.name, inbound, stream, abort_handle).await;
         }
         Ok(())
     }
@@ -103,6 +103,7 @@ impl TrojanOutbound {
                 socket: Arc::new(udp_socket),
             };
             established_udp(
+                self.name,
                 inbound,
                 adapter,
                 if tunnel_only { Some(self.dst) } else { None },
@@ -117,6 +118,7 @@ impl TrojanOutbound {
                 socket: Arc::new(udp_socket),
             };
             established_udp(
+                self.name,
                 inbound,
                 adapter,
                 if tunnel_only { Some(self.dst) } else { None },

@@ -78,7 +78,7 @@ impl SshOutboundHandle {
             }
         };
         let channel = master_conn.new_mapped_connection(self.dst.clone()).await?;
-        established_tcp(inbound, channel, abort_handle).await;
+        established_tcp(self.name, inbound, channel, abort_handle).await;
         Ok(())
     }
 }
