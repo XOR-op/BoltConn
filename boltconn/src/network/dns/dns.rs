@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct GenericDns<P: RuntimeProvider> {
+    name: String,
     table: DnsTable,
     preference: DnsPreference,
     host_resolver: ArcSwap<HostsResolver>,
@@ -28,6 +29,7 @@ pub type Dns = GenericDns<IfaceProvider>;
 
 impl Dns {
     pub fn with_config(
+        name: &str,
         iface_name: &str,
         preference: DnsPreference,
         hosts: &HashMap<String, IpAddr>,
@@ -45,6 +47,7 @@ impl Dns {
         }
         let host_resolver = HostsResolver::new(hosts);
         Dns {
+            name: name.to_string(),
             table: DnsTable::new(),
             preference,
             host_resolver: ArcSwap::new(Arc::new(host_resolver)),
@@ -78,10 +81,12 @@ impl Dns {
 
 impl<P: RuntimeProvider> GenericDns<P> {
     pub fn new_with_resolver(
+        name: &str,
         resolver: AsyncResolver<GenericConnector<P>>,
         preference: DnsPreference,
     ) -> Self {
         Self {
+            name: name.to_string(),
             table: DnsTable::new(),
             preference,
             host_resolver: ArcSwap::new(Arc::new(HostsResolver::empty())),
@@ -109,7 +114,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
 
     async fn genuine_lookup_v4(&self, domain_name: &str) -> Option<IpAddr> {
         for r in self.resolvers.load().iter() {
-            if let Some(ip) = Self::genuine_lookup_one_v4(domain_name, r).await {
+            if let Some(ip) = Self::genuine_lookup_one_v4(&self.name, domain_name, r).await {
                 return Some(ip);
             }
         }
@@ -117,6 +122,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
     }
 
     async fn genuine_lookup_one_v4<R: RuntimeProvider>(
+        name: &str,
         domain_name: &str,
         resolver: &AsyncResolver<GenericConnector<R>>,
     ) -> Option<IpAddr> {
@@ -129,14 +135,14 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 }
             }
         } else {
-            tracing::debug!("DNS v4 lookup for {domain_name} timeout: 5s");
+            tracing::debug!("DNS {name} v4 lookup for {domain_name} timeout: 5s");
         }
         None
     }
 
     async fn genuine_lookup_v6(&self, domain_name: &str) -> Option<IpAddr> {
         for r in self.resolvers.load().iter() {
-            if let Some(ip) = Self::genuine_lookup_one_v6(domain_name, r).await {
+            if let Some(ip) = Self::genuine_lookup_one_v6(&self.name, domain_name, r).await {
                 return Some(ip);
             }
         }
@@ -144,6 +150,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
     }
 
     async fn genuine_lookup_one_v6<R: RuntimeProvider>(
+        name: &str,
         domain_name: &str,
         resolver: &AsyncResolver<GenericConnector<R>>,
     ) -> Option<IpAddr> {
@@ -156,29 +163,37 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 }
             }
         } else {
-            tracing::debug!("DNS v6 lookup for {domain_name} timeout: 5s");
+            tracing::debug!("DNS {name} v6 lookup for {domain_name} timeout: 5s");
         }
         None
     }
 
-    async fn one_v4_wrapper(domain_name: &str, resolver: &DispatchedDnsResolver) -> Option<IpAddr> {
+    async fn one_v4_wrapper(
+        name: &str,
+        domain_name: &str,
+        resolver: &DispatchedDnsResolver,
+    ) -> Option<IpAddr> {
         match resolver {
             DispatchedDnsResolver::Iface(resolver) => {
-                Self::genuine_lookup_one_v4(domain_name, resolver).await
+                Self::genuine_lookup_one_v4(name, domain_name, resolver).await
             }
             DispatchedDnsResolver::Plain(resolver) => {
-                Self::genuine_lookup_one_v4(domain_name, resolver).await
+                Self::genuine_lookup_one_v4(name, domain_name, resolver).await
             }
         }
     }
 
-    async fn one_v6_wrapper(domain_name: &str, resolver: &DispatchedDnsResolver) -> Option<IpAddr> {
+    async fn one_v6_wrapper(
+        name: &str,
+        domain_name: &str,
+        resolver: &DispatchedDnsResolver,
+    ) -> Option<IpAddr> {
         match resolver {
             DispatchedDnsResolver::Iface(resolver) => {
-                Self::genuine_lookup_one_v6(domain_name, resolver).await
+                Self::genuine_lookup_one_v6(name, domain_name, resolver).await
             }
             DispatchedDnsResolver::Plain(resolver) => {
-                Self::genuine_lookup_one_v6(domain_name, resolver).await
+                Self::genuine_lookup_one_v6(name, domain_name, resolver).await
             }
         }
     }
@@ -201,20 +216,24 @@ impl<P: RuntimeProvider> GenericDns<P> {
         }
         if let Some(resolver) = self.ns_policy.load().resolve(domain_name) {
             return match pref {
-                DnsPreference::Ipv4Only => Self::one_v4_wrapper(domain_name, resolver).await,
-                DnsPreference::Ipv6Only => Self::one_v6_wrapper(domain_name, resolver).await,
+                DnsPreference::Ipv4Only => {
+                    Self::one_v4_wrapper(&self.name, domain_name, resolver).await
+                }
+                DnsPreference::Ipv6Only => {
+                    Self::one_v6_wrapper(&self.name, domain_name, resolver).await
+                }
                 DnsPreference::PreferIpv4 => {
-                    if let Some(a) = Self::one_v4_wrapper(domain_name, resolver).await {
+                    if let Some(a) = Self::one_v4_wrapper(&self.name, domain_name, resolver).await {
                         Some(a)
                     } else {
-                        Self::one_v6_wrapper(domain_name, resolver).await
+                        Self::one_v6_wrapper(&self.name, domain_name, resolver).await
                     }
                 }
                 DnsPreference::PreferIpv6 => {
-                    if let Some(a) = Self::one_v6_wrapper(domain_name, resolver).await {
+                    if let Some(a) = Self::one_v6_wrapper(&self.name, domain_name, resolver).await {
                         Some(a)
                     } else {
-                        Self::one_v4_wrapper(domain_name, resolver).await
+                        Self::one_v4_wrapper(&self.name, domain_name, resolver).await
                     }
                 }
             };

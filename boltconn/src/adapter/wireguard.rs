@@ -78,6 +78,7 @@ impl Endpoint {
                     )
                 };
                 let dns = Arc::new(GenericDns::new_with_resolver(
+                    name,
                     resolver,
                     config.dns_preference,
                 ));
