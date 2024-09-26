@@ -185,7 +185,10 @@ impl Dispatcher {
             .iter()
             .map(|n| match n {
                 GeneralProxy::Single(p) => (p.get_name(), p.get_impl()),
-                GeneralProxy::Group(g) => (g.get_name(), g.get_proxy().get_impl()),
+                GeneralProxy::Group(g) => {
+                    let proxy = g.get_proxy();
+                    (proxy.get_name(), proxy.get_impl())
+                }
             })
             .collect();
         let mut res = vec![];

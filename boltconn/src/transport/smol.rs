@@ -384,6 +384,7 @@ impl Drop for UdpConnTask {
 //          Program -- TCP/UDP -> SmolStack -> IP -- Internet
 //                   \ TCP/UDP <- SmolStack <- IP /
 pub struct SmolStack {
+    name: String,
     tcp_conn: DashMap<u16, TcpConnTask>,
     udp_conn: DashMap<u16, UdpConnTask>,
     ip_addr: InterfaceAddress,
@@ -396,6 +397,7 @@ pub struct SmolStack {
 
 impl SmolStack {
     pub fn new(
+        name: &str,
         iface_ip: InterfaceAddress,
         mut ip_device: VirtualIpDevice,
         dns: Arc<GenericDns<SmolDnsProvider>>,
@@ -416,6 +418,7 @@ impl SmolStack {
             }
         });
         Self {
+            name: name.to_string(),
             tcp_conn: Default::default(),
             udp_conn: Default::default(),
             ip_addr: iface_ip,

@@ -40,6 +40,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub async fn new(
+        name: &str,
         outbound: AdapterOrSocket,
         config: &WireguardConfig,
         endpoint_resolver: Arc<Dns>,
@@ -80,7 +81,13 @@ impl Endpoint {
                     resolver,
                     config.dns_preference,
                 ));
-                Mutex::new(SmolStack::new(iface, device, dns, Duration::from_secs(120)))
+                Mutex::new(SmolStack::new(
+                    name,
+                    iface,
+                    device,
+                    dns,
+                    Duration::from_secs(120),
+                ))
             })
         };
 
@@ -265,6 +272,7 @@ impl WireguardManager {
 
     pub async fn get_wg_conn(
         &self,
+        name: &str,
         config: &WireguardConfig,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
@@ -310,6 +318,7 @@ impl WireguardManager {
                     }
                 };
                 let ep = Endpoint::new(
+                    name,
                     outbound,
                     config,
                     self.endpoint_resolver.clone(),
@@ -385,7 +394,7 @@ impl WireguardHandle {
         ret_tx: tokio::sync::oneshot::Sender<bool>,
     ) -> io::Result<Arc<Endpoint>> {
         self.manager
-            .get_wg_conn(&self.config, adapter, ret_tx)
+            .get_wg_conn(&self.name, &self.config, adapter, ret_tx)
             .await
             .map_err(|e| io_err(format!("{}", e).as_str()))
     }

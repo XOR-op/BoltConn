@@ -125,7 +125,8 @@ impl WireguardTunnel {
         let buf_pool = Arc::new({
             let pool = Pool::<Vec<u8>>::new();
             // allocate memory in advance
-            const INIT_POOL_SIZE: usize = 4096;
+            // TODO: profile to determine removal
+            const INIT_POOL_SIZE: usize = 128;
             let mut index_arr = [0; INIT_POOL_SIZE];
             for entry in index_arr.iter_mut() {
                 *entry = pool
