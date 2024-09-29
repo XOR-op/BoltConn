@@ -31,6 +31,7 @@ use tokio::task::JoinHandle;
 
 // Shared Wireguard Tunnel between multiple client connections
 pub struct Endpoint {
+    name: String,
     wg: Arc<WireguardTunnel>,
     stack: Arc<Mutex<SmolStack>>,
     stop_sender: broadcast::Sender<()>,
@@ -101,15 +102,15 @@ impl Endpoint {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
             let timer = last_active.clone();
+            let name = name.to_string();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 loop {
-                    if tunnel
-                        .send_outgoing_packet(&mut smol_wg_rx, &mut buf)
-                        .await
-                        .is_err()
-                    {
+                    if let Err(e) = tunnel.send_outgoing_packet(&mut smol_wg_rx, &mut buf).await {
                         let _ = stop_send.send(());
+                        tracing::trace!(
+                            "[WireGuard] Close connection #{name} for send_outgoing_packet for {e}",
+                        );
                         return;
                     }
                     *timer.lock().await = Instant::now();
@@ -121,6 +122,7 @@ impl Endpoint {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
             let timer = last_active.clone();
+            let name = name.to_string();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 let mut wg_buf = [0u8; MAX_PKT_SIZE];
@@ -131,8 +133,9 @@ impl Endpoint {
                     {
                         Ok(true) => *timer.lock().await = Instant::now(),
                         Ok(false) => {}
-                        Err(_) => {
+                        Err(e) => {
                             let _ = stop_send.send(());
+                            tracing::trace!("[WireGuard] Close connection #{} for {}", name, e);
                             return;
                         }
                     }
@@ -229,6 +232,7 @@ impl Endpoint {
             });
         }
 
+        let name_clone = name.to_string();
         tokio::spawn(async move {
             // kill all coroutine
             let _ = stop_recv.recv().await;
@@ -237,9 +241,13 @@ impl Endpoint {
             wg_in.abort();
             wg_tick.abort();
             smol_drive.abort();
+            tracing::trace!("[WireGuard] connection #{} killed", name_clone);
         });
 
+        tracing::info!("[WireGuard] Established master connection #{}", name);
+
         Ok(Arc::new(Self {
+            name: name.to_string(),
             wg: tunnel,
             stack: smol_stack,
             stop_sender: stop_send,
