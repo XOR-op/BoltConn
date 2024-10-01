@@ -151,6 +151,7 @@ impl WireguardTunnel {
                         let socket = Arc::new(s);
                         let socket_clone = socket.clone();
                         let pool = buf_pool.clone();
+                        let name = config.name.clone();
                         local_async_run(async move {
                             // dedicated to poll UDP from small kernel buffer
                             loop {
@@ -166,8 +167,16 @@ impl WireguardTunnel {
                                     }
                                     None => {
                                         let mut buf = vec![0; MAX_UDP_PKT_SIZE];
-                                        let Ok(len) = socket.recv(&mut buf).await else {
-                                            break;
+                                        let len = match socket.recv(&mut buf).await {
+                                            Ok(len) => len,
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "WireGuard #{} failed to receive: {}",
+                                                    name,
+                                                    e
+                                                );
+                                                break;
+                                            }
                                         };
                                         buf.resize(len, 0);
                                         BufferIndex::Raw(buf)
@@ -181,9 +190,17 @@ impl WireguardTunnel {
                                 }
                             }
                         });
+                        let name = config.name.clone();
                         tokio::spawn(async move {
                             while let Ok(data) = out_rx.recv_async().await {
-                                socket_clone.send(&data).await?;
+                                if let Err(e) = socket_clone.send(&data).await {
+                                    tracing::warn!(
+                                        "WireGuard #{} outbound send failed: {}",
+                                        name,
+                                        e
+                                    );
+                                    return Err(e);
+                                }
                             }
                             Ok::<(), io::Error>(())
                         });
@@ -340,7 +357,9 @@ impl WireguardTunnelInner {
             AdapterOrChannel::Channel(c, _) => {
                 let data = Bytes::copy_from_slice(data);
                 let len = data.len();
-                let _ = c.send(data);
+                c.send_async(data)
+                    .await
+                    .map_err(|_| io_err("WireGuard outbound channel closed"))?;
                 Ok(len)
             }
         }
