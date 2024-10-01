@@ -316,6 +316,11 @@ impl WireguardTunnel {
             }
         }
     }
+
+    pub async fn stats(&self) -> (bool, Option<std::time::Duration>) {
+        let tun = self.tunnel.lock().await;
+        (tun.is_expired(), tun.stats().0)
+    }
 }
 
 impl WireguardTunnelInner {

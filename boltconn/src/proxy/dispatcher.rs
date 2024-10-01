@@ -80,6 +80,10 @@ impl Dispatcher {
         self.modifier.store(Arc::new(closure));
     }
 
+    pub fn get_wg_mgr(&self) -> Arc<WireguardManager> {
+        self.wireguard_mgr.clone()
+    }
+
     pub(super) fn get_iface_name(&self) -> String {
         self.iface_name.clone()
     }

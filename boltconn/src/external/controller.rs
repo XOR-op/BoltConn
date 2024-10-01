@@ -9,7 +9,8 @@ use crate::proxy::{
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
-    HttpInterceptSchema, ProcessSchema, ProxyData, SessionSchema, TrafficResp, TunStatusSchema,
+    HttpInterceptSchema, MasterConnectionStatus, ProcessSchema, ProxyData, SessionSchema,
+    TrafficResp, TunStatusSchema,
 };
 use std::collections::HashSet;
 use std::io::Write;
@@ -387,6 +388,10 @@ impl Controller {
 
     pub fn get_conn_log_limit(&self) -> u32 {
         self.stat_center.get_conn_log_limit()
+    }
+
+    pub async fn get_master_conn_stat(&self) -> Vec<MasterConnectionStatus> {
+        self.dispatcher.get_wg_mgr().debug_internal_state().await
     }
 
     pub async fn real_lookup(&self, domain_name: String) -> Option<String> {

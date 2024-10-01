@@ -306,6 +306,27 @@ impl Requester {
             Inner::Uds(c) => c.reload_config().await,
         }
     }
+
+    pub async fn master_conn_stats(&self) -> Result<()> {
+        match &self.inner {
+            Inner::Web(_) => Err(anyhow::anyhow!("conn-stats: Not supported by RESTful API")),
+            Inner::Uds(c) => {
+                let list = c.get_master_conn_stat().await?;
+                for entry in list {
+                    let alive_str = |alive: bool| if alive { "alive" } else { "dead" };
+                    println!(
+                        "{}:\t smol[{}, last active in {}s], wg=[{}, last handshake in {}s]",
+                        entry.name,
+                        alive_str(entry.alive),
+                        entry.last_active,
+                        alive_str(!entry.hand_shake_is_expired),
+                        entry.last_handshake
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 fn pretty_size(data: u64) -> String {

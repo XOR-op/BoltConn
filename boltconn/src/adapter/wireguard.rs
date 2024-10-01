@@ -21,7 +21,6 @@ use hickory_resolver::AsyncResolver;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use std::time::{Duration, Instant};
@@ -36,7 +35,8 @@ pub struct Endpoint {
     stack: Arc<Mutex<SmolStack>>,
     stop_sender: broadcast::Sender<()>,
     notify: Arc<Notify>,
-    is_active: Arc<AtomicBool>,
+    is_active: AbortCanary,
+    last_active: Arc<Mutex<Instant>>,
 }
 
 impl Endpoint {
@@ -94,8 +94,7 @@ impl Endpoint {
         };
 
         let last_active = Arc::new(Mutex::new(Instant::now()));
-        let indicator = Arc::new(AtomicBool::new(true));
-        let indi_write = indicator.clone();
+        let (indicator, indi_write) = AbortCanary::pair();
 
         // drive wg tunnel
         let wg_out = {
@@ -175,15 +174,15 @@ impl Endpoint {
         };
 
         // drive smol
-        let smol_drive = {
+        {
             let smol_stack = smol_stack.clone();
             let notifier = notify.clone();
-            let (abort_canary, canary_clone) = AbortCanary::pair();
+            let smol_canary = indicator.clone();
 
             local_async_run(async move {
                 let mut immediate_next_loop = false;
                 notifier.notified().await;
-                while abort_canary.alive() {
+                while smol_canary.alive() {
                     let mut stack_handle = smol_stack.lock().await;
                     stack_handle.drive_iface();
                     immediate_next_loop |= stack_handle.poll_all_tcp().await;
@@ -206,19 +205,20 @@ impl Endpoint {
                     }
                     immediate_next_loop = false;
                 }
+                smol_canary.abort();
             });
-            canary_clone
-        };
+        }
 
         // timeout inactive tunnel
         {
             let stop_send = stop_send.clone();
-            let indi_write = indi_write.clone();
+            let indi_write = indicator.clone();
             let name = config.name.clone();
+            let last_active = last_active.clone();
             tokio::spawn(async move {
                 loop {
                     if last_active.lock().await.elapsed() > timeout {
-                        indi_write.store(false, Ordering::Relaxed);
+                        indi_write.abort();
                         let _ = stop_send.send(());
                         tracing::debug!(
                             "[WireGuard] Stop inactive tunnel #{} after for {}s.",
@@ -236,11 +236,10 @@ impl Endpoint {
         tokio::spawn(async move {
             // kill all coroutine
             let _ = stop_recv.recv().await;
-            indi_write.store(false, Ordering::Relaxed);
+            indi_write.abort();
             wg_out.abort();
             wg_in.abort();
             wg_tick.abort();
-            smol_drive.abort();
             tracing::trace!("[WireGuard] connection #{} killed", name_clone);
         });
 
@@ -253,11 +252,23 @@ impl Endpoint {
             stop_sender: stop_send,
             notify,
             is_active: indicator,
+            last_active,
         }))
     }
 
     pub fn clone_notify(&self) -> Arc<Notify> {
         self.notify.clone()
+    }
+
+    pub async fn debug_internal_state(&self) -> boltapi::MasterConnectionStatus {
+        let tunn_state = self.wg.stats().await;
+        boltapi::MasterConnectionStatus {
+            name: self.name.clone(),
+            alive: self.is_active.alive(),
+            last_active: self.last_active.lock().await.elapsed().as_secs(),
+            last_handshake: tunn_state.1.map(|x| x.as_secs()).unwrap_or(114514),
+            hand_shake_is_expired: tunn_state.0,
+        }
     }
 }
 
@@ -290,7 +301,7 @@ impl WireguardManager {
             // get an existing conn, or create
             let mut guard = self.active_conn.lock().await;
             if let Some(endpoint) = guard.get(config) {
-                if endpoint.is_active.load(Ordering::Relaxed) {
+                if endpoint.is_active.alive() {
                     let _ = ret_tx.send(false);
                     return Ok(endpoint.clone());
                 } else {
@@ -341,6 +352,16 @@ impl WireguardManager {
         Err(TransportError::WireGuard(
             "get_wg_conn: unexpected loop time",
         ))
+    }
+
+    pub async fn debug_internal_state(&self) -> Vec<boltapi::MasterConnectionStatus> {
+        let conns = self.active_conn.lock().await;
+        let mut ret = Vec::new();
+        for (_, v) in conns.iter() {
+            let r = v.debug_internal_state().await;
+            ret.push(r);
+        }
+        ret
     }
 }
 

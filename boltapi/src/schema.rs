@@ -118,3 +118,13 @@ pub struct TrafficResp {
 pub struct TunStatusSchema {
     pub enabled: bool,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MasterConnectionStatus {
+    pub name: String,
+    pub alive: bool,
+    pub last_active: u64,
+    pub last_handshake: u64,
+    pub hand_shake_is_expired: bool,
+}
