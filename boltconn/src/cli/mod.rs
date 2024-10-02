@@ -385,6 +385,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
             DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
         },
+        #[cfg(feature = "internal-test")]
         SubCommand::MasterConn(opt) => match opt {
             MasterConnOptions::Wg => requester.master_conn_stats().await,
         },

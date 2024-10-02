@@ -109,7 +109,7 @@ impl TunUdpInbound {
                 // hijack dns
                 if let Ok(answer) = self.dns.respond_to_query(payload.as_ref()) {
                     let raw_data = create_raw_udp_pkt(answer.as_ref(), dst, src);
-                    if let Err(e) = self.tun_tx.send_async(raw_data.freeze()).await {
+                    if self.tun_tx.send_async(raw_data.freeze()).await.is_err() {
                         tracing::error!("TUN back tx closed");
                     }
                 }
