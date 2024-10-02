@@ -143,7 +143,9 @@ impl TcpConnTask {
         // notify smol when new message comes
         tokio::spawn(async move {
             while let Some(buf) = back_rx.recv().await {
-                let _ = tx.send_async(buf).await;
+                if tx.send_async(buf).await.is_err() {
+                    return;
+                }
                 notify.notify_one();
             }
         });
@@ -307,7 +309,9 @@ impl UdpConnTask {
                         .await
                         .map(|ip| SocketAddr::new(ip, port)),
                 } {
-                    let _ = tx.send_async((buf, dst)).await;
+                    if tx.send_async((buf, dst)).await.is_err() {
+                        return;
+                    }
                     notify.notify_one();
                 }
             }
