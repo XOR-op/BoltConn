@@ -426,10 +426,10 @@ async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
             ref domain_name,
             port,
         } => {
-            let resp = dns
-                .genuine_lookup(domain_name.as_str())
-                .await
-                .ok_or_else(|| io_err("dns not found"))?;
+            let resp = match dns.genuine_lookup(domain_name.as_str()).await {
+                Ok(Some(resp)) => resp,
+                _ => return Err(io_err("dns not found")),
+            };
             SocketAddr::new(resp, *port)
         }
     })
@@ -440,9 +440,10 @@ pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAd
         NetworkAddr::DomainName { domain_name, port } => {
             // translate fake ip
             SocketAddr::new(
-                dns.genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or_else(|| io_err("DNS failed"))?,
+                match dns.genuine_lookup(domain_name.as_str()).await {
+                    Ok(Some(resp)) => resp,
+                    _ => return Err(io_err("dns not found")),
+                },
                 *port,
             )
         }

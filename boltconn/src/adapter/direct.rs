@@ -127,7 +127,7 @@ impl UdpSocketAdapter for DirectUdpAdapter {
         let addr = match addr {
             NetworkAddr::Raw(s) => s,
             NetworkAddr::DomainName { domain_name, port } => {
-                let Some(ip) = self.1.genuine_lookup(domain_name.as_str()).await else {
+                let Ok(Some(ip)) = self.1.genuine_lookup(domain_name.as_str()).await else {
                     // drop
                     return Ok(());
                 };

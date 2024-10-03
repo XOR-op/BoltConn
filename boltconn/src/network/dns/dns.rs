@@ -3,18 +3,54 @@ use crate::network::dns::dns_table::DnsTable;
 use crate::network::dns::hosts::HostsResolver;
 use crate::network::dns::ns_policy::{DispatchedDnsResolver, NameserverPolicies};
 use crate::network::dns::provider::IfaceProvider;
+use crate::proxy::error::TransportError;
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
 use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
 use hickory_resolver::config::*;
+use hickory_resolver::error::ResolveErrorKind;
 use hickory_resolver::name_server::{GenericConnector, RuntimeProvider};
 use hickory_resolver::AsyncResolver;
 use std::collections::HashMap;
 use std::io;
-use std::io::Result;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
+
+macro_rules! impl_genuine_lookup {
+    ($func_name:ident, $lookup_type:ident) => {
+        async fn $func_name<R: RuntimeProvider>(
+            name: &str,
+            domain_name: &str,
+            resolver: &AsyncResolver<GenericConnector<R>>,
+        ) -> Result<Option<IpAddr>, TransportError> {
+            const TIMEOUT_SEC: u64 = 5;
+            if let Ok(r) = tokio::time::timeout(
+                Duration::from_secs(TIMEOUT_SEC),
+                resolver.$lookup_type(domain_name),
+            )
+            .await
+            {
+                return match r {
+                    Ok(result) => Ok(result.iter().next().map(|i| i.0.into())),
+                    Err(e) => match e.kind().clone() {
+                        ResolveErrorKind::Io(err) => Err(TransportError::Io(err)),
+                        _ => Ok(None),
+                    },
+                };
+            } else {
+                tracing::debug!(
+                    "DNS {} {} lookup for {} timeout: {}s",
+                    name,
+                    stringify!($lookup_type),
+                    domain_name,
+                    TIMEOUT_SEC
+                );
+            }
+            Ok(None)
+        }
+    };
+}
 
 pub struct GenericDns<P: RuntimeProvider> {
     name: String,
@@ -112,67 +148,31 @@ impl<P: RuntimeProvider> GenericDns<P> {
         })
     }
 
-    async fn genuine_lookup_v4(&self, domain_name: &str) -> Option<IpAddr> {
+    async fn genuine_lookup_v4(&self, domain_name: &str) -> Result<Option<IpAddr>, TransportError> {
         for r in self.resolvers.load().iter() {
-            if let Some(ip) = Self::genuine_lookup_one_v4(&self.name, domain_name, r).await {
-                return Some(ip);
+            if let Some(ip) = Self::genuine_lookup_one_v4(&self.name, domain_name, r).await? {
+                return Ok(Some(ip));
             }
         }
-        None
+        Ok(None)
     }
-
-    async fn genuine_lookup_one_v4<R: RuntimeProvider>(
-        name: &str,
-        domain_name: &str,
-        resolver: &AsyncResolver<GenericConnector<R>>,
-    ) -> Option<IpAddr> {
-        if let Ok(r) =
-            tokio::time::timeout(Duration::from_secs(5), resolver.ipv4_lookup(domain_name)).await
-        {
-            if let Ok(result) = r {
-                if let Some(i) = result.iter().next() {
-                    return Some(i.0.into());
-                }
-            }
-        } else {
-            tracing::debug!("DNS {name} v4 lookup for {domain_name} timeout: 5s");
-        }
-        None
-    }
-
-    async fn genuine_lookup_v6(&self, domain_name: &str) -> Option<IpAddr> {
+    async fn genuine_lookup_v6(&self, domain_name: &str) -> Result<Option<IpAddr>, TransportError> {
         for r in self.resolvers.load().iter() {
-            if let Some(ip) = Self::genuine_lookup_one_v6(&self.name, domain_name, r).await {
-                return Some(ip);
+            if let Some(ip) = Self::genuine_lookup_one_v6(&self.name, domain_name, r).await? {
+                return Ok(Some(ip));
             }
         }
-        None
+        Ok(None)
     }
 
-    async fn genuine_lookup_one_v6<R: RuntimeProvider>(
-        name: &str,
-        domain_name: &str,
-        resolver: &AsyncResolver<GenericConnector<R>>,
-    ) -> Option<IpAddr> {
-        if let Ok(r) =
-            tokio::time::timeout(Duration::from_secs(5), resolver.ipv6_lookup(domain_name)).await
-        {
-            if let Ok(result) = r {
-                if let Some(i) = result.iter().next() {
-                    return Some(i.0.into());
-                }
-            }
-        } else {
-            tracing::debug!("DNS {name} v6 lookup for {domain_name} timeout: 5s");
-        }
-        None
-    }
+    impl_genuine_lookup!(genuine_lookup_one_v4, ipv4_lookup);
+    impl_genuine_lookup!(genuine_lookup_one_v6, ipv6_lookup);
 
     async fn one_v4_wrapper(
         name: &str,
         domain_name: &str,
         resolver: &DispatchedDnsResolver,
-    ) -> Option<IpAddr> {
+    ) -> Result<Option<IpAddr>, TransportError> {
         match resolver {
             DispatchedDnsResolver::Iface(resolver) => {
                 Self::genuine_lookup_one_v4(name, domain_name, resolver).await
@@ -187,7 +187,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
         name: &str,
         domain_name: &str,
         resolver: &DispatchedDnsResolver,
-    ) -> Option<IpAddr> {
+    ) -> Result<Option<IpAddr>, TransportError> {
         match resolver {
             DispatchedDnsResolver::Iface(resolver) => {
                 Self::genuine_lookup_one_v6(name, domain_name, resolver).await
@@ -198,7 +198,10 @@ impl<P: RuntimeProvider> GenericDns<P> {
         }
     }
 
-    pub async fn genuine_lookup(&self, domain_name: &str) -> Option<IpAddr> {
+    pub async fn genuine_lookup(
+        &self,
+        domain_name: &str,
+    ) -> Result<Option<IpAddr>, TransportError> {
         self.genuine_lookup_with(domain_name, self.preference).await
     }
 
@@ -206,12 +209,12 @@ impl<P: RuntimeProvider> GenericDns<P> {
         &self,
         domain_name: &str,
         pref: DnsPreference,
-    ) -> Option<IpAddr> {
+    ) -> Result<Option<IpAddr>, TransportError> {
         if let Some(ip) = self.host_resolver.load().resolve(domain_name) {
             if (matches!(pref, DnsPreference::Ipv6Only) && ip.is_ipv6())
                 || (matches!(pref, DnsPreference::Ipv4Only) && ip.is_ipv4())
             {
-                return Some(ip);
+                return Ok(Some(ip));
             }
         }
         if let Some(resolver) = self.ns_policy.load().resolve(domain_name) {
@@ -223,15 +226,19 @@ impl<P: RuntimeProvider> GenericDns<P> {
                     Self::one_v6_wrapper(&self.name, domain_name, resolver).await
                 }
                 DnsPreference::PreferIpv4 => {
-                    if let Some(a) = Self::one_v4_wrapper(&self.name, domain_name, resolver).await {
-                        Some(a)
+                    if let Ok(Some(a)) =
+                        Self::one_v4_wrapper(&self.name, domain_name, resolver).await
+                    {
+                        Ok(Some(a))
                     } else {
                         Self::one_v6_wrapper(&self.name, domain_name, resolver).await
                     }
                 }
                 DnsPreference::PreferIpv6 => {
-                    if let Some(a) = Self::one_v6_wrapper(&self.name, domain_name, resolver).await {
-                        Some(a)
+                    if let Ok(Some(a)) =
+                        Self::one_v6_wrapper(&self.name, domain_name, resolver).await
+                    {
+                        Ok(Some(a))
                     } else {
                         Self::one_v4_wrapper(&self.name, domain_name, resolver).await
                     }
@@ -242,15 +249,15 @@ impl<P: RuntimeProvider> GenericDns<P> {
             DnsPreference::Ipv4Only => self.genuine_lookup_v4(domain_name).await,
             DnsPreference::Ipv6Only => self.genuine_lookup_v6(domain_name).await,
             DnsPreference::PreferIpv4 => {
-                if let Some(a) = self.genuine_lookup_v4(domain_name).await {
-                    Some(a)
+                if let Ok(Some(a)) = self.genuine_lookup_v4(domain_name).await {
+                    Ok(Some(a))
                 } else {
                     self.genuine_lookup_v6(domain_name).await
                 }
             }
             DnsPreference::PreferIpv6 => {
-                if let Some(a) = self.genuine_lookup_v6(domain_name).await {
-                    Some(a)
+                if let Ok(Some(a)) = self.genuine_lookup_v6(domain_name).await {
+                    Ok(Some(a))
                 } else {
                     self.genuine_lookup_v4(domain_name).await
                 }
@@ -263,6 +270,8 @@ impl<P: RuntimeProvider> GenericDns<P> {
         if let Some(record) = self.table.query_by_ip(fake_ip) {
             self.genuine_lookup(&record.domain_name)
                 .await
+                .ok()
+                .flatten()
                 .unwrap_or(fake_ip)
         } else {
             tracing::debug!("Failed to extract fake_ip: {}", fake_ip);
@@ -270,7 +279,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
         }
     }
 
-    pub fn respond_to_query(&self, pkt: &[u8]) -> Result<Vec<u8>> {
+    pub fn respond_to_query(&self, pkt: &[u8]) -> io::Result<Vec<u8>> {
         // https://stackoverflow.com/questions/55092830/how-to-perform-dns-lookup-with-multiple-questions
         // There should be no >1 questions in on query
         let err = Err(io::Error::new(io::ErrorKind::InvalidData, "fail to answer"));

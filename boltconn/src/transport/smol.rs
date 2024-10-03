@@ -298,7 +298,7 @@ impl UdpConnTask {
                             None
                         }
                     }
-                    NetworkAddr::DomainName { domain_name, port } => dns
+                    NetworkAddr::DomainName { domain_name, port } => match dns
                         .genuine_lookup_with(
                             domain_name.as_str(),
                             match socket_version {
@@ -307,7 +307,11 @@ impl UdpConnTask {
                             },
                         )
                         .await
-                        .map(|ip| SocketAddr::new(ip, port)),
+                    {
+                        Ok(Some(ip)) => Some(SocketAddr::new(ip, port)),
+                        Ok(None) => None,
+                        Err(_) => return,
+                    },
                 } {
                     if tx.send_async((buf, dst)).await.is_err() {
                         return;

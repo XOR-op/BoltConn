@@ -407,10 +407,10 @@ impl WireguardHandle {
         let dst = match self.dst {
             NetworkAddr::Raw(s) => s,
             NetworkAddr::DomainName { domain_name, port } => SocketAddr::new(
-                smol_dns
-                    .genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
+                match smol_dns.genuine_lookup(domain_name.as_str()).await {
+                    Ok(Some(addr)) => addr,
+                    _ => return Err(ErrorKind::AddrNotAvailable.into()),
+                },
                 port,
             ),
         };

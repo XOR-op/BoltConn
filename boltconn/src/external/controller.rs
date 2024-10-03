@@ -395,10 +395,10 @@ impl Controller {
     }
 
     pub async fn real_lookup(&self, domain_name: String) -> Option<String> {
-        self.dns
-            .genuine_lookup(domain_name.as_str())
-            .await
-            .map(|ip| ip.to_string())
+        match self.dns.genuine_lookup(domain_name.as_str()).await {
+            Ok(Some(ip)) => Some(ip.to_string()),
+            _ => None,
+        }
     }
 
     pub fn fake_ip_to_real(&self, fake_ip: String) -> Option<String> {

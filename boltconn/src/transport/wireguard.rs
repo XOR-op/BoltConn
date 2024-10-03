@@ -109,7 +109,7 @@ impl WireguardTunnel {
             } => {
                 let resp = dns
                     .genuine_lookup(domain_name)
-                    .await
+                    .await?
                     .ok_or_else(|| io_err("dns not found"))?;
                 SocketAddr::new(resp, port)
             }
