@@ -3,7 +3,7 @@ use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::{ClientStreamServiceRequest, ClientStreamServiceResponse, ControlServiceClient};
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
-    TunStatusSchema,
+    MasterConnectionStatus, TunStatusSchema,
 };
 use tarpc::context::Context;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
@@ -170,5 +170,9 @@ impl UdsConnector {
 
     pub async fn reload_config(&self) -> Result<()> {
         Ok(self.client.reload(Context::current()).await?)
+    }
+
+    pub async fn get_master_conn_stat(&self) -> Result<Vec<MasterConnectionStatus>> {
+        Ok(self.client.get_master_conn_stat(Context::current()).await?)
     }
 }

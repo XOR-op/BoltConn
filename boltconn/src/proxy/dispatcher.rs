@@ -80,12 +80,17 @@ impl Dispatcher {
         self.modifier.store(Arc::new(closure));
     }
 
+    pub fn get_wg_mgr(&self) -> Arc<WireguardManager> {
+        self.wireguard_mgr.clone()
+    }
+
     pub(super) fn get_iface_name(&self) -> String {
         self.iface_name.clone()
     }
 
     pub(super) fn build_normal_outbound(
         &self,
+        proxy_name: &str,
         iface_name: &str,
         proxy_config: &ProxyImpl,
         src_addr: SocketAddr,
@@ -104,6 +109,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Http(cfg) => (
                 Box::new(HttpOutbound::new(
+                    proxy_name,
                     iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
@@ -113,6 +119,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Socks5(cfg) => (
                 Box::new(Socks5Outbound::new(
+                    proxy_name,
                     iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
@@ -122,6 +129,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Shadowsocks(cfg) => (
                 Box::new(SSOutbound::new(
+                    proxy_name,
                     iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
@@ -131,6 +139,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Trojan(cfg) => (
                 Box::new(TrojanOutbound::new(
+                    proxy_name,
                     iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
@@ -140,6 +149,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Wireguard(cfg) => (
                 Box::new(WireguardHandle::new(
+                    proxy_name,
                     src_addr,
                     dst_addr.clone(),
                     cfg.clone(),
@@ -150,6 +160,7 @@ impl Dispatcher {
             ),
             ProxyImpl::Ssh(cfg) => (
                 Box::new(SshOutboundHandle::new(
+                    proxy_name,
                     iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
@@ -168,6 +179,7 @@ impl Dispatcher {
 
     pub(super) fn create_chain(
         &self,
+        chain_name: &str,
         vec: &[GeneralProxy],
         src_addr: SocketAddr,
         dst_addr: &NetworkAddr,
@@ -176,8 +188,11 @@ impl Dispatcher {
         let impls: Vec<_> = vec
             .iter()
             .map(|n| match n {
-                GeneralProxy::Single(p) => p.get_impl(),
-                GeneralProxy::Group(g) => g.get_proxy().get_impl(),
+                GeneralProxy::Single(p) => (p.get_name(), p.get_impl()),
+                GeneralProxy::Group(g) => {
+                    let proxy = g.get_proxy();
+                    (proxy.get_name(), proxy.get_impl())
+                }
             })
             .collect();
         let mut res = vec![];
@@ -187,7 +202,7 @@ impl Dispatcher {
         // if A->B->C, then vec is [C, B, A]
         dst_addrs.push(dst_addr.clone());
         for idx in 1..vec.len() {
-            let proxy_impl = impls.get(idx - 1).unwrap().as_ref();
+            let proxy_impl = impls.get(idx - 1).unwrap().1.as_ref();
             if let Some(dst) = proxy_impl.server_addr() {
                 dst_addrs.push(dst);
             } else {
@@ -197,16 +212,18 @@ impl Dispatcher {
         }
 
         for idx in 0..vec.len() {
+            let proxy = impls.get(idx).unwrap();
             let (outbounding, _) = self.build_normal_outbound(
+                &proxy.0,
                 iface_name,
-                impls.get(idx).unwrap().as_ref(),
+                &proxy.1,
                 src_addr,
                 dst_addrs.get(idx).unwrap(),
                 None,
             )?;
             res.push(outbounding);
         }
-        Ok(ChainOutbound::new(res))
+        Ok(ChainOutbound::new(chain_name, res))
     }
 
     pub async fn submit_tcp<S: StreamOutboundTrait>(
@@ -238,7 +255,7 @@ impl Dispatcher {
             match proxy_config.as_ref() {
                 ProxyImpl::Chain(vec) => (
                     Box::new(
-                        self.create_chain(vec, src_addr, &dst_addr, iface_name)
+                        self.create_chain(&proxy_name, vec, src_addr, &dst_addr, iface_name)
                             .map_err(|_| DispatchError::BadChain)?,
                     ),
                     OutboundType::Chain,
@@ -252,6 +269,7 @@ impl Dispatcher {
                 }
                 _ => self
                     .build_normal_outbound(
+                        &proxy_name,
                         iface_name,
                         proxy_config.as_ref(),
                         src_addr,
@@ -405,7 +423,7 @@ impl Dispatcher {
             match proxy_config.as_ref() {
                 ProxyImpl::Chain(vec) => (
                     Box::new(
-                        self.create_chain(vec, src_addr, &dst_addr, iface_name)
+                        self.create_chain(&proxy_name, vec, src_addr, &dst_addr, iface_name)
                             .map_err(|_| DispatchError::Reject)?,
                     ),
                     OutboundType::Chain,
@@ -413,6 +431,7 @@ impl Dispatcher {
                 ProxyImpl::BlackHole => return Err(DispatchError::BlackHole),
                 _ => self
                     .build_normal_outbound(
+                        &proxy_name,
                         iface_name,
                         proxy_config.as_ref(),
                         src_addr,

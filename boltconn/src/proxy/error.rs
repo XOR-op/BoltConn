@@ -44,6 +44,8 @@ pub enum TransportError {
     WireGuard(&'static str),
     #[error("SSH error: {0}")]
     Ssh(#[from] russh::Error),
+    #[error("Timeout: {0}")]
+    Timeout(&'static str),
 }
 
 #[derive(Error, Debug)]
@@ -52,6 +54,8 @@ pub enum DnsError {
     MissingBootstrap(String),
     #[error("Failed to resolve dns server: {0}")]
     ResolveServer(String),
+    #[error("Failed to resolve domain name: {0}")]
+    ResolveDomain(String),
 }
 
 #[derive(Error, Debug)]

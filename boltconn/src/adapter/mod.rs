@@ -36,7 +36,6 @@ pub use direct::*;
 pub use socks5::*;
 pub use ssh::*;
 use std::future::Future;
-use std::io::ErrorKind;
 pub use tcp_adapter::*;
 pub use trojan::*;
 pub use udp_adapter::*;
@@ -167,6 +166,10 @@ impl OutboundType {
 
 #[async_trait]
 pub trait Outbound: Send + Sync {
+    /// Get the globally unique id of the outbound to distinguish it
+    /// even from others with the same type.
+    fn id(&self) -> String;
+
     fn outbound_type(&self) -> OutboundType;
 
     /// Run with tokio::spawn.
@@ -174,7 +177,7 @@ pub trait Outbound: Send + Sync {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>>;
+    ) -> JoinHandle<Result<(), TransportError>>;
 
     /// Return whether outbound is used
     async fn spawn_tcp_with_outbound(
@@ -183,7 +186,7 @@ pub trait Outbound: Send + Sync {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool>;
+    ) -> Result<bool, TransportError>;
 
     /// Run with tokio::spawn.
     fn spawn_udp(
@@ -191,7 +194,7 @@ pub trait Outbound: Send + Sync {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>>;
+    ) -> JoinHandle<Result<(), TransportError>>;
 
     /// Return whether outbound is used
     async fn spawn_udp_with_outbound(
@@ -201,28 +204,33 @@ pub trait Outbound: Send + Sync {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<bool>;
+    ) -> Result<bool, TransportError>;
 }
 
-fn empty_handle() -> JoinHandle<io::Result<()>> {
-    tokio::spawn(async move { Err(io_err("Invalid spawn")) })
+fn empty_handle() -> JoinHandle<Result<(), TransportError>> {
+    tokio::spawn(async move { Err(TransportError::Internal("Invalid spawn")) })
 }
 
 #[tracing::instrument(skip_all)]
-async fn established_tcp<T>(inbound: Connector, outbound: T, abort_handle: ConnAbortHandle)
-where
+async fn established_tcp<T>(
+    name: String,
+    inbound: Connector,
+    outbound: T,
+    abort_handle: ConnAbortHandle,
+) where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     let (mut out_read, mut out_write) = tokio::io::split(outbound);
     let Connector { tx, mut rx } = inbound;
     // recv from inbound and send to outbound
     let abort_handle2 = abort_handle.clone();
+    let name2 = name.clone();
     let _guard = DuplexCloseGuard::new(
         tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
                 let res = out_write.write_all(buf.as_ref()).await;
                 if let Err(err) = res {
-                    tracing::debug!("write to outbound failed: {}", err);
+                    tracing::debug!("[{}] write to outbound failed: {}", name2, err);
                     abort_handle2.cancel();
                     break;
                 }
@@ -248,7 +256,7 @@ where
                     }
                 }
                 Err(err) => {
-                    tracing::debug!("outbound read error: {}", err);
+                    tracing::debug!("[{}] outbound read error: {}", name, err);
                     abort_handle.cancel();
                     break;
                 }
@@ -259,6 +267,7 @@ where
 
 #[tracing::instrument(skip_all)]
 async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
+    name: String,
     inbound: AddrConnector,
     outbound: S,
     tunnel_addr: Option<NetworkAddr>,
@@ -270,6 +279,7 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     let tunnel_addr2 = tunnel_addr.clone();
     let AddrConnector { tx, mut rx } = inbound;
     let abort_handle2 = abort_handle.clone();
+    let name2 = name.clone();
     let _guard = UdpDropGuard(tokio::spawn(async move {
         // recv from outbound and send to inbound
         loop {
@@ -288,12 +298,12 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                         }
                     }
                     if tx.send((buf.freeze(), addr)).await.is_err() {
-                        tracing::debug!("write to inbound failed");
+                        tracing::debug!("[{}] write to inbound failed", name);
                         break;
                     }
                 }
                 Err(err) => {
-                    tracing::debug!("outbound read error: {}", err);
+                    tracing::debug!("[{}] outbound read error: {}", name, err);
                     break;
                 }
             }
@@ -305,7 +315,7 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
         let addr = tunnel_addr2.clone().unwrap_or(addr);
         let res = outbound2.send_to(buf.as_ref(), addr).await;
         if let Err(err) = res {
-            tracing::debug!("write to outbound failed: {}", err);
+            tracing::debug!("[{}] write to outbound failed: {}", name2, err);
             break;
         }
     }
@@ -415,10 +425,10 @@ async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
             ref domain_name,
             port,
         } => {
-            let resp = dns
-                .genuine_lookup(domain_name.as_str())
-                .await
-                .ok_or_else(|| io_err("dns not found"))?;
+            let resp = match dns.genuine_lookup(domain_name.as_str()).await {
+                Ok(Some(resp)) => resp,
+                _ => return Err(io_err("dns not found")),
+            };
             SocketAddr::new(resp, *port)
         }
     })
@@ -429,9 +439,10 @@ pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAd
         NetworkAddr::DomainName { domain_name, port } => {
             // translate fake ip
             SocketAddr::new(
-                dns.genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or_else(|| io_err("DNS failed"))?,
+                match dns.genuine_lookup(domain_name.as_str()).await {
+                    Ok(Some(resp)) => resp,
+                    _ => return Err(io_err("dns not found")),
+                },
                 *port,
             )
         }
@@ -439,14 +450,14 @@ pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAd
     })
 }
 
-pub(super) async fn connect_timeout<F: Future<Output = io::Result<()>>>(
+pub(super) async fn connect_timeout<F: Future<Output = Result<(), TransportError>>>(
     future: F,
     component_str: &str,
-) -> io::Result<()> {
+) -> Result<(), TransportError> {
     tokio::time::timeout(Duration::from_secs(10), future)
         .await
         .unwrap_or_else(|_| {
             tracing::debug!("{} timeout after 10s", component_str);
-            Err(ErrorKind::TimedOut.into())
+            Err(TransportError::Timeout("connect"))
         })
 }

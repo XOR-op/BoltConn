@@ -1,6 +1,6 @@
 use crate::{
-    ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema, TrafficResp,
-    TunStatusSchema,
+    ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
+    MasterConnectionStatus, TrafficResp, TunStatusSchema,
 };
 
 pub const MAX_CODEC_FRAME_LENGTH: usize = 512 * 1024 * 1024;
@@ -54,6 +54,8 @@ pub trait ControlService {
     async fn set_conn_log_limit(limit: u32);
 
     async fn get_conn_log_limit() -> u32;
+
+    async fn get_master_conn_stat() -> Vec<MasterConnectionStatus>;
 
     async fn reload();
 

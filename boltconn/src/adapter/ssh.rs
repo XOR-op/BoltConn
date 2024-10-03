@@ -11,14 +11,13 @@ use crate::transport::ssh::{SshConfig, SshTunnel};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::io;
-use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct SshOutboundHandle {
+    name: String,
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
@@ -28,6 +27,7 @@ pub struct SshOutboundHandle {
 
 impl SshOutboundHandle {
     pub fn new(
+        name: &str,
         iface_name: &str,
         dst: NetworkAddr,
         dns: Arc<Dns>,
@@ -35,6 +35,7 @@ impl SshOutboundHandle {
         manager: Arc<SshManager>,
     ) -> Self {
         Self {
+            name: name.to_string(),
             iface_name: iface_name.to_string(),
             dst,
             dns,
@@ -75,13 +76,17 @@ impl SshOutboundHandle {
             }
         };
         let channel = master_conn.new_mapped_connection(self.dst.clone()).await?;
-        established_tcp(inbound, channel, abort_handle).await;
+        established_tcp(self.name, inbound, channel, abort_handle).await;
         Ok(())
     }
 }
 
 #[async_trait]
 impl Outbound for SshOutboundHandle {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Ssh
     }
@@ -90,7 +95,7 @@ impl Outbound for SshOutboundHandle {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<std::io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let (tx, _) = tokio::sync::oneshot::channel();
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -98,7 +103,7 @@ impl Outbound for SshOutboundHandle {
             let r = self_clone.attach_tcp(inbound, None, abort_handle, tx).await;
             if let Err(e) = r {
                 abort_handle2.cancel();
-                return Err(io_err(format!("SSH TCP spawn error: {:?}", e).as_str()));
+                return Err(e);
             }
             Ok(())
         })
@@ -110,10 +115,10 @@ impl Outbound for SshOutboundHandle {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> std::io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid SSH proxy tcp spawn");
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let (comp_tx, comp_rx) = tokio::sync::oneshot::channel();
         let self_clone = self.clone();
@@ -130,7 +135,7 @@ impl Outbound for SshOutboundHandle {
         });
         comp_rx
             .await
-            .map_err(|_| ErrorKind::ConnectionAborted.into())
+            .map_err(|_| TransportError::ShadowSocks("Aborted"))
     }
 
     fn spawn_udp(
@@ -138,7 +143,7 @@ impl Outbound for SshOutboundHandle {
         _inbound: AddrConnector,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<std::io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         tracing::error!("spawn_udp() should not be called with SshOutbound");
         empty_handle()
     }
@@ -150,9 +155,9 @@ impl Outbound for SshOutboundHandle {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> std::io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp() should not be called with SshOutbound");
-        Err(io::ErrorKind::InvalidData.into())
+        Err(TransportError::Internal("Invalid outbound"))
     }
 }
 

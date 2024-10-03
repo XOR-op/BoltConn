@@ -53,8 +53,6 @@ fn main() -> ExitCode {
     let args: ProgramArgs = ProgramArgs::parse();
     let cmds = match args.cmd {
         SubCommand::Start(sub) => sub,
-        #[cfg(feature = "internal-test")]
-        SubCommand::Internal => return internal_code(),
         _ => rt.block_on(cli::controller_main(args)),
     };
     if !is_root() {
@@ -136,11 +134,4 @@ pub(crate) fn process_path(cmds: &StartOptions) -> Result<(PathBuf, PathBuf, Pat
         return Err(ExitCode::FAILURE);
     }
     Ok((config_path, data_path, cert_path))
-}
-
-/// This function is a shortcut for testing things conveniently. Only for development use.
-#[cfg(feature = "internal-test")]
-fn internal_code() -> ExitCode {
-    println!("This option is not for end-user.");
-    ExitCode::SUCCESS
 }
