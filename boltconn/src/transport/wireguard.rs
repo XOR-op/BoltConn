@@ -41,6 +41,7 @@ pub struct WireguardConfig {
 impl Debug for WireguardConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("")
+            .field(&self.name)
             .field(&self.ip_addr)
             .field(&self.ip_addr6)
             .field(&self.endpoint)
@@ -51,7 +52,8 @@ impl Debug for WireguardConfig {
 
 impl PartialEq for WireguardConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.public_key == other.public_key
+        self.name == other.name
+            && self.public_key == other.public_key
             && self.ip_addr == other.ip_addr
             && self.ip_addr6 == other.ip_addr6
             && self.endpoint == other.endpoint
@@ -62,6 +64,7 @@ impl Eq for WireguardConfig {}
 
 impl Hash for WireguardConfig {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
         self.ip_addr.hash(state);
         self.ip_addr6.hash(state);
         self.public_key.hash(state);
