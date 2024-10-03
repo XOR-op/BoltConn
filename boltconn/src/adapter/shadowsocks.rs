@@ -2,7 +2,7 @@ use crate::adapter::{
     established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
 };
 
-use crate::common::{io_err, StreamOutboundTrait};
+use crate::common::StreamOutboundTrait;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
@@ -101,7 +101,7 @@ impl SSOutbound {
         outbound: S,
         server_addr: SocketAddr,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()>
+    ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -119,7 +119,7 @@ impl SSOutbound {
         server_addr: SocketAddr,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<()> {
+    ) -> Result<(), TransportError> {
         let (_, context, resolved_config) = self.create_internal(server_addr).await;
         let proxy_socket = ShadowsocksUdpAdapter::new(context, &resolved_config, adapter_or_socket);
         established_udp(
@@ -148,7 +148,7 @@ impl Outbound for SSOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let server_addr = self_clone.get_server_addr().await?;
@@ -167,10 +167,10 @@ impl Outbound for SSOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Shadowsocks tcp spawn");
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -187,14 +187,16 @@ impl Outbound for SSOutbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let server_addr = self_clone.get_server_addr().await?;
             let out_sock = {
                 let socket = match server_addr {
                     SocketAddr::V4(_) => Egress::new(&self_clone.iface_name).udpv4_socket().await?,
-                    SocketAddr::V6(_) => return Err(io_err("ss ipv6 udp not supported now")),
+                    SocketAddr::V6(_) => {
+                        return Err(TransportError::Internal("IPv6 not supported"))
+                    }
                 };
                 socket.connect(server_addr).await?;
                 socket
@@ -218,10 +220,10 @@ impl Outbound for SSOutbound {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Shadowsocks UDP outbound ancestor");
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let udp_outbound = udp_outbound.unwrap();
         let self_clone = self.clone();

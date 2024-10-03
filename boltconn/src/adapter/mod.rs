@@ -36,7 +36,6 @@ pub use direct::*;
 pub use socks5::*;
 pub use ssh::*;
 use std::future::Future;
-use std::io::ErrorKind;
 pub use tcp_adapter::*;
 pub use trojan::*;
 pub use udp_adapter::*;
@@ -178,7 +177,7 @@ pub trait Outbound: Send + Sync {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>>;
+    ) -> JoinHandle<Result<(), TransportError>>;
 
     /// Return whether outbound is used
     async fn spawn_tcp_with_outbound(
@@ -187,7 +186,7 @@ pub trait Outbound: Send + Sync {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool>;
+    ) -> Result<bool, TransportError>;
 
     /// Run with tokio::spawn.
     fn spawn_udp(
@@ -195,7 +194,7 @@ pub trait Outbound: Send + Sync {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>>;
+    ) -> JoinHandle<Result<(), TransportError>>;
 
     /// Return whether outbound is used
     async fn spawn_udp_with_outbound(
@@ -205,11 +204,11 @@ pub trait Outbound: Send + Sync {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<bool>;
+    ) -> Result<bool, TransportError>;
 }
 
-fn empty_handle() -> JoinHandle<io::Result<()>> {
-    tokio::spawn(async move { Err(io_err("Invalid spawn")) })
+fn empty_handle() -> JoinHandle<Result<(), TransportError>> {
+    tokio::spawn(async move { Err(TransportError::Internal("Invalid spawn")) })
 }
 
 #[tracing::instrument(skip_all)]
@@ -451,14 +450,14 @@ pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAd
     })
 }
 
-pub(super) async fn connect_timeout<F: Future<Output = io::Result<()>>>(
+pub(super) async fn connect_timeout<F: Future<Output = Result<(), TransportError>>>(
     future: F,
     component_str: &str,
-) -> io::Result<()> {
+) -> Result<(), TransportError> {
     tokio::time::timeout(Duration::from_secs(10), future)
         .await
         .unwrap_or_else(|_| {
             tracing::debug!("{} timeout after 10s", component_str);
-            Err(ErrorKind::TimedOut.into())
+            Err(TransportError::Timeout("connect"))
         })
 }

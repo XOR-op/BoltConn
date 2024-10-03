@@ -6,12 +6,12 @@ use crate::common::{io_err, StreamOutboundTrait};
 use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
+use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use base64::Engine;
 use httparse::Response;
-use std::io;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::task::JoinHandle;
@@ -53,7 +53,7 @@ impl HttpOutbound {
         inbound: Connector,
         mut outbound: S,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()>
+    ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -79,25 +79,25 @@ impl HttpOutbound {
         let mut resp = String::new();
         while !resp.ends_with("\r\n\r\n") {
             if buf_reader.read_line(&mut resp).await? == 0 {
-                return Err(io_err("EOF"));
+                return Err(TransportError::Http("EOF"));
             }
             if resp.len() > 4096 {
-                return Err(io_err("Too long resp"));
+                return Err(TransportError::Http("Response too long"));
             }
         }
         let mut buf = [httparse::EMPTY_HEADER; 16];
         let mut resp_struct = Response::new(buf.as_mut());
         resp_struct
             .parse(resp.as_bytes())
-            .map_err(|_| io_err("Parse response failed"))?;
+            .map_err(|_| TransportError::Http("Parsing failed"))?;
         if let Some(200) = resp_struct.code {
             let tcp_stream = buf_reader.into_inner();
             established_tcp(self.name, inbound, tcp_stream, abort_handle).await;
             Ok(())
         } else {
-            Err(io_err(
+            Err(TransportError::Io(io_err(
                 format!("Http Connect Failed: {:?}", resp_struct.code).as_str(),
-            ))
+            )))
         }
     }
 }
@@ -116,7 +116,7 @@ impl Outbound for HttpOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let server_addr =
@@ -124,10 +124,7 @@ impl Outbound for HttpOutbound {
             let tcp_stream = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self_clone
-                .run_tcp(inbound, tcp_stream, abort_handle)
-                .await
-                .map_err(|e| io_err(e.to_string().as_str()))
+            self_clone.run_tcp(inbound, tcp_stream, abort_handle).await
         })
     }
 
@@ -137,10 +134,10 @@ impl Outbound for HttpOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid HTTP proxy tcp spawn");
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -157,7 +154,7 @@ impl Outbound for HttpOutbound {
         _inbound: AddrConnector,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         tracing::error!("spawn_udp() should not be called with HttpOutbound");
         empty_handle()
     }
@@ -169,8 +166,8 @@ impl Outbound for HttpOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp_with_outbound() should not be called with HttpOutbound");
-        return Err(io::ErrorKind::InvalidData.into());
+        Err(TransportError::Internal("Invalid outbound"))
     }
 }

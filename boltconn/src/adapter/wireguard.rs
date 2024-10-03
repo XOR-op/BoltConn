@@ -3,10 +3,10 @@ use std::collections::HashMap;
 
 use crate::adapter;
 use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
-use crate::common::{io_err, local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
+use crate::common::{local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
-use crate::proxy::error::TransportError;
+use crate::proxy::error::{DnsError, TransportError};
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
@@ -400,7 +400,7 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> io::Result<()> {
+    ) -> Result<(), TransportError> {
         let endpoint = self.get_endpoint(adapter, ret_tx).await?;
         let notify = endpoint.clone_notify();
         let smol_dns = endpoint.stack.lock().await.get_dns();
@@ -409,24 +409,23 @@ impl WireguardHandle {
             NetworkAddr::DomainName { domain_name, port } => SocketAddr::new(
                 match smol_dns.genuine_lookup(domain_name.as_str()).await {
                     Ok(Some(addr)) => addr,
-                    _ => return Err(ErrorKind::AddrNotAvailable.into()),
+                    _ => return Err(TransportError::Dns(DnsError::ResolveDomain(domain_name))),
                 },
                 port,
             ),
         };
         let mut x = endpoint.stack.lock().await;
-        x.open_tcp(self.src, dst, inbound, abort_handle, notify)
+        Ok(x.open_tcp(self.src, dst, inbound, abort_handle, notify)?)
     }
 
     async fn get_endpoint(
         &self,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> io::Result<Arc<Endpoint>> {
+    ) -> Result<Arc<Endpoint>, TransportError> {
         self.manager
             .get_wg_conn(&self.name, &self.config, adapter, ret_tx)
             .await
-            .map_err(|e| io_err(format!("{}", e).as_str()))
     }
 
     async fn attach_udp(
@@ -435,11 +434,11 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> io::Result<()> {
+    ) -> Result<(), TransportError> {
         let endpoint = self.get_endpoint(adapter, ret_tx).await?;
         let notify = endpoint.clone_notify();
         let mut x = endpoint.stack.lock().await;
-        x.open_udp(self.src, inbound, abort_handle, notify)
+        Ok(x.open_udp(self.src, inbound, abort_handle, notify)?)
     }
 }
 
@@ -457,7 +456,7 @@ impl Outbound for WireguardHandle {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let (tx, _) = tokio::sync::oneshot::channel();
         tokio::spawn(adapter::connect_timeout(
             self.clone().attach_tcp(inbound, abort_handle, None, tx),
@@ -471,10 +470,10 @@ impl Outbound for WireguardHandle {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
-            return Err(ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
@@ -489,7 +488,7 @@ impl Outbound for WireguardHandle {
         ));
         ret_rx
             .await
-            .map_err(|_| ErrorKind::ConnectionAborted.into())
+            .map_err(|_| TransportError::Internal("Return rx closed"))
     }
 
     fn spawn_udp(
@@ -497,7 +496,7 @@ impl Outbound for WireguardHandle {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let (ret_tx, _) = tokio::sync::oneshot::channel();
         tokio::spawn(adapter::connect_timeout(
             self.clone().attach_udp(inbound, abort_handle, None, ret_tx),
@@ -512,10 +511,10 @@ impl Outbound for WireguardHandle {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
-            return Err(ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
@@ -530,7 +529,7 @@ impl Outbound for WireguardHandle {
         ));
         ret_rx
             .await
-            .map_err(|_| ErrorKind::ConnectionAborted.into())
+            .map_err(|_| TransportError::Internal("Return rx closed"))
     }
 }
 

@@ -2,7 +2,7 @@ use crate::adapter::{
     established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
 };
 
-use crate::common::{as_io_err, io_err, StreamOutboundTrait};
+use crate::common::{as_io_err, StreamOutboundTrait};
 use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
@@ -81,7 +81,7 @@ impl Socks5Outbound {
         inbound: Connector,
         outbound: S,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()>
+    ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -101,7 +101,7 @@ impl Socks5Outbound {
         outbound: S,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<()>
+    ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -115,7 +115,7 @@ impl Socks5Outbound {
         let mut socks_stream = self.connect_proxy(outbound).await?;
         let out_sock = Arc::new(match server_addr {
             SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
-            SocketAddr::V6(_) => return Err(io_err("udp v6 not supported")),
+            SocketAddr::V6(_) => return Err(TransportError::Socks5Extra("IPv6 not supported")),
         });
         let bound_addr = socks_stream
             .request(Socks5Command::UDPAssociate, target.clone())
@@ -151,7 +151,7 @@ impl Outbound for Socks5Outbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let server_addr =
@@ -169,10 +169,10 @@ impl Outbound for Socks5Outbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Socks5 tcp spawn");
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -188,7 +188,7 @@ impl Outbound for Socks5Outbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let server_addr =
@@ -209,9 +209,9 @@ impl Outbound for Socks5Outbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         tracing::error!("Socks5 does not support UDP chain");
-        return Err(io::ErrorKind::InvalidData.into());
+        Err(TransportError::Internal("Invalid outbound"))
     }
 }
 

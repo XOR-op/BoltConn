@@ -8,7 +8,6 @@ use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -37,7 +36,11 @@ impl DirectOutbound {
         }
     }
 
-    async fn run_tcp(self, inbound: Connector, abort_handle: ConnAbortHandle) -> io::Result<()> {
+    async fn run_tcp(
+        self,
+        inbound: Connector,
+        abort_handle: ConnAbortHandle,
+    ) -> Result<(), TransportError> {
         let dst_addr = if let Some(dst) = self.resolved_dst {
             dst
         } else {
@@ -53,7 +56,7 @@ impl DirectOutbound {
         self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()> {
+    ) -> Result<(), TransportError> {
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         established_udp(
             self.id(),
@@ -81,7 +84,7 @@ impl Outbound for DirectOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
     }
 
@@ -91,9 +94,9 @@ impl Outbound for DirectOutbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
-        return Err(io::ErrorKind::InvalidData.into());
+        Err(TransportError::Internal("Invalid outbound"))
     }
 
     fn spawn_udp(
@@ -101,7 +104,7 @@ impl Outbound for DirectOutbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         tokio::spawn(self.clone().run_udp(inbound, abort_handle))
     }
 
@@ -112,9 +115,9 @@ impl Outbound for DirectOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp_with_outbound() should not be called with DirectOutbound");
-        return Err(io::ErrorKind::InvalidData.into());
+        Err(TransportError::Internal("Invalid outbound"))
     }
 }
 

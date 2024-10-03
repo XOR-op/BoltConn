@@ -56,17 +56,14 @@ impl TrojanOutbound {
         mut inbound: Connector,
         outbound: S,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<()>
+    ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
         let mut stream = self.connect_proxy(outbound).await?;
         let first_packet = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         if let Some(ref uri) = self.config.websocket_path {
-            let mut stream = self
-                .with_websocket(stream, uri.as_str())
-                .await
-                .map_err(|e| io_err(e.to_string().as_str()))?;
+            let mut stream = self.with_websocket(stream, uri.as_str()).await?;
             self.first_packet(first_packet, TrojanCmd::Connect, &mut stream)
                 .await?;
             established_tcp(self.name, inbound, stream, abort_handle).await;
@@ -84,7 +81,7 @@ impl TrojanOutbound {
         outbound: S,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<()>
+    ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
@@ -92,10 +89,7 @@ impl TrojanOutbound {
         let (data, dst) = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         let first_packet = Bytes::from(encapsule_udp_packet(data.as_ref(), dst));
         if let Some(ref uri) = self.config.websocket_path {
-            let mut stream = self
-                .with_websocket(stream, uri.as_str())
-                .await
-                .map_err(|e| io_err(e.to_string().as_str()))?;
+            let mut stream = self.with_websocket(stream, uri.as_str()).await?;
             self.first_packet(first_packet, TrojanCmd::Associate, &mut stream)
                 .await?;
             let udp_socket = TrojanUdpSocket::bind(stream);
@@ -195,7 +189,7 @@ impl Outbound for TrojanOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let server_addr =
@@ -213,10 +207,10 @@ impl Outbound for TrojanOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -232,7 +226,7 @@ impl Outbound for TrojanOutbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let server_addr =
@@ -253,10 +247,10 @@ impl Outbound for TrojanOutbound {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let tcp_outbound = tcp_outbound.unwrap();
         let self_clone = self.clone();
