@@ -57,6 +57,8 @@ pub trait ControlService {
 
     async fn get_master_conn_stat() -> Vec<MasterConnectionStatus>;
 
+    async fn stop_master_conn(id: String);
+
     async fn reload();
 
     // Streaming

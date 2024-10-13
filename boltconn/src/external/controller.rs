@@ -394,6 +394,10 @@ impl Controller {
         self.dispatcher.get_wg_mgr().debug_internal_state().await
     }
 
+    pub async fn stop_master_conn(&self, id: String) {
+        self.dispatcher.get_wg_mgr().stop_master_conn(&id).await;
+    }
+
     pub async fn real_lookup(&self, domain_name: String) -> Option<String> {
         match self.dns.genuine_lookup(domain_name.as_str()).await {
             Ok(Some(ip)) => Some(ip.to_string()),

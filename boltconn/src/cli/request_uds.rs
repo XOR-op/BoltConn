@@ -175,4 +175,8 @@ impl UdsConnector {
     pub async fn get_master_conn_stat(&self) -> Result<Vec<MasterConnectionStatus>> {
         Ok(self.client.get_master_conn_stat(Context::current()).await?)
     }
+
+    pub async fn stop_master_conn(&self, id: String) -> Result<()> {
+        Ok(self.client.stop_master_conn(Context::current(), id).await?)
+    }
 }

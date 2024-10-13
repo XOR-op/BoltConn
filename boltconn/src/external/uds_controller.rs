@@ -347,6 +347,10 @@ impl ControlService for UdsRpcServer {
         self.controller.get_master_conn_stat().await
     }
 
+    async fn stop_master_conn(self, _ctx: Context, id: String) {
+        self.controller.stop_master_conn(id).await
+    }
+
     async fn reload(self, _ctx: Context) {
         self.controller.reload().await
     }

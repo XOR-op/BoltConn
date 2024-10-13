@@ -261,6 +261,10 @@ impl Endpoint {
         self.notify.clone()
     }
 
+    pub fn abort_connection(&self) {
+        let _ = self.stop_sender.send(());
+    }
+
     pub async fn debug_internal_state(&self) -> boltapi::MasterConnectionStatus {
         let tunn_state = self.wg.stats().await;
         boltapi::MasterConnectionStatus {
@@ -369,6 +373,23 @@ impl WireguardManager {
             self.timeout,
         )
         .await
+    }
+
+    pub async fn stop_master_conn(&self, name: &str) {
+        let mut stopped = false;
+        for entry in self.active_conn.iter() {
+            if entry.value().name == name {
+                stopped = true;
+                entry.value().abort_connection();
+                tracing::info!("Stop WireGuard master connection #{}", name);
+            }
+        }
+        if !stopped {
+            tracing::warn!(
+                "Stop WireGuard master connection #{} failed: no such connection",
+                name
+            );
+        }
     }
 
     pub async fn debug_internal_state(&self) -> Vec<boltapi::MasterConnectionStatus> {

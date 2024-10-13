@@ -327,6 +327,18 @@ impl Requester {
             }
         }
     }
+
+    pub async fn stop_master_conn(&self, id: String) -> Result<()> {
+        match &self.inner {
+            Inner::Web(_) => Err(anyhow::anyhow!(
+                "stop master conn: Not supported by RESTful API"
+            )),
+            Inner::Uds(c) => {
+                c.stop_master_conn(id).await?;
+                Ok(())
+            }
+        }
+    }
 }
 
 fn pretty_size(data: u64) -> String {

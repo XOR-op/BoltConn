@@ -174,10 +174,17 @@ pub(crate) enum LogsLimitOptions {
     Get,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Clone, Debug, Args)]
+pub(crate) struct WgOptions {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Subcommand)]
 pub(crate) enum MasterConnOptions {
     /// Show the WireGuard master connections
-    Wg,
+    ListWg,
+    /// Stop a WireGuard connection
+    StopWg(WgOptions),
 }
 
 #[derive(Debug, Subcommand)]
@@ -387,7 +394,8 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         },
         #[cfg(feature = "internal-test")]
         SubCommand::MasterConn(opt) => match opt {
-            MasterConnOptions::Wg => requester.master_conn_stats().await,
+            MasterConnOptions::ListWg => requester.master_conn_stats().await,
+            MasterConnOptions::StopWg(opt) => requester.stop_master_conn(opt.name).await,
         },
         SubCommand::Start(_)
         | SubCommand::Generate(_)
