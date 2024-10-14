@@ -41,6 +41,7 @@ pub struct WireguardConfig {
 impl Debug for WireguardConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("")
+            .field(&self.name)
             .field(&self.ip_addr)
             .field(&self.ip_addr6)
             .field(&self.endpoint)
@@ -51,7 +52,8 @@ impl Debug for WireguardConfig {
 
 impl PartialEq for WireguardConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.public_key == other.public_key
+        self.name == other.name
+            && self.public_key == other.public_key
             && self.ip_addr == other.ip_addr
             && self.ip_addr6 == other.ip_addr6
             && self.endpoint == other.endpoint
@@ -62,6 +64,7 @@ impl Eq for WireguardConfig {}
 
 impl Hash for WireguardConfig {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
         self.ip_addr.hash(state);
         self.ip_addr6.hash(state);
         self.public_key.hash(state);
@@ -109,7 +112,7 @@ impl WireguardTunnel {
             } => {
                 let resp = dns
                     .genuine_lookup(domain_name)
-                    .await
+                    .await?
                     .ok_or_else(|| io_err("dns not found"))?;
                 SocketAddr::new(resp, port)
             }
@@ -125,7 +128,8 @@ impl WireguardTunnel {
         let buf_pool = Arc::new({
             let pool = Pool::<Vec<u8>>::new();
             // allocate memory in advance
-            const INIT_POOL_SIZE: usize = 4096;
+            // TODO: profile to determine removal
+            const INIT_POOL_SIZE: usize = 128;
             let mut index_arr = [0; INIT_POOL_SIZE];
             for entry in index_arr.iter_mut() {
                 *entry = pool
@@ -150,6 +154,7 @@ impl WireguardTunnel {
                         let socket = Arc::new(s);
                         let socket_clone = socket.clone();
                         let pool = buf_pool.clone();
+                        let name = config.name.clone();
                         local_async_run(async move {
                             // dedicated to poll UDP from small kernel buffer
                             loop {
@@ -165,8 +170,16 @@ impl WireguardTunnel {
                                     }
                                     None => {
                                         let mut buf = vec![0; MAX_UDP_PKT_SIZE];
-                                        let Ok(len) = socket.recv(&mut buf).await else {
-                                            break;
+                                        let len = match socket.recv(&mut buf).await {
+                                            Ok(len) => len,
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "WireGuard #{} failed to receive: {}",
+                                                    name,
+                                                    e
+                                                );
+                                                break;
+                                            }
                                         };
                                         buf.resize(len, 0);
                                         BufferIndex::Raw(buf)
@@ -180,9 +193,17 @@ impl WireguardTunnel {
                                 }
                             }
                         });
+                        let name = config.name.clone();
                         tokio::spawn(async move {
                             while let Ok(data) = out_rx.recv_async().await {
-                                socket_clone.send(&data).await?;
+                                if let Err(e) = socket_clone.send(&data).await {
+                                    tracing::warn!(
+                                        "WireGuard #{} outbound send failed: {}",
+                                        name,
+                                        e
+                                    );
+                                    return Err(e);
+                                }
                             }
                             Ok::<(), io::Error>(())
                         });
@@ -315,6 +336,11 @@ impl WireguardTunnel {
             }
         }
     }
+
+    pub async fn stats(&self) -> (bool, Option<std::time::Duration>) {
+        let tun = self.tunnel.lock().await;
+        (tun.is_expired(), tun.stats().0)
+    }
 }
 
 impl WireguardTunnelInner {
@@ -334,7 +360,9 @@ impl WireguardTunnelInner {
             AdapterOrChannel::Channel(c, _) => {
                 let data = Bytes::copy_from_slice(data);
                 let len = data.len();
-                let _ = c.send(data);
+                c.send_async(data)
+                    .await
+                    .map_err(|_| io_err("WireGuard outbound channel closed"))?;
                 Ok(len)
             }
         }

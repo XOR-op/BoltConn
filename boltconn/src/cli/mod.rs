@@ -174,6 +174,19 @@ pub(crate) enum LogsLimitOptions {
     Get,
 }
 
+#[derive(Clone, Debug, Args)]
+pub(crate) struct WgOptions {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum MasterConnOptions {
+    /// Show the WireGuard master connections
+    ListWg,
+    /// Stop a WireGuard connection
+    StopWg(WgOptions),
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum SubCommand {
     /// Start the main program
@@ -207,6 +220,10 @@ pub(crate) enum SubCommand {
     /// Generate necessary files before the first run
     #[command(subcommand)]
     Generate(GenerateOptions),
+    #[cfg(feature = "internal-test")]
+    #[clap(hide = true)]
+    #[command(subcommand)]
+    MasterConn(MasterConnOptions),
     #[cfg(feature = "internal-test")]
     #[clap(hide = true)]
     Internal,
@@ -375,6 +392,11 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
             DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
         },
+        #[cfg(feature = "internal-test")]
+        SubCommand::MasterConn(opt) => match opt {
+            MasterConnOptions::ListWg => requester.master_conn_stats().await,
+            MasterConnOptions::StopWg(opt) => requester.stop_master_conn(opt.name).await,
+        },
         SubCommand::Start(_)
         | SubCommand::Generate(_)
         | SubCommand::Clean
@@ -383,9 +405,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             unreachable!()
         }
         #[cfg(feature = "internal-test")]
-        SubCommand::Internal => {
-            unreachable!()
-        }
+        SubCommand::Internal => internal_code(requester).await,
     };
     match result {
         Ok(_) => exit(0),
@@ -394,4 +414,13 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             exit(-1)
         }
     }
+}
+
+#[cfg(feature = "internal-test")]
+use crate::cli::request::Requester;
+/// This function is a shortcut for testing things conveniently. Only for development use.
+#[cfg(feature = "internal-test")]
+async fn internal_code(_requester: Requester) -> anyhow::Result<()> {
+    println!("This option is not for end-user.");
+    Ok(())
 }

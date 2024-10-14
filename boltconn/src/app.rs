@@ -447,6 +447,7 @@ async fn initialize_dns(
                 .await
                 .map_err(|e| anyhow!("Parse nameserver policy failed: {e}"))?;
         Arc::new(Dns::with_config(
+            "default",
             outbound_iface,
             config.preference,
             &config.hosts,

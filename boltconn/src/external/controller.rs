@@ -9,7 +9,8 @@ use crate::proxy::{
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
-    HttpInterceptSchema, ProcessSchema, ProxyData, SessionSchema, TrafficResp, TunStatusSchema,
+    HttpInterceptSchema, MasterConnectionStatus, ProcessSchema, ProxyData, SessionSchema,
+    TrafficResp, TunStatusSchema,
 };
 use std::collections::HashSet;
 use std::io::Write;
@@ -389,11 +390,19 @@ impl Controller {
         self.stat_center.get_conn_log_limit()
     }
 
+    pub async fn get_master_conn_stat(&self) -> Vec<MasterConnectionStatus> {
+        self.dispatcher.get_wg_mgr().debug_internal_state().await
+    }
+
+    pub async fn stop_master_conn(&self, id: String) {
+        self.dispatcher.get_wg_mgr().stop_master_conn(&id).await;
+    }
+
     pub async fn real_lookup(&self, domain_name: String) -> Option<String> {
-        self.dns
-            .genuine_lookup(domain_name.as_str())
-            .await
-            .map(|ip| ip.to_string())
+        match self.dns.genuine_lookup(domain_name.as_str()).await {
+            Ok(Some(ip)) => Some(ip.to_string()),
+            _ => None,
+        }
     }
 
     pub fn fake_ip_to_real(&self, fake_ip: String) -> Option<String> {

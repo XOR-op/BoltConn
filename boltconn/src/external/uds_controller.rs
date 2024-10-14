@@ -5,7 +5,7 @@ use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::{ClientStreamServiceClient, ControlService};
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
-    HttpInterceptSchema, TrafficResp, TunStatusSchema,
+    HttpInterceptSchema, MasterConnectionStatus, TrafficResp, TunStatusSchema,
 };
 use std::io;
 use std::sync::Arc;
@@ -341,6 +341,14 @@ impl ControlService for UdsRpcServer {
 
     async fn get_conn_log_limit(self, _ctx: Context) -> u32 {
         self.controller.get_conn_log_limit()
+    }
+
+    async fn get_master_conn_stat(self, _ctx: Context) -> Vec<MasterConnectionStatus> {
+        self.controller.get_master_conn_stat().await
+    }
+
+    async fn stop_master_conn(self, _ctx: Context, id: String) {
+        self.controller.stop_master_conn(id).await
     }
 
     async fn reload(self, _ctx: Context) {

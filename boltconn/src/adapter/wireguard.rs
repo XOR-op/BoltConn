@@ -1,18 +1,19 @@
 use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, OutboundType};
-use std::collections::HashMap;
 
 use crate::adapter;
 use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
-use crate::common::{io_err, local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
+use crate::common::{local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
-use crate::proxy::error::TransportError;
+use crate::proxy::error::{DnsError, TransportError};
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
 use bytes::Bytes;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::proto::udp::DnsUdpSocket;
@@ -21,7 +22,6 @@ use hickory_resolver::AsyncResolver;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use std::time::{Duration, Instant};
@@ -31,15 +31,18 @@ use tokio::task::JoinHandle;
 
 // Shared Wireguard Tunnel between multiple client connections
 pub struct Endpoint {
+    name: String,
     wg: Arc<WireguardTunnel>,
     stack: Arc<Mutex<SmolStack>>,
     stop_sender: broadcast::Sender<()>,
     notify: Arc<Notify>,
-    is_active: Arc<AtomicBool>,
+    is_active: AbortCanary,
+    last_active: Arc<Mutex<Instant>>,
 }
 
 impl Endpoint {
     pub async fn new(
+        name: &str,
         outbound: AdapterOrSocket,
         config: &WireguardConfig,
         endpoint_resolver: Arc<Dns>,
@@ -77,31 +80,37 @@ impl Endpoint {
                     )
                 };
                 let dns = Arc::new(GenericDns::new_with_resolver(
+                    name,
                     resolver,
                     config.dns_preference,
                 ));
-                Mutex::new(SmolStack::new(iface, device, dns, Duration::from_secs(120)))
+                Mutex::new(SmolStack::new(
+                    name,
+                    iface,
+                    device,
+                    dns,
+                    Duration::from_secs(120),
+                ))
             })
         };
 
         let last_active = Arc::new(Mutex::new(Instant::now()));
-        let indicator = Arc::new(AtomicBool::new(true));
-        let indi_write = indicator.clone();
+        let (indicator, indi_write) = AbortCanary::pair();
 
         // drive wg tunnel
         let wg_out = {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
             let timer = last_active.clone();
+            let name = name.to_string();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 loop {
-                    if tunnel
-                        .send_outgoing_packet(&mut smol_wg_rx, &mut buf)
-                        .await
-                        .is_err()
-                    {
+                    if let Err(e) = tunnel.send_outgoing_packet(&mut smol_wg_rx, &mut buf).await {
                         let _ = stop_send.send(());
+                        tracing::trace!(
+                            "[WireGuard] Close connection #{name} for send_outgoing_packet for {e}",
+                        );
                         return;
                     }
                     *timer.lock().await = Instant::now();
@@ -113,6 +122,7 @@ impl Endpoint {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
             let timer = last_active.clone();
+            let name = name.to_string();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
                 let mut wg_buf = [0u8; MAX_PKT_SIZE];
@@ -123,8 +133,9 @@ impl Endpoint {
                     {
                         Ok(true) => *timer.lock().await = Instant::now(),
                         Ok(false) => {}
-                        Err(_) => {
+                        Err(e) => {
                             let _ = stop_send.send(());
+                            tracing::trace!("[WireGuard] Close connection #{} for {}", name, e);
                             return;
                         }
                     }
@@ -164,15 +175,15 @@ impl Endpoint {
         };
 
         // drive smol
-        let smol_drive = {
+        {
             let smol_stack = smol_stack.clone();
             let notifier = notify.clone();
-            let (abort_canary, canary_clone) = AbortCanary::pair();
+            let smol_canary = indicator.clone();
 
             local_async_run(async move {
                 let mut immediate_next_loop = false;
                 notifier.notified().await;
-                while abort_canary.alive() {
+                while smol_canary.alive() {
                     let mut stack_handle = smol_stack.lock().await;
                     stack_handle.drive_iface();
                     immediate_next_loop |= stack_handle.poll_all_tcp().await;
@@ -195,19 +206,20 @@ impl Endpoint {
                     }
                     immediate_next_loop = false;
                 }
+                smol_canary.abort();
             });
-            canary_clone
-        };
+        }
 
         // timeout inactive tunnel
         {
             let stop_send = stop_send.clone();
-            let indi_write = indi_write.clone();
+            let indi_write = indicator.clone();
             let name = config.name.clone();
+            let last_active = last_active.clone();
             tokio::spawn(async move {
                 loop {
                     if last_active.lock().await.elapsed() > timeout {
-                        indi_write.store(false, Ordering::Relaxed);
+                        indi_write.abort();
                         let _ = stop_send.send(());
                         tracing::debug!(
                             "[WireGuard] Stop inactive tunnel #{} after for {}s.",
@@ -221,34 +233,59 @@ impl Endpoint {
             });
         }
 
-        tokio::spawn(async move {
-            // kill all coroutine
-            let _ = stop_recv.recv().await;
-            indi_write.store(false, Ordering::Relaxed);
-            wg_out.abort();
-            wg_in.abort();
-            wg_tick.abort();
-            smol_drive.abort();
-        });
+        {
+            let name = name.to_string();
+            let stack = smol_stack.clone();
+            tokio::spawn(async move {
+                // kill all coroutine
+                let _ = stop_recv.recv().await;
+                indi_write.abort();
+                wg_out.abort();
+                wg_in.abort();
+                wg_tick.abort();
+                // reset smol stack to drop all channel sender,
+                // so the receiver can report errors correctly
+                stack.lock().await.terminate_all();
+                tracing::trace!("[WireGuard] connection #{} killed", name);
+            });
+        }
+
+        tracing::info!("[WireGuard] Established master connection #{}", name);
 
         Ok(Arc::new(Self {
+            name: name.to_string(),
             wg: tunnel,
             stack: smol_stack,
             stop_sender: stop_send,
             notify,
             is_active: indicator,
+            last_active,
         }))
     }
 
     pub fn clone_notify(&self) -> Arc<Notify> {
         self.notify.clone()
     }
+
+    pub fn abort_connection(&self) {
+        let _ = self.stop_sender.send(());
+    }
+
+    pub async fn debug_internal_state(&self) -> boltapi::MasterConnectionStatus {
+        let tunn_state = self.wg.stats().await;
+        boltapi::MasterConnectionStatus {
+            name: self.name.clone(),
+            alive: self.is_active.alive(),
+            last_active: self.last_active.lock().await.elapsed().as_secs(),
+            last_handshake: tunn_state.1.map(|x| x.as_secs()).unwrap_or(114514),
+            hand_shake_is_expired: tunn_state.0,
+        }
+    }
 }
 
 pub struct WireguardManager {
     iface: String,
-    // We use an async wrapper to avoid deadlock in DashMap
-    active_conn: Mutex<HashMap<WireguardConfig, Arc<Endpoint>>>,
+    active_conn: DashMap<WireguardConfig, Arc<Endpoint>>,
     endpoint_resolver: Arc<Dns>,
     timeout: Duration,
 }
@@ -265,69 +302,115 @@ impl WireguardManager {
 
     pub async fn get_wg_conn(
         &self,
+        name: &str,
         config: &WireguardConfig,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
     ) -> Result<Arc<Endpoint>, TransportError> {
+        // optimistic trial to avoid extra config.clone()
+        if let Some(ep) = self.active_conn.get(config) {
+            if ep.is_active.alive() {
+                let _ = ret_tx.send(false);
+                return Ok(ep.clone());
+            }
+        }
+        // loop is only used for reconnecting a removed connection
         for _ in 0..10 {
             // get an existing conn, or create
-            let mut guard = self.active_conn.lock().await;
-            if let Some(endpoint) = guard.get(config) {
-                if endpoint.is_active.load(Ordering::Relaxed) {
-                    let _ = ret_tx.send(false);
-                    return Ok(endpoint.clone());
-                } else {
-                    guard.remove(config);
-                    continue;
-                }
-            } else {
-                let _ = ret_tx.send(true);
-                let server_addr =
-                    adapter::get_dst(&self.endpoint_resolver, &config.endpoint).await?;
-                let outbound = match adapter {
-                    Some(a) => a,
-                    None => {
-                        if config.over_tcp {
-                            let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
-                            AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(
-                                stream,
-                                server_addr,
-                            )?))
-                        } else {
-                            AdapterOrSocket::Socket(match server_addr {
-                                SocketAddr::V4(_) => {
-                                    let socket = Egress::new(&self.iface).udpv4_socket().await?;
-                                    socket.connect(server_addr).await?;
-                                    socket
-                                }
-                                SocketAddr::V6(_) => {
-                                    let socket = Egress::new(&self.iface).udpv6_socket().await?;
-                                    socket.connect(server_addr).await?;
-                                    socket
-                                }
-                            })
-                        }
+            // warning: if two keys fall into the same shard, the reconnecting may block this shard
+            match self.active_conn.entry(config.clone()) {
+                Entry::Occupied(entry) => {
+                    if entry.get().is_active.alive() {
+                        let _ = ret_tx.send(false);
+                        return Ok(entry.get().clone());
+                    } else {
+                        entry.remove();
+                        continue;
                     }
-                };
-                let ep = Endpoint::new(
-                    outbound,
-                    config,
-                    self.endpoint_resolver.clone(),
-                    self.timeout,
-                )
-                .await?;
-                guard.insert(config.clone(), ep.clone());
-                return Ok(ep);
+                }
+                Entry::Vacant(e) => {
+                    let _ = ret_tx.send(true);
+                    let ep = self.create_endpoint(name, config, adapter).await?;
+                    e.insert(ep.clone());
+                    return Ok(ep);
+                }
             }
         }
         Err(TransportError::WireGuard(
             "get_wg_conn: unexpected loop time",
         ))
     }
+
+    async fn create_endpoint(
+        &self,
+        name: &str,
+        config: &WireguardConfig,
+        adapter: Option<AdapterOrSocket>,
+    ) -> Result<Arc<Endpoint>, TransportError> {
+        let outbound = match adapter {
+            Some(a) => a,
+            None => {
+                let server_addr =
+                    adapter::get_dst(&self.endpoint_resolver, &config.endpoint).await?;
+                if config.over_tcp {
+                    let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
+                    AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(stream, server_addr)?))
+                } else {
+                    AdapterOrSocket::Socket(match server_addr {
+                        SocketAddr::V4(_) => {
+                            let socket = Egress::new(&self.iface).udpv4_socket().await?;
+                            socket.connect(server_addr).await?;
+                            socket
+                        }
+                        SocketAddr::V6(_) => {
+                            let socket = Egress::new(&self.iface).udpv6_socket().await?;
+                            socket.connect(server_addr).await?;
+                            socket
+                        }
+                    })
+                }
+            }
+        };
+        Endpoint::new(
+            name,
+            outbound,
+            config,
+            self.endpoint_resolver.clone(),
+            self.timeout,
+        )
+        .await
+    }
+
+    pub async fn stop_master_conn(&self, name: &str) {
+        let mut stopped = false;
+        for entry in self.active_conn.iter() {
+            if entry.value().name == name {
+                stopped = true;
+                entry.value().abort_connection();
+                tracing::info!("Stop WireGuard master connection #{}", name);
+            }
+        }
+        if !stopped {
+            tracing::warn!(
+                "Stop WireGuard master connection #{} failed: no such connection",
+                name
+            );
+        }
+    }
+
+    pub async fn debug_internal_state(&self) -> Vec<boltapi::MasterConnectionStatus> {
+        let mut ret = Vec::new();
+        for entry in self.active_conn.iter() {
+            let r = entry.debug_internal_state().await;
+            ret.push(r);
+        }
+        ret
+    }
 }
 
 #[derive(Clone)]
 pub struct WireguardHandle {
+    name: String,
     src: SocketAddr,
     dst: NetworkAddr,
     config: Arc<WireguardConfig>,
@@ -337,6 +420,7 @@ pub struct WireguardHandle {
 
 impl WireguardHandle {
     pub fn new(
+        name: &str,
         src: SocketAddr,
         dst: NetworkAddr,
         config: WireguardConfig,
@@ -344,6 +428,7 @@ impl WireguardHandle {
         dns_config: Arc<ResolverConfig>,
     ) -> Self {
         Self {
+            name: name.to_string(),
             src,
             dst,
             config: Arc::new(config),
@@ -358,33 +443,32 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> io::Result<()> {
+    ) -> Result<(), TransportError> {
         let endpoint = self.get_endpoint(adapter, ret_tx).await?;
         let notify = endpoint.clone_notify();
         let smol_dns = endpoint.stack.lock().await.get_dns();
         let dst = match self.dst {
             NetworkAddr::Raw(s) => s,
             NetworkAddr::DomainName { domain_name, port } => SocketAddr::new(
-                smol_dns
-                    .genuine_lookup(domain_name.as_str())
-                    .await
-                    .ok_or::<io::Error>(ErrorKind::AddrNotAvailable.into())?,
+                match smol_dns.genuine_lookup(domain_name.as_str()).await {
+                    Ok(Some(addr)) => addr,
+                    _ => return Err(TransportError::Dns(DnsError::ResolveDomain(domain_name))),
+                },
                 port,
             ),
         };
         let mut x = endpoint.stack.lock().await;
-        x.open_tcp(self.src, dst, inbound, abort_handle, notify)
+        Ok(x.open_tcp(self.src, dst, inbound, abort_handle, notify)?)
     }
 
     async fn get_endpoint(
         &self,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> io::Result<Arc<Endpoint>> {
+    ) -> Result<Arc<Endpoint>, TransportError> {
         self.manager
-            .get_wg_conn(&self.config, adapter, ret_tx)
+            .get_wg_conn(&self.name, &self.config, adapter, ret_tx)
             .await
-            .map_err(|e| io_err(format!("{}", e).as_str()))
     }
 
     async fn attach_udp(
@@ -393,16 +477,20 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> io::Result<()> {
+    ) -> Result<(), TransportError> {
         let endpoint = self.get_endpoint(adapter, ret_tx).await?;
         let notify = endpoint.clone_notify();
         let mut x = endpoint.stack.lock().await;
-        x.open_udp(self.src, inbound, abort_handle, notify)
+        Ok(x.open_udp(self.src, inbound, abort_handle, notify)?)
     }
 }
 
 #[async_trait]
 impl Outbound for WireguardHandle {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Wireguard
     }
@@ -411,7 +499,7 @@ impl Outbound for WireguardHandle {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let (tx, _) = tokio::sync::oneshot::channel();
         tokio::spawn(adapter::connect_timeout(
             self.clone().attach_tcp(inbound, abort_handle, None, tx),
@@ -425,10 +513,10 @@ impl Outbound for WireguardHandle {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
-            return Err(ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
@@ -443,7 +531,7 @@ impl Outbound for WireguardHandle {
         ));
         ret_rx
             .await
-            .map_err(|_| ErrorKind::ConnectionAborted.into())
+            .map_err(|_| TransportError::Internal("Return rx closed"))
     }
 
     fn spawn_udp(
@@ -451,7 +539,7 @@ impl Outbound for WireguardHandle {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         let (ret_tx, _) = tokio::sync::oneshot::channel();
         tokio::spawn(adapter::connect_timeout(
             self.clone().attach_udp(inbound, abort_handle, None, ret_tx),
@@ -466,10 +554,10 @@ impl Outbound for WireguardHandle {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
-            return Err(ErrorKind::InvalidData.into());
+            return Err(TransportError::Internal("Invalid outbound"));
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
@@ -484,7 +572,7 @@ impl Outbound for WireguardHandle {
         ));
         ret_rx
             .await
-            .map_err(|_| ErrorKind::ConnectionAborted.into())
+            .map_err(|_| TransportError::Internal("Return rx closed"))
     }
 }
 

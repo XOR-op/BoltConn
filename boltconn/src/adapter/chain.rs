@@ -3,23 +3,25 @@ use crate::adapter::{
     UdpTransferType,
 };
 use async_trait::async_trait;
-use std::io;
 use std::sync::Arc;
 
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::StreamOutboundTrait;
+use crate::proxy::error::TransportError;
 use crate::proxy::ConnAbortHandle;
 use crate::transport::UdpSocketAdapter;
 use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct ChainOutbound {
+    name: String,
     chains: Vec<Arc<dyn Outbound>>,
 }
 
 impl ChainOutbound {
-    pub fn new(chains: Vec<Box<dyn Outbound>>) -> Self {
+    pub fn new(name: &str, chains: Vec<Box<dyn Outbound>>) -> Self {
         Self {
+            name: name.to_string(),
             chains: chains.into_iter().map(Arc::from).collect(),
         }
     }
@@ -30,7 +32,7 @@ impl ChainOutbound {
         mut inbound_tcp_container: Option<Connector>,
         mut inbound_udp_container: Option<AddrConnector>,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         tokio::spawn(async move {
             let mut not_first_jump = false;
             let mut need_next_jump = true;
@@ -122,6 +124,10 @@ impl ChainOutbound {
 
 #[async_trait]
 impl Outbound for ChainOutbound {
+    fn id(&self) -> String {
+        self.name.clone()
+    }
+
     fn outbound_type(&self) -> OutboundType {
         OutboundType::Chain
     }
@@ -130,7 +136,7 @@ impl Outbound for ChainOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
-    ) -> JoinHandle<std::io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         self.clone().spawn(true, Some(inbound), None, abort_handle)
     }
 
@@ -140,9 +146,9 @@ impl Outbound for ChainOutbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with ChainOutbound");
-        return Err(io::ErrorKind::InvalidData.into());
+        Err(TransportError::Internal("Invalid outbound"))
     }
 
     fn spawn_udp(
@@ -150,7 +156,7 @@ impl Outbound for ChainOutbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> JoinHandle<io::Result<()>> {
+    ) -> JoinHandle<Result<(), TransportError>> {
         self.clone().spawn(false, None, Some(inbound), abort_handle)
     }
 
@@ -161,8 +167,8 @@ impl Outbound for ChainOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp_with_outbound() should not be called with ChainUdpOutbound");
-        return Err(io::ErrorKind::InvalidData.into());
+        Err(TransportError::Internal("Invalod outbound"))
     }
 }

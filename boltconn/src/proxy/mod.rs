@@ -101,6 +101,7 @@ pub async fn latency_test(
     let creator: Box<dyn Outbound> = match proxy.get_impl().as_ref() {
         ProxyImpl::Chain(vec) => {
             match dispatcher.create_chain(
+                &proxy.get_name(),
                 vec,
                 get_random_local_addr(&dst_addr, rng.gen_range(32768..65535)),
                 &dst_addr,
@@ -115,6 +116,7 @@ pub async fn latency_test(
         }
         proxy_config => {
             let creator = match dispatcher.build_normal_outbound(
+                &proxy.get_name(),
                 iface.as_str(),
                 proxy_config,
                 get_random_local_addr(&dst_addr, rng.gen_range(32768..65535)),
