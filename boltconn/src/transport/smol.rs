@@ -700,6 +700,12 @@ impl SmolStack {
             }
         });
     }
+
+    /// Terminate all connections with fatal errors
+    pub fn terminate_all(&mut self) {
+        self.tcp_conn.clear();
+        self.udp_conn.clear();
+    }
 }
 
 // -----------------------------------------------------------------------------------

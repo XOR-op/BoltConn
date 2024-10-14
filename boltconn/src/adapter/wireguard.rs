@@ -233,16 +233,22 @@ impl Endpoint {
             });
         }
 
-        let name_clone = name.to_string();
-        tokio::spawn(async move {
-            // kill all coroutine
-            let _ = stop_recv.recv().await;
-            indi_write.abort();
-            wg_out.abort();
-            wg_in.abort();
-            wg_tick.abort();
-            tracing::trace!("[WireGuard] connection #{} killed", name_clone);
-        });
+        {
+            let name = name.to_string();
+            let stack = smol_stack.clone();
+            tokio::spawn(async move {
+                // kill all coroutine
+                let _ = stop_recv.recv().await;
+                indi_write.abort();
+                wg_out.abort();
+                wg_in.abort();
+                wg_tick.abort();
+                // reset smol stack to drop all channel sender,
+                // so the receiver can report errors correctly
+                stack.lock().await.terminate_all();
+                tracing::trace!("[WireGuard] connection #{} killed", name);
+            });
+        }
 
         tracing::info!("[WireGuard] Established master connection #{}", name);
 
