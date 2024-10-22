@@ -58,7 +58,7 @@ pub enum ProxyImpl {
     Socks5(Socks5Config),
     Shadowsocks(ShadowSocksConfig),
     Trojan(TrojanConfig),
-    Wireguard(WireguardConfig),
+    Wireguard(Box<WireguardConfig>),
     Ssh(SshConfig),
     Chain(Vec<GeneralProxy>),
 }

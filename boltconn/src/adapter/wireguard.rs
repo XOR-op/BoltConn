@@ -423,7 +423,7 @@ impl WireguardHandle {
         name: &str,
         src: SocketAddr,
         dst: NetworkAddr,
-        config: WireguardConfig,
+        config: Box<WireguardConfig>,
         manager: Arc<WireguardManager>,
         dns_config: Arc<ResolverConfig>,
     ) -> Self {
@@ -431,7 +431,7 @@ impl WireguardHandle {
             name: name.to_string(),
             src,
             dst,
-            config: Arc::new(config),
+            config: Arc::from(config),
             manager,
             dns_config,
         }
