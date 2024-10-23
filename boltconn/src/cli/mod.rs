@@ -47,6 +47,9 @@ pub(crate) enum ConnOptions {
     /// Connection logs limit
     #[command(subcommand)]
     Limit(LogsLimitOptions),
+    /// Manage multiplexed master connections
+    #[command(subcommand)]
+    Master(MasterConnOptions),
 }
 
 #[derive(Debug, Clone, Copy, Subcommand)]
@@ -222,10 +225,6 @@ pub(crate) enum SubCommand {
     Generate(GenerateOptions),
     #[cfg(feature = "internal-test")]
     #[clap(hide = true)]
-    #[command(subcommand)]
-    MasterConn(MasterConnOptions),
-    #[cfg(feature = "internal-test")]
-    #[clap(hide = true)]
     Internal,
 }
 
@@ -364,6 +363,10 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 LogsLimitOptions::Set { limit } => requester.set_conn_log_limit(limit).await,
                 LogsLimitOptions::Get => requester.get_conn_log_limit().await,
             },
+            ConnOptions::Master(opt) => match opt {
+                MasterConnOptions::ListWg => requester.master_conn_stats().await,
+                MasterConnOptions::StopWg(opt) => requester.stop_master_conn(opt.name).await,
+            },
         },
         SubCommand::Tun(opt) => match opt {
             TunOptions::Get => requester.get_tun().await,
@@ -391,11 +394,6 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         SubCommand::Dns(opt) => match opt {
             DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
             DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
-        },
-        #[cfg(feature = "internal-test")]
-        SubCommand::MasterConn(opt) => match opt {
-            MasterConnOptions::ListWg => requester.master_conn_stats().await,
-            MasterConnOptions::StopWg(opt) => requester.stop_master_conn(opt.name).await,
         },
         SubCommand::Start(_)
         | SubCommand::Generate(_)

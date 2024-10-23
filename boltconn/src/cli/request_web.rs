@@ -1,7 +1,7 @@
 use anyhow::Result;
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
-    TunStatusSchema,
+    MasterConnectionStatus, TunStatusSchema,
 };
 
 pub struct WebConnector {
@@ -104,6 +104,23 @@ impl WebConnector {
             .await?;
         let result: GetInterceptDataResp = serde_json::from_str(data.as_str())?;
         Ok(result)
+    }
+
+    pub async fn get_master_conn_stat(&self) -> Result<Vec<MasterConnectionStatus>> {
+        let data = reqwest::get(self.route("/connections/master"))
+            .await?
+            .text()
+            .await?;
+        let result: Vec<MasterConnectionStatus> = serde_json::from_str(data.as_str())?;
+        Ok(result)
+    }
+
+    pub async fn stop_master_conn(&self, id: String) -> Result<()> {
+        reqwest::Client::new()
+            .delete(self.route(format!("/connections/master/{}", id).as_str()))
+            .send()
+            .await?;
+        Ok(())
     }
 
     pub async fn real_lookup(&self, domain: String) -> Result<String> {

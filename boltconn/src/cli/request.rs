@@ -308,36 +308,30 @@ impl Requester {
     }
 
     pub async fn master_conn_stats(&self) -> Result<()> {
-        match &self.inner {
-            Inner::Web(_) => Err(anyhow::anyhow!("conn-stats: Not supported by RESTful API")),
-            Inner::Uds(c) => {
-                let list = c.get_master_conn_stat().await?;
-                for entry in list {
-                    let alive_str = |alive: bool| if alive { "alive" } else { "dead" };
-                    println!(
-                        "{}:\t smol[{}, last active in {}s], wg=[{}, last handshake in {}s]",
-                        entry.name,
-                        alive_str(entry.alive),
-                        entry.last_active,
-                        alive_str(!entry.hand_shake_is_expired),
-                        entry.last_handshake
-                    );
-                }
-                Ok(())
-            }
+        let list = match &self.inner {
+            Inner::Web(c) => c.get_master_conn_stat().await?,
+            Inner::Uds(c) => c.get_master_conn_stat().await?,
+        };
+        for entry in list {
+            let alive_str = |alive: bool| if alive { "alive" } else { "dead" };
+            println!(
+                "{}:\t smol[{}, last active in {}s], wg=[{}, last handshake in {}s]",
+                entry.name,
+                alive_str(entry.alive),
+                entry.last_active,
+                alive_str(!entry.hand_shake_is_expired),
+                entry.last_handshake
+            );
         }
+        Ok(())
     }
 
     pub async fn stop_master_conn(&self, id: String) -> Result<()> {
         match &self.inner {
-            Inner::Web(_) => Err(anyhow::anyhow!(
-                "stop master conn: Not supported by RESTful API"
-            )),
-            Inner::Uds(c) => {
-                c.stop_master_conn(id).await?;
-                Ok(())
-            }
+            Inner::Web(c) => c.stop_master_conn(id).await?,
+            Inner::Uds(c) => c.stop_master_conn(id).await?,
         }
+        Ok(())
     }
 }
 

@@ -73,6 +73,8 @@ impl WebController {
                 get(Self::get_conn_log_limit).put(Self::set_conn_log_limit),
             )
             .route("/reload", post(Self::reload))
+            .route("/connections/master", get(Self::get_master_conn_stat))
+            .route("/connections/master/:id", delete(Self::stop_master_conn))
             .route_layer(map_request(wrapper))
             .with_state(self);
         if let Some(origin) = parse_api_cors_origin(cors_allowed_list) {
@@ -271,6 +273,21 @@ impl WebController {
         };
         server.controller.update_latency(group).await;
         Json(serde_json::Value::Bool(true))
+    }
+
+    async fn get_master_conn_stat(State(server): State<Self>) -> Json<serde_json::Value> {
+        Json(json!(server.controller.get_master_conn_stat().await))
+    }
+
+    async fn stop_master_conn(
+        State(server): State<Self>,
+        Path(params): Path<HashMap<String, String>>,
+    ) {
+        let id = {
+            let Some(id) = params.get("id") else { return };
+            id.clone()
+        };
+        server.controller.stop_master_conn(id).await
     }
 
     async fn fake_ip_to_real(
