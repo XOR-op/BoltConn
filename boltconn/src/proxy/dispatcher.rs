@@ -226,6 +226,39 @@ impl Dispatcher {
         Ok(ChainOutbound::new(chain_name, res))
     }
 
+    pub async fn construct_outbound(
+        &self,
+        src_addr: SocketAddr,
+        dst_addr: &NetworkAddr,
+        proxy_config: &ProxyImpl,
+        proxy_name: &str,
+        iface_name: &str,
+        resolved_dst: Option<&SocketAddr>,
+    ) -> Result<(Box<dyn Outbound>, OutboundType), DispatchError> {
+        Ok(match proxy_config {
+            ProxyImpl::Chain(vec) => (
+                Box::new(
+                    self.create_chain(proxy_name, vec, src_addr, dst_addr, iface_name)
+                        .map_err(|_| DispatchError::BadChain)?,
+                ),
+                OutboundType::Chain,
+            ),
+            ProxyImpl::BlackHole => {
+                return Err(DispatchError::BlackHole);
+            }
+            _ => self
+                .build_normal_outbound(
+                    proxy_name,
+                    iface_name,
+                    proxy_config,
+                    src_addr,
+                    dst_addr,
+                    resolved_dst,
+                )
+                .map_err(|_| DispatchError::Reject)?,
+        })
+    }
+
     pub async fn submit_tcp<S: StreamOutboundTrait>(
         &self,
         inbound: InboundInfo,
@@ -251,33 +284,28 @@ impl Dispatcher {
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
-        let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) =
-            match proxy_config.as_ref() {
-                ProxyImpl::Chain(vec) => (
-                    Box::new(
-                        self.create_chain(&proxy_name, vec, src_addr, &dst_addr, iface_name)
-                            .map_err(|_| DispatchError::BadChain)?,
-                    ),
-                    OutboundType::Chain,
-                ),
-                ProxyImpl::BlackHole => {
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(30)).await;
-                        drop(stream)
-                    });
-                    return Err(DispatchError::BlackHole);
-                }
-                _ => self
-                    .build_normal_outbound(
-                        &proxy_name,
-                        iface_name,
-                        proxy_config.as_ref(),
-                        src_addr,
-                        &dst_addr,
-                        conn_info.resolved_dst.as_ref(),
-                    )
-                    .map_err(|_| DispatchError::Reject)?,
-            };
+        let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) = match self
+            .construct_outbound(
+                src_addr,
+                &dst_addr,
+                &proxy_config,
+                &proxy_name,
+                iface_name,
+                conn_info.resolved_dst.as_ref(),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(DispatchError::Reject) => return Err(DispatchError::Reject),
+            Err(DispatchError::BlackHole) => {
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    drop(stream)
+                });
+                return Err(DispatchError::BlackHole);
+            }
+            Err(e) => return Err(e),
+        };
 
         // conn info
         let abort_handle = ConnAbortHandle::new();

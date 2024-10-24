@@ -9,10 +9,10 @@ mod socks5_inbound;
 mod tun_inbound;
 mod tun_udp_inbound;
 
-use crate::adapter::{Connector, Outbound};
+use crate::adapter::Connector;
 use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
-use crate::dispatch::{Latency, Proxy, ProxyImpl};
+use crate::dispatch::{Latency, Proxy};
 use crate::proxy::error::RuntimeError;
 use bytes::Bytes;
 pub use context::*;
@@ -100,9 +100,17 @@ pub async fn latency_test(
     );
     let src_addr = get_random_local_addr(&dst_addr, rng.gen_range(32768..65535));
     // create outbound
-    let creator = construct_outbound(dispatcher, &proxy, src_addr, &dst_addr, &iface)
+    let (creator, _) = dispatcher
+        .construct_outbound(
+            src_addr,
+            &dst_addr,
+            &proxy.get_impl(),
+            &proxy.get_name(),
+            &iface,
+            None,
+        )
         .await
-        .ok_or_else(|| {
+        .map_err(|_| {
             proxy.set_latency(Latency::Failed);
             RuntimeError::LatencyTest("Create outbound failed")
         })?;
@@ -144,34 +152,4 @@ pub async fn latency_test(
         proxy_handle.abort()
     });
     Ok(timeout_future)
-}
-
-async fn construct_outbound(
-    dispatcher: &Dispatcher,
-    proxy: &Proxy,
-    src_addr: SocketAddr,
-    dst_addr: &NetworkAddr,
-    iface: &str,
-) -> Option<Box<dyn Outbound>> {
-    match proxy.get_impl().as_ref() {
-        ProxyImpl::Chain(vec) => {
-            match dispatcher.create_chain(&proxy.get_name(), vec, src_addr, dst_addr, iface) {
-                Ok(o) => Some(Box::new(o)),
-                Err(_) => None,
-            }
-        }
-        proxy_config => {
-            match dispatcher.build_normal_outbound(
-                &proxy.get_name(),
-                iface,
-                proxy_config,
-                src_addr,
-                dst_addr,
-                None,
-            ) {
-                Ok((o, _)) => Some(o),
-                Err(_) => None,
-            }
-        }
-    }
 }
