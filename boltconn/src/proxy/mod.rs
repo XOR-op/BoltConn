@@ -89,49 +89,23 @@ pub async fn latency_test(
             .map_err(|_| RuntimeError::LatencyTest("Failed to resolve test host"))?,
     }
     .to_owned();
+
+    let iface = iface.unwrap_or(dispatcher.get_iface_name());
+
     let mut rng = rand::rngs::SmallRng::seed_from_u64(
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_else(|_| Duration::default())
             .as_secs(),
     );
-    let iface = iface.unwrap_or(dispatcher.get_iface_name());
-
+    let src_addr = get_random_local_addr(&dst_addr, rng.gen_range(32768..65535));
     // create outbound
-    let creator: Box<dyn Outbound> = match proxy.get_impl().as_ref() {
-        ProxyImpl::Chain(vec) => {
-            match dispatcher.create_chain(
-                &proxy.get_name(),
-                vec,
-                get_random_local_addr(&dst_addr, rng.gen_range(32768..65535)),
-                &dst_addr,
-                iface.as_str(),
-            ) {
-                Ok(o) => Box::new(o),
-                Err(_) => {
-                    proxy.set_latency(Latency::Failed);
-                    return Err(RuntimeError::LatencyTest("Create outbound failed"));
-                }
-            }
-        }
-        proxy_config => {
-            let creator = match dispatcher.build_normal_outbound(
-                &proxy.get_name(),
-                iface.as_str(),
-                proxy_config,
-                get_random_local_addr(&dst_addr, rng.gen_range(32768..65535)),
-                &dst_addr,
-                None,
-            ) {
-                Ok((o, _)) => o,
-                Err(_) => {
-                    proxy.set_latency(Latency::Failed);
-                    return Err(RuntimeError::LatencyTest("Create outbound failed"));
-                }
-            };
-            creator
-        }
-    };
+    let creator = construct_outbound(dispatcher, &proxy, src_addr, &dst_addr, &iface)
+        .await
+        .ok_or_else(|| {
+            proxy.set_latency(Latency::Failed);
+            RuntimeError::LatencyTest("Create outbound failed")
+        })?;
 
     let proxy_handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
 
@@ -170,4 +144,34 @@ pub async fn latency_test(
         proxy_handle.abort()
     });
     Ok(timeout_future)
+}
+
+async fn construct_outbound(
+    dispatcher: &Dispatcher,
+    proxy: &Proxy,
+    src_addr: SocketAddr,
+    dst_addr: &NetworkAddr,
+    iface: &str,
+) -> Option<Box<dyn Outbound>> {
+    match proxy.get_impl().as_ref() {
+        ProxyImpl::Chain(vec) => {
+            match dispatcher.create_chain(&proxy.get_name(), vec, src_addr, dst_addr, iface) {
+                Ok(o) => Some(Box::new(o)),
+                Err(_) => None,
+            }
+        }
+        proxy_config => {
+            match dispatcher.build_normal_outbound(
+                &proxy.get_name(),
+                iface,
+                proxy_config,
+                src_addr,
+                dst_addr,
+                None,
+            ) {
+                Ok((o, _)) => Some(o),
+                Err(_) => None,
+            }
+        }
+    }
 }
