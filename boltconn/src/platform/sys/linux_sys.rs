@@ -6,7 +6,7 @@ use crate::platform::{
 };
 use ipnet::IpNet;
 use libc::{c_int, socklen_t, O_RDWR};
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
@@ -139,7 +139,7 @@ impl Drop for SystemDnsHandle {
 
 pub fn get_user_info() -> Option<UserInfo> {
     let (name, user_info) = if let Ok(n) = std::env::var("SUDO_USER") {
-        let user_info = unsafe { libc::getpwnam(n.as_ptr() as *const i8) };
+        let user_info = unsafe { libc::getpwnam(CString::new(n.clone()).ok()?.as_ptr()) };
         (n, user_info)
     } else {
         let user_name = unsafe { libc::getlogin() };
