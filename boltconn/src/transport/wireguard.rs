@@ -163,6 +163,10 @@ impl WireguardTunnel {
                                         let key = BufferIndex::Pool(buf.key());
                                         buf.resize(MAX_UDP_PKT_SIZE, 0);
                                         let Ok(len) = socket.recv(&mut buf).await else {
+                                            tracing::warn!(
+                                                "WireGuard #{} failed to receive from socket",
+                                                name,
+                                            );
                                             break;
                                         };
                                         buf.resize(len, 0);
@@ -262,7 +266,13 @@ impl WireguardTunnel {
                 }
                 false
             }
-            _ => false,
+            TunnResult::Err(e) => {
+                return Err(TransportError::InternalExtra(format!(
+                    "WireGuard receive failed: {:?}",
+                    e
+                )));
+            }
+            TunnResult::Done => false,
         })
     }
 

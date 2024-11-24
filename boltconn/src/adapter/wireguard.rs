@@ -219,13 +219,15 @@ impl Endpoint {
             tokio::spawn(async move {
                 loop {
                     if last_active.lock().await.elapsed() > timeout {
-                        indi_write.abort();
-                        let _ = stop_send.send(());
-                        tracing::debug!(
-                            "[WireGuard] Stop inactive tunnel #{} after for {}s.",
-                            name,
-                            timeout.as_secs()
-                        );
+                        if indi_write.alive() {
+                            indi_write.abort();
+                            let _ = stop_send.send(());
+                            tracing::debug!(
+                                "[WireGuard] Stop inactive tunnel #{} after for {}s.",
+                                name,
+                                timeout.as_secs()
+                            );
+                        }
                         break;
                     }
                     tokio::time::sleep(timeout / 2).await;

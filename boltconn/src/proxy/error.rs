@@ -26,6 +26,8 @@ pub enum SystemError {
 pub enum TransportError {
     #[error("Internal error: {0}")]
     Internal(&'static str),
+    #[error("Internal error: {0}")]
+    InternalExtra(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("DNS error: {0}")]
