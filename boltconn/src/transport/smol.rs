@@ -694,7 +694,8 @@ impl SmolStack {
 
     pub fn purge_timeout_udp(&mut self) {
         self.udp_conn.retain(|_port, task| {
-            if task.last_active.elapsed() > self.udp_timeout {
+            let socket = self.socket_set.get_mut::<SmolUdpSocket>(task.handle);
+            if !socket.is_open() || task.last_active.elapsed() > self.udp_timeout {
                 self.socket_set.remove(task.handle);
                 task.abort_handle.cancel();
                 false
