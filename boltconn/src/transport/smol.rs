@@ -347,13 +347,16 @@ impl UdpConnTask {
                         );
                         continue;
                     }
-                    if socket
-                        .send_slice(buf.as_ref(), IpEndpoint::from(addr))
-                        .is_ok()
-                    {
-                        self.last_active = Instant::now();
-                    } else {
-                        return Err(SmolError::Aborted);
+                    match socket.send_slice(buf.as_ref(), IpEndpoint::from(addr)) {
+                        Ok(_) => self.last_active = Instant::now(),
+                        Err(smoltcp::socket::udp::SendError::BufferFull) => {
+                            // drop the packet
+                            break;
+                        }
+                        Err(smoltcp::socket::udp::SendError::Unaddressable) => {
+                            tracing::warn!("UdpConnTask: socket.send_slice failed: unaddressable");
+                            return Err(SmolError::Aborted);
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => break,
