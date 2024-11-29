@@ -38,14 +38,14 @@ impl AsyncWrite for DuplexChan {
         }
         let mut handle = BytesMut::with_capacity(buf.len());
         handle.extend_from_slice(buf);
-        return match self.tx.try_send(handle.freeze()) {
+        match self.tx.try_send(handle.freeze()) {
             Ok(_) => Ready(Ok(buf.len())),
             Err(TrySendError::Full(_)) => {
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
             Err(TrySendError::Closed(_)) => Ready(Err(io_err("DuplexChan: tx closed"))),
-        };
+        }
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
@@ -79,7 +79,7 @@ impl AsyncRead for DuplexChan {
                 Ready(Ok(()))
             }
         } else {
-            return match self.rx.poll_recv(cx) {
+            match self.rx.poll_recv(cx) {
                 Ready(Some(v)) => {
                     if v.len() <= buf.remaining() {
                         buf.initialize_unfilled()[..v.len()].copy_from_slice(v.as_ref());
@@ -96,7 +96,7 @@ impl AsyncRead for DuplexChan {
                 }
                 Ready(None) => Ready(Ok(())),
                 Poll::Pending => Poll::Pending,
-            };
+            }
         }
     }
 }

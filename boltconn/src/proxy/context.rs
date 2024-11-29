@@ -739,9 +739,5 @@ impl Drop for HttpCapturerInner {
 }
 
 fn minimum_start(logical_len: usize, limit: usize) -> usize {
-    if logical_len > limit {
-        logical_len - limit
-    } else {
-        0
-    }
+    logical_len.saturating_sub(limit)
 }

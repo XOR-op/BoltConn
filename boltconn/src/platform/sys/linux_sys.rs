@@ -19,7 +19,7 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     let mut req: ifreq = mem::zeroed();
     req.ifru.flags = IFF_TUN | IFF_NO_PI;
     let fd = {
-        let fd = libc::open(b"/dev/net/tun\0".as_ptr() as *const _, O_RDWR);
+        let fd = libc::open(c"/dev/net/tun".as_ptr() as *const _, O_RDWR);
         if fd < 0 {
             return Err(errno_err("Failed to open /dev/net/tun"));
         }
