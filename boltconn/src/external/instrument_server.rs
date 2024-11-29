@@ -31,7 +31,7 @@ impl InstrumentServer {
         listen_addr: SocketAddr,
         cors_allowed_list: &[String],
     ) -> Result<(), RuntimeError> {
-        let secret = Arc::new(self.secret.clone());
+        let secret = Arc::new(None); // We verify the secret in the subscribe parameters
         let cors_vec = parse_cors_allow(cors_allowed_list);
         let auth_wrapper = move |r| web_auth(secret.clone(), r, cors_vec.clone());
 

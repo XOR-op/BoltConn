@@ -459,7 +459,7 @@ async fn initialize_dns(
 
 fn start_instrument_services(bus: Arc<MessageBus>, config: Option<&RawInstrumentConfig>) {
     if let Some(config) = config {
-        let web_server = InstrumentServer::new(config.api_key.clone(), bus.clone());
+        let web_server = InstrumentServer::new(config.secret.clone(), bus.clone());
         let addr = config.api_addr.as_socket_addr(default_inbound_ip_addr);
         let cors_allowed_list = config.cors_allowed_list.clone();
         tokio::spawn(async move { web_server.run(addr, cors_allowed_list.as_slice()).await });

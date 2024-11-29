@@ -98,11 +98,11 @@ pub struct RawWebControllerConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct RawInstrumentConfig {
     #[serde(alias = "api-port", alias = "api-addr")]
     pub api_addr: PortOrSocketAddr,
-    #[serde(alias = "api-key")]
-    pub api_key: Option<String>,
+    pub secret: Option<String>,
     #[serde(alias = "cors-allowed-list", default = "default_str_vec")]
     pub cors_allowed_list: Vec<String>,
 }
