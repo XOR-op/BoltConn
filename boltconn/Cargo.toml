@@ -111,7 +111,7 @@ fast-socks5 = "0.9.1"
 boringtun = "0.6.0"
 sha2 = "0.10.8"
 shadowsocks = { version = "1.16.0", default-features = false }
-smoltcp = { version = "0.11.0", features = ["socket-tcp-cubic"] }
+smoltcp = { version = "0.12.0", features = ["socket-tcp-cubic"] }
 # Command line
 clap = { version = "4.4.6", features = ["derive"] }
 clap_complete = "4.4.3"
