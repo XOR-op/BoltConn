@@ -47,6 +47,9 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         let outgoing_info_arc = self.info.clone();
         let Connector { tx, mut rx } = self.connector;
         let abort_handle = self.abort_handle.clone();
+        let conn_id = self.info.id;
+        let dest = self.info.dest.clone();
+        let dest2 = dest.clone();
         let _duplex_guard = DuplexCloseGuard::new(
             tokio::spawn(async move {
                 // recv from outbound and send to inbound
@@ -57,7 +60,12 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
                 while let Some(buf) = rx.recv().await {
                     self.info.more_download(buf.len());
                     if let Err(err) = in_write.write_all(buf.as_ref()).await {
-                        tracing::warn!("TcpAdapter write to inbound failed: {}", err);
+                        tracing::warn!(
+                            "TcpAdapter #{}({}) write to client failed: {}",
+                            conn_id,
+                            dest2,
+                            err
+                        );
                         self.abort_handle.cancel();
                         break;
                     }
@@ -85,13 +93,18 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
                     }
                     outgoing_info_arc.more_upload(size);
                     if tx.send(buf.freeze()).await.is_err() {
-                        tracing::warn!("TcpAdapter tx send err");
+                        tracing::warn!("TcpAdapter #{}({}) tx send err", conn_id, dest);
                         abort_handle.cancel();
                         break;
                     }
                 }
                 Err(err) => {
-                    tracing::warn!("TcpAdapter read error: {}", err);
+                    tracing::warn!(
+                        "TcpAdapter #{}({}) read from client error: {}",
+                        conn_id,
+                        dest,
+                        err
+                    );
                     abort_handle.cancel();
                     break;
                 }
