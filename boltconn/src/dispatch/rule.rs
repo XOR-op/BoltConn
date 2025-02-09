@@ -104,7 +104,7 @@ impl RuleImpl {
                     false
                 }
             }
-            RuleImpl::LocalIpCidr(net) => info.local_ip.as_ref().map_or(false, |s| net.contains(s)),
+            RuleImpl::LocalIpCidr(net) => info.local_ip.as_ref().is_some_and(|s| net.contains(s)),
             RuleImpl::SrcIpCidr(net) => net.contains(&info.src.ip()),
             RuleImpl::IpCidr(net) => info.dst_addr().is_some_and(|s| net.contains(&s.ip())),
             RuleImpl::GeoIP(mmdb, country) => info

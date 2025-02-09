@@ -21,8 +21,8 @@ impl Display for IPPkt {
                 let d = Ipv4Packet::new_unchecked(self.packet_data());
                 (
                     4,
-                    IpAddr::V4(d.src_addr().into()),
-                    IpAddr::V4(d.dst_addr().into()),
+                    IpAddr::V4(d.src_addr()),
+                    IpAddr::V4(d.dst_addr()),
                     d.payload().len(),
                     d.next_header(),
                 )
@@ -31,8 +31,8 @@ impl Display for IPPkt {
                 let d = Ipv6Packet::new_unchecked(self.packet_data());
                 (
                     6,
-                    IpAddr::V6(d.src_addr().into()),
-                    IpAddr::V6(d.dst_addr().into()),
+                    IpAddr::V6(d.src_addr()),
+                    IpAddr::V6(d.dst_addr()),
                     d.payload().len(),
                     d.next_header(),
                 )
@@ -90,31 +90,15 @@ impl IPPkt {
 
     pub fn src_addr(&self) -> IpAddr {
         match self {
-            IPPkt::V4(_) => IpAddr::V4(
-                Ipv4Packet::new_unchecked(self.packet_data())
-                    .src_addr()
-                    .into(),
-            ),
-            IPPkt::V6(_) => IpAddr::V6(
-                Ipv6Packet::new_unchecked(self.packet_data())
-                    .src_addr()
-                    .into(),
-            ),
+            IPPkt::V4(_) => IpAddr::V4(Ipv4Packet::new_unchecked(self.packet_data()).src_addr()),
+            IPPkt::V6(_) => IpAddr::V6(Ipv6Packet::new_unchecked(self.packet_data()).src_addr()),
         }
     }
 
     pub fn dst_addr(&self) -> IpAddr {
         match self {
-            IPPkt::V4(_) => IpAddr::V4(
-                Ipv4Packet::new_unchecked(self.packet_data())
-                    .dst_addr()
-                    .into(),
-            ),
-            IPPkt::V6(_) => IpAddr::V6(
-                Ipv6Packet::new_unchecked(self.packet_data())
-                    .dst_addr()
-                    .into(),
-            ),
+            IPPkt::V4(_) => IpAddr::V4(Ipv4Packet::new_unchecked(self.packet_data()).dst_addr()),
+            IPPkt::V6(_) => IpAddr::V6(Ipv6Packet::new_unchecked(self.packet_data()).dst_addr()),
         }
     }
 

@@ -80,8 +80,8 @@ impl TunUdpInbound {
                 let dst = ip_pkt.dst_addr();
                 let udp_pkt = UdpPacket::new_unchecked(ip_pkt.payload());
                 (
-                    SocketAddrV4::new(src.into(), udp_pkt.src_port()).into(),
-                    SocketAddrV4::new(dst.into(), udp_pkt.dst_port()).into(),
+                    SocketAddrV4::new(src, udp_pkt.src_port()).into(),
+                    SocketAddrV4::new(dst, udp_pkt.dst_port()).into(),
                     header_len,
                 )
             }
@@ -92,8 +92,8 @@ impl TunUdpInbound {
                 let dst = ip_pkt.dst_addr();
                 let udp_pkt = UdpPacket::new_unchecked(ip_pkt.payload());
                 (
-                    SocketAddrV6::new(src.into(), udp_pkt.src_port(), 0, 0).into(),
-                    SocketAddrV6::new(dst.into(), udp_pkt.dst_port(), 0, 0).into(),
+                    SocketAddrV6::new(src, udp_pkt.src_port(), 0, 0).into(),
+                    SocketAddrV6::new(dst, udp_pkt.dst_port(), 0, 0).into(),
                     header_len,
                 )
             }

@@ -237,7 +237,7 @@ impl ScriptEngine {
                         .ok()?;
                     }
                     "br" => {
-                        brotli::CompressorReader::new(d.as_bytes(), d.as_bytes().len(), 0, 22)
+                        brotli::CompressorReader::new(d.as_bytes(), d.len(), 0, 22)
                             .read_to_end(&mut buf)
                             .ok()?;
                     }

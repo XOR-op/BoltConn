@@ -105,9 +105,9 @@ impl HttpInbound {
         req_struct
             .parse(req.as_bytes())
             .map_err(|_| TransportError::Http("Failed to parse request header"))?;
-        if req_struct.method.map_or(false, |m| m == "CONNECT")
+        if (req_struct.method == Some("CONNECT"))
             // HTTP/1.1
-            && req_struct.version.map_or(false, |v| v == 1)
+            && (req_struct.version == Some(1))
         {
             if let Some(Ok(dest)) = req_struct.path.map(|p| p.parse()) {
                 let authorized = if auth.is_empty() {
@@ -304,11 +304,11 @@ fn validate_auth(
 }
 
 fn check_keep_alive(headers: &HeaderMap) -> bool {
-    headers.get("Connection").map_or(false, |v| {
+    headers.get("Connection").is_some_and(|v| {
         v.to_str()
             .unwrap_or_default()
             .eq_ignore_ascii_case("keep-alive")
-    }) || headers.get("Proxy-Connection").map_or(false, |v| {
+    }) || headers.get("Proxy-Connection").is_some_and(|v| {
         v.to_str()
             .unwrap_or_default()
             .eq_ignore_ascii_case("keep-alive")

@@ -2,8 +2,8 @@ use crate::network::packet::ip::IPPkt;
 use bytes::BytesMut;
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
-    IpAddress, IpProtocol, Ipv4Address, Ipv4Packet, Ipv4Repr, Ipv6Address, Ipv6Packet, Ipv6Repr,
-    TcpPacket, UdpPacket, UdpRepr,
+    IpAddress, IpProtocol, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr, TcpPacket, UdpPacket,
+    UdpRepr,
 };
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
@@ -52,13 +52,13 @@ impl TransLayerPkt for TcpPkt {
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
                 pkt.fill_checksum(
-                    &IpAddress::Ipv4(Ipv4Address::from(*src_addr.ip())),
-                    &IpAddress::Ipv4(Ipv4Address::from(*dst_addr.ip())),
+                    &IpAddress::Ipv4(*src_addr.ip()),
+                    &IpAddress::Ipv4(*dst_addr.ip()),
                 );
                 // rewrite ip header
                 let mut pkt = Ipv4Packet::new_unchecked(self.ip_pkt.packet_data_mut());
-                pkt.set_src_addr(Ipv4Address::from(*src_addr.ip()));
-                pkt.set_dst_addr(Ipv4Address::from(*dst_addr.ip()));
+                pkt.set_src_addr(*src_addr.ip());
+                pkt.set_dst_addr(*dst_addr.ip());
                 pkt.fill_checksum();
             }
             (SocketAddr::V6(src_addr), SocketAddr::V6(dst_addr)) => {
@@ -68,13 +68,13 @@ impl TransLayerPkt for TcpPkt {
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
                 pkt.fill_checksum(
-                    &IpAddress::Ipv6(Ipv6Address::from(*src_addr.ip())),
-                    &IpAddress::Ipv6(Ipv6Address::from(*dst_addr.ip())),
+                    &IpAddress::Ipv6(*src_addr.ip()),
+                    &IpAddress::Ipv6(*dst_addr.ip()),
                 );
                 // rewrite ip header
                 let mut pkt = Ipv6Packet::new_unchecked(self.ip_pkt.packet_data_mut());
-                pkt.set_src_addr(Ipv6Address::from(*src_addr.ip()));
-                pkt.set_dst_addr(Ipv6Address::from(*dst_addr.ip()));
+                pkt.set_src_addr(*src_addr.ip());
+                pkt.set_dst_addr(*dst_addr.ip());
                 // ipv6 does not contain checksum
             }
             (_, _) => unreachable!(),
@@ -138,13 +138,13 @@ impl TransLayerPkt for UdpPkt {
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
                 pkt.fill_checksum(
-                    &IpAddress::Ipv4(Ipv4Address::from(*src_addr.ip())),
-                    &IpAddress::Ipv4(Ipv4Address::from(*dst_addr.ip())),
+                    &IpAddress::Ipv4(*src_addr.ip()),
+                    &IpAddress::Ipv4(*dst_addr.ip()),
                 );
                 // rewrite ip header
                 let mut pkt = Ipv4Packet::new_unchecked(self.ip_pkt.packet_data_mut());
-                pkt.set_src_addr(Ipv4Address::from(*src_addr.ip()));
-                pkt.set_dst_addr(Ipv4Address::from(*dst_addr.ip()));
+                pkt.set_src_addr(*src_addr.ip());
+                pkt.set_dst_addr(*dst_addr.ip());
                 pkt.fill_checksum();
             }
             (SocketAddr::V6(src_addr), SocketAddr::V6(dst_addr)) => {
@@ -154,13 +154,13 @@ impl TransLayerPkt for UdpPkt {
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
                 pkt.fill_checksum(
-                    &IpAddress::Ipv6(Ipv6Address::from(*src_addr.ip())),
-                    &IpAddress::Ipv6(Ipv6Address::from(*dst_addr.ip())),
+                    &IpAddress::Ipv6(*src_addr.ip()),
+                    &IpAddress::Ipv6(*dst_addr.ip()),
                 );
                 // rewrite ip header
                 let mut pkt = Ipv6Packet::new_unchecked(self.ip_pkt.packet_data_mut());
-                pkt.set_src_addr(Ipv6Address::from(*src_addr.ip()));
-                pkt.set_dst_addr(Ipv6Address::from(*dst_addr.ip()));
+                pkt.set_src_addr(*src_addr.ip());
+                pkt.set_dst_addr(*dst_addr.ip());
                 // ipv6 does not contain checksum
             }
             (_, _) => unreachable!(),
@@ -248,8 +248,8 @@ pub fn create_raw_udp_pkt(data: &[u8], src: SocketAddr, dst: SocketAddr) -> Byte
             _ => unreachable!(),
         };
         Ipv4Repr {
-            src_addr: src.into(),
-            dst_addr: dst.into(),
+            src_addr: src,
+            dst_addr: dst,
             next_header: IpProtocol::Udp,
             payload_len: data.len() + udp_hdr,
             hop_limit: 31,
@@ -262,8 +262,8 @@ pub fn create_raw_udp_pkt(data: &[u8], src: SocketAddr, dst: SocketAddr) -> Byte
             _ => unreachable!(),
         };
         Ipv6Repr {
-            src_addr: src.into(),
-            dst_addr: dst.into(),
+            src_addr: src,
+            dst_addr: dst,
             next_header: IpProtocol::Udp,
             payload_len: data.len() + udp_hdr,
             hop_limit: 31,

@@ -71,7 +71,7 @@ impl TrojanAddr {
             }
             TrojanAddr::Domain((dn, port)) => {
                 data.push(0x03);
-                data.push(dn.as_bytes().len() as u8);
+                data.push(dn.len() as u8);
                 data.extend(dn.as_bytes().iter());
                 data.extend(port.to_be_bytes().iter())
             }
