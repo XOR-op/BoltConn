@@ -201,7 +201,7 @@ impl TcpConnTask {
         // Receive data
         let mut has_activity = false;
         let mut accum_bytes = 0;
-        while socket.can_recv() && self.back_tx.capacity() > 0 {
+        while socket.can_recv() && !self.back_tx.is_closed() && self.back_tx.capacity() > 0 {
             let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
             if let Ok(size) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
                 unsafe { buf.advance_mut(size) };
