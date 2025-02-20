@@ -158,6 +158,7 @@ impl WireguardTunnel {
                         let name = config.name.clone();
                         local_async_run(async move {
                             // dedicated to poll UDP from small kernel buffer
+                            let mut buf = vec![0; MAX_UDP_PKT_SIZE];
                             while !in_tx.is_disconnected() {
                                 let key = match pool.clone().create_owned() {
                                     Some(mut buf) => {
@@ -165,7 +166,10 @@ impl WireguardTunnel {
                                         buf.resize(MAX_UDP_PKT_SIZE, 0);
                                         let recv_result = tokio::select! {
                                             recv_result = socket.recv(&mut buf) => recv_result,
-                                            _ = tokio::time::sleep(Duration::from_millis(500)) => continue,
+                                            _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                                                pool.clear(buf.key());
+                                                continue
+                                            },
                                         };
                                         let Ok(len) = recv_result else {
                                             tracing::warn!(
@@ -178,11 +182,12 @@ impl WireguardTunnel {
                                         key
                                     }
                                     None => {
-                                        let mut buf = vec![0; MAX_UDP_PKT_SIZE];
                                         let recv_result = tokio::select! {
                                             recv_result = socket.recv(&mut buf) => recv_result,
                                             _ = tokio::time::sleep(Duration::from_millis(500)) => continue,
                                         };
+                                        let mut used_buf = std::mem::take(&mut buf);
+                                        buf.resize(MAX_UDP_PKT_SIZE, 0);
                                         let len = match recv_result {
                                             Ok(len) => len,
                                             Err(e) => {
@@ -194,8 +199,8 @@ impl WireguardTunnel {
                                                 break;
                                             }
                                         };
-                                        buf.resize(len, 0);
-                                        BufferIndex::Raw(buf)
+                                        used_buf.resize(len, 0);
+                                        BufferIndex::Raw(used_buf)
                                     }
                                 };
                                 if let Err(err) = in_tx.try_send(key) {
