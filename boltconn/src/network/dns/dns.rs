@@ -72,15 +72,17 @@ impl Dns {
         ns_policy: NameserverPolicies,
         configs: Vec<NameServerConfigGroup>,
     ) -> Dns {
-        let mut resolvers = Vec::new();
-        for config in configs {
-            let cfg = ResolverConfig::from_parts(None, vec![], config);
-            resolvers.push(AsyncResolver::new(
-                cfg,
-                ResolverOpts::default(),
-                GenericConnector::new(IfaceProvider::new(iface_name)),
-            ));
-        }
+        let resolvers = configs
+            .into_iter()
+            .map(|config| {
+                let cfg = ResolverConfig::from_parts(None, vec![], config);
+                AsyncResolver::new(
+                    cfg,
+                    Self::default_resolver_opt(),
+                    GenericConnector::new(IfaceProvider::new(iface_name)),
+                )
+            })
+            .collect();
         let host_resolver = HostsResolver::new(hosts);
         Dns {
             name: name.to_string(),
@@ -102,16 +104,25 @@ impl Dns {
     }
 
     pub fn replace_resolvers(&self, iface_name: &str, configs: Vec<NameServerConfigGroup>) {
-        let mut resolvers = Vec::new();
-        for config in configs {
-            let cfg = ResolverConfig::from_parts(None, vec![], config);
-            resolvers.push(AsyncResolver::new(
-                cfg,
-                ResolverOpts::default(),
-                GenericConnector::new(IfaceProvider::new(iface_name)),
-            ));
-        }
+        let resolvers = configs
+            .into_iter()
+            .map(|config| {
+                let cfg = ResolverConfig::from_parts(None, vec![], config);
+                AsyncResolver::new(
+                    cfg,
+                    Self::default_resolver_opt(),
+                    GenericConnector::new(IfaceProvider::new(iface_name)),
+                )
+            })
+            .collect();
         self.resolvers.store(Arc::new(resolvers));
+    }
+
+    fn default_resolver_opt() -> ResolverOpts {
+        let mut opts = ResolverOpts::default();
+        opts.timeout = Duration::from_millis(1600);
+        opts.attempts = 3;
+        opts
     }
 }
 

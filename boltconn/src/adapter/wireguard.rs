@@ -68,10 +68,13 @@ impl Endpoint {
                 })?;
             Arc::new_cyclic(|me| {
                 // create dns
+                let mut opts = ResolverOpts::default();
+                opts.timeout = Duration::from_millis(1500);
+                opts.attempts = 3;
                 let resolver = {
                     AsyncResolver::new(
                         config.dns.clone(),
-                        ResolverOpts::default(),
+                        opts,
                         GenericConnector::new(SmolDnsProvider::new(
                             me.clone(),
                             ConnAbortHandle::placeholder(),
