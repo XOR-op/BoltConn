@@ -37,8 +37,13 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+const GIT_VERSION: &'static str = git_version::git_version!(fallback = "UNKNOWN-GIT-VER");
+const fn get_version() -> &'static str {
+    const_format::concatcp!(env!("CARGO_PKG_VERSION"), " (", GIT_VERSION, ")")
+}
+
 #[derive(Debug, Parser)]
-#[clap(name = "boltconn", about = "CLI interface of BoltConn", version = env!("CARGO_PKG_VERSION"))]
+#[clap(name = "boltconn", about = "CLI interface of BoltConn", version = get_version())]
 struct ProgramArgs {
     /// RESTful API URL; if not set, the controller will use unix domain socket as default.
     #[arg(short, long)]
