@@ -257,7 +257,7 @@ impl ScriptEngine {
         parts: &mut http::request::Parts,
         data: Option<Bytes>,
     ) -> Option<Bytes> {
-        if self.pattern.as_ref().map_or(true, |s| s.is_match(url)) {
+        if self.pattern.as_ref().is_none_or(|s| s.is_match(url)) {
             match self.script_type {
                 ScriptType::Req | ScriptType::All => {
                     let method = parts.method.to_string();
@@ -265,7 +265,7 @@ impl ScriptEngine {
                     let (_, header, body) =
                         self.run_js(url, data, method, None, header, "$request")?;
                     parts.headers = header;
-                    body.map(Bytes::from)
+                    body
                 }
                 ScriptType::Resp => None,
             }
@@ -281,7 +281,7 @@ impl ScriptEngine {
         parts: &mut http::response::Parts,
         data: Option<Bytes>,
     ) -> Option<Bytes> {
-        if self.pattern.as_ref().map_or(true, |s| s.is_match(url)) {
+        if self.pattern.as_ref().is_none_or(|s| s.is_match(url)) {
             match self.script_type {
                 ScriptType::Req => None,
                 ScriptType::Resp | ScriptType::All => {
@@ -298,7 +298,7 @@ impl ScriptEngine {
                         parts.status = status;
                     }
                     parts.headers = header;
-                    body.map(Bytes::from)
+                    body
                 }
             }
         } else {
