@@ -62,7 +62,7 @@ jobs:
         run: echo "version=$(rustc --version)" >> $GITHUB_OUTPUT
 
       - name: Cache cargo index
-        uses: actions/cache@v3.2.3
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/registry/index
           key: index-${{ runner.os }}-${{ github.run_number }}
@@ -72,7 +72,7 @@ jobs:
             #      run: cargo generate-lockfile
 
       - name: Cache cargo registry
-        uses: actions/cache@v3.2.3
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/registry/cache
           key: registry-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.lock') }}
@@ -81,7 +81,7 @@ jobs:
         run: cargo fetch
 
       - name: Cache target directory
-        uses: actions/cache@v3.2.3
+        uses: actions/cache@v4
         with:
           path: target
           key: cache-target-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.lock') }}
@@ -110,7 +110,7 @@ jobs:
           tar czf boltconn.tar.gz -C ./release/ .
 
       - name: Upload a Build Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: boltconn-${{ github.sha }}-${{ matrix.config.artifact }}
           path: release
