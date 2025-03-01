@@ -58,6 +58,8 @@ pub enum DnsError {
     ResolveServer(String),
     #[error("Failed to resolve domain name: {0}")]
     ResolveDomain(String),
+    #[error("Failed to retrieve DNS server from DHCP: {0}")]
+    DhcpNameServer(&'static str),
 }
 
 #[derive(Error, Debug)]

@@ -7,7 +7,9 @@ pub mod tun_device;
 mod unix_tun;
 #[cfg(not(target_os = "windows"))]
 use unix_tun::TunInstance;
+pub mod dhcp;
 #[cfg(target_os = "windows")]
 mod windows_tun;
+
 #[cfg(target_os = "windows")]
 use windows_tun::TunInstance;
