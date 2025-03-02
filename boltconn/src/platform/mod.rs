@@ -3,6 +3,7 @@ use std::io;
 use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 
+pub mod dhcp;
 pub mod route;
 
 pub mod process;

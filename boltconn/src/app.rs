@@ -329,9 +329,11 @@ impl App {
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );
 
-        self.linked_state.lock().unwrap().state = loaded_config.state;
+        // this is atomic
+        self.dns.replace_resolvers(&self.outbound_iface, group)?;
 
-        self.dns.replace_resolvers(&self.outbound_iface, group);
+        // start atomic replacing
+
         self.dns.replace_ns_policy(ns_policy);
         self.dns.replace_hosts(&config.dns.hosts);
         self.dns_hijack_ctrl.update(
@@ -340,7 +342,8 @@ impl App {
             SocketAddr::new(Ipv4Addr::new(198, 18, 99, 88).into(), 53),
         );
 
-        // start atomic replacing
+        self.linked_state.lock().unwrap().state = loaded_config.state;
+
         self.api_dispatching_handler.store(dispatching.clone());
         let hcap2 = self.http_capturer.clone();
         self.dispatcher.replace_dispatching(dispatching);
@@ -453,7 +456,7 @@ async fn initialize_dns(
             &config.hosts,
             ns_policy,
             group,
-        ))
+        )?)
     })
 }
 

@@ -61,16 +61,46 @@ fn create_dhcp_discover(src_mac: [u8; 6]) -> Option<Vec<u8>> {
     Some(ether_pkt_data)
 }
 
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn get_dhcp_dns(iface_name: &str) -> Result<IpAddr, DnsError> {
+    get_dhcp_dns_impl(iface_name)
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_dhcp_dns(iface_name: &str) -> Result<IpAddr, DnsError> {
+    // spawn a thread calling get_dhcp_dns_impl with a timeout
+    let iface_name = iface_name.to_string();
+    let handle = std::thread::spawn(move || get_dhcp_dns_impl(&iface_name));
+    let start = std::time::Instant::now();
+    while start.elapsed() < READ_TIMEOUT {
+        if handle.is_finished() {
+            return handle
+                .join()
+                .map_err(|_| DnsError::DhcpNameServer("dhcp thread"))?;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    Err(DnsError::DhcpNameServer(
+        "timeout waiting for DHCP response",
+    ))
+}
+
+fn get_dhcp_dns_impl(iface_name: &str) -> Result<IpAddr, DnsError> {
     let interface = pnet_datalink::interfaces()
         .into_iter()
         .find(|interface| interface.name == iface_name)
         .ok_or(DnsError::DhcpNameServer("interface not found"))?;
-    let (mut tx, mut rx) =
-        match pnet_datalink::channel(&interface, pnet_datalink::Config::default()) {
-            Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-            _ => return Err(DnsError::DhcpNameServer("failed to open channel")),
-        };
+    let config = pnet_datalink::Config {
+        read_timeout: Some(READ_TIMEOUT),
+        ..Default::default()
+    };
+    // read_timeout only works on linux/BPF/Netmap, which includes macos and linux
+    let (mut tx, mut rx) = match pnet_datalink::channel(&interface, config) {
+        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
+        _ => return Err(DnsError::DhcpNameServer("failed to open channel")),
+    };
     let src_mac = interface
         .mac
         .ok_or(DnsError::DhcpNameServer("missing mac address"))?;
@@ -82,7 +112,8 @@ pub fn get_dhcp_dns(iface_name: &str) -> Result<IpAddr, DnsError> {
         .ok()
         .flatten()
         .ok_or(DnsError::DhcpNameServer("failed to send packet"))?;
-    loop {
+    let start = std::time::Instant::now();
+    while start.elapsed() < READ_TIMEOUT {
         let buf = rx
             .next()
             .ok()
@@ -109,6 +140,9 @@ pub fn get_dhcp_dns(iface_name: &str) -> Result<IpAddr, DnsError> {
             }
         }
     }
+    Err(DnsError::DhcpNameServer(
+        "timeout waiting for DHCP response",
+    ))
 }
 
 fn get_dhcp_payload(buf: &[u8]) -> Option<Message> {

@@ -3,7 +3,8 @@ use crate::network::dns::dns_table::DnsTable;
 use crate::network::dns::hosts::HostsResolver;
 use crate::network::dns::ns_policy::{DispatchedDnsResolver, NameserverPolicies};
 use crate::network::dns::provider::IfaceProvider;
-use crate::proxy::error::TransportError;
+use crate::network::dns::{default_resolver_opt, AuxiliaryResolver, NameServerConfigEnum};
+use crate::proxy::error::{DnsError, TransportError};
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
 use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
@@ -52,13 +53,40 @@ macro_rules! impl_genuine_lookup {
     };
 }
 
+macro_rules! apply_resolver {
+    ($func_name:ident, $name:expr, $domain_name:expr,$auxiliary_resolver:expr) => {
+        match $auxiliary_resolver {
+            AuxiliaryResolver::Dhcp(inner) => {
+                let resolver = {
+                    let mut guard = inner.lock().unwrap();
+                    match guard.refresh() {
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                "failed to update DHCP DNS at ({},{},{}): {:?}",
+                                guard.iface,
+                                guard.iface_addr,
+                                guard.ns_addr,
+                                e
+                            );
+                        }
+                    }
+                    guard.get_resolver()
+                };
+                $func_name($name, $domain_name, &resolver).await
+            }
+            AuxiliaryResolver::Resolver(inner) => $func_name($name, $domain_name, &inner).await,
+        }
+    };
+}
+
 pub struct GenericDns<P: RuntimeProvider> {
     name: String,
     table: DnsTable,
     preference: DnsPreference,
     host_resolver: ArcSwap<HostsResolver>,
     ns_policy: ArcSwap<NameserverPolicies>,
-    resolvers: ArcSwap<Vec<AsyncResolver<GenericConnector<P>>>>,
+    resolvers: ArcSwap<Vec<AuxiliaryResolver<AsyncResolver<GenericConnector<P>>>>>,
 }
 
 pub type Dns = GenericDns<IfaceProvider>;
@@ -70,28 +98,18 @@ impl Dns {
         preference: DnsPreference,
         hosts: &HashMap<String, IpAddr>,
         ns_policy: NameserverPolicies,
-        configs: Vec<NameServerConfigGroup>,
-    ) -> Dns {
-        let resolvers = configs
-            .into_iter()
-            .map(|config| {
-                let cfg = ResolverConfig::from_parts(None, vec![], config);
-                AsyncResolver::new(
-                    cfg,
-                    Self::default_resolver_opt(),
-                    GenericConnector::new(IfaceProvider::new(iface_name)),
-                )
-            })
-            .collect();
+        configs: Vec<NameServerConfigEnum>,
+    ) -> Result<Dns, DnsError> {
+        let resolvers = Self::build_resolvers(iface_name, configs)?;
         let host_resolver = HostsResolver::new(hosts);
-        Dns {
+        Ok(Dns {
             name: name.to_string(),
             table: DnsTable::new(),
             preference,
             host_resolver: ArcSwap::new(Arc::new(host_resolver)),
             ns_policy: ArcSwap::new(Arc::new(ns_policy)),
             resolvers: ArcSwap::new(Arc::new(resolvers)),
-        }
+        })
     }
 
     pub fn replace_hosts(&self, hosts: &HashMap<String, IpAddr>) {
@@ -103,26 +121,38 @@ impl Dns {
         self.ns_policy.store(Arc::new(ns_policy));
     }
 
-    pub fn replace_resolvers(&self, iface_name: &str, configs: Vec<NameServerConfigGroup>) {
-        let resolvers = configs
-            .into_iter()
-            .map(|config| {
-                let cfg = ResolverConfig::from_parts(None, vec![], config);
-                AsyncResolver::new(
-                    cfg,
-                    Self::default_resolver_opt(),
-                    GenericConnector::new(IfaceProvider::new(iface_name)),
-                )
-            })
-            .collect();
+    // This function is atomic
+    pub fn replace_resolvers(
+        &self,
+        iface_name: &str,
+        configs: Vec<NameServerConfigEnum>,
+    ) -> Result<(), DnsError> {
+        let resolvers = Self::build_resolvers(iface_name, configs)?;
         self.resolvers.store(Arc::new(resolvers));
+        Ok(())
     }
 
-    fn default_resolver_opt() -> ResolverOpts {
-        let mut opts = ResolverOpts::default();
-        opts.timeout = Duration::from_millis(1600);
-        opts.attempts = 3;
-        opts
+    fn build_resolvers(
+        iface_name: &str,
+        configs: Vec<NameServerConfigEnum>,
+    ) -> Result<Vec<AuxiliaryResolver<AsyncResolver<GenericConnector<IfaceProvider>>>>, DnsError>
+    {
+        let mut resolvers = Vec::new();
+        for config in configs.into_iter() {
+            let resolver = match config {
+                NameServerConfigEnum::Normal(config) => {
+                    let cfg = ResolverConfig::from_parts(None, vec![], config);
+                    AuxiliaryResolver::new_normal(AsyncResolver::new(
+                        cfg,
+                        default_resolver_opt(),
+                        GenericConnector::new(IfaceProvider::new(iface_name)),
+                    ))
+                }
+                NameServerConfigEnum::Dhcp(dhcp) => AuxiliaryResolver::new_dhcp(&dhcp)?,
+            };
+            resolvers.push(resolver);
+        }
+        Ok(resolvers)
     }
 }
 
@@ -138,7 +168,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
             preference,
             host_resolver: ArcSwap::new(Arc::new(HostsResolver::empty())),
             ns_policy: ArcSwap::new(Arc::new(NameserverPolicies::empty())),
-            resolvers: ArcSwap::new(Arc::new(vec![resolver])),
+            resolvers: ArcSwap::new(Arc::new(vec![AuxiliaryResolver::new_normal(resolver)])),
         }
     }
 
@@ -161,7 +191,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
 
     async fn genuine_lookup_v4(&self, domain_name: &str) -> Result<Option<IpAddr>, TransportError> {
         for r in self.resolvers.load().iter() {
-            if let Some(ip) = Self::genuine_lookup_one_v4(&self.name, domain_name, r).await? {
+            if let Some(ip) = apply_resolver!(genuine_lookup_one_v4, &self.name, domain_name, r)? {
                 return Ok(Some(ip));
             }
         }
@@ -169,15 +199,12 @@ impl<P: RuntimeProvider> GenericDns<P> {
     }
     async fn genuine_lookup_v6(&self, domain_name: &str) -> Result<Option<IpAddr>, TransportError> {
         for r in self.resolvers.load().iter() {
-            if let Some(ip) = Self::genuine_lookup_one_v6(&self.name, domain_name, r).await? {
+            if let Some(ip) = apply_resolver!(genuine_lookup_one_v6, &self.name, domain_name, r)? {
                 return Ok(Some(ip));
             }
         }
         Ok(None)
     }
-
-    impl_genuine_lookup!(genuine_lookup_one_v4, ipv4_lookup);
-    impl_genuine_lookup!(genuine_lookup_one_v6, ipv6_lookup);
 
     async fn one_v4_wrapper(
         name: &str,
@@ -186,10 +213,10 @@ impl<P: RuntimeProvider> GenericDns<P> {
     ) -> Result<Option<IpAddr>, TransportError> {
         match resolver {
             DispatchedDnsResolver::Iface(resolver) => {
-                Self::genuine_lookup_one_v4(name, domain_name, resolver).await
+                apply_resolver!(genuine_lookup_one_v4, name, domain_name, resolver)
             }
             DispatchedDnsResolver::Plain(resolver) => {
-                Self::genuine_lookup_one_v4(name, domain_name, resolver).await
+                genuine_lookup_one_v4(name, domain_name, resolver).await
             }
         }
     }
@@ -201,10 +228,10 @@ impl<P: RuntimeProvider> GenericDns<P> {
     ) -> Result<Option<IpAddr>, TransportError> {
         match resolver {
             DispatchedDnsResolver::Iface(resolver) => {
-                Self::genuine_lookup_one_v6(name, domain_name, resolver).await
+                apply_resolver!(genuine_lookup_one_v6, name, domain_name, resolver)
             }
             DispatchedDnsResolver::Plain(resolver) => {
-                Self::genuine_lookup_one_v6(name, domain_name, resolver).await
+                genuine_lookup_one_v6(name, domain_name, resolver).await
             }
         }
     }
@@ -331,3 +358,6 @@ impl<P: RuntimeProvider> GenericDns<P> {
         }
     }
 }
+
+impl_genuine_lookup!(genuine_lookup_one_v4, ipv4_lookup);
+impl_genuine_lookup!(genuine_lookup_one_v6, ipv6_lookup);
