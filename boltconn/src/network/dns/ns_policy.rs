@@ -87,7 +87,7 @@ impl NameserverPolicies {
                         }
                     }
                     NameServerConfigEnum::Dhcp(iface) => {
-                        DispatchedDnsResolver::Iface(AuxiliaryResolver::new_dhcp(&iface)?)
+                        DispatchedDnsResolver::Iface(AuxiliaryResolver::new_dhcp(&iface))
                     }
                 };
                 let matcher = m.build();

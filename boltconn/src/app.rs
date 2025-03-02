@@ -329,11 +329,8 @@ impl App {
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );
 
-        // this is atomic
-        self.dns.replace_resolvers(&self.outbound_iface, group)?;
-
         // start atomic replacing
-
+        self.dns.replace_resolvers(&self.outbound_iface, group);
         self.dns.replace_ns_policy(ns_policy);
         self.dns.replace_hosts(&config.dns.hosts);
         self.dns_hijack_ctrl.update(
@@ -456,7 +453,7 @@ async fn initialize_dns(
             &config.hosts,
             ns_policy,
             group,
-        )?)
+        ))
     })
 }
 

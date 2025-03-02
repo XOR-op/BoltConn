@@ -8,7 +8,7 @@ mod ns_policy;
 mod provider;
 
 use crate::config::DnsConfigError;
-use crate::proxy::error::{DnsError, TransportError};
+use crate::proxy::error::DnsError;
 pub use bootstrap::BootstrapResolver;
 pub use dns::{Dns, GenericDns};
 use hickory_resolver::config::{
@@ -167,32 +167,40 @@ struct DhcpDnsRecord {
 }
 
 impl DhcpDnsRecord {
-    pub fn new(iface: &str) -> Result<Self, DnsError> {
-        let iface_addr = crate::platform::get_iface_address(iface)
-            .map_err(|_| DnsError::DhcpNameServer("failed to get iface address"))?;
-        let ns_addr = crate::platform::dhcp::get_dhcp_dns(iface)?;
-        tracing::debug!(
-            "DHCP DNS: iface={}, iface_addr={}, ns_addr={}",
-            iface,
-            iface_addr,
-            ns_addr
-        );
-        Ok(Self {
+    pub fn new(iface: &str) -> Self {
+        let mut iface_addr = crate::platform::get_iface_address(iface).ok();
+        let ns_addr = match crate::platform::dhcp::get_dhcp_dns(iface) {
+            Ok(addr) => addr,
+            Err(e) => {
+                tracing::warn!(
+                    "DHCP DNS: iface={}, iface_addr={:?}, error={}, use empty address",
+                    iface,
+                    iface_addr,
+                    e
+                );
+                // we don't want the replayable fault stop the program from running
+                // e.g. start offline but soon connect to a network with DHCP
+                iface_addr = None;
+                IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+            }
+        };
+        Self {
             iface: iface.to_string(),
-            iface_addr,
+            iface_addr: iface_addr.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))),
             ns_addr,
             last_checked: std::time::Instant::now(),
             resolver: Self::create_resolver(ns_addr, iface),
-        })
+        }
     }
 
     // return if the record is updated
-    pub fn refresh(&mut self) -> Result<bool, TransportError> {
+    pub fn refresh(&mut self) -> Result<bool, DnsError> {
         if self.last_checked.elapsed() < Duration::from_secs(30) {
             Ok(false)
         } else {
             // when error occurs, update the record in a best-effort way
-            let addr = crate::platform::get_iface_address(&self.iface)?;
+            let addr = crate::platform::get_iface_address(&self.iface)
+                .map_err(|_| DnsError::DhcpNameServer("failed to get iface address"))?;
             if addr != self.iface_addr {
                 let new_dns = crate::platform::dhcp::get_dhcp_dns(&self.iface)?;
                 self.iface_addr = addr;
@@ -241,8 +249,8 @@ impl<T> AuxiliaryResolver<T> {
         Self::Resolver(resolver)
     }
 
-    pub fn new_dhcp(iface: &str) -> Result<Self, DnsError> {
-        let record = DhcpDnsRecord::new(iface)?;
-        Ok(Self::Dhcp(Mutex::new(record)))
+    pub fn new_dhcp(iface: &str) -> Self {
+        let record = DhcpDnsRecord::new(iface);
+        Self::Dhcp(Mutex::new(record))
     }
 }

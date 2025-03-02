@@ -4,7 +4,7 @@ use crate::network::dns::hosts::HostsResolver;
 use crate::network::dns::ns_policy::{DispatchedDnsResolver, NameserverPolicies};
 use crate::network::dns::provider::IfaceProvider;
 use crate::network::dns::{default_resolver_opt, AuxiliaryResolver, NameServerConfigEnum};
-use crate::proxy::error::{DnsError, TransportError};
+use crate::proxy::error::TransportError;
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
 use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
@@ -99,17 +99,17 @@ impl Dns {
         hosts: &HashMap<String, IpAddr>,
         ns_policy: NameserverPolicies,
         configs: Vec<NameServerConfigEnum>,
-    ) -> Result<Dns, DnsError> {
-        let resolvers = Self::build_resolvers(iface_name, configs)?;
+    ) -> Dns {
+        let resolvers = Self::build_resolvers(iface_name, configs);
         let host_resolver = HostsResolver::new(hosts);
-        Ok(Dns {
+        Dns {
             name: name.to_string(),
             table: DnsTable::new(),
             preference,
             host_resolver: ArcSwap::new(Arc::new(host_resolver)),
             ns_policy: ArcSwap::new(Arc::new(ns_policy)),
             resolvers: ArcSwap::new(Arc::new(resolvers)),
-        })
+        }
     }
 
     pub fn replace_hosts(&self, hosts: &HashMap<String, IpAddr>) {
@@ -122,21 +122,15 @@ impl Dns {
     }
 
     // This function is atomic
-    pub fn replace_resolvers(
-        &self,
-        iface_name: &str,
-        configs: Vec<NameServerConfigEnum>,
-    ) -> Result<(), DnsError> {
-        let resolvers = Self::build_resolvers(iface_name, configs)?;
+    pub fn replace_resolvers(&self, iface_name: &str, configs: Vec<NameServerConfigEnum>) {
+        let resolvers = Self::build_resolvers(iface_name, configs);
         self.resolvers.store(Arc::new(resolvers));
-        Ok(())
     }
 
     fn build_resolvers(
         iface_name: &str,
         configs: Vec<NameServerConfigEnum>,
-    ) -> Result<Vec<AuxiliaryResolver<AsyncResolver<GenericConnector<IfaceProvider>>>>, DnsError>
-    {
+    ) -> Vec<AuxiliaryResolver<AsyncResolver<GenericConnector<IfaceProvider>>>> {
         let mut resolvers = Vec::new();
         for config in configs.into_iter() {
             let resolver = match config {
@@ -148,11 +142,11 @@ impl Dns {
                         GenericConnector::new(IfaceProvider::new(iface_name)),
                     ))
                 }
-                NameServerConfigEnum::Dhcp(dhcp) => AuxiliaryResolver::new_dhcp(&dhcp)?,
+                NameServerConfigEnum::Dhcp(dhcp) => AuxiliaryResolver::new_dhcp(&dhcp),
             };
             resolvers.push(resolver);
         }
-        Ok(resolvers)
+        resolvers
     }
 }
 
