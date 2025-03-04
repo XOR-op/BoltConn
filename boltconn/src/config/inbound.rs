@@ -21,6 +21,8 @@ pub enum RawInboundServiceConfig {
 pub struct RawInboundConfig {
     #[serde(alias = "enable-tun", default = "default_true")]
     pub enable_tun: bool,
+    #[serde(alias = "enable-icmp-proxy", default = "default_true")]
+    pub enable_icmp_proxy: bool,
     pub http: Option<SingleOrVec<RawInboundServiceConfig>>,
     pub socks5: Option<SingleOrVec<RawInboundServiceConfig>>,
 }

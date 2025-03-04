@@ -7,6 +7,7 @@ pub mod tun_device;
 mod unix_tun;
 #[cfg(not(target_os = "windows"))]
 use unix_tun::TunInstance;
+mod icmp;
 #[cfg(target_os = "windows")]
 mod windows_tun;
 

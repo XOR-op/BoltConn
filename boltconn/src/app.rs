@@ -112,6 +112,7 @@ impl App {
                 tun_udp_tx,
                 udp_tun_rx,
                 false, // TODO: load from configuration
+                config.inbound.enable_icmp_proxy,
             )
             .map_err(|e| anyhow!("Fail to create TUN: {e}"))?;
             // create tun device

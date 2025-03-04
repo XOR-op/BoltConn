@@ -31,6 +31,11 @@ impl Icmpv4Pkt {
         pkt.msg_type() == Icmpv4Message::EchoRequest
     }
 
+    pub fn is_echo_reply(&self) -> bool {
+        let pkt = Icmpv4Packet::new_unchecked(self.ip_pkt.packet_payload());
+        pkt.msg_type() == Icmpv4Message::EchoReply
+    }
+
     pub fn set_as_reply(&mut self) {
         let mut pkt = Icmpv4Packet::new_unchecked(self.ip_pkt.packet_payload_mut());
         pkt.set_msg_type(Icmpv4Message::EchoReply);

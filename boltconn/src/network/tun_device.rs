@@ -28,6 +28,7 @@ pub struct TunDevice {
     udp_tx: flume::Sender<Bytes>,
     udp_rx: flume::Receiver<Bytes>,
     ipv6_enabled: bool,
+    icmp_proxy_enabled: bool,
 }
 
 impl TunDevice {
@@ -37,6 +38,7 @@ impl TunDevice {
         udp_tx: flume::Sender<Bytes>,
         udp_rx: flume::Receiver<Bytes>,
         ipv6_enabled: bool,
+        icmp_proxy_enabled: bool,
     ) -> io::Result<TunDevice> {
         let (inner, name) = TunInstance::new()?;
         Ok(TunDevice {
@@ -48,6 +50,7 @@ impl TunDevice {
             udp_tx,
             udp_rx,
             ipv6_enabled,
+            icmp_proxy_enabled,
         })
     }
 
@@ -119,21 +122,38 @@ impl TunDevice {
     //     TunInstance::send_outbound(pkt, self.gw_name.as_str(), self.ipv6_enabled).await
     // }
 
-    pub async fn run(mut self, nat_addr: SocketAddr) -> io::Result<()> {
+    pub async fn run(mut self, nat_addr: SocketAddr) {
         let nat_addr = if let SocketAddr::V4(addr) = nat_addr {
             addr
         } else {
             panic!("v6 nat not supported")
         };
         let (mut fd_read, mut fd_write) = split(self.inner.take_fd().unwrap());
+        let (mut tun_tx, icmp_rx) = flume::bounded(100);
+        if self.icmp_proxy_enabled {
+            match network::icmp::IcmpProxy::new(*nat_addr.ip(), self.gw_name.as_str(), icmp_rx) {
+                Ok(proxy) => {
+                    tracing::info!("[TUN] ICMP proxy enabled");
+                    tokio::spawn(proxy.run());
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create ICMP proxy: {:?}", e);
+                }
+            };
+        }
+
         tracing::info!("[TUN] Running...");
+
         loop {
-            // read a ip packet from tun device
+            // read an ip packet from tun device
             let handle = BytesMut::with_capacity(MAX_PKT_SIZE);
             tokio::select! {
                 pkt = Self::recv_ip(&mut fd_read, handle) => {
-                    let pkt = pkt?;
-                    self.forwarding_packet(pkt, &nat_addr, &mut fd_write).await;
+                    let Ok(pkt) = pkt else{
+                        tracing::error!("Invalid IP packet received from TUN");
+                        break;
+                    };
+                    self.forwarding_packet(pkt, &nat_addr, &mut tun_tx, &mut fd_write).await;
                 }
                 data = self.udp_rx.recv_async() => {
                     if let Ok(data) = data{
@@ -160,6 +180,7 @@ impl TunDevice {
         &self,
         pkt: IPPkt,
         nat_addr: &SocketAddrV4,
+        icmp_tx: &mut flume::Sender<Icmpv4Pkt>,
         fd_write: &mut WriteHalf<T>,
     ) {
         if pkt.src_addr().is_ipv6() {
@@ -220,12 +241,17 @@ impl TunDevice {
                 // }
             }
             IpProtocol::Icmp => {
-                // just echo now
-                let mut pkt = Icmpv4Pkt::new(pkt);
-                if pkt.is_echo_request() {
-                    pkt.rewrite_addr(dst, src);
-                    pkt.set_as_reply();
-                    let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
+                if self.icmp_proxy_enabled {
+                    let pkt = Icmpv4Pkt::new(pkt);
+                    let _ = icmp_tx.try_send(pkt);
+                } else {
+                    // just echo now
+                    let mut pkt = Icmpv4Pkt::new(pkt);
+                    if pkt.is_echo_request() {
+                        pkt.rewrite_addr(dst, src);
+                        pkt.set_as_reply();
+                        let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
+                    }
                 }
             }
             _ => {

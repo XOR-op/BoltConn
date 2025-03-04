@@ -207,6 +207,7 @@ fn default_speedtest_url() -> String {
 fn default_inbound_config() -> RawInboundConfig {
     RawInboundConfig {
         enable_tun: true,
+        enable_icmp_proxy: true,
         http: None,
         socks5: None,
     }
