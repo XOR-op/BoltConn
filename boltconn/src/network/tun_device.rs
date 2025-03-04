@@ -222,8 +222,11 @@ impl TunDevice {
             IpProtocol::Icmp => {
                 // just echo now
                 let mut pkt = Icmpv4Pkt::new(pkt);
-                pkt.rewrite_addr(dst, src);
-                let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
+                if pkt.is_echo_request() {
+                    pkt.rewrite_addr(dst, src);
+                    pkt.set_as_reply();
+                    let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
+                }
             }
             _ => {
                 // discarded
