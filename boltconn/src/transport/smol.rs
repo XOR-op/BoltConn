@@ -206,6 +206,7 @@ impl TcpConnTask {
             if let Ok(size) = socket.recv_slice(unsafe { mut_buf(&mut buf) }) {
                 unsafe { buf.advance_mut(size) };
                 // must not fail because there is only 1 sender
+                assert!(self.back_tx.capacity() > 0); // otherwise DashMap would deadlock
                 let _ = self.back_tx.send(buf.freeze()).await;
                 accum_bytes += size;
                 has_activity = true;
@@ -377,6 +378,7 @@ impl UdpConnTask {
                 let src_addr =
                     NetworkAddr::Raw(SocketAddr::new(ep.endpoint.addr.into(), ep.endpoint.port));
                 // must not fail because there is only 1 sender
+                assert!(self.back_tx.capacity() > 0); // otherwise DashMap would deadlock
                 let _ = self.back_tx.send((buf.freeze(), src_addr)).await;
                 has_activity = true;
                 // discard mismatched packet
@@ -633,7 +635,8 @@ impl SmolStack {
             }
 
             if socket.may_recv() {
-                // this async is a channel operation
+                // this async is a channel operation, and guaranteed not to change to other task;
+                // otherwise, there will be a deadlock for DashMap
                 has_activity |= item.try_recv(socket).await;
             } else if socket.may_send() && item.half_close_timeout.is_none() {
                 item.half_close_timeout = Some(Instant::now().add(Duration::from_secs(30)));
@@ -662,7 +665,8 @@ impl SmolStack {
                         }
                     }
                 }
-                // this async is a channel operation
+                // this async is a channel operation, and guaranteed not to change to other task;
+                // otherwise, there will be a deadlock for DashMap
                 has_activity |= item.try_recv(socket).await;
             }
         }
