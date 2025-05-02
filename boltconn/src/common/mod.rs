@@ -1,8 +1,8 @@
 use bytes::{BufMut, BytesMut};
 use std::convert::Infallible;
 use std::error::Error;
-use std::intrinsics::transmute;
 use std::io;
+use std::mem::transmute;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadHalf};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};

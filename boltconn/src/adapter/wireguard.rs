@@ -12,13 +12,12 @@ use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
 use bytes::Bytes;
-use dashmap::mapref::entry::Entry;
-use dashmap::DashMap;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::proto::udp::DnsUdpSocket;
 use hickory_resolver::proto::TokioTime;
 use hickory_resolver::AsyncResolver;
+use std::collections::HashMap;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
@@ -26,7 +25,7 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::select;
-use tokio::sync::{broadcast, Mutex, Notify};
+use tokio::sync::{broadcast, Mutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 
 // Shared Wireguard Tunnel between multiple client connections
@@ -290,7 +289,8 @@ impl Endpoint {
 
 pub struct WireguardManager {
     iface: String,
-    active_conn: DashMap<WireguardConfig, Arc<Endpoint>>,
+    active_conn: RwLock<HashMap<WireguardConfig, Arc<Endpoint>>>,
+    initializing_conn: Mutex<HashMap<WireguardConfig, Arc<Notify>>>,
     endpoint_resolver: Arc<Dns>,
     timeout: Duration,
 }
@@ -300,6 +300,7 @@ impl WireguardManager {
         Self {
             iface: iface.to_string(),
             active_conn: Default::default(),
+            initializing_conn: Default::default(),
             endpoint_resolver: dns,
             timeout,
         }
@@ -310,40 +311,50 @@ impl WireguardManager {
         name: &str,
         config: &WireguardConfig,
         adapter: Option<AdapterOrSocket>,
-        ret_tx: tokio::sync::oneshot::Sender<bool>,
+        creating_new_conn: tokio::sync::oneshot::Sender<bool>,
     ) -> Result<Arc<Endpoint>, TransportError> {
         // optimistic trial to avoid extra config.clone()
-        if let Some(ep) = self.active_conn.get(config) {
+        if let Some(ep) = self.active_conn.read().await.get(config) {
             if ep.is_active.alive() {
-                let _ = ret_tx.send(false);
+                let _ = creating_new_conn.send(false);
                 return Ok(ep.clone());
             }
         }
-        // loop is only used for reconnecting a removed connection
-        for _ in 0..10 {
-            // get an existing conn, or create
-            // warning: if two keys fall into the same shard, the reconnecting may block this shard
-            match self.active_conn.entry(config.clone()) {
-                Entry::Occupied(entry) => {
-                    if entry.get().is_active.alive() {
-                        let _ = ret_tx.send(false);
-                        return Ok(entry.get().clone());
-                    } else {
-                        entry.remove();
-                        continue;
-                    }
-                }
-                Entry::Vacant(e) => {
-                    let _ = ret_tx.send(true);
-                    let ep = self.create_endpoint(name, config, adapter).await?;
-                    e.insert(ep.clone());
-                    return Ok(ep);
+
+        // either non-existing or conn is dead
+        let mut initing = self.initializing_conn.lock().await;
+        if let Some(notify) = initing.get(config) {
+            // another thread is creating the endpoint
+            let _ = creating_new_conn.send(false);
+            let notify = notify.clone();
+            drop(initing);
+            notify.notified().await;
+            if let Some(ep) = self.active_conn.read().await.get(config) {
+                if ep.is_active.alive() {
+                    return Ok(ep.clone());
                 }
             }
+            return Err(TransportError::WireGuard(
+                "get_wg_conn: endpoint creation failed",
+            ));
         }
-        Err(TransportError::WireGuard(
-            "get_wg_conn: unexpected loop time",
-        ))
+        // creating new endpoint
+        let notify = Arc::new(Notify::new());
+        initing.insert(config.clone(), notify.clone());
+        drop(initing);
+        let _ = creating_new_conn.send(true);
+
+        let res = self.create_endpoint(name, config, adapter).await;
+        if let Ok(ref ep) = res {
+            let mut active_conn = self.active_conn.write().await;
+            active_conn.insert(config.clone(), ep.clone());
+        }
+
+        let mut initing = self.initializing_conn.lock().await;
+        initing.remove(config);
+        notify.notify_waiters();
+        drop(initing);
+        res.map_err(|_| TransportError::WireGuard("get_wg_conn: endpoint creation failed"))
     }
 
     async fn create_endpoint(
@@ -388,10 +399,10 @@ impl WireguardManager {
 
     pub async fn stop_master_conn(&self, name: &str) {
         let mut stopped = false;
-        for entry in self.active_conn.iter() {
-            if entry.value().name == name {
+        for (_, ep) in self.active_conn.read().await.iter() {
+            if ep.name == name {
                 stopped = true;
-                entry.value().abort_connection();
+                ep.abort_connection();
                 tracing::info!("Stop WireGuard master connection #{}", name);
             }
         }
@@ -405,8 +416,8 @@ impl WireguardManager {
 
     pub async fn debug_internal_state(&self) -> Vec<boltapi::MasterConnectionStatus> {
         let mut ret = Vec::new();
-        for entry in self.active_conn.iter() {
-            let r = entry.debug_internal_state().await;
+        for (_, ep) in self.active_conn.read().await.iter() {
+            let r = ep.debug_internal_state().await;
             ret.push(r);
         }
         ret
