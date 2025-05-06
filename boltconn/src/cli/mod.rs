@@ -134,8 +134,12 @@ pub(crate) struct StartOptions {
     /// Path of certificate. Default to ${app_data}/cert
     #[arg(long)]
     pub cert: Option<PathBuf>,
+    /// Whether to enable TUN interface at startup. Default to true.
     #[arg(short = 't', long = "tun")]
     pub enable_tun: Option<bool>,
+    /// Run in rootless mode. Certain features may not be available in this mode.
+    #[arg(long)]
+    pub rootless: bool,
 }
 
 #[derive(Debug, Args)]

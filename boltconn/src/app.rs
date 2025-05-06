@@ -59,13 +59,14 @@ impl App {
         data_path: PathBuf,
         cert_path: PathBuf,
         enable_tun: Option<bool>,
+        rootless_mode: bool,
     ) -> anyhow::Result<Self> {
         // tracing
         let stream_logger = StreamLoggerSend::new();
         external::init_tracing(&stream_logger)?;
 
         // setup Unix socket
-        let uds_listener = Arc::new(UnixListenerGuard::new(app_uds_addr())?);
+        let uds_listener = Arc::new(UnixListenerGuard::new(app_uds_addr(rootless_mode))?);
 
         // Read initial config
         let loaded_config = LoadedConfig::load_config(&config_path, &data_path)
@@ -99,56 +100,6 @@ impl App {
         let manager = Arc::new(SessionManager::new());
         // initialize instrumentation
         let msg_bus = Arc::new(MessageBus::new());
-
-        // Create TUN
-        let will_enable_tun = enable_tun.unwrap_or(config.inbound.enable_tun);
-        let (tun_udp_tx, tun_udp_rx) = flume::bounded(4096);
-        let (udp_tun_tx, udp_tun_rx) = flume::bounded(4096);
-        let fake_dns_server = Ipv4Addr::new(198, 18, 99, 88);
-        let tun = {
-            let mut tun = TunDevice::open(
-                manager.clone(),
-                outbound_iface.as_str(),
-                tun_udp_tx,
-                udp_tun_rx,
-                false, // TODO: load from configuration
-                config.inbound.enable_icmp_proxy,
-            )
-            .map_err(|e| anyhow!("Fail to create TUN: {e}"))?;
-            // create tun device
-            tracing::info!("TUN Device {} opened.", tun.get_name());
-            tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 16).unwrap())
-                .map_err(|e| anyhow!("TUN failed to set address: {e}"))?;
-            tun.up().map_err(|e| anyhow!("TUN failed to up: {e}"))?;
-            tun
-        };
-        let tun_configure = {
-            let tun_configure = Arc::new(std::sync::Mutex::new(TunConfigure::new(
-                fake_dns_server,
-                tun.get_name(),
-                &outbound_iface,
-            )));
-            if will_enable_tun {
-                // tokio::time::sleep(Duration::from_secs(5)).await;
-                tun_configure
-                    .lock()
-                    .unwrap()
-                    .enable()
-                    .map_err(|e| anyhow!("Failed to enable global setting: {e}"))?;
-            }
-            tun_configure
-        };
-        let dns_hijack = Arc::new(DnsHijackController::new(
-            config.dns.tun_bypass_list.clone(),
-            config.dns.tun_hijack_list.clone(),
-            SocketAddr::new(fake_dns_server.into(), 53),
-        ));
-
-        let nat_addr = SocketAddr::new(
-            platform::get_iface_address(tun.get_name())
-                .map_err(|e| anyhow!("Failed to get tun address: {e}"))?,
-            9961,
-        );
 
         // dispatch
         let ruleset = load_rulesets(&loaded_config)?;
@@ -193,6 +144,57 @@ impl App {
             ))
         };
 
+        // Create TUN
+        let will_enable_tun = enable_tun.unwrap_or(config.inbound.enable_tun) && !rootless_mode;
+        let (tun_udp_tx, tun_udp_rx) = flume::bounded(4096);
+        let (udp_tun_tx, udp_tun_rx) = flume::bounded(4096);
+        let fake_dns_server = Ipv4Addr::new(198, 18, 99, 88);
+        let tun = if rootless_mode {
+            None
+        } else {
+            let mut tun = TunDevice::open(
+                manager.clone(),
+                outbound_iface.as_str(),
+                tun_udp_tx,
+                udp_tun_rx,
+                false, // TODO: load from configuration
+                config.inbound.enable_icmp_proxy,
+            )
+            .map_err(|e| anyhow!("Fail to create TUN: {e}"))?;
+            // create tun device
+            tracing::info!("TUN Device {} opened.", tun.get_name());
+            tun.set_network_address(Ipv4Net::new(Ipv4Addr::new(198, 18, 0, 1), 16).unwrap())
+                .map_err(|e| anyhow!("TUN failed to set address: {e}"))?;
+            tun.up().map_err(|e| anyhow!("TUN failed to up: {e}"))?;
+            Some(tun)
+        };
+        assert!((tun.is_some() && !rootless_mode) || (tun.is_none() && rootless_mode));
+
+        let tun_configure = {
+            let tun_configure = Arc::new(std::sync::Mutex::new(TunConfigure::new(
+                fake_dns_server,
+                tun.as_ref()
+                    .map(|t| t.get_name())
+                    .unwrap_or("placeholder device name for rootless mode"),
+                &outbound_iface,
+                rootless_mode,
+            )));
+            if will_enable_tun && !rootless_mode {
+                // tokio::time::sleep(Duration::from_secs(5)).await;
+                tun_configure
+                    .lock()
+                    .unwrap()
+                    .enable()
+                    .map_err(|e| anyhow!("Failed to enable global setting: {e}"))?;
+            }
+            tun_configure
+        };
+        let dns_hijack = Arc::new(DnsHijackController::new(
+            config.dns.tun_bypass_list.clone(),
+            config.dns.tun_hijack_list.clone(),
+            SocketAddr::new(fake_dns_server.into(), 53),
+        ));
+
         // create controller
         let api_dispatching_handler = Arc::new(ArcSwap::new(dispatching));
         let (reload_sender, reload_receiver) = tokio::sync::mpsc::channel::<()>(1);
@@ -216,17 +218,25 @@ impl App {
         ));
 
         // start tun & L7 inbound services
-        start_tun_services(
-            nat_addr,
-            manager.clone(),
-            dispatcher.clone(),
-            dns.clone(),
-            tun,
-            tun_udp_rx,
-            udp_tun_tx,
-            dns_hijack.clone(),
-        )
-        .await?;
+        if !rootless_mode {
+            assert!(tun.is_some());
+            let nat_addr = SocketAddr::new(
+                platform::get_iface_address(tun.as_ref().unwrap().get_name())
+                    .map_err(|e| anyhow!("Failed to get tun address: {e}"))?,
+                9961,
+            );
+            start_tun_services(
+                nat_addr,
+                manager.clone(),
+                dispatcher.clone(),
+                dns.clone(),
+                tun.unwrap(),
+                tun_udp_rx,
+                udp_tun_tx,
+                dns_hijack.clone(),
+            )
+            .await?;
+        }
         start_inbound_services(&config.inbound, dispatcher.clone());
 
         // start controller service
@@ -668,13 +678,17 @@ fn parse_two_inbound_service(
     result
 }
 
-fn app_uds_addr() -> &'static str {
+fn app_uds_addr(rootless_mode: bool) -> &'static str {
     #[cfg(target_os = "windows")]
     {
         r"\\.\pipe\boltconn"
     }
     #[cfg(not(target_os = "windows"))]
     {
-        "/var/run/boltconn.sock"
+        if rootless_mode {
+            "/tmp/boltconn.sock"
+        } else {
+            "/var/run/boltconn.sock"
+        }
     }
 }

@@ -60,8 +60,8 @@ fn main() -> ExitCode {
         SubCommand::Start(sub) => sub,
         _ => rt.block_on(cli::controller_main(args)),
     };
-    if !is_root() {
-        eprintln!("BoltConn must be run with root privilege");
+    if !is_root() && !cmds.rootless {
+        eprintln!("BoltConn must be run with root privilege or under rootless mode. See `boltconn start --help` for more information.");
         return ExitCode::FAILURE;
     }
     let target_fd_size = 7568;
@@ -94,6 +94,7 @@ fn main() -> ExitCode {
         data_path,
         cert_path,
         cmds.enable_tun,
+        cmds.rootless,
     )) {
         Ok(app) => app,
         Err(e) => {
