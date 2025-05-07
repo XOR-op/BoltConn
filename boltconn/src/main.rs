@@ -120,21 +120,21 @@ pub(crate) fn process_path(cmds: &StartOptions) -> Result<(PathBuf, PathBuf, Pat
     // test if the paths exist
     if !config_path.try_exists().is_ok_and(|x| x) {
         eprintln!(
-            "Config path {} not found.\nDo you forget to run `boltconn init` first?",
+            "Config path {} not found.\nDo you forget to run `boltconn generate` first?",
             config_path.to_string_lossy()
         );
         return Err(ExitCode::FAILURE);
     }
     if !data_path.try_exists().is_ok_and(|x| x) {
         eprintln!(
-            "Data path {} not found.\nDo you forget to run `boltconn init` first?",
+            "Data path {} not found.\nDo you forget to run `boltconn generate` first?",
             data_path.to_string_lossy()
         );
         return Err(ExitCode::FAILURE);
     }
     if !cert_path.try_exists().is_ok_and(|x| x) {
         eprintln!(
-            "Certificate path {} not found.\nDo you forget to run `sudo boltconn init` first?",
+            "Certificate path {} not found.\nDo you forget to run `boltconn generate` first?",
             cert_path.to_string_lossy()
         );
         return Err(ExitCode::FAILURE);

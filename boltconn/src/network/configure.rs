@@ -20,6 +20,7 @@ macro_rules! check_rootless {
             tracing::warn!(
                 "TUN mode is disabled in rootless mode; no configuration will be applied"
             );
+            #[allow(clippy::unused_unit)]
             return $ret;
         }
     };
