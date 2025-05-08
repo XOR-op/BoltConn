@@ -1,8 +1,5 @@
 [workspace]
-members = [
-    "boltapi",
-    "boltconn",
-]
+members = ["boltapi", "boltconn"]
 resolver = "2"
 
 [profile.release]
@@ -15,7 +12,7 @@ opt-level = 0
 debug = true
 
 [patch.crates-io]
-rustls = { git = "https://github.com/XOR-op/rustls.delta.git", branch = "unofficial-rel-0.23" }
+rustls = { git = "https://github.com/XOR-op/rustls.delta.git", branch = "v0.23.12" }
 smoltcp = { git = "https://github.com/XOR-op/smoltcp.git", branch = "rcv-buf-pinned" }
 # Only used to bump x25519-dalek; will be removed once 0.6.1 is released
-boringtun = { git = "https://github.com/XOR-op/boringtun", branch = "master"}
+boringtun = { git = "https://github.com/XOR-op/boringtun", branch = "master" }
