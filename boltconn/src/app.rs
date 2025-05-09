@@ -66,7 +66,7 @@ impl App {
         external::init_tracing(&stream_logger)?;
 
         // setup Unix socket
-        let uds_listener = Arc::new(UnixListenerGuard::new(app_uds_addr(rootless_mode))?);
+        let uds_listener = Arc::new(UnixListenerGuard::new(&app_uds_addr(rootless_mode))?);
 
         // Read initial config
         let loaded_config = LoadedConfig::load_config(&config_path, &data_path)
@@ -678,7 +678,7 @@ fn parse_two_inbound_service(
     result
 }
 
-fn app_uds_addr(rootless_mode: bool) -> &'static str {
+pub(crate) fn app_uds_addr(rootless_mode: bool) -> String {
     #[cfg(target_os = "windows")]
     {
         r"\\.\pipe\boltconn"
@@ -686,9 +686,20 @@ fn app_uds_addr(rootless_mode: bool) -> &'static str {
     #[cfg(not(target_os = "windows"))]
     {
         if rootless_mode {
-            "/tmp/boltconn.sock"
+            let runtime_dir_env = if cfg!(target_os = "macos") {
+                "TMPDIR"
+            } else {
+                "XDG_RUNTIME_DIR"
+            };
+            if let Ok(dir) = std::env::var(runtime_dir_env) {
+                let mut path = PathBuf::from(dir);
+                path.push("boltconn.sock");
+                path.to_string_lossy().to_string()
+            } else {
+                String::from("/tmp/boltconn.sock")
+            }
         } else {
-            "/var/run/boltconn.sock"
+            String::from("/var/run/boltconn.sock")
         }
     }
 }

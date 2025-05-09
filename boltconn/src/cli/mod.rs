@@ -5,6 +5,7 @@ mod request_uds;
 mod request_web;
 mod streaming;
 
+use crate::app::app_uds_addr;
 use crate::cli::streaming::ConnectionState;
 use crate::ProgramArgs;
 use anyhow::anyhow;
@@ -236,7 +237,7 @@ pub(crate) enum SubCommand {
 
 pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
     let unix_default_path = "/var/run/boltconn.sock";
-    let unix_rootless_path = "/tmp/boltconn.sock";
+    let unix_rootless_fallback_path = "/tmp/boltconn.sock";
     #[cfg(unix)]
     let default_uds_path = {
         // test if the default path exists
@@ -244,18 +245,22 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             .try_exists()
             .is_ok_and(|v| v)
         {
-            Some(unix_default_path)
-        } else if std::path::Path::new(unix_rootless_path)
-            .try_exists()
-            .is_ok_and(|v| v)
-        {
-            Some(unix_rootless_path)
+            Some(unix_default_path.to_string())
         } else {
-            None
+            let rootless_path = app_uds_addr(true);
+
+            if std::path::Path::new(&rootless_path)
+                .try_exists()
+                .is_ok_and(|v| v)
+            {
+                Some(rootless_path)
+            } else {
+                None
+            }
         }
     };
     #[cfg(windows)]
-    let default_uds_path = Some(r"\\.\pipe\boltconn");
+    let default_uds_path = Some(r"\\.\pipe\boltconn".to_string());
     match args.cmd {
         SubCommand::Generate(GenerateOptions::Init(init)) => {
             fn create(init: InitOptions) -> anyhow::Result<()> {
@@ -329,7 +334,8 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             } else {
                 clean::clean_route_table();
                 clean::remove_unix_socket(unix_default_path);
-                clean::remove_unix_socket(unix_rootless_path);
+                clean::remove_unix_socket(unix_rootless_fallback_path);
+                clean::remove_unix_socket(crate::app::app_uds_addr(true));
                 exit(0)
             }
         }
@@ -338,10 +344,10 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 eprintln!("Log command does not support remote connection");
                 exit(-1)
             }
-            let state = match ConnectionState::new(validate_uds_path(
+            let state = match ConnectionState::new(&validate_uds_path(
                 default_uds_path,
                 unix_default_path,
-                unix_rootless_path,
+                unix_rootless_fallback_path,
             ))
             .await
             {
@@ -373,9 +379,12 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
 
     let requester = match match args.url {
         None => {
-            let default_uds_path =
-                validate_uds_path(default_uds_path, unix_default_path, unix_rootless_path);
-            request::Requester::new_uds(default_uds_path).await
+            let default_uds_path = validate_uds_path(
+                default_uds_path,
+                unix_default_path,
+                unix_rootless_fallback_path,
+            );
+            request::Requester::new_uds(&default_uds_path).await
         }
         Some(url) => request::Requester::new_web(url),
     } {
@@ -459,10 +468,10 @@ async fn internal_code(_requester: Requester) -> anyhow::Result<()> {
 }
 
 fn validate_uds_path(
-    path_result: Option<&'static str>,
+    path_result: Option<String>,
     default_path: &str,
     rootless_path: &str,
-) -> &'static str {
+) -> String {
     if path_result.is_none() {
         eprintln!("No connection socket found either in {} or {} (rootless mode). Please start the server first.", default_path, rootless_path);
         exit(-1)
