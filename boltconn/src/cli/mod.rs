@@ -5,6 +5,7 @@ mod request_uds;
 mod request_web;
 mod streaming;
 
+use crate::app::app_uds_addr;
 use crate::cli::streaming::ConnectionState;
 use crate::ProgramArgs;
 use anyhow::anyhow;
@@ -71,6 +72,8 @@ pub(crate) enum TunOptions {
 pub(crate) struct CertOptions {
     #[arg(short, long)]
     path: Option<PathBuf>,
+    #[arg(long)]
+    rootless: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -134,8 +137,12 @@ pub(crate) struct StartOptions {
     /// Path of certificate. Default to ${app_data}/cert
     #[arg(long)]
     pub cert: Option<PathBuf>,
+    /// Whether to enable TUN interface at startup. Default to true.
     #[arg(short = 't', long = "tun")]
     pub enable_tun: Option<bool>,
+    /// Run in rootless mode. Certain features may not be available in this mode.
+    #[arg(long)]
+    pub rootless: bool,
 }
 
 #[derive(Debug, Args)]
@@ -229,10 +236,31 @@ pub(crate) enum SubCommand {
 }
 
 pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
+    let unix_default_path = "/var/run/boltconn.sock";
+    let unix_rootless_fallback_path = "/tmp/boltconn.sock";
     #[cfg(unix)]
-    let default_uds_path = "/var/run/boltconn.sock";
+    let default_uds_path = {
+        // test if the default path exists
+        if std::path::Path::new(unix_default_path)
+            .try_exists()
+            .is_ok_and(|v| v)
+        {
+            Some(unix_default_path.to_string())
+        } else {
+            let rootless_path = app_uds_addr(true);
+
+            if std::path::Path::new(&rootless_path)
+                .try_exists()
+                .is_ok_and(|v| v)
+            {
+                Some(rootless_path)
+            } else {
+                None
+            }
+        }
+    };
     #[cfg(windows)]
-    let default_uds_path = r"\\.\pipe\boltconn";
+    let default_uds_path = Some(r"\\.\pipe\boltconn".to_string());
     match args.cmd {
         SubCommand::Generate(GenerateOptions::Init(init)) => {
             fn create(init: InitOptions) -> anyhow::Result<()> {
@@ -258,8 +286,8 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             }
         }
         SubCommand::Generate(GenerateOptions::Cert(opt)) => {
-            if !is_root() {
-                eprintln!("Must be run with root/admin privilege");
+            if !is_root() && !opt.rootless {
+                eprintln!("Expect be run with root/admin privilege to prevent unauthorized access to certificates. If you expect to generate certificates without hardening the permissions, please use --rootless option.");
                 exit(-1)
             } else {
                 fn fetch_path() -> anyhow::Result<PathBuf> {
@@ -277,7 +305,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                     None => fetch_path(),
                     Some(p) => Ok(p),
                 } {
-                    Ok(path) => cert::generate_cert(path),
+                    Ok(path) => cert::generate_cert(path, opt.rootless),
                     Err(e) => Err(e),
                 } {
                     Ok(_) => exit(0),
@@ -305,7 +333,9 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 exit(-1)
             } else {
                 clean::clean_route_table();
-                clean::remove_unix_socket(default_uds_path);
+                clean::remove_unix_socket(unix_default_path);
+                clean::remove_unix_socket(unix_rootless_fallback_path);
+                clean::remove_unix_socket(crate::app::app_uds_addr(true));
                 exit(0)
             }
         }
@@ -314,7 +344,13 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 eprintln!("Log command does not support remote connection");
                 exit(-1)
             }
-            let state = match ConnectionState::new(default_uds_path).await {
+            let state = match ConnectionState::new(&validate_uds_path(
+                default_uds_path,
+                unix_default_path,
+                unix_rootless_fallback_path,
+            ))
+            .await
+            {
                 Ok(s) => s,
                 Err(err) => {
                     eprintln!("{}", err);
@@ -340,8 +376,16 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         }
         _ => (),
     }
+
     let requester = match match args.url {
-        None => request::Requester::new_uds(default_uds_path).await,
+        None => {
+            let default_uds_path = validate_uds_path(
+                default_uds_path,
+                unix_default_path,
+                unix_rootless_fallback_path,
+            );
+            request::Requester::new_uds(&default_uds_path).await
+        }
         Some(url) => request::Requester::new_web(url),
     } {
         Ok(r) => r,
@@ -421,4 +465,16 @@ use crate::cli::request::Requester;
 async fn internal_code(_requester: Requester) -> anyhow::Result<()> {
     println!("This option is not for end-user.");
     Ok(())
+}
+
+fn validate_uds_path(
+    path_result: Option<String>,
+    default_path: &str,
+    rootless_path: &str,
+) -> String {
+    if path_result.is_none() {
+        eprintln!("No connection socket found either in {} or {} (rootless mode). Please start the server first.", default_path, rootless_path);
+        exit(-1)
+    }
+    path_result.unwrap()
 }

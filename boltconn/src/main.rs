@@ -60,8 +60,8 @@ fn main() -> ExitCode {
         SubCommand::Start(sub) => sub,
         _ => rt.block_on(cli::controller_main(args)),
     };
-    if !is_root() {
-        eprintln!("BoltConn must be run with root privilege");
+    if !is_root() && !cmds.rootless {
+        eprintln!("BoltConn must be run with root privilege or under rootless mode. See `boltconn start --help` for more information.");
         return ExitCode::FAILURE;
     }
     let target_fd_size = 7568;
@@ -94,6 +94,7 @@ fn main() -> ExitCode {
         data_path,
         cert_path,
         cmds.enable_tun,
+        cmds.rootless,
     )) {
         Ok(app) => app,
         Err(e) => {
@@ -119,21 +120,21 @@ pub(crate) fn process_path(cmds: &StartOptions) -> Result<(PathBuf, PathBuf, Pat
     // test if the paths exist
     if !config_path.try_exists().is_ok_and(|x| x) {
         eprintln!(
-            "Config path {} not found.\nDo you forget to run `boltconn init` first?",
+            "Config path {} not found.\nDo you forget to run `boltconn generate` first?",
             config_path.to_string_lossy()
         );
         return Err(ExitCode::FAILURE);
     }
     if !data_path.try_exists().is_ok_and(|x| x) {
         eprintln!(
-            "Data path {} not found.\nDo you forget to run `boltconn init` first?",
+            "Data path {} not found.\nDo you forget to run `boltconn generate` first?",
             data_path.to_string_lossy()
         );
         return Err(ExitCode::FAILURE);
     }
     if !cert_path.try_exists().is_ok_and(|x| x) {
         eprintln!(
-            "Certificate path {} not found.\nDo you forget to run `sudo boltconn init` first?",
+            "Certificate path {} not found.\nDo you forget to run `boltconn generate` first?",
             cert_path.to_string_lossy()
         );
         return Err(ExitCode::FAILURE);

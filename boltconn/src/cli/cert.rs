@@ -6,19 +6,21 @@ use rcgen::{
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn safe_write(path: PathBuf, content: &str) -> anyhow::Result<()> {
+fn safe_write(path: PathBuf, content: &str, rootless: bool) -> anyhow::Result<()> {
     fs::write(path.as_path(), content)?;
-    UserInfo::root().chown(&path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perm = fs::Permissions::from_mode(0o600);
-        fs::set_permissions(&path, perm)?;
+    if !rootless {
+        UserInfo::root().chown(&path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perm = fs::Permissions::from_mode(0o600);
+            fs::set_permissions(&path, perm)?;
+        }
     }
     Ok(())
 }
 
-pub fn generate_cert<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
+pub fn generate_cert<P: AsRef<Path>>(path: P, rootless: bool) -> anyhow::Result<()> {
     // generate ca only now
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::CommonName, "*");
@@ -38,8 +40,8 @@ pub fn generate_cert<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     let cert = Certificate::from_params(params)?;
     let cert_crt = cert.serialize_pem().unwrap();
     let private_key = cert.serialize_private_key_pem();
-    safe_write(path.as_ref().join("crt.pem"), &cert_crt)?;
-    safe_write(path.as_ref().join("key.pem"), &private_key)?;
+    safe_write(path.as_ref().join("crt.pem"), &cert_crt, rootless)?;
+    safe_write(path.as_ref().join("key.pem"), &private_key, rootless)?;
     println!("Successfully generated certificate and private key.");
     Ok(())
 }
