@@ -100,10 +100,11 @@ impl HttpsIntercept {
 
     pub async fn run(self) -> io::Result<()> {
         // tls server
-        let tls_config = ServerConfig::builder()
+        let mut tls_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(self.cert, self.priv_key)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
@@ -121,7 +122,7 @@ impl HttpsIntercept {
         let service = service_fn(|req| {
             // since sniffer is the middle part, async tasks should be cancelled properly
             let (parts, body) = req.into_parts();
-            Self::proxy(
+            let fut = Self::proxy(
                 sender.clone(),
                 client_tls.clone(),
                 server_name.clone(),
@@ -132,18 +133,26 @@ impl HttpsIntercept {
                     tag: id_gen.get(),
                     conn_info: self.conn_info.clone(),
                 },
-            )
+            );
+            async move {
+                match fut.await {
+                    Ok(resp) => Ok(resp),
+                    Err(err) => {
+                        tracing::warn!("https interception failed: {}", err);
+                        Err(err)
+                    }
+                }
+            }
         });
 
         // start running
         let inbound = acceptor.accept(self.inbound).await?;
-        if let Err(http_err) = hyper::server::conn::http1::Builder::new()
-            .preserve_header_case(true)
-            .title_case_headers(true)
-            .serve_connection(TokioIo::new(inbound), service)
-            .await
+        if let Err(http_err) =
+            hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                .serve_connection(TokioIo::new(inbound), service)
+                .await
         {
-            tracing::warn!("Sniff err {}", http_err);
+            tracing::warn!("https interception failed to serve: {}", http_err);
         }
         Ok(())
     }
