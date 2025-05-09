@@ -47,16 +47,23 @@ Before running BoltConn, you should run these two commands first:
 1. Create necessary configuration and runtime files. The default configuration path is `$HOME/.config/boltconn`, and the
 default runtime path is `$HOME/.local/share/boltconn`:
 ```bash
-boltconn init
+# generate configuration files
+boltconn generate init
 ```
 2. Generate root certificates with proper permissions for MitM:
 ```bash
-sudo -E boltconn cert
+# generate root certificates and make them readable only by root user (recommended)
+sudo -E boltconn generate cert
+# or generate them without configuring permissions
+boltconn generate cert --rootless
 ```
 
 ### Run BoltConn
 ```bash
+# run BoltConn globally
 sudo -E boltconn start
+# or run BoltConn with rootless mode (certain features will be unavailable)
+boltconn start --rootless
 ```
 
 ### CLI Tools for Management
@@ -66,6 +73,9 @@ boltconn [conn/proxy/rule/tun/reload/...]
 See `boltconn --help` for more help.
 
 ## Documentations
+> [!NOTE]
+> Documentations are outdated now. Please wait for our update.
+
 Learn more about BoltConn's architecture, RESTful API, and how it compares to other related projects:
 
 - [design.md](./docs/design.md) explains BoltConn's architecture.
@@ -73,9 +83,7 @@ Learn more about BoltConn's architecture, RESTful API, and how it compares to ot
 - [features.md](./docs/features.md) lists full features of BoltConn.
 
 ## Future Plan
-- Full IPv6 support
-- Windows support with Wintun driver
-- Better integration with external programs (e.g. OpenVPN or ssh)
+- Stablize Windows support with Wintun driver (it's experimental now).
 
 ## License
 This software is released under the GPL-3.0 license.
