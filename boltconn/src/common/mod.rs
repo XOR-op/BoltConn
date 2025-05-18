@@ -19,8 +19,11 @@ pub mod client_hello;
 pub mod duplex_chan;
 pub mod evictable_vec;
 pub mod host_matcher;
+mod hostname_parse;
 mod sync;
 pub mod utils;
+
+pub(crate) use hostname_parse::{parse_http_host, parse_tls_sni};
 
 pub use sync::{local_async_run, AbortCanary};
 
