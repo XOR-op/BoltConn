@@ -95,6 +95,7 @@ impl Requester {
             Inner::Uds(c) => c.get_connections().await,
         }?;
         for conn in result {
+            let src_ip = conn.source.split(":").next().unwrap();
             println!(
                 "#{}: {} ({},{}) {}\t [up:{},down:{},time:{}] [{}]",
                 conn.conn_id,
@@ -103,7 +104,12 @@ impl Requester {
                 conn.proxy.italic(),
                 match conn.process {
                     Some(s) => format!("<{}>", s.name),
-                    None => "".to_string(),
+                    None =>
+                        if !(src_ip == "127.0.0.1" || src_ip == "198.18.0.1") {
+                            format!("<{}>", src_ip)
+                        } else {
+                            String::new()
+                        },
                 },
                 pretty_size(conn.upload),
                 pretty_size(conn.download),

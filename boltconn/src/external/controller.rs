@@ -114,6 +114,7 @@ impl Controller {
         ConnectionSchema {
             conn_id: info.id,
             inbound: info.conn_info.inbound.to_string(),
+            source: info.conn_info.src.to_string(),
             destination: info.conn_info.dst.to_string(),
             protocol: info.session_proto.write().unwrap().to_string(),
             proxy: info.outbound_name.clone(),

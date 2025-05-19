@@ -45,6 +45,7 @@ pub struct RawRootCfg {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct DispatchingConfig {
     #[serde(alias = "sni-sniff", default = "default_false")]
     pub sni_sniff: bool,

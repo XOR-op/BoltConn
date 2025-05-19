@@ -16,6 +16,7 @@ pub struct ProcessSchema {
 pub struct ConnectionSchema {
     pub conn_id: u64,
     pub inbound: String,
+    pub source: String,
     pub destination: String,
     pub protocol: String,
     pub proxy: String,
