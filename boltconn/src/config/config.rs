@@ -23,13 +23,10 @@ pub struct RawRootCfg {
     pub instrument: Option<RawInstrumentConfig>,
     #[serde(default = "default_false")]
     pub enable_dump: bool,
+    pub dispatching: DispatchingConfig,
     // From now on, all the configs should be reloaded properly
     #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
     pub speedtest_url: String,
-    #[serde(alias = "sni-sniff", default = "default_false")]
-    pub sni_sniff: bool,
-    #[serde(alias = "geoip-db")]
-    pub geoip_db: Option<String>,
     pub dns: RawDnsConfig,
     #[serde(alias = "proxy-local", default = "default_local_proxy")]
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
@@ -45,6 +42,14 @@ pub struct RawRootCfg {
     pub interception: Vec<InterceptionConfig>,
     #[serde(default = "default_module")]
     pub module: Vec<ModuleConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DispatchingConfig {
+    #[serde(alias = "sni-sniff", default = "default_false")]
+    pub sni_sniff: bool,
+    #[serde(alias = "geoip-db")]
+    pub geoip_db: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
