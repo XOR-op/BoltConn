@@ -23,7 +23,7 @@ pub struct RawRootCfg {
     pub instrument: Option<RawInstrumentConfig>,
     #[serde(default = "default_false")]
     pub enable_dump: bool,
-    pub dispatching: DispatchingConfig,
+    pub dispatching: Option<DispatchingConfig>,
     // From now on, all the configs should be reloaded properly
     #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
     pub speedtest_url: String,

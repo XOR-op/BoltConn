@@ -73,7 +73,13 @@ impl App {
             .await
             .map_err(|e| anyhow!("Load config from {:?} failed: {}", &config_path, e))?;
         let config = &loaded_config.config;
-        let mmdb = load_mmdb(config.dispatching.geoip_db.as_ref(), &config_path)?;
+        let mmdb = load_mmdb(
+            config
+                .dispatching
+                .as_ref()
+                .and_then(|d| d.geoip_db.as_ref()),
+            &config_path,
+        )?;
 
         let outbound_iface = detect_interface(config)?;
 
@@ -134,7 +140,11 @@ impl App {
             Arc::new(Dispatcher::new(
                 outbound_iface.as_str(),
                 dns.clone(),
-                config.dispatching.sni_sniff,
+                config
+                    .dispatching
+                    .as_ref()
+                    .map(|d| d.sni_sniff)
+                    .unwrap_or(false),
                 ctx_manager.clone(),
                 dispatching.clone(),
                 cert,
@@ -305,7 +315,13 @@ impl App {
         // reload parsing
         let loaded_config = LoadedConfig::load_config(&self.config_path, &self.data_path).await?;
         let config = &loaded_config.config;
-        let mmdb = load_mmdb(config.dispatching.geoip_db.as_ref(), &self.config_path)?;
+        let mmdb = load_mmdb(
+            config
+                .dispatching
+                .as_ref()
+                .and_then(|d| d.geoip_db.as_ref()),
+            &self.config_path,
+        )?;
         let ruleset = load_rulesets(&loaded_config)?;
 
         let bootstrap =
@@ -361,7 +377,13 @@ impl App {
             .replace_modifier(Box::new(move |result, proc_info| {
                 Arc::new(InterceptModifier::new(hcap2.clone(), result, proc_info))
             }));
-        self.dispatcher.set_sniff_flag(config.dispatching.sni_sniff);
+        self.dispatcher.set_sniff_flag(
+            config
+                .dispatching
+                .as_ref()
+                .map(|d| d.sni_sniff)
+                .unwrap_or(false),
+        );
         self.speedtest_url
             .write()
             .unwrap()
@@ -380,7 +402,13 @@ pub async fn validate_config(
         .await
         .map_err(|e| anyhow!("Load config from {:?} failed: {}", config_path, e))?;
     let config = &loaded_config.config;
-    let mmdb = load_mmdb(config.dispatching.geoip_db.as_ref(), config_path)?;
+    let mmdb = load_mmdb(
+        config
+            .dispatching
+            .as_ref()
+            .and_then(|d| d.geoip_db.as_ref()),
+        config_path,
+    )?;
     let outbound_iface = detect_interface(config)?;
     // initialize resources
     let _bootstrap =
