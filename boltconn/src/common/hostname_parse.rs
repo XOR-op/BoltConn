@@ -1,5 +1,3 @@
-use russh::compression;
-
 pub(crate) fn parse_tls_sni(buf: &[u8]) -> Option<String> {
     let session_start = 5 + 4 + 2 + 32;
     // TLS && ClientHello && packet length matches
@@ -54,7 +52,7 @@ fn skip_part(buf: &[u8], idx_start: usize, len_size: usize) -> Option<usize> {
     };
     let next_start = idx_start + big_endian + len_size;
     if next_start > buf.len() {
-        return None;
+        None
     } else {
         Some(next_start)
     }
@@ -84,29 +82,19 @@ pub(crate) fn parse_http_host(buf: &[u8]) -> Option<String> {
 
     // scan host field
     let content = String::from_utf8_lossy(&buf[idx_start..idx_end]).to_ascii_lowercase();
-    if content.starts_with("host: ") {
+    content.strip_prefix("host: ").map(|c| {
         // skip port if present
-        Some(
-            content[6..]
-                .trim()
-                .split(':')
-                .next()
-                .expect("at least 1 entry")
-                .to_string(),
-        )
-    } else {
-        None
-    }
+        c.trim()
+            .split(':')
+            .next()
+            .expect("at least 1 entry")
+            .to_string()
+    })
 }
 
 #[inline]
 fn find_crlf(buf: &[u8], idx_start: usize) -> Option<usize> {
-    for i in idx_start..buf.len() {
-        if buf[i] == b'\r' && i + 1 < buf.len() && buf[i + 1] == b'\n' {
-            return Some(i);
-        }
-    }
-    None
+    (idx_start..buf.len()).find(|&i| buf[i] == b'\r' && i + 1 < buf.len() && buf[i + 1] == b'\n')
 }
 
 #[cfg(test)]
@@ -114,7 +102,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_tls_sni() {}
+    fn test_parse_tls_sni() {
+        todo!()
+    }
 
     #[test]
     fn test_parse_http_host() {

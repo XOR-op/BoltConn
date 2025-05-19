@@ -104,7 +104,7 @@ impl Modifier for Recorder {
             .remove(&ctx.tag)
             .ok_or_else(|| InterceptError::NoCorrespondingId(ctx.tag))?
             .1;
-        let host = match &ctx.conn_info.dest {
+        let host = match &ctx.conn_info.conn_info.dst {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
         };

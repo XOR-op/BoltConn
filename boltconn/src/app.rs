@@ -134,6 +134,7 @@ impl App {
             Arc::new(Dispatcher::new(
                 outbound_iface.as_str(),
                 dns.clone(),
+                config.sni_sniff,
                 ctx_manager.clone(),
                 dispatching.clone(),
                 cert,
@@ -360,6 +361,7 @@ impl App {
             .replace_modifier(Box::new(move |result, proc_info| {
                 Arc::new(InterceptModifier::new(hcap2.clone(), result, proc_info))
             }));
+        self.dispatcher.set_sniff_flag(config.sni_sniff);
         self.speedtest_url
             .write()
             .unwrap()

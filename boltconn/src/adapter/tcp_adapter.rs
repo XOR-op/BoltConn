@@ -3,7 +3,9 @@ use crate::common::{
     parse_http_host, parse_tls_sni, read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE,
 };
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr, SessionProtocol};
+use crate::proxy::{
+    check_tcp_protocol, ConnAbortHandle, ConnContext, NetworkAddr, SessionProtocol,
+};
 use bytes::BytesMut;
 use std::io;
 use std::net::SocketAddr;
@@ -13,7 +15,6 @@ use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 
 pub struct TcpAdapter<S> {
     stat: TcpStatus,
-    info: Arc<ConnContext>,
     in_read: ReadHalf<S>,
     in_write: WriteHalf<S>,
     connector: Connector,
@@ -28,7 +29,6 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
     pub fn new(
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
-        info: Arc<ConnContext>,
         inbound: S,
         available: Arc<AtomicU8>,
         connector: Connector,
@@ -37,7 +37,6 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         let (in_read, in_write) = tokio::io::split(inbound);
         Self {
             stat: TcpStatus::new(src_addr, dst_addr, available),
-            info,
             in_read,
             in_write,
             connector,
@@ -46,45 +45,46 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         }
     }
 
-    pub async fn try_sni_or_host(&mut self) -> Result<Option<String>, TransportError> {
+    pub async fn try_sni_or_host(
+        &mut self,
+    ) -> Result<Option<(SessionProtocol, String)>, TransportError> {
         let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
         let read_size = read_to_bytes_mut(&mut buf, &mut self.in_read).await?;
         if read_size == 0 {
-            return Err(TransportError::Io(std::io::Error::new(
+            Err(TransportError::Io(std::io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "read first packet error",
-            )));
+            )))
         } else {
             assert!(
                 self.first_packet_buffer.is_none(),
                 "read_first_packet called twice"
             );
-            self.info.update_proto(buf.as_ref());
-            self.info.more_upload(read_size);
-            let proto = *self.info.session_proto.read().unwrap();
-            let result = match proto {
+            let proto = check_tcp_protocol(buf.as_ref());
+            let result = match &proto {
                 SessionProtocol::Http => parse_http_host(buf.as_ref()),
                 SessionProtocol::Tls(_) => parse_tls_sni(buf.as_ref()),
                 _ => None,
-            };
+            }
+            .map(|h| (proto, h));
             self.first_packet_buffer = Some(buf);
             Ok(result)
         }
     }
 
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, info: Arc<ConnContext>) -> io::Result<()> {
         let mut need_parse_first_packet = self.first_packet_buffer.is_none();
         let Connector { tx, mut rx } = self.connector;
-        let dest = self.info.dest.clone();
+        let dest = info.conn_info.dst.clone();
         let abort_handle = self.abort_handle.clone();
-        let conn_id = self.info.id;
+        let conn_id = info.id;
         let mut in_read = self.in_read;
         let mut in_write = self.in_write;
 
         let _duplex_guard = {
             let ingoing_indicator = self.stat.available.clone();
             let dest2 = dest.clone();
-            let info = self.info.clone();
+            let info = info.clone();
             DuplexCloseGuard::new(
                 tokio::spawn(async move {
                     // recv from outbound and send to inbound
@@ -114,8 +114,17 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         let outgoing_indicator = self.stat.available.clone();
         let _guard = TcpIndicatorGuard {
             indicator: outgoing_indicator,
-            info: self.info.clone(),
+            info: info.clone(),
         };
+        if let Some(first_packet) = self.first_packet_buffer {
+            info.more_upload(first_packet.len());
+            if tx.send(first_packet.freeze()).await.is_err() {
+                tracing::warn!("TcpAdapter #{}({}) tx send err", conn_id, dest);
+                abort_handle.cancel();
+                return Ok(());
+            }
+        }
+
         loop {
             let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
             let read_size = match read_to_bytes_mut(&mut buf, &mut in_read).await {
@@ -126,7 +135,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
                 Ok(size) => {
                     if need_parse_first_packet {
                         need_parse_first_packet = false;
-                        self.info.update_proto(buf.as_ref());
+                        info.update_proto(buf.as_ref());
                     }
                     size
                 }
@@ -141,7 +150,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
                     break;
                 }
             };
-            self.info.more_upload(read_size);
+            info.more_upload(read_size);
             if tx.send(buf.freeze()).await.is_err() {
                 tracing::warn!("TcpAdapter #{}({}) tx send err", conn_id, dest);
                 abort_handle.cancel();

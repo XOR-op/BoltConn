@@ -1,7 +1,7 @@
 use crate::adapter::OutboundType;
 use crate::common::evictable_vec::EvictableVec;
 use crate::config::RawServerAddr;
-use crate::dispatch::InboundInfo;
+use crate::dispatch::ConnInfo;
 use crate::external::DatabaseHandle;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use arc_swap::ArcSwap;
@@ -266,14 +266,12 @@ impl ConnAbortHandle {
 pub struct ConnContext {
     pub id: u64,
     pub start_time: SystemTime,
-    pub dest: NetworkAddr,
-    pub process_info: Option<ProcessInfo>,
-    pub inbound_info: InboundInfo,
+    pub conn_info: ConnInfo,
+    pub outbound_name: String,
+    pub outbound_type: OutboundType,
 
     // Will change
     pub session_proto: RwLock<SessionProtocol>,
-    pub outbound_name: String,
-    pub outbound_type: OutboundType,
     pub upload_traffic: AtomicU64,
     pub download_traffic: AtomicU64,
     pub done: AtomicBool,
@@ -288,28 +286,25 @@ impl ConnContext {
     pub fn new(
         // static info
         id: u64,
-        dst: NetworkAddr,
-        process_info: Option<ProcessInfo>,
-        inbound_info: InboundInfo,
+        conn_info: ConnInfo,
         outbound_name: String,
         outbound_type: OutboundType,
-        network_type: NetworkType,
+        parsed_session_proto: Option<SessionProtocol>,
         // runtime handle
         abort_handle: ConnAbortHandle,
         global_upload: Arc<AtomicU64>,
         global_download: Arc<AtomicU64>,
         notify_handle: Arc<AtomicBool>,
     ) -> Self {
+        let s_proto = parsed_session_proto.unwrap_or(match conn_info.connection_type {
+            NetworkType::Tcp => SessionProtocol::Tcp,
+            NetworkType::Udp => SessionProtocol::Udp,
+        });
         Self {
             id,
             start_time: SystemTime::now(),
-            dest: dst,
-            inbound_info,
-            process_info,
-            session_proto: std::sync::RwLock::new(match network_type {
-                NetworkType::Tcp => SessionProtocol::Tcp,
-                NetworkType::Udp => SessionProtocol::Udp,
-            }),
+            conn_info,
+            session_proto: std::sync::RwLock::new(s_proto),
             outbound_name,
             outbound_type,
             upload_traffic: AtomicU64::new(0),

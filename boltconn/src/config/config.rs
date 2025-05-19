@@ -26,6 +26,8 @@ pub struct RawRootCfg {
     // From now on, all the configs should be reloaded properly
     #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
     pub speedtest_url: String,
+    #[serde(alias = "sni-sniff", default = "default_false")]
+    pub sni_sniff: bool,
     #[serde(alias = "geoip-db")]
     pub geoip_db: Option<String>,
     pub dns: RawDnsConfig,

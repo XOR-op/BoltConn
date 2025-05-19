@@ -113,11 +113,11 @@ impl Controller {
     fn get_connection_schema(info: &ConnContext) -> ConnectionSchema {
         ConnectionSchema {
             conn_id: info.id,
-            inbound: info.inbound_info.to_string(),
-            destination: info.dest.to_string(),
+            inbound: info.conn_info.inbound.to_string(),
+            destination: info.conn_info.dst.to_string(),
             protocol: info.session_proto.write().unwrap().to_string(),
             proxy: info.outbound_name.clone(),
-            process: info.process_info.as_ref().map(|i| ProcessSchema {
+            process: info.conn_info.process_info.as_ref().map(|i| ProcessSchema {
                 pid: i.pid,
                 path: i.path.clone(),
                 name: i.name.clone(),

@@ -184,7 +184,7 @@ impl Modifier for InterceptModifier {
             parts.version,
             &parts.headers,
             &parts.uri,
-            ctx.conn_info.dest.port(),
+            ctx.conn_info.conn_info.dst.port(),
         );
 
         let mut whole_data = if self.result.capture_request || self.result.contains_script {
@@ -236,7 +236,7 @@ impl Modifier for InterceptModifier {
                                         body: CapturedBody::FullCapture(resp_body.clone()),
                                         time: Instant::now(),
                                     };
-                                    let host = match &ctx.conn_info.dest {
+                                    let host = match &ctx.conn_info.conn_info.dst {
                                         NetworkAddr::Raw(addr) => addr.ip().to_string(),
                                         NetworkAddr::DomainName { domain_name, .. } => {
                                             domain_name.clone()
@@ -318,7 +318,7 @@ impl Modifier for InterceptModifier {
             req.version,
             &req.headers,
             &req.uri,
-            ctx.conn_info.dest.port(),
+            ctx.conn_info.conn_info.dst.port(),
         );
 
         for payload in &self.result.payloads {
@@ -348,7 +348,7 @@ impl Modifier for InterceptModifier {
             }
         }
 
-        let host = match &ctx.conn_info.dest {
+        let host = match &ctx.conn_info.conn_info.dst {
             NetworkAddr::Raw(addr) => addr.ip().to_string(),
             NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
         };

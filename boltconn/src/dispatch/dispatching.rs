@@ -32,6 +32,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[derive(Clone, Debug)]
 pub struct ConnInfo {
     pub src: SocketAddr,
     pub dst: NetworkAddr,

@@ -23,16 +23,20 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
+use super::error::TransportError;
+
 pub(crate) enum DispatchError {
     Reject,
     BlackHole,
     BadMitmCert,
     BadChain,
+    Error(TransportError),
 }
 
 pub struct Dispatcher {
     iface_name: String,
     dns: Arc<Dns>,
+    sniff_flag: AtomicBool,
     stat_center: Arc<ContextManager>,
     dispatching: ArcSwap<Dispatching>,
     ca_certificate: Certificate,
@@ -47,6 +51,7 @@ impl Dispatcher {
     pub fn new(
         iface_name: &str,
         dns: Arc<Dns>,
+        sniff_flag: bool,
         stat_center: Arc<ContextManager>,
         dispatching: Arc<Dispatching>,
         ca_certificate: Certificate,
@@ -58,6 +63,7 @@ impl Dispatcher {
         Self {
             iface_name: iface_name.into(),
             dns,
+            sniff_flag: AtomicBool::new(sniff_flag),
             stat_center,
             dispatching: ArcSwap::new(dispatching),
             ca_certificate,
@@ -78,6 +84,11 @@ impl Dispatcher {
 
     pub fn replace_modifier(&self, closure: ModifierClosure) {
         self.modifier.store(Arc::new(closure));
+    }
+
+    pub fn set_sniff_flag(&self, flag: bool) {
+        self.sniff_flag
+            .store(flag, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get_wg_mgr(&self) -> Arc<WireguardManager> {
@@ -269,6 +280,20 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         let process_info = process::get_pid(src_addr, process::NetworkType::Tcp)
             .map_or(None, process::get_process_info);
+
+        // conn info
+        let abort_handle = ConnAbortHandle::new();
+
+        let (inbound_conn, next_conn) = Connector::new_pair(10);
+        let mut inbound_adapter = TcpAdapter::new(
+            src_addr,
+            dst_addr.clone(),
+            stream,
+            indicator,
+            inbound_conn,
+            abort_handle.clone(),
+        );
+
         let mut conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
@@ -278,6 +303,22 @@ impl Dispatcher {
             connection_type: NetworkType::Tcp,
             process_info: process_info.clone(),
         };
+
+        let mut parsed_proto = None;
+        if self.sniff_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some((proto, domain_name)) = inbound_adapter
+                .try_sni_or_host()
+                .await
+                .map_err(DispatchError::Error)?
+            {
+                conn_info.dst = NetworkAddr::DomainName {
+                    domain_name: domain_name.clone(),
+                    port: dst_addr.port(),
+                };
+                parsed_proto = Some(proto);
+            }
+        };
+
         // match outbound proxy
         let (proxy_name, proxy_config, iface) =
             self.dispatching.load().matches(&mut conn_info, true).await;
@@ -300,49 +341,31 @@ impl Dispatcher {
             Err(DispatchError::BlackHole) => {
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(30)).await;
-                    drop(stream)
+                    drop(inbound_adapter);
                 });
                 return Err(DispatchError::BlackHole);
             }
             Err(e) => return Err(e),
         };
 
-        // conn info
-        let abort_handle = ConnAbortHandle::new();
+        let mut handles = Vec::new();
         let info = Arc::new(ConnContext::new(
             self.stat_center.alloc_unique_id(),
-            dst_addr.clone(),
-            process_info.clone(),
-            inbound,
+            conn_info.clone(),
             proxy_name,
             proxy_type,
-            NetworkType::Tcp,
+            parsed_proto,
             abort_handle.clone(),
             self.stat_center.get_upload(),
             self.stat_center.get_download(),
             self.stat_center.get_notify_handle(),
         ));
-
-        let (tun_conn, tun_next) = Connector::new_pair(10);
-        let mut handles = Vec::new();
-
         handles.push({
             let info = info.clone();
-            let dst_addr = dst_addr.clone();
-            let abort_handle = abort_handle.clone();
             (
                 "tcp".to_string(),
                 tokio::spawn(async move {
-                    let tun = TcpAdapter::new(
-                        src_addr,
-                        dst_addr,
-                        info,
-                        stream,
-                        indicator,
-                        tun_conn,
-                        abort_handle,
-                    );
-                    if let Err(err) = tun.run().await {
+                    if let Err(err) = inbound_adapter.run(info).await {
                         tracing::error!("[Dispatcher] run TcpAdapter failed: {}", err)
                     }
                 }),
@@ -350,9 +373,9 @@ impl Dispatcher {
         });
 
         // mitm for 80/443
-        if let NetworkAddr::DomainName { domain_name, port } = dst_addr {
+        if let NetworkAddr::DomainName { domain_name, port } = conn_info.dst.clone() {
             if port == 80 || port == 443 {
-                let result = self.intercept_mgr.load().matches(&mut conn_info).await;
+                let result = self.intercept_mgr.load().matches(conn_info).await;
                 if result.should_intercept() {
                     let parrot_fingerprint = result.parrot_fingerprint;
                     let modifier = (self.modifier.load())(result, process_info);
@@ -364,7 +387,7 @@ impl Dispatcher {
                                 let info = info.clone();
                                 tokio::spawn(async move {
                                     let mocker = HttpIntercept::new(
-                                        DuplexChan::new(tun_next),
+                                        DuplexChan::new(next_conn),
                                         modifier,
                                         outbounding,
                                         info,
@@ -389,7 +412,7 @@ impl Dispatcher {
                                 let mocker = match HttpsIntercept::new(
                                     &self.ca_certificate,
                                     domain_name,
-                                    DuplexChan::new(tun_next),
+                                    DuplexChan::new(next_conn),
                                     modifier,
                                     outbounding,
                                     info,
@@ -425,7 +448,7 @@ impl Dispatcher {
         handles.push((
             outbounding.outbound_type().to_string(),
             tokio::spawn(async move {
-                if let Err(err) = outbounding.spawn_tcp(tun_next, abort_handle2).await {
+                if let Err(err) = outbounding.spawn_tcp(next_conn, abort_handle2).await {
                     tracing::error!("[Dispatcher] create failed: {}", err)
                 }
             }),
@@ -472,12 +495,10 @@ impl Dispatcher {
         let abort_handle = ConnAbortHandle::new();
         let info = Arc::new(ConnContext::new(
             self.stat_center.alloc_unique_id(),
-            dst_addr,
-            conn_info.process_info,
-            conn_info.inbound,
+            conn_info,
             proxy_name,
             proxy_type,
-            NetworkType::Udp,
+            None,
             abort_handle.clone(),
             self.stat_center.get_upload(),
             self.stat_center.get_download(),

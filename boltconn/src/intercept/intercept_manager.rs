@@ -130,14 +130,14 @@ impl InterceptionManager {
         Ok(Self { entries: res })
     }
 
-    pub async fn matches(&self, conn_info: &mut ConnInfo) -> InterceptionResult {
+    pub async fn matches(&self, mut conn_info: ConnInfo) -> InterceptionResult {
         let mut result = vec![];
         let mut parrot_fingerprint = false;
         let mut capture_request = false;
         let mut capture_response = false;
         let mut contains_script = false;
         for i in self.entries.iter() {
-            if let Some(payload) = i.matches(conn_info).await {
+            if let Some(payload) = i.matches(&mut conn_info).await {
                 capture_request |= payload.capture_request;
                 capture_response |= payload.capture_response;
                 parrot_fingerprint |= i.parrot_fingerprint;
