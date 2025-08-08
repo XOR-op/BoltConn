@@ -3,7 +3,7 @@ use crate::config::{
     RawInboundConfig, RawInboundServiceConfig, RawInstrumentConfig, RawRootCfg,
     RawWebControllerConfig, SingleOrVec,
 };
-use crate::dispatch::{DispatchingBuilder, RuleSet, RuleSetBuilder};
+use crate::dispatch::{DispatchingBuilder, InboundManager, RuleSet, RuleSetBuilder};
 use crate::external::{
     Controller, DatabaseHandle, InstrumentServer, MmdbReader, SharedDispatching, StreamLoggerSend,
     UdsController, UnixListenerGuard, WebController,
@@ -583,27 +583,27 @@ fn start_inbound_services(config: &RawInboundConfig, dispatcher: Arc<Dispatcher>
     {
         let dispatcher = dispatcher.clone();
         match (http_auth, socks_auth) {
-            (Some(http_auth), Some(socks_auth)) => {
+            (Some(http_mgr), Some(socks_mgr)) => {
                 tokio::spawn(async move {
-                    MixedInbound::new(sock_addr, http_auth, socks_auth, dispatcher)
+                    MixedInbound::new(sock_addr, http_mgr, socks_mgr, dispatcher)
                         .await?
                         .run()
                         .await;
                     Ok::<(), io::Error>(())
                 });
             }
-            (Some(auth), None) => {
+            (Some(mgr), None) => {
                 tokio::spawn(async move {
-                    HttpInbound::new(sock_addr, auth, dispatcher)
+                    HttpInbound::new(sock_addr, mgr, dispatcher)
                         .await?
                         .run()
                         .await;
                     Ok::<(), io::Error>(())
                 });
             }
-            (None, Some(auth)) => {
+            (None, Some(mgr)) => {
                 tokio::spawn(async move {
-                    Socks5Inbound::new(sock_addr, auth, dispatcher)
+                    Socks5Inbound::new(sock_addr, mgr, dispatcher)
                         .await?
                         .run()
                         .await;
@@ -668,14 +668,10 @@ fn open_database_handle(data_path: &Path) -> anyhow::Result<DatabaseHandle> {
 fn parse_two_inbound_service(
     http: &Option<SingleOrVec<RawInboundServiceConfig>>,
     socks5: &Option<SingleOrVec<RawInboundServiceConfig>>,
-) -> Vec<(
-    SocketAddr,
-    Option<HashMap<String, String>>,
-    Option<HashMap<String, String>>,
-)> {
+) -> Vec<(SocketAddr, Option<InboundManager>, Option<InboundManager>)> {
     fn parse_inbound_service(
         config: &Option<SingleOrVec<RawInboundServiceConfig>>,
-    ) -> HashMap<SocketAddr, HashMap<String, String>> {
+    ) -> HashMap<SocketAddr, InboundManager> {
         config
             .as_ref()
             .map(|v| {
@@ -683,15 +679,21 @@ fn parse_two_inbound_service(
                     .linearize()
                     .into_iter()
                     .map(|c| match c {
-                        RawInboundServiceConfig::Simple(e) => (
-                            e.as_socket_addr(default_inbound_ip_addr),
-                            HashMap::default(),
-                        ),
-                        RawInboundServiceConfig::Complex { host, port, auth } => {
-                            (SocketAddr::new(host, port), auth)
+                        RawInboundServiceConfig::Simple(e) => {
+                            let addr = e.as_socket_addr(default_inbound_ip_addr);
+                            (addr, InboundManager::new(addr, HashMap::new(), None))
+                        }
+                        RawInboundServiceConfig::Complex {
+                            host,
+                            port,
+                            auth,
+                            alias,
+                        } => {
+                            let addr = SocketAddr::new(host, port);
+                            (addr, InboundManager::new(addr, auth, alias))
                         }
                     })
-                    .collect()
+                    .collect::<HashMap<_, _>>()
             })
             .unwrap_or_default()
     }

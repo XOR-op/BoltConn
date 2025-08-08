@@ -233,7 +233,7 @@ fn default_hosts() -> HashMap<String, IpAddr> {
     Default::default()
 }
 
-pub(super) fn default_str_str_mapping() -> HashMap<String, String> {
+fn default_str_str_mapping() -> HashMap<String, String> {
     Default::default()
 }
 

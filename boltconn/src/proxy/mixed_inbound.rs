@@ -1,6 +1,6 @@
+use crate::dispatch::InboundManager;
 use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, HttpInbound, Socks5Inbound};
-use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -9,24 +9,24 @@ use tokio::net::{TcpListener, TcpStream};
 pub struct MixedInbound {
     sock_addr: SocketAddr,
     server: TcpListener,
-    http_auth: Arc<HashMap<String, String>>,
-    socks_auth: Arc<HashMap<String, String>>,
+    http_mgr: Arc<InboundManager>,
+    socks_mgr: Arc<InboundManager>,
     dispatcher: Arc<Dispatcher>,
 }
 
 impl MixedInbound {
     pub async fn new(
         sock_addr: SocketAddr,
-        http_auth: HashMap<String, String>,
-        socks_auth: HashMap<String, String>,
+        http_mgr: InboundManager,
+        socks_mgr: InboundManager,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
         let server = TcpListener::bind(sock_addr).await?;
         Ok(Self {
             sock_addr,
             server,
-            http_auth: Arc::new(http_auth),
-            socks_auth: Arc::new(socks_auth),
+            http_mgr: Arc::new(http_mgr),
+            socks_mgr: Arc::new(socks_mgr),
             dispatcher,
         })
     }
@@ -37,13 +37,13 @@ impl MixedInbound {
             match self.server.accept().await {
                 Ok((socket, src_addr)) => {
                     let disp = self.dispatcher.clone();
-                    let http_auth = self.http_auth.clone();
-                    let socks_auth = self.socks_auth.clone();
+                    let http_mgr = self.http_mgr.clone();
+                    let socks_mgr = self.socks_mgr.clone();
                     tokio::spawn(Self::serve_connection(
                         self.sock_addr.port(),
                         socket,
-                        http_auth,
-                        socks_auth,
+                        http_mgr,
+                        socks_mgr,
                         src_addr,
                         disp,
                     ));
@@ -59,8 +59,8 @@ impl MixedInbound {
     async fn serve_connection(
         self_port: u16,
         socks_stream: TcpStream,
-        http_auth: Arc<HashMap<String, String>>,
-        socks_auth: Arc<HashMap<String, String>>,
+        http_mgr: Arc<InboundManager>,
+        socks_mgr: Arc<InboundManager>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
     ) -> Result<(), TransportError> {
@@ -75,7 +75,7 @@ impl MixedInbound {
                 Socks5Inbound::serve_connection(
                     self_port,
                     socks_stream,
-                    socks_auth,
+                    socks_mgr,
                     src_addr,
                     dispatcher,
                 )
@@ -83,20 +83,13 @@ impl MixedInbound {
             }
 
             C_ASCII => {
-                HttpInbound::serve_connection(
-                    self_port,
-                    socks_stream,
-                    http_auth,
-                    src_addr,
-                    dispatcher,
-                )
-                .await?
+                HttpInbound::serve_connection(socks_stream, http_mgr, src_addr, dispatcher).await?
             }
             _ => {
                 HttpInbound::serve_legacy_connection(
                     self_port,
                     socks_stream,
-                    http_auth,
+                    http_mgr,
                     src_addr,
                     dispatcher,
                 )

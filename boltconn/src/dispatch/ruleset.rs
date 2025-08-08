@@ -1,7 +1,7 @@
 use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::{ProviderBehavior, RuleError, RuleSchema};
 use crate::dispatch::rule::{PortRule, RuleBuilder, RuleImpl};
-use crate::dispatch::{ConnInfo, InboundIdentity, InboundInfo};
+use crate::dispatch::{ConnInfo, InboundExtra, InboundInfo};
 use crate::external::MmdbReader;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
@@ -28,6 +28,7 @@ pub struct RuleSet {
     dst_udp_port: PortFilter,
     http_inbound: InboundFilter,
     socks5_inbound: InboundFilter,
+    inbound_alias: HashSet<String>,
     tun_inbound: bool,
     domain_keyword: AhoCorasick,
     process_name: HashSet<String>,
@@ -115,6 +116,7 @@ pub struct RuleSetBuilder {
     dst_udp_port: PortFilter,
     http_inbound: InboundFilter,
     socks5_inbound: InboundFilter,
+    inbound_alias: HashSet<String>,
     tun_inbound: bool,
     asn: HashSet<u32>,
     geoip_country: HashSet<String>,
@@ -139,6 +141,7 @@ impl RuleSetBuilder {
             dst_udp_port: Default::default(),
             http_inbound: Default::default(),
             socks5_inbound: Default::default(),
+            inbound_alias: Default::default(),
             tun_inbound: false,
             asn: Default::default(),
             geoip_country: Default::default(),
@@ -176,6 +179,9 @@ impl RuleSetBuilder {
                             InboundInfo::Http(s) => retval.http_inbound.insert(s),
                             InboundInfo::Socks5(s) => retval.socks5_inbound.insert(s),
                         },
+                        RuleImpl::InboundAlias(alias) => {
+                            retval.inbound_alias.insert(alias);
+                        }
                         RuleImpl::ProcessName(pn) => {
                             retval.process_name.insert(pn.clone());
                         }
@@ -280,6 +286,7 @@ impl RuleSetBuilder {
             dst_udp_port: self.dst_udp_port,
             http_inbound: self.http_inbound,
             socks5_inbound: self.socks5_inbound,
+            inbound_alias: self.inbound_alias,
             tun_inbound: self.tun_inbound,
             domain_keyword: AhoCorasick::new(self.domain_keyword.into_iter())
                 .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
@@ -313,6 +320,7 @@ impl RuleSetBuilder {
             dst_udp_port: Default::default(),
             http_inbound: Default::default(),
             socks5_inbound: Default::default(),
+            inbound_alias: Default::default(),
             tun_inbound: false,
             asn: Default::default(),
             geoip_country: Default::default(),
@@ -366,11 +374,11 @@ impl Default for PortFilter {
 
 enum InboundFilter {
     Any,
-    Some(Vec<InboundIdentity>),
+    Some(Vec<InboundExtra>),
 }
 
 impl InboundFilter {
-    pub fn insert(&mut self, entry: InboundIdentity) {
+    pub fn insert(&mut self, entry: InboundExtra) {
         match self {
             InboundFilter::Any => {}
             InboundFilter::Some(s) => {
@@ -387,7 +395,7 @@ impl InboundFilter {
         *self = InboundFilter::Any
     }
 
-    pub fn contains(&self, rhs: &InboundIdentity) -> bool {
+    pub fn contains(&self, rhs: &InboundExtra) -> bool {
         match self {
             InboundFilter::Any => true,
             InboundFilter::Some(v) => v.iter().any(|s| s.contains(rhs)),

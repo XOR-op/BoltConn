@@ -1,9 +1,8 @@
-use crate::dispatch::{InboundIdentity, InboundInfo};
+use crate::dispatch::{InboundExtra, InboundInfo, InboundManager};
 use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use fast_socks5::util::target_addr::{read_address, TargetAddr};
 use fast_socks5::{consts, read_exact, ReplyError, SocksError};
-use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
@@ -16,21 +15,21 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 pub struct Socks5Inbound {
     sock_addr: SocketAddr,
     server: TcpListener,
-    auth: Arc<HashMap<String, String>>,
+    inbound_mgr: Arc<InboundManager>,
     dispatcher: Arc<Dispatcher>,
 }
 
 impl Socks5Inbound {
     pub async fn new(
         sock_addr: SocketAddr,
-        auth: HashMap<String, String>,
+        inbound_mgr: InboundManager,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
         let server = TcpListener::bind(sock_addr).await?;
         Ok(Self {
             sock_addr,
             server,
-            auth: Arc::new(auth),
+            inbound_mgr: Arc::new(inbound_mgr),
             dispatcher,
         })
     }
@@ -41,11 +40,11 @@ impl Socks5Inbound {
             match self.server.accept().await {
                 Ok((socket, src_addr)) => {
                     let disp = self.dispatcher.clone();
-                    let auth = self.auth.clone();
+                    let inbound_mgr = self.inbound_mgr.clone();
                     tokio::spawn(Self::serve_connection(
                         self.sock_addr.port(),
                         socket,
-                        auth,
+                        inbound_mgr,
                         src_addr,
                         disp,
                     ));
@@ -61,11 +60,11 @@ impl Socks5Inbound {
     pub(super) async fn serve_connection(
         self_port: u16,
         mut socks_stream: TcpStream,
-        auth: Arc<HashMap<String, String>>,
+        inbound_mgr: Arc<InboundManager>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
     ) -> Result<(), TransportError> {
-        let incoming_user = Self::process_auth(&mut socks_stream, &auth).await?;
+        let inbound_extra = Self::process_auth(&mut socks_stream, &inbound_mgr).await?;
         let [version, cmd, _rsv, address_type] = read_exact!(socks_stream, [0u8; 4])?;
 
         if version != consts::SOCKS5_VERSION {
@@ -98,10 +97,7 @@ impl Socks5Inbound {
                     .await?;
                 let _ = dispatcher
                     .submit_tcp(
-                        InboundInfo::Socks5(InboundIdentity {
-                            user: incoming_user,
-                            port: Some(self_port),
-                        }),
+                        InboundInfo::Socks5(inbound_extra),
                         src_addr,
                         target_addr,
                         Arc::new(AtomicU8::new(2)),
@@ -132,7 +128,8 @@ impl Socks5Inbound {
                 if dispatcher
                     .submit_socks_udp_pkt(
                         self_port,
-                        incoming_user,
+                        inbound_extra.user,
+                        inbound_extra.alias,
                         src_addr,
                         target_addr,
                         indicator.clone(),
@@ -153,14 +150,14 @@ impl Socks5Inbound {
 
     async fn process_auth(
         socket: &mut TcpStream,
-        auth: &HashMap<String, String>,
-    ) -> Result<Option<String>, TransportError> {
+        mgr: &InboundManager,
+    ) -> Result<InboundExtra, TransportError> {
         let [version, method_len] = read_exact!(socket, [0u8; 2])?;
         if version != consts::SOCKS5_VERSION {
             Err(SocksError::UnsupportedSocksVersion(version))?;
         }
         let methods = read_exact!(socket, vec![0u8; method_len as usize])?;
-        let supported = if !auth.is_empty() {
+        let supported = if mgr.has_auth() {
             consts::SOCKS5_AUTH_METHOD_PASSWORD
         } else {
             consts::SOCKS5_AUTH_METHOD_NONE
@@ -179,8 +176,8 @@ impl Socks5Inbound {
                 .write_all(&[consts::SOCKS5_VERSION, supported])
                 .await?;
         }
-        if auth.is_empty() {
-            Ok(None)
+        if !mgr.has_auth() {
+            Ok(mgr.default_extra())
         } else {
             let [version, user_len] = read_exact!(socket, [0u8; 2])?;
             if version != 0x01 {
@@ -208,11 +205,11 @@ impl Socks5Inbound {
                 .map_err(|_| TransportError::Socks5Extra("not UTF-8 encoded username"))?;
             let parsed_pwd = String::from_utf8(password)
                 .map_err(|_| TransportError::Socks5Extra("not UTF-8 encoded password"))?;
-            if auth.get(&parsed_usr).is_some_and(|pwd| *pwd == parsed_pwd) {
+            if let Some(extra) = mgr.authenticate(&parsed_usr, &parsed_pwd) {
                 socket
                     .write_all(&[1, consts::SOCKS5_REPLY_SUCCEEDED])
                     .await?;
-                Ok(Some(parsed_usr))
+                Ok(extra)
             } else {
                 Self::response_auth_error(socket).await?;
                 Err(SocksError::AuthenticationRejected(

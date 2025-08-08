@@ -5,9 +5,7 @@ use crate::adapter::{
 };
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::StreamOutboundTrait;
-use crate::dispatch::{
-    ConnInfo, Dispatching, GeneralProxy, InboundIdentity, InboundInfo, ProxyImpl,
-};
+use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, InboundExtra, InboundInfo, ProxyImpl};
 use crate::intercept::{HttpIntercept, HttpsIntercept, InterceptionManager, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -602,6 +600,7 @@ impl Dispatcher {
         &self,
         inbound_port: u16,
         user: Option<String>,
+        alias: Option<String>,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         indicator: Arc<AtomicBool>,
@@ -613,9 +612,10 @@ impl Dispatcher {
             src: src_addr,
             dst: dst_addr.clone(),
             local_ip: get_iface_address(self.iface_name.as_str()).ok(),
-            inbound: InboundInfo::Socks5(InboundIdentity {
+            inbound: InboundInfo::Socks5(InboundExtra {
                 user,
                 port: Some(inbound_port),
+                alias,
             }),
             resolved_dst: None,
             connection_type: NetworkType::Udp,

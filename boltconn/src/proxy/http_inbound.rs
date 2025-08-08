@@ -1,6 +1,6 @@
 use crate::adapter::Connector;
 use crate::common::duplex_chan::DuplexChan;
-use crate::dispatch::{InboundIdentity, InboundInfo};
+use crate::dispatch::{InboundExtra, InboundInfo, InboundManager};
 use crate::intercept::HyperBody;
 use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, NetworkAddr};
@@ -12,7 +12,6 @@ use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
-use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
@@ -23,21 +22,21 @@ use tokio::net::{TcpListener, TcpStream};
 pub struct HttpInbound {
     sock_addr: SocketAddr,
     server: TcpListener,
-    auth: Arc<HashMap<String, String>>,
+    inbound_mgr: Arc<InboundManager>,
     dispatcher: Arc<Dispatcher>,
 }
 
 impl HttpInbound {
     pub async fn new(
         sock_addr: SocketAddr,
-        auth: HashMap<String, String>,
+        inbound_mgr: InboundManager,
         dispatcher: Arc<Dispatcher>,
     ) -> io::Result<Self> {
         let server = TcpListener::bind(sock_addr).await?;
         Ok(Self {
             sock_addr,
             server,
-            auth: Arc::new(auth),
+            inbound_mgr: Arc::new(inbound_mgr),
             dispatcher,
         })
     }
@@ -49,24 +48,18 @@ impl HttpInbound {
             match self.server.accept().await {
                 Ok((socket, addr)) => {
                     let disp = self.dispatcher.clone();
-                    let auth = self.auth.clone();
+                    let inbound_mgr = self.inbound_mgr.clone();
                     let mut first_char = [0u8; 1];
                     let _ = socket.peek(&mut first_char).await;
                     match first_char[0] {
                         C_ASCII => {
-                            tokio::spawn(Self::serve_connection(
-                                self.sock_addr.port(),
-                                socket,
-                                auth,
-                                addr,
-                                disp,
-                            ));
+                            tokio::spawn(Self::serve_connection(socket, inbound_mgr, addr, disp));
                         }
                         _ => {
                             tokio::spawn(Self::serve_legacy_connection(
                                 self.sock_addr.port(),
                                 socket,
-                                auth,
+                                inbound_mgr,
                                 addr,
                                 disp,
                             ));
@@ -82,9 +75,8 @@ impl HttpInbound {
     }
 
     pub(super) async fn serve_connection(
-        self_port: u16,
         socket: TcpStream,
-        auth: Arc<HashMap<String, String>>,
+        mgr: Arc<InboundManager>,
         addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
     ) -> Result<(), TransportError> {
@@ -110,8 +102,8 @@ impl HttpInbound {
             && (req_struct.version == Some(1))
         {
             if let Some(Ok(dest)) = req_struct.path.map(|p| p.parse()) {
-                let authorized = if auth.is_empty() {
-                    Some(None)
+                let inbound_extra = if !mgr.has_auth() {
+                    Some(mgr.default_extra())
                 } else {
                     // let's verify the auth
                     let mut r = None;
@@ -120,13 +112,13 @@ impl HttpInbound {
                             let Ok(value) = std::str::from_utf8(hdr.value) else {
                                 break;
                             };
-                            r = validate_auth(Some(value), &auth);
+                            r = validate_auth(Some(value), &mgr);
                             break;
                         }
                     }
                     r
                 };
-                if authorized.is_none() {
+                if inbound_extra.is_none() {
                     socket.write_all(Self::response403().as_bytes()).await?;
                     return Err(TransportError::Http(
                         "Invalid CONNECT request: unauthorized",
@@ -135,10 +127,7 @@ impl HttpInbound {
                 socket.write_all(Self::response200().as_bytes()).await?;
                 let _ = dispatcher
                     .submit_tcp(
-                        InboundInfo::Http(InboundIdentity {
-                            user: authorized.unwrap(),
-                            port: Some(self_port),
-                        }),
+                        InboundInfo::Http(inbound_extra.unwrap()),
                         addr,
                         dest,
                         Arc::new(AtomicU8::new(2)),
@@ -155,7 +144,7 @@ impl HttpInbound {
     pub(super) async fn serve_legacy_connection(
         self_port: u16,
         socket: TcpStream,
-        auth: Arc<HashMap<String, String>>,
+        auth: Arc<InboundManager>,
         src: SocketAddr,
         dispatcher: Arc<Dispatcher>,
     ) -> Result<(), TransportError> {
@@ -191,7 +180,7 @@ impl HttpInbound {
 struct LegacyProxy {
     // Since we only support http/1.1 in legacy proxy, there is no concurrent request.
     client: Arc<tokio::sync::Mutex<Option<hyper::client::conn::http1::SendRequest<Incoming>>>>,
-    auth: Arc<HashMap<String, String>>,
+    auth: Arc<InboundManager>,
     port: u16,
     src: SocketAddr,
     dispatcher: Arc<Dispatcher>,
@@ -221,7 +210,7 @@ impl LegacyProxy {
                     .unwrap());
             }
         };
-        let Some(http_auth) = validate_auth(
+        let Some(inbound_extra) = validate_auth(
             if let Some(value) = req.headers().get("Proxy-Authorization") {
                 value.to_str().ok()
             } else {
@@ -245,10 +234,7 @@ impl LegacyProxy {
             let _ = self
                 .dispatcher
                 .submit_tcp(
-                    InboundInfo::Http(InboundIdentity {
-                        user: http_auth,
-                        port: Some(self.port),
-                    }),
+                    InboundInfo::Http(inbound_extra),
                     self.src,
                     dest,
                     Arc::new(AtomicU8::new(2)),
@@ -275,12 +261,9 @@ impl LegacyProxy {
 //  - None: invalid
 //  - Some(None): valid but empty auth
 //  - Some(Some(user)): valid auth
-fn validate_auth(
-    auth: Option<&str>,
-    server_auth: &HashMap<String, String>,
-) -> Option<Option<String>> {
-    if server_auth.is_empty() {
-        return Some(None);
+fn validate_auth(auth: Option<&str>, server_auth: &InboundManager) -> Option<InboundExtra> {
+    if !server_auth.has_auth() {
+        return Some(server_auth.default_extra());
     } else if let Some(value) = auth {
         // manually split
         if value.is_ascii() && value.len() > 6 {
@@ -290,12 +273,12 @@ fn validate_auth(
                 let code = b64decoder.decode(right).ok()?;
                 let text = std::str::from_utf8(code.as_slice()).ok()?;
                 let v: Vec<String> = text.split(':').map(|s| s.to_string()).collect();
-                if v.len() == 2
-                    && server_auth
-                        .get(v.first().unwrap())
-                        .is_some_and(|pwd| pwd == v.get(1).unwrap())
-                {
-                    return Some(Some(v.first().unwrap().clone()));
+                if v.len() == 2 {
+                    if let Some(extra) =
+                        server_auth.authenticate(v.first().unwrap(), v.get(1).unwrap())
+                    {
+                        return Some(extra);
+                    }
                 }
             }
         }

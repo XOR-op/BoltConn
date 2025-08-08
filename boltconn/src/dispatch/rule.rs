@@ -52,6 +52,7 @@ impl FromStr for PortRule {
 #[derive(Debug, Clone)]
 pub enum RuleImpl {
     Inbound(InboundInfo),
+    InboundAlias(String),
     ProcessName(String),
     ProcessKeyword(String),
     ProcPathKeyword(String),
@@ -136,6 +137,7 @@ impl RuleImpl {
                 PortRule::AnyUdp => info.connection_type == NetworkType::Udp,
             },
             RuleImpl::Inbound(inbound) => inbound.contains(&info.inbound),
+            RuleImpl::InboundAlias(alias) => info.inbound.matches_alias(alias),
             RuleImpl::ProcessName(proc) => info
                 .process_info
                 .as_ref()
@@ -382,6 +384,7 @@ impl RuleBuilder<'_> {
     ) -> Option<RuleImpl> {
         match prefix.as_str() {
             "INBOUND" => Some(RuleImpl::Inbound(InboundInfo::from_str(&content).ok()?)),
+            "INBOUND-ALIAS" => Some(RuleImpl::InboundAlias(content)),
             "DOMAIN-SUFFIX" => Some(RuleImpl::DomainSuffix(content)),
             "DOMAIN-KEYWORD" => Some(RuleImpl::DomainKeyword(content)),
             "DOMAIN" => Some(RuleImpl::Domain(content)),
