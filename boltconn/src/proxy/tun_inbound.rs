@@ -60,21 +60,23 @@ impl TunTcpInbound {
                         port: dst_addr.port(),
                     },
                 };
-                match self
-                    .dispatcher
-                    .submit_tcp(
-                        InboundInfo::Tun,
-                        src_addr,
-                        dst_addr,
-                        indicator.clone(),
-                        socket,
-                    )
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(DispatchError::BlackHole) => {}
-                    Err(_) => indicator.store(0, Ordering::Relaxed),
-                }
+                let dispatcher = self.dispatcher.clone();
+                tokio::spawn(async move {
+                    match dispatcher
+                        .submit_tcp(
+                            InboundInfo::Tun,
+                            src_addr,
+                            dst_addr,
+                            indicator.clone(),
+                            socket,
+                        )
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(DispatchError::BlackHole) => {}
+                        Err(_) => indicator.store(0, Ordering::Relaxed),
+                    }
+                });
             } else {
                 tracing::warn!("Unexpected: no record found by port {}", addr.port())
             }

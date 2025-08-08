@@ -231,21 +231,23 @@ impl LegacyProxy {
         let mut client_holder = self.client.lock().await;
         if client_holder.is_none() {
             let (left, right) = Connector::new_pair(10);
-            let _ = self
-                .dispatcher
-                .submit_tcp(
-                    InboundInfo::Http(inbound_extra),
-                    self.src,
-                    dest,
-                    Arc::new(AtomicU8::new(2)),
-                    DuplexChan::new(right),
-                )
-                .await;
             let (send_req, conn) = hyper::client::conn::http1::Builder::new()
                 .handshake(TokioIo::new(DuplexChan::new(left)))
                 .await?;
             tokio::spawn(conn);
             *client_holder = Some(send_req);
+            let dispatcher = self.dispatcher.clone();
+            tokio::spawn(async move {
+                let _ = dispatcher
+                    .submit_tcp(
+                        InboundInfo::Http(inbound_extra),
+                        self.src,
+                        dest,
+                        Arc::new(AtomicU8::new(2)),
+                        DuplexChan::new(right),
+                    )
+                    .await;
+            });
         }
         let client = client_holder.as_mut().unwrap();
         let mut res = client.send_request(req).await?;

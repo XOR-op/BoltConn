@@ -268,6 +268,8 @@ impl Dispatcher {
         })
     }
 
+    // All invocations of this function should be in a spawned task
+    // since submission may block on DNS resolution or SNI sniff etc.
     pub async fn submit_tcp<S: StreamOutboundTrait>(
         &self,
         inbound: InboundInfo,
