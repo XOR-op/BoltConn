@@ -1,6 +1,6 @@
 use crate::adapter::{
     AddrConnector, ChainOutbound, Connector, DirectOutbound, HttpOutbound, Outbound, OutboundType,
-    SSOutbound, Socks5Outbound, SshManager, SshOutboundHandle, StandardUdpAdapter, TcpAdapter,
+    SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager, SshOutboundHandle, TcpAdapter,
     TrojanOutbound, TunUdpAdapter, WireguardHandle, WireguardManager,
 };
 use crate::common::duplex_chan::DuplexChan;
@@ -533,20 +533,21 @@ impl Dispatcher {
         )
     }
 
-    pub async fn submit_tun_udp_session(
+    async fn submit_any_udp_session(
         &self,
+        inbound: InboundInfo,
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         proc_info: Option<ProcessInfo>,
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
-        recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
+        recv_tx: UdpReturnChannel,
         indicator: Arc<AtomicBool>,
     ) -> Result<(), DispatchError> {
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
             local_ip: get_iface_address(self.iface_name.as_str()).ok(),
-            inbound: InboundInfo::Tun,
+            inbound,
             resolved_dst: None,
             connection_type: NetworkType::Udp,
             process_info: proc_info,
@@ -567,86 +568,34 @@ impl Dispatcher {
 
         let mut handles = Vec::new();
 
-        let (adapter_tun, adapter_next) = AddrConnector::new_pair(10);
-
-        handles.push(("tun_udp".to_string(), {
-            let info = info.clone();
-            let abort_handle = abort_handle.clone();
-            let dns = self.dns.clone();
-            tokio::spawn(async move {
-                let tun_udp =
-                    TunUdpAdapter::new(info, send_rx, recv_tx, adapter_tun, dns, indicator);
-                if let Err(err) = tun_udp.run(abort_handle).await {
-                    tracing::error!("[Dispatcher] run TunUdpAdapter failed: {}", err)
-                }
-            })
-        }));
-        let abort_handle2 = abort_handle.clone();
-        handles.push((
-            outbounding.outbound_type().to_string(),
-            tokio::spawn(async move {
-                if let Err(err) = outbounding
-                    .spawn_udp(adapter_next, abort_handle2, false)
-                    .await
-                {
-                    tracing::error!("[Dispatcher] create failed: {}", err)
-                }
-            }),
-        ));
-        abort_handle.fulfill(handles);
-        self.stat_center.push(info.clone());
-        Ok(())
-    }
-
-    pub async fn submit_socks_udp_pkt(
-        &self,
-        inbound_port: u16,
-        user: Option<String>,
-        alias: Option<String>,
-        src_addr: SocketAddr,
-        dst_addr: NetworkAddr,
-        indicator: Arc<AtomicBool>,
-        socket: UdpSocket,
-    ) -> Result<(), DispatchError> {
-        let process_info =
-            process::get_pid(src_addr, NetworkType::Udp).map_or(None, process::get_process_info);
-        let conn_info = ConnInfo {
-            src: src_addr,
-            dst: dst_addr.clone(),
-            local_ip: get_iface_address(self.iface_name.as_str()).ok(),
-            inbound: InboundInfo::Socks5(InboundExtra {
-                user,
-                port: Some(inbound_port),
-                alias,
-            }),
-            resolved_dst: None,
-            connection_type: NetworkType::Udp,
-            process_info: process_info.clone(),
-        };
-        let (outbounding, info, abort_handle) =
-            match self.route_udp(src_addr, dst_addr, conn_info).await {
-                Ok(r) => r,
-                Err(DispatchError::BlackHole) => {
-                    tokio::spawn(async {
-                        tokio::time::interval(Duration::from_secs(30)).tick().await;
-                        drop(socket);
-                    });
-                    return Err(DispatchError::BlackHole);
-                }
-                Err(e) => return Err(e),
-            };
-        let mut handles = Vec::new();
-
-        let (adapter_conn, adapter_next) = AddrConnector::new_pair(10);
+        let (adapter_now, adapter_next) = AddrConnector::new_pair(10);
 
         handles.push(("udp".to_string(), {
             let info = info.clone();
             let abort_handle = abort_handle.clone();
+            let dns = self.dns.clone();
             tokio::spawn(async move {
-                let udp_adapter =
-                    StandardUdpAdapter::new(info, socket, src_addr, indicator, adapter_conn);
-                if let Err(err) = udp_adapter.run(abort_handle).await {
-                    tracing::error!("[Dispatcher] run StandardUdpAdapter failed: {}", err)
+                match recv_tx {
+                    UdpReturnChannel::Tun(recv_tx) => {
+                        let udp_adapter =
+                            TunUdpAdapter::new(info, send_rx, recv_tx, adapter_now, dns, indicator);
+                        if let Err(err) = udp_adapter.run(abort_handle).await {
+                            tracing::error!("[Dispatcher] run TunUdpAdapter failed: {}", err)
+                        }
+                    }
+                    UdpReturnChannel::Socks(recv_tx) => {
+                        let udp_adapter = SocksUdpAdapter::new(
+                            info,
+                            send_rx,
+                            recv_tx,
+                            src_addr,
+                            indicator,
+                            adapter_now,
+                        );
+                        if let Err(err) = udp_adapter.run(abort_handle).await {
+                            tracing::error!("[Dispatcher] run TunUdpAdapter failed: {}", err)
+                        }
+                    }
                 }
             })
         }));
@@ -666,4 +615,106 @@ impl Dispatcher {
         self.stat_center.push(info.clone());
         Ok(())
     }
+
+    pub async fn submit_tun_udp_session(
+        &self,
+        src_addr: SocketAddr,
+        dst_addr: NetworkAddr,
+        proc_info: Option<ProcessInfo>,
+        send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
+        recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
+        indicator: Arc<AtomicBool>,
+    ) -> Result<(), DispatchError> {
+        self.submit_any_udp_session(
+            InboundInfo::Tun,
+            src_addr,
+            dst_addr,
+            proc_info,
+            send_rx,
+            UdpReturnChannel::Tun(recv_tx),
+            indicator,
+        )
+        .await
+    }
+
+    pub async fn submit_socks_udp_session(
+        &self,
+        inbound_extra: InboundExtra,
+        src_addr: SocketAddr,
+        dst_addr: NetworkAddr,
+        process_info: Option<ProcessInfo>,
+        send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
+        recv_tx: Arc<UdpSocket>,
+        indicator: Arc<AtomicBool>,
+    ) -> Result<(), DispatchError> {
+        self.submit_any_udp_session(
+            InboundInfo::Socks5(inbound_extra),
+            src_addr,
+            dst_addr,
+            process_info,
+            send_rx,
+            UdpReturnChannel::Socks(recv_tx),
+            indicator,
+        )
+        .await
+    }
+    //     let conn_info = ConnInfo {
+    //         src: src_addr,
+    //         dst: dst_addr.clone(),
+    //         local_ip: get_iface_address(self.iface_name.as_str()).ok(),
+    //         inbound: InboundInfo::Socks5(inbound_extra),
+    //         resolved_dst: None,
+    //         connection_type: NetworkType::Udp,
+    //         process_info: process_info.clone(),
+    //     };
+    //     let (outbounding, info, abort_handle) =
+    //         match self.route_udp(src_addr, dst_addr, conn_info).await {
+    //             Ok(r) => r,
+    //             Err(DispatchError::BlackHole) => {
+    //                 tokio::spawn(async {
+    //                     tokio::time::interval(Duration::from_secs(30)).tick().await;
+    //                     drop(send_rx);
+    //                     drop(recv_tx);
+    //                 });
+    //                 return Err(DispatchError::BlackHole);
+    //             }
+    //             Err(e) => return Err(e),
+    //         };
+    //     let mut handles = Vec::new();
+
+    //     let (adapter_conn, adapter_next) = AddrConnector::new_pair(10);
+
+    //     handles.push(("udp".to_string(), {
+    //         let info = info.clone();
+    //         let abort_handle = abort_handle.clone();
+    //         let dns = self.dns.clone();
+    //         tokio::spawn(async move {
+    //             let udp_adapter =
+    //                 TunUdpAdapter::new(info, send_rx, recv_tx, adapter_conn, dns, indicator);
+    //             if let Err(err) = udp_adapter.run(abort_handle).await {
+    //                 tracing::error!("[Dispatcher] run SocksUdpAdapter failed: {}", err)
+    //             }
+    //         })
+    //     }));
+    //     let abort_handle2 = abort_handle.clone();
+    //     handles.push((
+    //         outbounding.outbound_type().to_string(),
+    //         tokio::spawn(async move {
+    //             if let Err(err) = outbounding
+    //                 .spawn_udp(adapter_next, abort_handle2, false)
+    //                 .await
+    //             {
+    //                 tracing::error!("[Dispatcher] create failed: {}", err)
+    //             }
+    //         }),
+    //     ));
+    //     abort_handle.fulfill(handles);
+    //     self.stat_center.push(info.clone());
+    //     Ok(())
+    // }
+}
+
+enum UdpReturnChannel {
+    Tun(mpsc::Sender<(Bytes, SocketAddr)>),
+    Socks(Arc<UdpSocket>),
 }

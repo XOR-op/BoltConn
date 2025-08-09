@@ -1,4 +1,5 @@
 use crate::dispatch::InboundManager;
+use crate::network::dns::Dns;
 use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, HttpInbound, Socks5Inbound};
 use std::io;
@@ -6,12 +7,16 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 
+use super::SessionManager;
+
 pub struct MixedInbound {
     sock_addr: SocketAddr,
     server: TcpListener,
     http_mgr: Arc<InboundManager>,
     socks_mgr: Arc<InboundManager>,
     dispatcher: Arc<Dispatcher>,
+    session_mgr: Arc<SessionManager>,
+    dns: Arc<Dns>,
 }
 
 impl MixedInbound {
@@ -20,6 +25,8 @@ impl MixedInbound {
         http_mgr: InboundManager,
         socks_mgr: InboundManager,
         dispatcher: Arc<Dispatcher>,
+        session_mgr: Arc<SessionManager>,
+        dns: Arc<Dns>,
     ) -> io::Result<Self> {
         let server = TcpListener::bind(sock_addr).await?;
         Ok(Self {
@@ -28,6 +35,8 @@ impl MixedInbound {
             http_mgr: Arc::new(http_mgr),
             socks_mgr: Arc::new(socks_mgr),
             dispatcher,
+            session_mgr,
+            dns,
         })
     }
 
@@ -39,6 +48,8 @@ impl MixedInbound {
                     let disp = self.dispatcher.clone();
                     let http_mgr = self.http_mgr.clone();
                     let socks_mgr = self.socks_mgr.clone();
+                    let session_mgr = self.session_mgr.clone();
+                    let dns = self.dns.clone();
                     tokio::spawn(Self::serve_connection(
                         self.sock_addr.port(),
                         socket,
@@ -46,6 +57,8 @@ impl MixedInbound {
                         socks_mgr,
                         src_addr,
                         disp,
+                        session_mgr,
+                        dns,
                     ));
                 }
                 Err(err) => {
@@ -63,6 +76,8 @@ impl MixedInbound {
         socks_mgr: Arc<InboundManager>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
+        session_mgr: Arc<SessionManager>,
+        dns: Arc<Dns>,
     ) -> Result<(), TransportError> {
         let mut first_byte = [0u8; 1];
         socks_stream.peek(&mut first_byte).await?;
@@ -73,11 +88,12 @@ impl MixedInbound {
             }
             5u8 => {
                 Socks5Inbound::serve_connection(
-                    self_port,
                     socks_stream,
                     socks_mgr,
                     src_addr,
                     dispatcher,
+                    session_mgr,
+                    dns,
                 )
                 .await?
             }

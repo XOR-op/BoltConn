@@ -1,10 +1,9 @@
 // Adapter to NAT
 
 use crate::adapter::{AddrConnector, DuplexCloseGuard};
-use crate::common::{mut_buf, MAX_PKT_SIZE};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use io::Result;
 use std::io;
 use std::net::SocketAddr;
@@ -108,25 +107,28 @@ impl TunUdpAdapter {
     }
 }
 
-pub struct StandardUdpAdapter {
+pub struct SocksUdpAdapter {
     info: Arc<ConnContext>,
-    inbound: UdpSocket,
+    send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
+    recv_tx: Arc<UdpSocket>,
     src: SocketAddr,
     available: Arc<AtomicBool>,
     connector: AddrConnector,
 }
 
-impl StandardUdpAdapter {
+impl SocksUdpAdapter {
     pub fn new(
         info: Arc<ConnContext>,
-        inbound: UdpSocket,
+        send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
+        recv_tx: Arc<UdpSocket>,
         src: SocketAddr,
         available: Arc<AtomicBool>,
         connector: AddrConnector,
     ) -> Self {
         Self {
             info,
-            inbound,
+            send_rx,
+            recv_tx,
             src,
             available,
             connector,
@@ -136,9 +138,7 @@ impl StandardUdpAdapter {
     pub async fn run(self, abort_handle: ConnAbortHandle) -> Result<()> {
         let mut first_packet = true;
         let outgoing_info_arc = self.info.clone();
-        let inbound_read = Arc::new(self.inbound);
-        let inbound_write = inbound_read.clone();
-        let src_addr = self.src;
+        let mut inbound_read = self.send_rx;
         let AddrConnector { tx, mut rx } = self.connector;
         let abort_handle2 = abort_handle.clone();
         let available2 = self.available.clone();
@@ -146,47 +146,23 @@ impl StandardUdpAdapter {
         let mut duplex_guard = DuplexCloseGuard::new(
             tokio::spawn(async move {
                 while available2.load(Ordering::Relaxed) {
-                    let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
-                    let result_with_ddl = timeout(
-                        UDP_ALIVE_PROBE_INTERVAL,
-                        inbound_read.recv_from(unsafe { mut_buf(&mut buf) }),
-                    )
-                    .await;
-                    let Ok(result) = result_with_ddl else {
+                    let Ok(result_with_ddl) =
+                        timeout(UDP_ALIVE_PROBE_INTERVAL, inbound_read.recv()).await
+                    else {
                         continue;
                     };
-                    if let Ok((len, pkt_src)) = result {
+
+                    if let Some((buf, pkt_dst)) = result_with_ddl {
                         // check if packet is from the valid socks client
-                        if src_addr == pkt_src {
-                            unsafe { buf.advance_mut(len) }
-                            let buf = buf.freeze();
 
-                            // decapsule udp header
-                            let Ok((frag, addr, payload)) =
-                                fast_socks5::parse_udp_request(buf.as_ref()).await
-                            else {
-                                continue;
-                            };
-                            if frag != 0 {
-                                // cannot handle, drop
-                                continue;
-                            }
-
-                            if first_packet {
-                                first_packet = false;
-                                outgoing_info_arc.update_proto(payload);
-                            }
-                            outgoing_info_arc.more_upload(buf.len());
-                            if tx
-                                .send((buf.slice_ref(payload), addr.into()))
-                                .await
-                                .is_err()
-                            {
-                                available2.store(false, Ordering::Relaxed);
-                                break;
-                            }
-                        } else {
-                            // drop silently
+                        if first_packet {
+                            first_packet = false;
+                            outgoing_info_arc.update_proto(&buf);
+                        }
+                        outgoing_info_arc.more_upload(buf.len());
+                        if tx.send((buf, pkt_dst)).await.is_err() {
+                            available2.store(false, Ordering::Relaxed);
+                            break;
                         }
                     } else {
                         // udp socket err
@@ -212,9 +188,12 @@ impl StandardUdpAdapter {
             }) else {
                 continue;
             };
+            let mut res = Vec::with_capacity(data.len() + buf.len());
+            res.extend_from_slice(&data);
+            res.extend_from_slice(buf.as_ref());
 
-            if let Err(err) = inbound_write.send_to(data.as_slice(), self.src).await {
-                tracing::warn!("StandardUdpAdapter write to inbound failed: {}", err);
+            if let Err(err) = self.recv_tx.send_to(&res, self.src).await {
+                tracing::warn!("SocksUdpAdapter write to inbound failed: {}", err);
                 break;
             }
         }

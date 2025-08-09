@@ -1,4 +1,5 @@
 use crate::dispatch::{InboundExtra, InboundInfo, InboundManager};
+use crate::network::dns::Dns;
 use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use fast_socks5::util::target_addr::{read_address, TargetAddr};
@@ -12,11 +13,15 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
+use super::{SessionManager, SocksUdpInbound};
+
 pub struct Socks5Inbound {
     sock_addr: SocketAddr,
     server: TcpListener,
     inbound_mgr: Arc<InboundManager>,
     dispatcher: Arc<Dispatcher>,
+    session_mgr: Arc<SessionManager>,
+    dns: Arc<Dns>,
 }
 
 impl Socks5Inbound {
@@ -24,6 +29,8 @@ impl Socks5Inbound {
         sock_addr: SocketAddr,
         inbound_mgr: InboundManager,
         dispatcher: Arc<Dispatcher>,
+        session_mgr: Arc<SessionManager>,
+        dns: Arc<Dns>,
     ) -> io::Result<Self> {
         let server = TcpListener::bind(sock_addr).await?;
         Ok(Self {
@@ -31,6 +38,8 @@ impl Socks5Inbound {
             server,
             inbound_mgr: Arc::new(inbound_mgr),
             dispatcher,
+            session_mgr,
+            dns,
         })
     }
 
@@ -41,12 +50,15 @@ impl Socks5Inbound {
                 Ok((socket, src_addr)) => {
                     let disp = self.dispatcher.clone();
                     let inbound_mgr = self.inbound_mgr.clone();
+                    let session_mgr = self.session_mgr.clone();
+                    let dns = self.dns.clone();
                     tokio::spawn(Self::serve_connection(
-                        self.sock_addr.port(),
                         socket,
                         inbound_mgr,
                         src_addr,
                         disp,
+                        session_mgr,
+                        dns,
                     ));
                 }
                 Err(err) => {
@@ -58,11 +70,12 @@ impl Socks5Inbound {
     }
 
     pub(super) async fn serve_connection(
-        self_port: u16,
         mut socks_stream: TcpStream,
         inbound_mgr: Arc<InboundManager>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
+        session_mgr: Arc<SessionManager>,
+        dns: Arc<Dns>,
     ) -> Result<(), TransportError> {
         let inbound_extra = Self::process_auth(&mut socks_stream, &inbound_mgr).await?;
         let [version, cmd, _rsv, address_type] = read_exact!(socks_stream, [0u8; 4])?;
@@ -116,30 +129,28 @@ impl Socks5Inbound {
                 let id2 = indicator.clone();
                 tokio::spawn(async move {
                     // connected TCP to ensure tunnel alive
+                    let mut b = [0u8; 1];
                     while id2.load(Ordering::Relaxed) {
-                        if socks_stream.writable().await.is_ok() {
-                            tokio::time::sleep(Duration::from_secs(30)).await;
+                        if let Ok(n) = socks_stream.try_read(&mut b) {
+                            if n == 0 {
+                                break;
+                            }
                         } else {
-                            break;
+                            tokio::time::sleep(Duration::from_secs(30)).await;
                         }
                     }
                     id2.store(false, Ordering::Relaxed);
                 });
-                if dispatcher
-                    .submit_socks_udp_pkt(
-                        self_port,
-                        inbound_extra.user,
-                        inbound_extra.alias,
-                        src_addr,
-                        target_addr,
-                        indicator.clone(),
-                        peer_sock,
-                    )
-                    .await
-                    .is_err()
-                {
-                    indicator.store(false, Ordering::Relaxed)
-                };
+                let outbound = SocksUdpInbound::new(
+                    Arc::new(peer_sock),
+                    src_addr,
+                    inbound_extra,
+                    dispatcher,
+                    session_mgr,
+                    dns,
+                    indicator,
+                );
+                tokio::spawn(async move { outbound.run().await });
             }
             _ => Err(TransportError::Socks5(SocksError::ReplyError(
                 ReplyError::CommandNotSupported,

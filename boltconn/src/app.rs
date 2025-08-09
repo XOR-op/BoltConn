@@ -248,7 +248,12 @@ impl App {
             )
             .await?;
         }
-        start_inbound_services(&config.inbound, dispatcher.clone());
+        start_inbound_services(
+            &config.inbound,
+            dispatcher.clone(),
+            manager.clone(),
+            dns.clone(),
+        );
 
         // start controller service
         start_controller_services(
@@ -577,15 +582,22 @@ async fn start_tun_services(
     Ok(())
 }
 
-fn start_inbound_services(config: &RawInboundConfig, dispatcher: Arc<Dispatcher>) {
+fn start_inbound_services(
+    config: &RawInboundConfig,
+    dispatcher: Arc<Dispatcher>,
+    session_mgr: Arc<SessionManager>,
+    dns: Arc<Dns>,
+) {
     for (sock_addr, http_auth, socks_auth) in
         parse_two_inbound_service(&config.http, &config.socks5)
     {
         let dispatcher = dispatcher.clone();
         match (http_auth, socks_auth) {
             (Some(http_mgr), Some(socks_mgr)) => {
+                let session_mgr = session_mgr.clone();
+                let dns = dns.clone();
                 tokio::spawn(async move {
-                    MixedInbound::new(sock_addr, http_mgr, socks_mgr, dispatcher)
+                    MixedInbound::new(sock_addr, http_mgr, socks_mgr, dispatcher, session_mgr, dns)
                         .await?
                         .run()
                         .await;
@@ -602,8 +614,10 @@ fn start_inbound_services(config: &RawInboundConfig, dispatcher: Arc<Dispatcher>
                 });
             }
             (None, Some(mgr)) => {
+                let session_mgr = session_mgr.clone();
+                let dns = dns.clone();
                 tokio::spawn(async move {
-                    Socks5Inbound::new(sock_addr, mgr, dispatcher)
+                    Socks5Inbound::new(sock_addr, mgr, dispatcher, session_mgr, dns)
                         .await?
                         .run()
                         .await;

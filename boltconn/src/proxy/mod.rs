@@ -7,7 +7,7 @@ mod mixed_inbound;
 mod session_ctl;
 mod socks5_inbound;
 mod tun_inbound;
-mod tun_udp_inbound;
+mod udp_inbound;
 
 use crate::adapter::Connector;
 use crate::common::create_tls_connector;
@@ -31,7 +31,7 @@ use std::time::{Duration, SystemTime};
 use tokio::task::JoinHandle;
 use tokio_rustls::rustls::pki_types::ServerName;
 pub use tun_inbound::*;
-pub use tun_udp_inbound::*;
+pub use udp_inbound::*;
 use url::Host;
 
 fn get_random_local_addr(dst: &NetworkAddr, port: u16) -> SocketAddr {
