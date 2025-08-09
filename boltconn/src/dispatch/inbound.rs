@@ -128,6 +128,9 @@ impl InboundExtra {
     fn format(&self, category: &str) -> String {
         format!(
             "{}{}{}{}",
+            self.alias
+                .as_ref()
+                .map_or("".to_string(), |alias| { format!("<{alias}>") }),
             self.user
                 .as_ref()
                 .map_or("".to_string(), |user| format!("{user}@")),
@@ -135,9 +138,6 @@ impl InboundExtra {
             self.port
                 .as_ref()
                 .map_or("".to_string(), |port| format!(":{}", *port)),
-            self.alias
-                .as_ref()
-                .map_or("".to_string(), |alias| format!(" ({alias})"))
         )
     }
 }
