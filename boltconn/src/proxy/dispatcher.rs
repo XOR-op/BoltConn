@@ -658,60 +658,6 @@ impl Dispatcher {
         )
         .await
     }
-    //     let conn_info = ConnInfo {
-    //         src: src_addr,
-    //         dst: dst_addr.clone(),
-    //         local_ip: get_iface_address(self.iface_name.as_str()).ok(),
-    //         inbound: InboundInfo::Socks5(inbound_extra),
-    //         resolved_dst: None,
-    //         connection_type: NetworkType::Udp,
-    //         process_info: process_info.clone(),
-    //     };
-    //     let (outbounding, info, abort_handle) =
-    //         match self.route_udp(src_addr, dst_addr, conn_info).await {
-    //             Ok(r) => r,
-    //             Err(DispatchError::BlackHole) => {
-    //                 tokio::spawn(async {
-    //                     tokio::time::interval(Duration::from_secs(30)).tick().await;
-    //                     drop(send_rx);
-    //                     drop(recv_tx);
-    //                 });
-    //                 return Err(DispatchError::BlackHole);
-    //             }
-    //             Err(e) => return Err(e),
-    //         };
-    //     let mut handles = Vec::new();
-
-    //     let (adapter_conn, adapter_next) = AddrConnector::new_pair(10);
-
-    //     handles.push(("udp".to_string(), {
-    //         let info = info.clone();
-    //         let abort_handle = abort_handle.clone();
-    //         let dns = self.dns.clone();
-    //         tokio::spawn(async move {
-    //             let udp_adapter =
-    //                 TunUdpAdapter::new(info, send_rx, recv_tx, adapter_conn, dns, indicator);
-    //             if let Err(err) = udp_adapter.run(abort_handle).await {
-    //                 tracing::error!("[Dispatcher] run SocksUdpAdapter failed: {}", err)
-    //             }
-    //         })
-    //     }));
-    //     let abort_handle2 = abort_handle.clone();
-    //     handles.push((
-    //         outbounding.outbound_type().to_string(),
-    //         tokio::spawn(async move {
-    //             if let Err(err) = outbounding
-    //                 .spawn_udp(adapter_next, abort_handle2, false)
-    //                 .await
-    //             {
-    //                 tracing::error!("[Dispatcher] create failed: {}", err)
-    //             }
-    //         }),
-    //     ));
-    //     abort_handle.fulfill(handles);
-    //     self.stat_center.push(info.clone());
-    //     Ok(())
-    // }
 }
 
 enum UdpReturnChannel {
