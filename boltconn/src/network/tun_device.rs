@@ -89,7 +89,7 @@ impl TunDevice {
 
     async fn send_ip<T: AsyncWrite>(sender: &mut WriteHalf<T>, ip_pkt: &IPPkt) -> io::Result<()> {
         if sender.write(ip_pkt.raw_data()).await? != ip_pkt.raw_data().len() {
-            Err(io::Error::new(ErrorKind::Other, "Write partial packet"))
+            Err(io::Error::other("Write partial packet"))
         } else {
             Ok(())
         }

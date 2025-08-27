@@ -1,6 +1,5 @@
 use std::ffi::OsStr;
 use std::io;
-use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 
 pub mod dhcp;
@@ -24,10 +23,10 @@ pub fn run_command(cmd: &mut Command) -> io::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(io::Error::new(
-            ErrorKind::Other,
-            format!("Subcommand exit status: {}", status),
-        ))
+        Err(io::Error::other(format!(
+            "Subcommand exit status: {}",
+            status
+        )))
     }
 }
 
@@ -50,11 +49,11 @@ where
         .stderr(Stdio::null())
         .output()?;
     if output.status.success() {
-        String::from_utf8(output.stdout).map_err(|e| io::Error::new(ErrorKind::Other, e))
+        String::from_utf8(output.stdout).map_err(io::Error::other)
     } else {
-        Err(io::Error::new(
-            ErrorKind::Other,
-            format!("Subcommand exit status: {}", output.status),
-        ))
+        Err(io::Error::other(format!(
+            "Subcommand exit status: {}",
+            output.status
+        )))
     }
 }

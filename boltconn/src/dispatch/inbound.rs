@@ -99,7 +99,7 @@ impl InboundInfo {
         match self {
             InboundInfo::Tun => false,
             InboundInfo::Http(info) | InboundInfo::Socks5(info) => {
-                info.alias.as_ref().map_or(false, |a| a == alias)
+                info.alias.as_ref().is_some_and(|a| a == alias)
             }
         }
     }

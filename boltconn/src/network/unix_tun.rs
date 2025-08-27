@@ -5,7 +5,6 @@ use crate::platform;
 use crate::platform::errno_err;
 use ipnet::Ipv4Net;
 use std::io;
-use std::io::ErrorKind;
 use std::os::fd::{IntoRawFd, RawFd};
 use tokio::io::AsyncWriteExt;
 
@@ -54,9 +53,8 @@ impl TunInstance {
                     Some(socket2::Protocol::from(libc::IPPROTO_RAW)),
                 )?
                 .into_raw_fd();
-                platform::bind_to_device(fd, gw_name).map_err(|e| {
-                    io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
-                })?;
+                platform::bind_to_device(fd, gw_name)
+                    .map_err(|e| io::Error::other(format!("Bind to device failed, {}", e)))?;
                 let mut outbound = AsyncRawSocket::create(fd, pkt.dst_addr())?;
                 let _ = outbound.write(pkt.packet_data()).await?;
             }
@@ -69,7 +67,7 @@ impl TunInstance {
                     )?
                     .into_raw_fd();
                     platform::bind_to_device(fd, gw_name).map_err(|e| {
-                        io::Error::new(ErrorKind::Other, format!("Bind to device failed, {}", e))
+                        io::Error::other(format!("Bind to device failed, {}", e))
                     })?;
                     let mut outbound = AsyncRawSocket::create(fd, pkt.dst_addr())?;
                     let _ = outbound.write(pkt.packet_data()).await?;

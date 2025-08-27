@@ -28,14 +28,14 @@ pub(crate) use hostname_parse::{parse_http_host, parse_tls_sni};
 pub use sync::{local_async_run, AbortCanary};
 
 pub fn io_err(msg: &str) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, msg)
+    std::io::Error::other(msg)
 }
 
 pub fn as_io_err<E>(err: E) -> std::io::Error
 where
     E: Error,
 {
-    std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
+    std::io::Error::other(err.to_string())
 }
 
 pub trait StreamOutboundTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}

@@ -69,6 +69,7 @@ impl MixedInbound {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn serve_connection(
         self_port: u16,
         socks_stream: TcpStream,

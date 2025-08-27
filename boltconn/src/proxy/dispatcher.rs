@@ -533,6 +533,7 @@ impl Dispatcher {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn submit_any_udp_session(
         &self,
         inbound: InboundInfo,
@@ -637,6 +638,7 @@ impl Dispatcher {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit_socks_udp_session(
         &self,
         inbound_extra: InboundExtra,
