@@ -156,7 +156,7 @@ impl WireguardTunnel {
                         let socket_clone = socket.clone();
                         let pool = buf_pool.clone();
                         let name = config.name.clone();
-                        local_async_run(async move {
+                        local_async_run(Some(format!("WG-{}", config.name)), async move {
                             // dedicated to poll UDP from small kernel buffer
                             let mut buf = vec![0; MAX_UDP_PKT_SIZE];
                             while !in_tx.is_disconnected() {

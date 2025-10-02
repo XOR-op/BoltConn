@@ -182,7 +182,7 @@ impl Endpoint {
             let notifier = notify.clone();
             let smol_canary = indicator.clone();
 
-            local_async_run(async move {
+            local_async_run(Some(format!("ST-{}", name)), async move {
                 let mut immediate_next_loop = false;
                 notifier.notified().await;
                 while smol_canary.alive() {
