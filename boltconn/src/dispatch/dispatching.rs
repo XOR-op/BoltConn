@@ -24,7 +24,7 @@ use base64::Engine;
 use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
-use russh::keys::key::PublicKey;
+use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
 use std::collections::{HashMap, HashSet};
@@ -558,7 +558,10 @@ impl DispatchingBuilder {
                         .map_err(|_| {
                             ProxyError::ProxyFieldError(name.clone(), "Load private key file")
                         })?;
-                        SshAuthentication::PrivateKey(Arc::new(key_content))
+                        SshAuthentication::PrivateKey(PrivateKeyWithHashAlg::new(
+                            Arc::new(key_content),
+                            None,
+                        ))
                     } else if let Some(passwd) = password {
                         SshAuthentication::Password(passwd.clone())
                     } else {

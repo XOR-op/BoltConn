@@ -123,7 +123,7 @@ const_format = "0.2.34"
 
 # features(tokio-console)
 console-subscriber = { version = "0.1.10", optional = true }
-russh = "0.45.0"
+russh = "0.54.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58.0", features = [

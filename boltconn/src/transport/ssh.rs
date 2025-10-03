@@ -1,8 +1,7 @@
 use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
-use async_trait::async_trait;
 use russh::client::{connect_stream, Handle, Msg};
-use russh::keys::key::{KeyPair, PublicKey};
+use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{ChannelStream, SshId};
 use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU16};
@@ -12,7 +11,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 #[derive(Debug, Clone)]
 pub enum SshAuthentication {
     Password(String),
-    PrivateKey(Arc<KeyPair>),
+    PrivateKey(PrivateKeyWithHashAlg),
 }
 
 #[derive(Debug, Clone)]
@@ -43,7 +42,6 @@ struct Client {
     expected_server_key: Option<Vec<PublicKey>>,
 }
 
-#[async_trait]
 impl russh::client::Handler for Client {
     type Error = TransportError;
 
@@ -142,7 +140,8 @@ where
             handle.authenticate_publickey(&config.user, k.clone()).await
         }
     }
-    .map_err(TransportError::Ssh)?)
+    .map_err(TransportError::Ssh)?
+    .success())
     {
         return Err(TransportError::Ssh(russh::Error::NotAuthenticated));
     }
