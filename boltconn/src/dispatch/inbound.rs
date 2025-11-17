@@ -117,8 +117,8 @@ impl InboundExtra {
         let user_match = self
             .user
             .as_ref()
-            .map(|user| (rhs.user.as_ref() == Some(user)));
-        let port_match = self.port.map(|port| (rhs.port == Some(port)));
+            .map(|user| rhs.user.as_ref() == Some(user));
+        let port_match = self.port.map(|port| rhs.port == Some(port));
         !matches!(
             (user_match, port_match),
             (Some(false), _) | (_, Some(false))
