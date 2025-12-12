@@ -3,7 +3,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderName};
 use regex::Regex;
 use rquickjs::class::Trace;
-use rquickjs::{Class, Context, Ctx, FromJs, IntoJs, Object, Runtime, Value};
+use rquickjs::{Class, Context, Ctx, FromJs, IntoJs, JsLifetime, Object, Runtime, Value};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::io::Read;
@@ -184,13 +184,11 @@ impl ScriptEngine {
                         if v.type_of() == rquickjs::Type::Exception {
                             let v = v.as_exception().unwrap();
                             tracing::debug!(
-                                "Script {} exception: {} {}",
+                                "Script {} exception: {}",
                                 self.name
                                     .clone()
                                     .map_or_else(String::default, |n| format!("\"{}\"", n)),
                                 v.message().unwrap_or_else(|| "MISSING MSG".to_string()),
-                                v.line()
-                                    .map_or_else(String::default, |l| format!("in line {}", l))
                             );
                         }
                     }
@@ -307,7 +305,7 @@ impl ScriptEngine {
     }
 }
 
-#[derive(Debug, Clone, Trace)]
+#[derive(Debug, Clone, Trace, JsLifetime)]
 #[rquickjs::class]
 struct Console {
     id: String,

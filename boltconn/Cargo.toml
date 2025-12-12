@@ -96,7 +96,7 @@ hyper = { version = "1.2.0", features = ["server", "client", "http1", "http2"] }
 hyper-util = { version = "0.1.11", features = ["http1", "http2"] }
 ja-tools = { git = "https://github.com/XOR-op/ja-tools.git", branch = "main" }
 rcgen = { version = "0.12.1", features = ["pem", "x509-parser"] }
-rquickjs = { version = "0.6.2", features = [
+rquickjs = { version = "0.10.0", features = [
     "bindgen",
     "futures",
     "macro",
@@ -120,10 +120,10 @@ colored = "2.0.0"
 tabular = "0.2.0"
 git-version = "0.3.9"
 const_format = "0.2.34"
+russh = "0.54.4"
 
 # features(tokio-console)
 console-subscriber = { version = "0.1.10", optional = true }
-russh = "0.54.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58.0", features = [
