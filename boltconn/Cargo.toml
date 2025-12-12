@@ -120,7 +120,7 @@ colored = "2.0.0"
 tabular = "0.2.0"
 git-version = "0.3.9"
 const_format = "0.2.34"
-russh = "0.54.4"
+russh = "0.55.0"
 
 # features(tokio-console)
 console-subscriber = { version = "0.1.10", optional = true }
