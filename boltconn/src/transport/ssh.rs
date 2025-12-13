@@ -134,15 +134,20 @@ where
             .map(|v| v.iter().map(|(_, k)| k.clone()).collect::<Vec<PublicKey>>()),
     };
     let mut handle = connect_stream(ru_config, outbound, ssh_handler).await?;
-    if !(match config.auth {
+    let res = match config.auth {
         SshAuthentication::Password(ref p) => handle.authenticate_password(&config.user, p).await,
         SshAuthentication::PrivateKey(ref k) => {
             handle.authenticate_publickey(&config.user, k.clone()).await
         }
     }
-    .map_err(TransportError::Ssh)?
-    .success())
-    {
+    .map_err(TransportError::Ssh)?;
+    if !res.success() {
+        tracing::debug!(
+            "SSH authentication to {}@{} failed: {:?}",
+            config.user,
+            config.server,
+            res
+        );
         return Err(TransportError::Ssh(russh::Error::NotAuthenticated));
     }
     Ok(handle)

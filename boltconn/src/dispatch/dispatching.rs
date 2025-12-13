@@ -560,7 +560,7 @@ impl DispatchingBuilder {
                         })?;
                         SshAuthentication::PrivateKey(PrivateKeyWithHashAlg::new(
                             Arc::new(key_content),
-                            None,
+                            Some(russh::keys::HashAlg::Sha512),
                         ))
                     } else if let Some(passwd) = password {
                         SshAuthentication::Password(passwd.clone())
