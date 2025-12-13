@@ -3,15 +3,15 @@ use crate::network::dns::dns_table::DnsTable;
 use crate::network::dns::hosts::HostsResolver;
 use crate::network::dns::ns_policy::{DispatchedDnsResolver, NameserverPolicies};
 use crate::network::dns::provider::IfaceProvider;
-use crate::network::dns::{default_resolver_opt, AuxiliaryResolver, NameServerConfigEnum};
+use crate::network::dns::{AuxiliaryResolver, NameServerConfigEnum, default_resolver_opt};
 use crate::proxy::error::TransportError;
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
 use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
+use hickory_resolver::AsyncResolver;
 use hickory_resolver::config::*;
 use hickory_resolver::error::ResolveErrorKind;
 use hickory_resolver::name_server::{GenericConnector, RuntimeProvider};
-use hickory_resolver::AsyncResolver;
 use std::collections::HashMap;
 use std::io;
 use std::net::IpAddr;
@@ -242,12 +242,11 @@ impl<P: RuntimeProvider> GenericDns<P> {
         domain_name: &str,
         pref: DnsPreference,
     ) -> Result<Option<IpAddr>, TransportError> {
-        if let Some(ip) = self.host_resolver.load().resolve(domain_name) {
-            if (matches!(pref, DnsPreference::Ipv6Only) && ip.is_ipv6())
-                || (matches!(pref, DnsPreference::Ipv4Only) && ip.is_ipv4())
-            {
-                return Ok(Some(ip));
-            }
+        if let Some(ip) = self.host_resolver.load().resolve(domain_name)
+            && ((matches!(pref, DnsPreference::Ipv6Only) && ip.is_ipv6())
+                || (matches!(pref, DnsPreference::Ipv4Only) && ip.is_ipv4()))
+        {
+            return Ok(Some(ip));
         }
         if let Some(resolver) = self.ns_policy.load().resolve(domain_name) {
             return match pref {

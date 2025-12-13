@@ -1,8 +1,8 @@
 use crate::network::packet::transport_layer::create_raw_udp_pkt;
 use crate::proxy::error::DnsError;
 use dhcproto::{
-    v4::{self, Message},
     Decodable, Decoder, Encodable, Encoder,
+    v4::{self, Message},
 };
 use pnet_datalink::{Channel, MacAddr};
 use smoltcp::wire::{IpProtocol, Ipv4Packet, UdpPacket};
@@ -129,15 +129,13 @@ fn get_dhcp_dns_impl(iface_name: &str) -> Result<IpAddr, DnsError> {
                     v4::DhcpOption::MessageType(ty) => *ty == v4::MessageType::Offer,
                     _ => false,
                 })
-        {
-            if let Some(v4::DhcpOption::DomainNameServer(dns)) =
+            && let Some(v4::DhcpOption::DomainNameServer(dns)) =
                 msg.opts().get(v4::OptionCode::DomainNameServer)
-            {
-                return dns
-                    .first()
-                    .map(|&ip| IpAddr::V4(ip))
-                    .ok_or(DnsError::DhcpNameServer("no DNS option offered by DHCP"));
-            }
+        {
+            return dns
+                .first()
+                .map(|&ip| IpAddr::V4(ip))
+                .ok_or(DnsError::DhcpNameServer("no DNS option offered by DHCP"));
         }
     }
     Err(DnsError::DhcpNameServer(
@@ -146,20 +144,17 @@ fn get_dhcp_dns_impl(iface_name: &str) -> Result<IpAddr, DnsError> {
 }
 
 fn get_dhcp_payload(buf: &[u8]) -> Option<Message> {
-    if let Ok(pkt) = smoltcp::wire::EthernetFrame::new_checked(buf) {
-        if pkt.ethertype() == smoltcp::wire::EthernetProtocol::Ipv4 {
-            if let Ok(pkt) = Ipv4Packet::new_checked(pkt.payload()) {
-                if pkt.next_header() == IpProtocol::Udp {
-                    if let Ok(pkt) = UdpPacket::new_checked(pkt.payload()) {
-                        if pkt.src_port() == DHCP_SERVER_PORT && pkt.dst_port() == DHCP_CLIENT_PORT
-                        {
-                            let msg = Message::decode(&mut Decoder::new(pkt.payload())).ok()?;
-                            return Some(msg);
-                        }
-                    }
-                }
-            }
-        }
+    if let Ok(pkt) = smoltcp::wire::EthernetFrame::new_checked(buf)
+        && pkt.ethertype() == smoltcp::wire::EthernetProtocol::Ipv4
+        && let Ok(pkt) = Ipv4Packet::new_checked(pkt.payload())
+        && pkt.next_header() == IpProtocol::Udp
+        && let Ok(pkt) = UdpPacket::new_checked(pkt.payload())
+        && pkt.src_port() == DHCP_SERVER_PORT
+        && pkt.dst_port() == DHCP_CLIENT_PORT
+    {
+        let msg = Message::decode(&mut Decoder::new(pkt.payload())).ok()?;
+        return Some(msg);
     }
+
     None
 }

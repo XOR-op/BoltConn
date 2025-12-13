@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Instant, SystemTime};
 use tokio::task::JoinHandle;
@@ -361,14 +361,15 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
         };
     }
     // HTTP request line
-    if let Some(idx) = packet.iter().position(|&b| b == b'\r') {
-        if idx + 1 < packet.len() && packet[idx + 1] == b'\n' {
-            // contains a request line
-            let request_line = &packet[0..idx];
-            if request_line.ends_with("HTTP/1.1".as_bytes()) {
-                // we just ignore legacy versions
-                return SessionProtocol::Http;
-            }
+    if let Some(idx) = packet.iter().position(|&b| b == b'\r')
+        && idx + 1 < packet.len()
+        && packet[idx + 1] == b'\n'
+    {
+        // contains a request line
+        let request_line = &packet[0..idx];
+        if request_line.ends_with("HTTP/1.1".as_bytes()) {
+            // we just ignore legacy versions
+            return SessionProtocol::Http;
         }
     }
     // Unknown

@@ -2,7 +2,7 @@ use crate::platform::process::{NetworkType, ProcessInfo};
 use libc::c_int;
 use libproc::libproc::bsd_info::BSDInfo;
 use libproc::libproc::proc_pid::pidinfo;
-use std::ffi::{c_void, CString, OsStr};
+use std::ffi::{CString, OsStr, c_void};
 use std::io;
 use std::io::{ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -223,8 +223,8 @@ fn get_arg_max() -> Option<usize> {
 
 unsafe fn get_unchecked_str(cp: *mut u8, start: *mut u8) -> String {
     let len = cp as usize - start as usize;
-    let part = Vec::from_raw_parts(start, len, len);
-    let tmp = String::from_utf8_unchecked(part.clone());
+    let part = unsafe { Vec::from_raw_parts(start, len, len) };
+    let tmp = unsafe { String::from_utf8_unchecked(part.clone()) };
     ::std::mem::forget(part);
     tmp
 }

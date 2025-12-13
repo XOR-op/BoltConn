@@ -3,10 +3,10 @@ use crate::common::io_err;
 use crate::platform::sys::ffi;
 use crate::platform::sys::unix_sys::create_req;
 use crate::platform::{
-    errno_err, get_command_output, get_sockaddr, run_command, run_command_with_args, UserInfo,
+    UserInfo, errno_err, get_command_output, get_sockaddr, run_command, run_command_with_args,
 };
 use ipnet::IpNet;
-use libc::{c_char, c_int, c_void, sockaddr, socklen_t, SOCK_DGRAM};
+use libc::{SOCK_DGRAM, c_char, c_int, c_void, sockaddr, socklen_t};
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr};
@@ -18,7 +18,7 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     let mut name_len: socklen_t = 32;
     for sc_unit in 0..256 {
         let fd = {
-            let fd = libc::socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
+            let fd = unsafe { libc::socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL) };
             if fd < 0 {
                 return Err(errno_err("Failed to pen tun socket"));
             }
@@ -36,48 +36,49 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
                 r
             },
         };
+        unsafe {
+            if ctliocginfo(fd, &mut ctl_info as *mut _) < 0 {
+                libc::close(fd);
+                return Err(errno_err("Failed to get fd info"));
+            }
 
-        if ctliocginfo(fd, &mut ctl_info as *mut _) < 0 {
-            libc::close(fd);
-            return Err(errno_err("Failed to get fd info"));
+            let sock_ctl = sockaddr_ctl {
+                sc_len: mem::size_of::<sockaddr_ctl>() as _,
+                sc_family: AF_SYSTEM,
+                ss_sysaddr: AF_SYS_CONTROL,
+                sc_id: ctl_info.ctl_id,
+                sc_unit,
+                sc_reserved: [0; 5],
+            };
+
+            if libc::connect(
+                fd,
+                &sock_ctl as *const sockaddr_ctl as *const sockaddr,
+                mem::size_of_val(&sock_ctl) as socklen_t,
+            ) < 0
+            {
+                libc::close(fd);
+                continue;
+            }
+
+            if libc::getsockopt(
+                fd,
+                SYSPROTO_CONTROL,
+                UTUN_OPT_IFNAME,
+                &mut name_buf as *mut u8 as *mut c_void,
+                &mut name_len as *mut socklen_t,
+            ) < 0
+            {
+                libc::close(fd);
+                return Err(errno_err("Failed to get socket options"));
+            }
+            return Ok((
+                fd,
+                CStr::from_ptr(name_buf.as_ptr() as *const c_char)
+                    .to_string_lossy()
+                    .into_owned(),
+            ));
         }
-
-        let sock_ctl = sockaddr_ctl {
-            sc_len: mem::size_of::<sockaddr_ctl>() as _,
-            sc_family: AF_SYSTEM,
-            ss_sysaddr: AF_SYS_CONTROL,
-            sc_id: ctl_info.ctl_id,
-            sc_unit,
-            sc_reserved: [0; 5],
-        };
-
-        if libc::connect(
-            fd,
-            &sock_ctl as *const sockaddr_ctl as *const sockaddr,
-            mem::size_of_val(&sock_ctl) as socklen_t,
-        ) < 0
-        {
-            libc::close(fd);
-            continue;
-        }
-
-        if libc::getsockopt(
-            fd,
-            SYSPROTO_CONTROL,
-            UTUN_OPT_IFNAME,
-            &mut name_buf as *mut u8 as *mut c_void,
-            &mut name_len as *mut socklen_t,
-        ) < 0
-        {
-            libc::close(fd);
-            return Err(errno_err("Failed to get socket options"));
-        }
-        return Ok((
-            fd,
-            CStr::from_ptr(name_buf.as_ptr() as *const c_char)
-                .to_string_lossy()
-                .into_owned(),
-        ));
     }
 
     Err(errno_err("No available sc_unit"))
@@ -282,10 +283,13 @@ pub fn set_maximum_opened_files(target_size: u32) -> io::Result<u32> {
 }
 
 pub(crate) unsafe fn set_dest(fd: c_int, name: &str, addr: Ipv4Addr) -> io::Result<()> {
-    let mut addr_req = create_req(name);
-    addr_req.ifru.dstaddr = mem::transmute::<libc::sockaddr_in, libc::sockaddr>(get_sockaddr(addr));
-    if ffi::siocsifdstaddr(fd, &addr_req) < 0 {
-        return Err(errno_err("Failed to set tun dst addr"));
+    unsafe {
+        let mut addr_req = create_req(name);
+        addr_req.ifru.dstaddr =
+            mem::transmute::<libc::sockaddr_in, libc::sockaddr>(get_sockaddr(addr));
+        if ffi::siocsifdstaddr(fd, &addr_req) < 0 {
+            return Err(errno_err("Failed to set tun dst addr"));
+        }
+        Ok(())
     }
-    Ok(())
 }

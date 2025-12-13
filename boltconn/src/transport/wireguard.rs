@@ -1,8 +1,8 @@
-use crate::common::{io_err, local_async_run, MAX_PKT_SIZE, MAX_UDP_PKT_SIZE};
+use crate::common::{MAX_PKT_SIZE, MAX_UDP_PKT_SIZE, io_err, local_async_run};
 use crate::config::DnsPreference;
 use crate::network::dns::Dns;
-use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
+use crate::proxy::error::TransportError;
 use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
 use boringtun::noise::errors::WireGuardError;
 use boringtun::noise::{Tunn, TunnResult};
@@ -374,12 +374,12 @@ impl WireguardTunnel {
 
 impl WireguardTunnelInner {
     async fn outbound_send(&self, data: &mut [u8]) -> Result<usize, TransportError> {
-        if data.len() >= 4 {
-            if let Some(r) = &self.reserved {
-                data[1] = r[0];
-                data[2] = r[1];
-                data[3] = r[2];
-            }
+        if data.len() >= 4
+            && let Some(r) = &self.reserved
+        {
+            data[1] = r[0];
+            data[2] = r[1];
+            data[3] = r[2];
         }
         match &self.outbound {
             AdapterOrChannel::Adapter(a) => {

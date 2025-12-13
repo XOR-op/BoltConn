@@ -165,8 +165,8 @@ impl ProxyGroup {
 
     pub fn get_proxy_and_interface(&self) -> (Arc<Proxy>, Option<String>) {
         match self.selection.load().as_ref() {
-            GeneralProxy::Single(ref p) => (p.clone(), self.get_direct_interface()),
-            GeneralProxy::Group(ref g) => g.get_proxy_and_interface(),
+            GeneralProxy::Single(p) => (p.clone(), self.get_direct_interface()),
+            GeneralProxy::Group(g) => g.get_proxy_and_interface(),
         }
     }
 

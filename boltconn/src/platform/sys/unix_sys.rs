@@ -45,17 +45,19 @@ pub fn interface_up(fd: c_int, name: &str) -> io::Result<()> {
 }
 
 pub(super) unsafe fn create_req(name: &str) -> ffi::ifreq {
-    let mut req: ffi::ifreq = mem::zeroed();
-    ptr::copy_nonoverlapping(
-        name.as_ptr() as *const c_char,
-        req.ifrn.name.as_mut_ptr(),
-        name.len(),
-    );
-    req
+    unsafe {
+        let mut req: ffi::ifreq = mem::zeroed();
+        ptr::copy_nonoverlapping(
+            name.as_ptr() as *const c_char,
+            req.ifrn.name.as_mut_ptr(),
+            name.len(),
+        );
+        req
+    }
 }
 
 pub(crate) unsafe fn get_sockaddr(v4: Ipv4Addr) -> libc::sockaddr_in {
-    let mut addr = mem::zeroed::<libc::sockaddr_in>();
+    let mut addr = unsafe { mem::zeroed::<libc::sockaddr_in>() };
     addr.sin_family = libc::AF_INET as libc::sa_family_t;
     addr.sin_port = 0;
     addr.sin_addr = libc::in_addr {

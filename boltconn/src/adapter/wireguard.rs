@@ -2,7 +2,7 @@ use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, O
 
 use crate::adapter;
 use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
-use crate::common::{local_async_run, AbortCanary, StreamOutboundTrait, MAX_PKT_SIZE};
+use crate::common::{AbortCanary, MAX_PKT_SIZE, StreamOutboundTrait, local_async_run};
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
 use crate::proxy::error::{DnsError, TransportError};
@@ -12,20 +12,20 @@ use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
 use bytes::Bytes;
+use hickory_resolver::AsyncResolver;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::GenericConnector;
-use hickory_resolver::proto::udp::DnsUdpSocket;
 use hickory_resolver::proto::TokioTime;
-use hickory_resolver::AsyncResolver;
+use hickory_resolver::proto::udp::DnsUdpSocket;
 use std::collections::HashMap;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
 use tokio::select;
-use tokio::sync::{broadcast, Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock, broadcast};
 use tokio::task::JoinHandle;
 
 // Shared Wireguard Tunnel between multiple client connections
@@ -314,11 +314,11 @@ impl WireguardManager {
         creating_new_conn: tokio::sync::oneshot::Sender<bool>,
     ) -> Result<Arc<Endpoint>, TransportError> {
         // optimistic trial to avoid extra config.clone()
-        if let Some(ep) = self.active_conn.read().await.get(config) {
-            if ep.is_active.alive() {
-                let _ = creating_new_conn.send(false);
-                return Ok(ep.clone());
-            }
+        if let Some(ep) = self.active_conn.read().await.get(config)
+            && ep.is_active.alive()
+        {
+            let _ = creating_new_conn.send(false);
+            return Ok(ep.clone());
         }
 
         // either non-existing or conn is dead
@@ -329,10 +329,10 @@ impl WireguardManager {
             let notify = notify.clone();
             drop(initing);
             notify.notified().await;
-            if let Some(ep) = self.active_conn.read().await.get(config) {
-                if ep.is_active.alive() {
-                    return Ok(ep.clone());
-                }
+            if let Some(ep) = self.active_conn.read().await.get(config)
+                && ep.is_active.alive()
+            {
+                return Ok(ep.clone());
             }
             return Err(TransportError::WireGuard(
                 "get_wg_conn: endpoint creation failed",

@@ -108,13 +108,12 @@ impl HeaderRule {
                     let mut ret = false;
                     for i in backup {
                         let new_value = (|| {
-                            if let Ok(s) = i.to_str() {
-                                if let Some(new_v) = r.rewrite(s) {
-                                    if let Ok(hv) = new_v.parse::<HeaderValue>() {
-                                        ret = true;
-                                        return Some(hv);
-                                    }
-                                }
+                            if let Ok(s) = i.to_str()
+                                && let Some(new_v) = r.rewrite(s)
+                                && let Ok(hv) = new_v.parse::<HeaderValue>()
+                            {
+                                ret = true;
+                                return Some(hv);
                             }
                             None
                         })()

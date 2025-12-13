@@ -78,23 +78,22 @@ impl RuleSet {
                 }
             }
         }
-        if let Some(proc) = &info.process_info {
-            if self.process_name.contains(&proc.name)
+        if let Some(proc) = &info.process_info
+            && (self.process_name.contains(&proc.name)
                 || self.process_keyword.is_match(proc.name.as_str())
-                || self.procpath_keyword.is_match(proc.path.as_str())
-            {
-                return true;
-            }
+                || self.procpath_keyword.is_match(proc.path.as_str()))
+        {
+            return true;
         }
-        if let Some((mmdb, asn, countries)) = &self.mmdb {
-            if info.dst_addr().is_some_and(|s| {
+        if let Some((mmdb, asn, countries)) = &self.mmdb
+            && (info.dst_addr().is_some_and(|s| {
                 mmdb.search_asn(s.ip()).is_some_and(|a| asn.contains(&a))
                     || mmdb
                         .search_country(s.ip())
                         .is_some_and(|c| countries.contains(c))
-            }) {
-                return true;
-            }
+            }))
+        {
+            return true;
         }
         false
     }

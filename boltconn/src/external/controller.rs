@@ -4,8 +4,8 @@ use crate::external::{SharedDispatching, StreamLoggerRecv, StreamLoggerSend};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::Dns;
 use crate::proxy::{
-    latency_test, ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData,
-    SessionManager,
+    ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
+    latency_test,
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
@@ -14,8 +14,8 @@ use boltapi::{
 };
 use std::collections::HashSet;
 use std::io::Write;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, UNIX_EPOCH};
 
 #[derive(Clone)]
@@ -213,35 +213,34 @@ impl Controller {
     }
 
     pub fn get_intercept_range(&self, params: &GetInterceptRangeReq) -> Vec<HttpInterceptSchema> {
-        if let Some(capturer) = &self.http_capturer {
-            if let Some((list, offset)) =
+        if let Some(capturer) = &self.http_capturer
+            && let Some((list, offset)) =
                 capturer.get_range_copy(params.start as usize, params.end.map(|p| p as usize))
-            {
-                return Self::collect_interception(list, offset);
-            }
+        {
+            return Self::collect_interception(list, offset);
         }
+
         vec![]
     }
 
     pub fn get_intercept_payload(&self, id: usize) -> Option<GetInterceptDataResp> {
-        if let Some(capturer) = &self.http_capturer {
-            if let Some((list, _)) = capturer.get_range_copy(id, Some(id + 1)) {
-                if list.len() == 1 {
-                    let HttpInterceptData {
-                        host: _,
-                        process_info: _,
-                        req,
-                        resp,
-                    } = list.first().unwrap();
-                    let result = GetInterceptDataResp {
-                        req_header: req.collect_headers(),
-                        req_body: req.body.to_captured_schema(),
-                        resp_header: resp.collect_headers(),
-                        resp_body: resp.body.to_captured_schema(),
-                    };
-                    return Some(result);
-                }
-            }
+        if let Some(capturer) = &self.http_capturer
+            && let Some((list, _)) = capturer.get_range_copy(id, Some(id + 1))
+            && list.len() == 1
+        {
+            let HttpInterceptData {
+                host: _,
+                process_info: _,
+                req,
+                resp,
+            } = list.first().unwrap();
+            let result = GetInterceptDataResp {
+                req_header: req.collect_headers(),
+                req_body: req.body.to_captured_schema(),
+                resp_header: resp.collect_headers(),
+                resp_body: resp.body.to_captured_schema(),
+            };
+            return Some(result);
         }
         None
     }

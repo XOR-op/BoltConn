@@ -7,15 +7,15 @@ use crate::proxy::{Dispatcher, NetworkAddr};
 use base64::Engine;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Request, Response};
-use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
+use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -97,45 +97,44 @@ impl HttpInbound {
         req_struct
             .parse(req.as_bytes())
             .map_err(|_| TransportError::Http("Failed to parse request header"))?;
-        if (req_struct.method == Some("CONNECT"))
+        if req_struct.method == Some("CONNECT")
             // HTTP/1.1
-            && (req_struct.version == Some(1))
+            && req_struct.version == Some(1)
+        && let Some(Ok(dest)) = req_struct.path.map(|p| p.parse())
         {
-            if let Some(Ok(dest)) = req_struct.path.map(|p| p.parse()) {
-                let inbound_extra = if !mgr.has_auth() {
-                    Some(mgr.default_extra())
-                } else {
-                    // let's verify the auth
-                    let mut r = None;
-                    for hdr in req_struct.headers.iter() {
-                        if hdr.name.eq_ignore_ascii_case("proxy-authorization") {
-                            let Ok(value) = std::str::from_utf8(hdr.value) else {
-                                break;
-                            };
-                            r = validate_auth(Some(value), &mgr);
+            let inbound_extra = if !mgr.has_auth() {
+                Some(mgr.default_extra())
+            } else {
+                // let's verify the auth
+                let mut r = None;
+                for hdr in req_struct.headers.iter() {
+                    if hdr.name.eq_ignore_ascii_case("proxy-authorization") {
+                        let Ok(value) = std::str::from_utf8(hdr.value) else {
                             break;
-                        }
+                        };
+                        r = validate_auth(Some(value), &mgr);
+                        break;
                     }
-                    r
-                };
-                if inbound_extra.is_none() {
-                    socket.write_all(Self::response403().as_bytes()).await?;
-                    return Err(TransportError::Http(
-                        "Invalid CONNECT request: unauthorized",
-                    ));
                 }
-                socket.write_all(Self::response200().as_bytes()).await?;
-                let _ = dispatcher
-                    .submit_tcp(
-                        InboundInfo::Http(inbound_extra.unwrap()),
-                        addr,
-                        dest,
-                        Arc::new(AtomicU8::new(2)),
-                        socket,
-                    )
-                    .await;
-                return Ok(());
+                r
+            };
+            if inbound_extra.is_none() {
+                socket.write_all(Self::response403().as_bytes()).await?;
+                return Err(TransportError::Http(
+                    "Invalid CONNECT request: unauthorized",
+                ));
             }
+            socket.write_all(Self::response200().as_bytes()).await?;
+            let _ = dispatcher
+                .submit_tcp(
+                    InboundInfo::Http(inbound_extra.unwrap()),
+                    addr,
+                    dest,
+                    Arc::new(AtomicU8::new(2)),
+                    socket,
+                )
+                .await;
+            return Ok(());
         }
         socket.write_all(Self::response403().as_bytes()).await?;
         Err(TransportError::Http("Invalid CONNECT request"))
@@ -275,12 +274,11 @@ fn validate_auth(auth: Option<&str>, server_auth: &InboundManager) -> Option<Inb
                 let code = b64decoder.decode(right).ok()?;
                 let text = std::str::from_utf8(code.as_slice()).ok()?;
                 let v: Vec<String> = text.split(':').map(|s| s.to_string()).collect();
-                if v.len() == 2 {
-                    if let Some(extra) =
+                if v.len() == 2
+                    && let Some(extra) =
                         server_auth.authenticate(v.first().unwrap(), v.get(1).unwrap())
-                    {
-                        return Some(extra);
-                    }
+                {
+                    return Some(extra);
                 }
             }
         }

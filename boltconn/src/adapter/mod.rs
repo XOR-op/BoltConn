@@ -3,12 +3,12 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::select;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 
 mod chain;
@@ -26,7 +26,7 @@ mod wireguard;
 pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
 
-use crate::common::{io_err, mut_buf, read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE};
+use crate::common::{MAX_PKT_SIZE, StreamOutboundTrait, io_err, mut_buf, read_to_bytes_mut};
 use crate::network::dns::Dns;
 use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
@@ -291,11 +291,11 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                 }
                 Ok((n, addr)) => {
                     unsafe { buf.advance_mut(n) };
-                    if let Some(t_addr) = &tunnel_addr {
-                        if addr.definitely_not_equal(t_addr) {
-                            // drop definitely unequal packets; for domain name & socket address pair, only compare ports
-                            continue;
-                        }
+                    if let Some(t_addr) = &tunnel_addr
+                        && addr.definitely_not_equal(t_addr)
+                    {
+                        // drop definitely unequal packets; for domain name & socket address pair, only compare ports
+                        continue;
                     }
                     if tx.send((buf.freeze(), addr)).await.is_err() {
                         tracing::debug!("[{}] write to inbound failed", name);
@@ -421,10 +421,7 @@ impl Drop for UdpDropGuard {
 async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
     Ok(match addr {
         NetworkAddr::Raw(addr) => *addr,
-        NetworkAddr::DomainName {
-            ref domain_name,
-            port,
-        } => {
+        NetworkAddr::DomainName { domain_name, port } => {
             let resp = match dns.genuine_lookup(domain_name.as_str()).await {
                 Ok(Some(resp)) => resp,
                 _ => return Err(io_err("dns not found")),

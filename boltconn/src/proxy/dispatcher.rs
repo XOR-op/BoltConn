@@ -3,8 +3,8 @@ use crate::adapter::{
     SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager, SshOutboundHandle, TcpAdapter,
     TrojanOutbound, TunUdpAdapter, WireguardHandle, WireguardManager,
 };
-use crate::common::duplex_chan::DuplexChan;
 use crate::common::StreamOutboundTrait;
+use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, InboundExtra, InboundInfo, ProxyImpl};
 use crate::intercept::{HttpIntercept, HttpsIntercept, InterceptionManager, ModifierClosure};
 use crate::network::dns::Dns;
@@ -15,8 +15,8 @@ use arc_swap::ArcSwap;
 use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -305,18 +305,17 @@ impl Dispatcher {
         };
 
         let mut parsed_proto = None;
-        if self.sniff_flag.load(std::sync::atomic::Ordering::Relaxed) {
-            if let Some((proto, domain_name)) = inbound_adapter
+        if self.sniff_flag.load(std::sync::atomic::Ordering::Relaxed)
+            && let Some((proto, domain_name)) = inbound_adapter
                 .try_sni_or_host()
                 .await
                 .map_err(DispatchError::Error)?
-            {
-                conn_info.dst = NetworkAddr::DomainName {
-                    domain_name: domain_name.clone(),
-                    port: dst_addr.port(),
-                };
-                parsed_proto = Some(proto);
-            }
+        {
+            conn_info.dst = NetworkAddr::DomainName {
+                domain_name: domain_name.clone(),
+                port: dst_addr.port(),
+            };
+            parsed_proto = Some(proto);
         };
 
         // match outbound proxy
@@ -373,73 +372,73 @@ impl Dispatcher {
         });
 
         // mitm for 80/443
-        if let NetworkAddr::DomainName { domain_name, port } = conn_info.dst.clone() {
-            if port == 80 || port == 443 {
-                let result = self.intercept_mgr.load().matches(conn_info).await;
-                if result.should_intercept() {
-                    let parrot_fingerprint = result.parrot_fingerprint;
-                    let modifier = (self.modifier.load())(result, process_info);
-                    match port {
-                        80 => {
-                            // hijack
-                            tracing::debug!("HTTP intercept for {}", domain_name);
-                            {
-                                let info = info.clone();
-                                tokio::spawn(async move {
-                                    let mocker = HttpIntercept::new(
-                                        DuplexChan::new(next_conn),
-                                        modifier,
-                                        outbounding,
-                                        info,
-                                    );
-                                    if let Err(err) = mocker.run().await {
-                                        tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
-                                    }
-                                })
-                            };
-                            abort_handle.fulfill(handles);
-                            self.stat_center.push(info);
-                            return Ok(());
-                        }
-                        443 => {
-                            tracing::debug!(
-                                "HTTPS intercept for {}; parrot_fingerprint={}",
-                                domain_name,
-                                parrot_fingerprint
-                            );
-                            {
-                                let info = info.clone();
-                                let mocker = match HttpsIntercept::new(
-                                    &self.ca_certificate,
-                                    domain_name,
+        if let NetworkAddr::DomainName { domain_name, port } = conn_info.dst.clone()
+            && (port == 80 || port == 443)
+        {
+            let result = self.intercept_mgr.load().matches(conn_info).await;
+            if result.should_intercept() {
+                let parrot_fingerprint = result.parrot_fingerprint;
+                let modifier = (self.modifier.load())(result, process_info);
+                match port {
+                    80 => {
+                        // hijack
+                        tracing::debug!("HTTP intercept for {}", domain_name);
+                        {
+                            let info = info.clone();
+                            tokio::spawn(async move {
+                                let mocker = HttpIntercept::new(
                                     DuplexChan::new(next_conn),
                                     modifier,
                                     outbounding,
                                     info,
-                                    parrot_fingerprint,
-                                ) {
-                                    Ok(v) => v,
-                                    Err(err) => {
-                                        tracing::error!(
-                                            "[Dispatcher] sign certificate failed: {}",
-                                            err
-                                        );
-                                        return Err(DispatchError::BadMitmCert);
-                                    }
-                                };
-                                tokio::spawn(async move {
-                                    if let Err(err) = mocker.run().await {
-                                        tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
-                                    }
-                                })
+                                );
+                                if let Err(err) = mocker.run().await {
+                                    tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+                                }
+                            })
+                        };
+                        abort_handle.fulfill(handles);
+                        self.stat_center.push(info);
+                        return Ok(());
+                    }
+                    443 => {
+                        tracing::debug!(
+                            "HTTPS intercept for {}; parrot_fingerprint={}",
+                            domain_name,
+                            parrot_fingerprint
+                        );
+                        {
+                            let info = info.clone();
+                            let mocker = match HttpsIntercept::new(
+                                &self.ca_certificate,
+                                domain_name,
+                                DuplexChan::new(next_conn),
+                                modifier,
+                                outbounding,
+                                info,
+                                parrot_fingerprint,
+                            ) {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    tracing::error!(
+                                        "[Dispatcher] sign certificate failed: {}",
+                                        err
+                                    );
+                                    return Err(DispatchError::BadMitmCert);
+                                }
                             };
-                            abort_handle.fulfill(handles);
-                            self.stat_center.push(info);
-                            return Ok(());
-                        }
-                        _ => {
-                            // fallback
-                        }
+                            tokio::spawn(async move {
+                                if let Err(err) = mocker.run().await {
+                                    tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
+                                }
+                            })
+                        };
+                        abort_handle.fulfill(handles);
+                        self.stat_center.push(info);
+                        return Ok(());
+                    }
+                    _ => {
+                        // fallback
                     }
                 }
             }

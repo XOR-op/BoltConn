@@ -2,12 +2,12 @@ use crate::common::as_io_err;
 use crate::external::web_common::{get_cors_layer, parse_cors_allow, web_auth};
 use crate::instrument::bus::{BusSubscriber, MessageBus};
 use crate::proxy::error::{RuntimeError, SystemError};
+use axum::Router;
 use axum::extract::ws::WebSocket;
-use axum::extract::{ws, Query, State, WebSocketUpgrade};
+use axum::extract::{Query, State, WebSocketUpgrade, ws};
 use axum::middleware::map_request;
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
 use boltapi::instrument::InstrumentData;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -63,10 +63,10 @@ impl InstrumentServer {
         Query(params): Query<HashMap<String, String>>,
         ws: WebSocketUpgrade,
     ) -> impl IntoResponse {
-        if let Some(secret) = server.secret.as_ref() {
-            if params.get("secret") != Some(secret) {
-                return refusal_resp(http::StatusCode::UNAUTHORIZED);
-            }
+        if let Some(secret) = server.secret.as_ref()
+            && params.get("secret") != Some(secret)
+        {
+            return refusal_resp(http::StatusCode::UNAUTHORIZED);
         }
         // parse hex-encoded topics from url params
         let ids = {

@@ -25,8 +25,8 @@ use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
-use shadowsocks::crypto::CipherKind;
 use shadowsocks::ServerAddr;
+use shadowsocks::crypto::CipherKind;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -644,12 +644,11 @@ impl DispatchingBuilder {
                     queued_groups,
                     wg_history,
                 )?;
-                if let GeneralProxy::Single(px) = &proxy {
-                    if px.get_impl().simple_description() == "wireguard"
-                        && wg_history.insert(p.clone(), true).is_some()
-                    {
-                        tracing::warn!("WireGuard {} should not appear in different chains", p);
-                    }
+                if let GeneralProxy::Single(px) = &proxy
+                    && px.get_impl().simple_description() == "wireguard"
+                    && wg_history.insert(p.clone(), true).is_some()
+                {
+                    tracing::warn!("WireGuard {} should not appear in different chains", p);
                 }
                 contents.push(proxy);
             }
@@ -673,12 +672,11 @@ impl DispatchingBuilder {
                     queued_groups,
                     wg_history,
                 )?;
-                if let GeneralProxy::Single(px) = &content {
-                    if px.get_impl().simple_description() == "wireguard"
-                        && wg_history.insert(p.clone(), false) == Some(true)
-                    {
-                        tracing::warn!("WireGuard {} should not appear in different chains", p);
-                    }
+                if let GeneralProxy::Single(px) = &content
+                    && px.get_impl().simple_description() == "wireguard"
+                    && wg_history.insert(p.clone(), false) == Some(true)
+                {
+                    tracing::warn!("WireGuard {} should not appear in different chains", p);
                 }
                 if p == state.group_selection.get(name).unwrap_or(&String::new()) {
                     selection = Some(content.clone());

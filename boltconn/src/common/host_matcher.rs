@@ -11,24 +11,24 @@ pub struct HostMatcher(Trie<String, HostType>);
 impl HostMatcher {
     pub fn matches(&self, host: &str) -> bool {
         let rev_dn: String = host.chars().rev().collect();
-        if let Some(result) = self.0.get_ancestor(rev_dn.as_str()) {
-            if let Some(val) = result.value() {
-                let key = result.key().unwrap();
-                match val {
-                    HostType::Exact => {
-                        if key.len() == rev_dn.len() {
-                            // DOMAIN rule
-                            return true;
-                        }
+        if let Some(result) = self.0.get_ancestor(rev_dn.as_str())
+            && let Some(val) = result.value()
+        {
+            let key = result.key().unwrap();
+            match val {
+                HostType::Exact => {
+                    if key.len() == rev_dn.len() {
+                        // DOMAIN rule
+                        return true;
                     }
-                    HostType::Suffix => {
-                        if key.len() == rev_dn.len()
-                            || (key.len() < rev_dn.len()
-                                && rev_dn.chars().nth(key.len()).unwrap() == '.')
-                        {
-                            // DOMAIN-SUFFIX rule
-                            return true;
-                        }
+                }
+                HostType::Suffix => {
+                    if key.len() == rev_dn.len()
+                        || (key.len() < rev_dn.len()
+                            && rev_dn.chars().nth(key.len()).unwrap() == '.')
+                    {
+                        // DOMAIN-SUFFIX rule
+                        return true;
                     }
                 }
             }
