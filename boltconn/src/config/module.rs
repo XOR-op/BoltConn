@@ -47,6 +47,8 @@ pub async fn read_module_schema(
 ) -> Result<Vec<ModuleSchema>, ConfigError> {
     let mut list = Vec::new();
     // concurrently download rules
+    #[allow(clippy::redundant_iter_cloned)]
+    // false positive in https://github.com/rust-lang/rust-clippy/issues/16012
     let tasks: Vec<JoinHandle<Result<ModuleSchema, ConfigError>>> = modules
         .iter()
         .cloned()
