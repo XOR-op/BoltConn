@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 #[derive(Clone)]
 struct ClientStreamServer {

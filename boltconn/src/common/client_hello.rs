@@ -1,9 +1,9 @@
+use ja_tools::JAOverride;
 use ja_tools::builder::JAOverrideBuilder;
 use ja_tools::rustls_vendor::client::client_hello::CompressCertificateOptions;
 use ja_tools::rustls_vendor::internal::msgs::enums::ExtensionType;
 use ja_tools::rustls_vendor::internal::msgs::handshake::{ClientExtension, ProtocolName};
 use ja_tools::rustls_vendor::{ProtocolVersion, SignatureScheme};
-use ja_tools::JAOverride;
 use std::sync::{Arc, OnceLock};
 
 fn override_config() -> JAOverride {

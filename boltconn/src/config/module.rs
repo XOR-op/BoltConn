@@ -1,7 +1,7 @@
 use crate::config::interception::InterceptionConfig;
 use crate::config::{
-    config::default_interception_vec, config::default_rule_provider, safe_join_path, ConfigError,
-    FileError, RuleConfigLine, RuleProvider,
+    ConfigError, FileError, RuleConfigLine, RuleProvider, config::default_interception_vec,
+    config::default_rule_provider, safe_join_path,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

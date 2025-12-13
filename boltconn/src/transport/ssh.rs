@@ -1,11 +1,11 @@
-use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
-use russh::client::{connect_stream, Handle, Msg};
+use crate::proxy::error::TransportError;
+use russh::client::{Handle, Msg, connect_stream};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{ChannelStream, SshId};
 use std::hash::Hash;
-use std::sync::atomic::{AtomicBool, AtomicU16};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 #[derive(Debug, Clone)]

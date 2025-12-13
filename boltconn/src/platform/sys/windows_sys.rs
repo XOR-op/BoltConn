@@ -6,7 +6,7 @@ use std::process::Command;
 use std::{io, net::IpAddr};
 use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
 use windows::Win32::NetworkManagement::IpHelper::{
-    GetAdaptersAddresses, GAA_FLAG_INCLUDE_PREFIX, IP_ADAPTER_ADDRESSES_LH,
+    GAA_FLAG_INCLUDE_PREFIX, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
 };
 use windows::Win32::Networking::WinSock::{
     AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6,

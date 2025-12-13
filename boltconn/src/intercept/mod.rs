@@ -16,8 +16,8 @@ pub use intercept_manager::*;
 pub use intercept_modifier::*;
 pub use modifier::*;
 use rcgen::{
-    date_time_ymd, Certificate, CertificateParams, DistinguishedName, DnType, IsCa,
-    KeyUsagePurpose, SanType,
+    Certificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose, SanType,
+    date_time_ymd,
 };
 use regex::Regex;
 pub use script_engine::*;

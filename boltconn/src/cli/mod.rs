@@ -5,9 +5,9 @@ mod request_uds;
 mod request_web;
 mod streaming;
 
+use crate::ProgramArgs;
 use crate::app::app_uds_addr;
 use crate::cli::streaming::ConnectionState;
-use crate::ProgramArgs;
 use anyhow::anyhow;
 use clap::{Args, CommandFactory, Subcommand, ValueHint};
 use colored::Colorize;
@@ -287,7 +287,9 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         }
         SubCommand::Generate(GenerateOptions::Cert(opt)) => {
             if !is_root() && !opt.rootless {
-                eprintln!("Expect be run with root/admin privilege to prevent unauthorized access to certificates. If you expect to generate certificates without hardening the permissions, please use --rootless option.");
+                eprintln!(
+                    "Expect be run with root/admin privilege to prevent unauthorized access to certificates. If you expect to generate certificates without hardening the permissions, please use --rootless option."
+                );
                 exit(-1)
             } else {
                 fn fetch_path() -> anyhow::Result<PathBuf> {
@@ -473,7 +475,10 @@ fn validate_uds_path(
     rootless_path: &str,
 ) -> String {
     if path_result.is_none() {
-        eprintln!("No connection socket found either in {} or {} (rootless mode). Please start the server first.", default_path, rootless_path);
+        eprintln!(
+            "No connection socket found either in {} or {} (rootless mode). Please start the server first.",
+            default_path, rootless_path
+        );
         exit(-1)
     }
     path_result.unwrap()

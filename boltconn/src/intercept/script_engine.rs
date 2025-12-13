@@ -4,8 +4,8 @@ use http::{HeaderMap, HeaderName};
 use regex::Regex;
 use rquickjs::class::Trace;
 use rquickjs::{Class, Context, Ctx, FromJs, IntoJs, JsLifetime, Object, Runtime, Value};
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::io::Read;
 
 #[derive(Debug, Clone)]
@@ -90,7 +90,7 @@ impl ScriptEngine {
                     return Err(ScriptError::InvalidType(
                         name.unwrap_or("<anonymous>").to_string(),
                         s.to_string(),
-                    ))
+                    ));
                 }
             },
             pattern: pattern.map(Regex::new).transpose().map_err(|_| {

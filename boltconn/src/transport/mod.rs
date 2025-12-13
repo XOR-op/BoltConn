@@ -1,5 +1,5 @@
-use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
+use crate::proxy::error::TransportError;
 use async_trait::async_trait;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;

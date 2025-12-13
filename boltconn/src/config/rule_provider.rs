@@ -1,5 +1,5 @@
 use crate::config;
-use crate::config::{load_remote_config, ConfigError, FileError};
+use crate::config::{ConfigError, FileError, load_remote_config};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

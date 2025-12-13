@@ -7,7 +7,7 @@ use crate::proxy::{CapturedBody, DumpedRequest, DumpedResponse, HttpCapturer, Ne
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
-use http::{header, Request, Response, Version};
+use http::{Request, Response, Version, header};
 use http_body_util::BodyExt;
 use hyper::body::Body;
 use std::pin::Pin;

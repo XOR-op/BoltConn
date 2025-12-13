@@ -8,11 +8,11 @@ use crate::proxy::error::TransportError;
 use crate::proxy::{Dispatcher, NetworkAddr, SessionManager};
 use bytes::Bytes;
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, UdpPacket};
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 

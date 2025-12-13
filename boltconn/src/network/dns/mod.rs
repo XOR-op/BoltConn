@@ -11,11 +11,11 @@ use crate::config::DnsConfigError;
 use crate::proxy::error::DnsError;
 pub use bootstrap::BootstrapResolver;
 pub use dns::{Dns, GenericDns};
+use hickory_resolver::AsyncResolver;
 use hickory_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
 };
 use hickory_resolver::name_server::GenericConnector;
-use hickory_resolver::AsyncResolver;
 pub use hijack_ctrl::DnsHijackController;
 pub use ns_policy::NameserverPolicies;
 use provider::IfaceProvider;

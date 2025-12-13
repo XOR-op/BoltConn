@@ -1,18 +1,18 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
+    AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
-use crate::common::{as_io_err, io_err, StreamOutboundTrait};
+use crate::common::{StreamOutboundTrait, as_io_err, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
-use crate::transport::trojan::{
-    encapsule_udp_packet, make_tls_config, TrojanAddr, TrojanCmd, TrojanConfig, TrojanReqInner,
-    TrojanRequest, TrojanUdpSocket,
-};
 use crate::transport::UdpSocketAdapter;
+use crate::transport::trojan::{
+    TrojanAddr, TrojanCmd, TrojanConfig, TrojanReqInner, TrojanRequest, TrojanUdpSocket,
+    encapsule_udp_packet, make_tls_config,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{StatusCode, Uri};
@@ -20,9 +20,9 @@ use std::io;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinHandle;
+use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::TlsConnector;
 use tokio_tungstenite::client_async;
 
 #[derive(Clone)]

@@ -1,10 +1,10 @@
 use crate::platform::get_user_info;
 use crate::proxy::error::DatabaseError;
 use crate::proxy::{CapturedBody, ConnContext, HttpInterceptData};
-use rusqlite::{params, Error, ErrorCode, OpenFlags};
+use rusqlite::{Error, ErrorCode, OpenFlags, params};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 use tokio::sync::mpsc;

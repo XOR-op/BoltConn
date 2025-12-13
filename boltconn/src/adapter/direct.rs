@@ -1,5 +1,5 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
+    AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
 };
 use crate::common::StreamOutboundTrait;
 use crate::network::dns::Dns;

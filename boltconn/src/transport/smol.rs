@@ -1,19 +1,19 @@
 use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector};
 
 use crate::common::duplex_chan::DuplexChan;
-use crate::common::{mut_buf, MAX_PKT_SIZE};
+use crate::common::{MAX_PKT_SIZE, mut_buf};
 use crate::config::DnsPreference;
 use crate::network::dns::GenericDns;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::InterfaceAddress;
 use bytes::{BufMut, Bytes, BytesMut};
-use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use flume::TryRecvError;
-use hickory_proto::iocompat::AsyncIoTokioAsStd;
 use hickory_proto::TokioTime;
-use hickory_resolver::name_server::RuntimeProvider;
+use hickory_proto::iocompat::AsyncIoTokioAsStd;
 use hickory_resolver::TokioHandle;
+use hickory_resolver::name_server::RuntimeProvider;
 use rand::Rng;
 use smoltcp::iface::{Interface, PollResult, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -32,7 +32,7 @@ use std::ops::Add;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc};
 
 struct TcpTuning {
     estimated_rtt: Duration,
@@ -225,11 +225,11 @@ impl TcpConnTask {
                     .is_err()
                 {
                     tracing::error!(
-                    "smol failed to increase TCP recv buffer size: old={}, new={}, window_scale={}",
-                    cur_capacity,
-                    new_cap,
-                    socket.local_recv_win_scale()
-                );
+                        "smol failed to increase TCP recv buffer size: old={}, new={}, window_scale={}",
+                        cur_capacity,
+                        new_cap,
+                        socket.local_recv_win_scale()
+                    );
                 }
             }
         }

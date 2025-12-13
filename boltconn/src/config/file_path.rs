@@ -1,4 +1,4 @@
-use crate::config::{set_real_ownership, FileError};
+use crate::config::{FileError, set_real_ownership};
 use std::fs;
 use std::path::{Path, PathBuf};
 

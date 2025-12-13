@@ -4,7 +4,7 @@ use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::utils::IdGenerator;
 use crate::intercept::modifier::Modifier;
-use crate::intercept::{sign_site_cert, HyperBody, ModifierContext};
+use crate::intercept::{HyperBody, ModifierContext, sign_site_cert};
 use crate::proxy::error::InterceptError;
 use crate::proxy::{ConnAbortHandle, ConnContext};
 use hyper::client::conn::http2;
@@ -15,8 +15,8 @@ use rcgen::Certificate as CaCertificate;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub struct HttpsIntercept {

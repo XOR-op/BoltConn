@@ -1,12 +1,12 @@
+use crate::Dns;
 use crate::dispatch::InboundInfo;
 use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::manager::SessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
-use crate::Dns;
 use std::io::Result;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::net::TcpListener;
 
 pub struct TunTcpInbound {

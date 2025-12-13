@@ -5,10 +5,10 @@ use crate::adapter::{
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::common::duplex_chan::DuplexChan;
 use crate::common::StreamOutboundTrait;
-use crate::proxy::error::TransportError;
+use crate::common::duplex_chan::DuplexChan;
 use crate::proxy::ConnAbortHandle;
+use crate::proxy::error::TransportError;
 use crate::transport::UdpSocketAdapter;
 use tokio::task::JoinHandle;
 

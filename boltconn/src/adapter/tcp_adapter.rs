@@ -1,16 +1,16 @@
 use crate::adapter::{Connector, DuplexCloseGuard, TcpIndicatorGuard, TcpStatus};
 use crate::common::{
-    parse_http_host, parse_tls_sni, read_to_bytes_mut, StreamOutboundTrait, MAX_PKT_SIZE,
+    MAX_PKT_SIZE, StreamOutboundTrait, parse_http_host, parse_tls_sni, read_to_bytes_mut,
 };
 use crate::proxy::error::TransportError;
 use crate::proxy::{
-    check_tcp_protocol, ConnAbortHandle, ConnContext, NetworkAddr, SessionProtocol,
+    ConnAbortHandle, ConnContext, NetworkAddr, SessionProtocol, check_tcp_protocol,
 };
 use bytes::BytesMut;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 
 pub struct TcpAdapter<S> {

@@ -1,5 +1,5 @@
-use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
+use crate::proxy::error::TransportError;
 use bytes::Bytes;
 use sha2::{Digest, Sha224};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};

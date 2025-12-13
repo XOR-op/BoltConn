@@ -1,6 +1,6 @@
 use crate::cli::request_uds::UdsConnector;
 use crate::cli::request_web::WebConnector;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use boltapi::CapturedBodySchema;
 use colored::Colorize;
 use std::ops::Add;

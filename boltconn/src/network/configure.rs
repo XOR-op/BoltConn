@@ -1,6 +1,6 @@
 use crate::platform;
-use crate::platform::route::{ipv4_relay_addresses, setup_ipv4_routing_table};
 use crate::platform::SystemDnsHandle;
+use crate::platform::route::{ipv4_relay_addresses, setup_ipv4_routing_table};
 use ipnet::IpNet;
 use std::io;
 use std::net::Ipv4Addr;

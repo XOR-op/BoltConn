@@ -1,4 +1,4 @@
-use crate::config::{load_remote_config, safe_join_path, ConfigError, FileError, RawProxyLocalCfg};
+use crate::config::{ConfigError, FileError, RawProxyLocalCfg, load_remote_config, safe_join_path};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

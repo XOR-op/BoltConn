@@ -1,6 +1,6 @@
 use crate::network::dns::provider::IfaceProvider;
-use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::AsyncResolver;
+use hickory_resolver::name_server::GenericConnector;
 use std::net::{IpAddr, Ipv4Addr};
 
 pub struct BootstrapResolver {

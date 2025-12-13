@@ -5,7 +5,7 @@ use crate::external::{Controller, StreamLoggerRecv};
 use crate::proxy::error::SystemError;
 use arc_swap::ArcSwap;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{ws::WebSocketUpgrade, Path, Query, State};
+use axum::extract::{Path, Query, State, ws::WebSocketUpgrade};
 use axum::middleware::map_request;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};

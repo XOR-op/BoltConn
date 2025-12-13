@@ -1,8 +1,8 @@
 use crate::network::egress::Egress;
-use hickory_resolver::name_server::RuntimeProvider;
-use hickory_resolver::proto::iocompat::AsyncIoTokioAsStd;
-use hickory_resolver::proto::TokioTime;
 use hickory_resolver::TokioHandle;
+use hickory_resolver::name_server::RuntimeProvider;
+use hickory_resolver::proto::TokioTime;
+use hickory_resolver::proto::iocompat::AsyncIoTokioAsStd;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;

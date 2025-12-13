@@ -4,7 +4,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll, Poll::*};
 
-use tokio::io::{unix, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, unix};
 
 fn set_nonblock(fd: RawFd) -> Result<()> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };

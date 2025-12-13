@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tracing_subscriber::filter::Directive;
-use tracing_subscriber::fmt::{format::Writer, time::FormatTime, MakeWriter};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::fmt::{MakeWriter, format::Writer, time::FormatTime};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone)]
 pub struct StreamLoggerSend {

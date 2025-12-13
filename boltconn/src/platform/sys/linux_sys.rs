@@ -2,10 +2,10 @@ use super::linux_ffi::*;
 use crate::common::io_err;
 use crate::platform::sys::unix_sys::create_req;
 use crate::platform::{
-    get_command_output, linux_ffi, run_command, run_command_with_args, UserInfo,
+    UserInfo, get_command_output, linux_ffi, run_command, run_command_with_args,
 };
 use ipnet::IpNet;
-use libc::{c_int, socklen_t, O_RDWR};
+use libc::{O_RDWR, c_int, socklen_t};
 use std::ffi::{CStr, CString};
 use std::fs::{File, OpenOptions};
 use std::io::Write;

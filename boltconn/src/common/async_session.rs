@@ -22,17 +22,19 @@ impl AsyncSession {
         let (chan_send, chan_recv) = mpsc::unbounded_channel();
         let session = Arc::new(session);
         let session2 = session.clone();
-        thread::spawn(move || loop {
-            match session2.receive_blocking() {
-                Ok(pkt) => {
-                    let _ = chan_send.send(pkt);
-                }
-                Err(wintun::Error::ShuttingDown) => {
-                    break;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to receive packet: {:?}", e);
-                    continue;
+        thread::spawn(move || {
+            loop {
+                match session2.receive_blocking() {
+                    Ok(pkt) => {
+                        let _ = chan_send.send(pkt);
+                    }
+                    Err(wintun::Error::ShuttingDown) => {
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to receive packet: {:?}", e);
+                        continue;
+                    }
                 }
             }
         });

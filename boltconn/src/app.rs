@@ -1,7 +1,7 @@
 use crate::config::{
-    default_inbound_ip_addr, safe_join_path, LinkedState, LoadedConfig, RawDnsConfig,
-    RawInboundConfig, RawInboundServiceConfig, RawInstrumentConfig, RawRootCfg,
-    RawWebControllerConfig, SingleOrVec,
+    LinkedState, LoadedConfig, RawDnsConfig, RawInboundConfig, RawInboundServiceConfig,
+    RawInstrumentConfig, RawRootCfg, RawWebControllerConfig, SingleOrVec, default_inbound_ip_addr,
+    safe_join_path,
 };
 use crate::dispatch::{DispatchingBuilder, InboundManager, RuleSet, RuleSetBuilder};
 use crate::external::{
@@ -12,8 +12,8 @@ use crate::instrument::bus::MessageBus;
 use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{
-    new_bootstrap_resolver, parse_dns_config, BootstrapResolver, Dns, DnsHijackController,
-    NameserverPolicies,
+    BootstrapResolver, Dns, DnsHijackController, NameserverPolicies, new_bootstrap_resolver,
+    parse_dns_config,
 };
 use crate::network::tun_device::TunDevice;
 use crate::platform::get_default_v4_route;

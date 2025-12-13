@@ -1,6 +1,6 @@
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn local_async_run<F>(
     name: Option<String>,

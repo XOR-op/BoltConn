@@ -1,7 +1,7 @@
 use crate::common::MAX_PKT_SIZE;
 use crate::network;
-use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::network::TunInstance;
+use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::proxy::SessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -12,7 +12,7 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
-use tokio::io::{split, AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, split};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 
 const ETH_P_IP: u16 = 0x0800;

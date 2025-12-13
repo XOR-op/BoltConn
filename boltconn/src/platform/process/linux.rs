@@ -1,12 +1,12 @@
 use crate::platform::process::{NetworkType, ProcessInfo};
-use netlink_packet_core::{constants::*, NetlinkHeader, NetlinkMessage, NetlinkPayload};
+use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload, constants::*};
 use netlink_packet_sock_diag::{
+    SockDiagMessage,
     constants::*,
     inet::{ExtensionFlags, InetRequest, SocketId, StateFlags},
-    SockDiagMessage,
 };
-use netlink_sys::protocols::NETLINK_SOCK_DIAG;
 use netlink_sys::Socket;
+use netlink_sys::protocols::NETLINK_SOCK_DIAG;
 use std::io;
 use std::{
     fs::DirEntry,

@@ -1,11 +1,11 @@
-use crate::proxy::error::TransportError;
 use crate::proxy::NetworkAddr;
+use crate::proxy::error::TransportError;
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use std::io;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{tcp, TcpStream};
+use tokio::net::{TcpStream, tcp};
 use tokio::sync::Mutex;
 
 pub(super) struct UdpOverTcpAdapter {

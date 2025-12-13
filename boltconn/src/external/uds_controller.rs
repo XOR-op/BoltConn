@@ -13,10 +13,10 @@ use std::time::Duration;
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel};
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
-#[cfg(windows)]
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 #[cfg(unix)]
 use tokio::net::UnixListener;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio_serde::formats::Cbor;
 
 pub struct UnixListenerGuard {
@@ -32,7 +32,7 @@ impl UnixListenerGuard {
     pub fn new(path: &str) -> Result<Self, SystemError> {
         #[cfg(unix)]
         {
-            use crate::common::{as_io_err, UnwrapInfallible};
+            use crate::common::{UnwrapInfallible, as_io_err};
             use crate::platform::get_user_info;
             use std::path::PathBuf;
             use std::str::FromStr;

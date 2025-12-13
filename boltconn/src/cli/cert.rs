@@ -1,7 +1,7 @@
 use crate::platform::UserInfo;
 use rcgen::{
-    date_time_ymd, BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
-    IsCa, KeyUsagePurpose,
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa,
+    KeyUsagePurpose, date_time_ymd,
 };
 use std::fs;
 use std::path::{Path, PathBuf};

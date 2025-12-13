@@ -1,14 +1,14 @@
 use crate::adapter;
 use crate::adapter::{
-    empty_handle, established_tcp, AddrConnector, Connector, Outbound, OutboundType,
+    AddrConnector, Connector, Outbound, OutboundType, empty_handle, established_tcp,
 };
-use crate::common::{io_err, StreamOutboundTrait};
+use crate::common::{StreamOutboundTrait, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
-use crate::transport::ssh::{SshConfig, SshTunnel};
 use crate::transport::UdpSocketAdapter;
+use crate::transport::ssh::{SshConfig, SshTunnel};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;

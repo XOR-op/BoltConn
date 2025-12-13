@@ -2,12 +2,12 @@ use crate::common::host_matcher::{HostMatcher, HostMatcherBuilder};
 use crate::config::DnsConfigError;
 use crate::network::dns::bootstrap::BootstrapResolver;
 use crate::network::dns::provider::{IfaceProvider, PlainProvider};
-use crate::network::dns::{parse_single_dns, AuxiliaryResolver, NameServerConfigEnum};
+use crate::network::dns::{AuxiliaryResolver, NameServerConfigEnum, parse_single_dns};
+use hickory_resolver::AsyncResolver;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::GenericConnector;
-use hickory_resolver::AsyncResolver;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 pub struct NameserverPolicies {
     matchers: Vec<(HostMatcher, DispatchedDnsResolver)>,

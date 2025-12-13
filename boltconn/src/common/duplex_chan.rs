@@ -1,5 +1,5 @@
 use crate::adapter::Connector;
-use crate::common::{io_err, StreamOutboundTrait};
+use crate::common::{StreamOutboundTrait, io_err};
 use bytes::{Bytes, BytesMut};
 use std::io::Error;
 use std::pin::Pin;

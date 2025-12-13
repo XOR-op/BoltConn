@@ -91,7 +91,7 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
                 "".to_string(),
                 ":System Idle Process".to_string(),
                 "".to_string(),
-            ))
+            ));
         }
         4 => return Some((0, "".to_string(), ":System".to_string(), "".to_string())),
         _ => {}

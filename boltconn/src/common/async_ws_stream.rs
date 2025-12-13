@@ -1,12 +1,12 @@
 use crate::common::{as_io_err, io_err};
 use bytes::{Buf, Bytes};
-use futures::{sink::Sink, Stream};
+use futures::{Stream, sink::Sink};
 use std::io;
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
 
 pub struct AsyncWsStream<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> {
     stream: WebSocketStream<S>,
@@ -59,7 +59,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> AsyncRead for AsyncWsStrea
                         }
                     }
                     Message::Close(_) => {
-                        return Poll::Ready(Err(io::ErrorKind::ConnectionAborted.into()))
+                        return Poll::Ready(Err(io::ErrorKind::ConnectionAborted.into()));
                     }
                     _ => {
                         return Poll::Ready(Err(io_err("Unexpected websocket message")));
@@ -76,9 +76,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> AsyncWrite for AsyncWsStre
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
-        ready!(Pin::new(&mut self.stream)
-            .poll_ready(cx)
-            .map_err(as_io_err)?);
+        ready!(
+            Pin::new(&mut self.stream)
+                .poll_ready(cx)
+                .map_err(as_io_err)?
+        );
         Pin::new(&mut self.stream)
             .start_send(Message::Binary(buf.into()))
             .map_err(as_io_err)?;
@@ -93,9 +95,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> AsyncWrite for AsyncWsStre
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
-        ready!(Pin::new(&mut self.stream)
-            .poll_ready(cx)
-            .map_err(as_io_err)?);
+        ready!(
+            Pin::new(&mut self.stream)
+                .poll_ready(cx)
+                .map_err(as_io_err)?
+        );
         let _ = Pin::new(&mut self.stream).start_send(Message::Close(None));
         Pin::new(&mut self.stream).poll_close(cx).map_err(as_io_err)
     }

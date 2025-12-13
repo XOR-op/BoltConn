@@ -5,8 +5,8 @@ use std::io;
 use std::mem::transmute;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadHalf};
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 #[cfg(not(target_os = "windows"))]
 pub mod async_raw_fd;
@@ -25,7 +25,7 @@ pub mod utils;
 
 pub(crate) use hostname_parse::{parse_http_host, parse_tls_sni};
 
-pub use sync::{local_async_run, AbortCanary};
+pub use sync::{AbortCanary, local_async_run};
 
 pub fn io_err(msg: &str) -> std::io::Error {
     std::io::Error::other(msg)

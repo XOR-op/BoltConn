@@ -155,16 +155,20 @@ fn test_url_match() {
         ))
     );
 
-    assert!(UrlEngine::new(
-        UrlModType::R302,
-        r"https://www.google.com/(.*\?)((.*)&)?(source=[^&]+)(.*)",
-        Some("https://www.google.com/$1$3$6"),
-    )
-    .is_none());
-    assert!(UrlEngine::new(
-        UrlModType::R404,
-        r"https://www.google.com/(.*\?)((.*)&)?(source=[^&]+)(.*)",
-        None,
-    )
-    .is_some());
+    assert!(
+        UrlEngine::new(
+            UrlModType::R302,
+            r"https://www.google.com/(.*\?)((.*)&)?(source=[^&]+)(.*)",
+            Some("https://www.google.com/$1$3$6"),
+        )
+        .is_none()
+    );
+    assert!(
+        UrlEngine::new(
+            UrlModType::R404,
+            r"https://www.google.com/(.*\?)((.*)&)?(source=[^&]+)(.*)",
+            None,
+        )
+        .is_some()
+    );
 }

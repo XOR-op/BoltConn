@@ -6,7 +6,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll, Poll::*};
 
-use tokio::io::{unix, AsyncWrite};
+use tokio::io::{AsyncWrite, unix};
 
 pub struct AsyncRawSocket {
     fd: unix::AsyncFd<RawFd>,

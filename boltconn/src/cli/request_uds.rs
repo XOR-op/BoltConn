@@ -8,10 +8,10 @@ use boltapi::{
 use tarpc::context::Context;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tarpc::transport::channel::UnboundedChannel;
-#[cfg(windows)]
-use tokio::net::windows::named_pipe::ClientOptions;
 #[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::ClientOptions;
 use tokio_serde::formats::Cbor;
 
 pub struct UdsConnector {

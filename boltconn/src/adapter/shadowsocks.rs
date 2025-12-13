@@ -1,5 +1,5 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
+    AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
 };
 
 use crate::common::StreamOutboundTrait;
@@ -14,8 +14,8 @@ use shadowsocks::config::ServerType;
 use shadowsocks::context::SharedContext;
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::relay::udprelay::crypto_io::{decrypt_client_payload, encrypt_client_payload};
-use shadowsocks::relay::{udprelay, Address};
-use shadowsocks::{relay, ProxyClientStream, ServerAddr, ServerConfig};
+use shadowsocks::relay::{Address, udprelay};
+use shadowsocks::{ProxyClientStream, ServerAddr, ServerConfig, relay};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -195,7 +195,7 @@ impl Outbound for SSOutbound {
                 let socket = match server_addr {
                     SocketAddr::V4(_) => Egress::new(&self_clone.iface_name).udpv4_socket().await?,
                     SocketAddr::V6(_) => {
-                        return Err(TransportError::Internal("IPv6 not supported"))
+                        return Err(TransportError::Internal("IPv6 not supported"));
                     }
                 };
                 socket.connect(server_addr).await?;

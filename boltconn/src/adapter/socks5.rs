@@ -1,8 +1,8 @@
 use crate::adapter::{
-    established_tcp, established_udp, lookup, AddrConnector, Connector, Outbound, OutboundType,
+    AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
 };
 
-use crate::common::{as_io_err, StreamOutboundTrait};
+use crate::common::{StreamOutboundTrait, as_io_err};
 use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
