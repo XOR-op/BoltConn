@@ -98,12 +98,16 @@ pub enum ProxyError {
     DuplicateGroup(String),
     #[error("Duplicate proxy name: {0}")]
     DuplicateProxy(String),
+    #[error("Duplicate chain name: {0}")]
+    DuplicateChain(String),
     #[error("Missing group: {0}")]
     MissingGroup(String),
     #[error("Missing proxy: {0}")]
     MissingProxy(String),
     #[error("Invalid proxy: {0}")]
     Invalid(String),
+    #[error("Invalid chain: {0}")]
+    InvalidChain(String),
     #[error("Invalid Shadowsocks cipher {0} in proxy {1}")]
     ShadowsocksCipher(String, String),
     #[error("Proxy {0} error: {1}")]

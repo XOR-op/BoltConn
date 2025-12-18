@@ -1,8 +1,8 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::{
-    ConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema, RawProxyGroupCfg,
-    RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr, RawServerSockAddr, RawState,
-    RuleAction, RuleConfigLine, RuleError, SingleOrVec,
+    ConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema, RawProxyChainCfg,
+    RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr, RawServerSockAddr,
+    RawState, RuleAction, RuleConfigLine, RuleError, SingleOrVec,
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
@@ -177,6 +177,21 @@ impl DispatchingBuilder {
                 state,
                 group,
                 &config.proxy_group,
+                &config.proxy_chain,
+                proxy_schema,
+                &mut queued_groups,
+                &mut wg_history,
+                false,
+            )?;
+        }
+        // Parse proxy chains
+        for (name, chain) in &config.proxy_chain {
+            builder.parse_chain(
+                name,
+                state,
+                chain,
+                &config.proxy_group,
+                &config.proxy_chain,
                 proxy_schema,
                 &mut queued_groups,
                 &mut wg_history,
@@ -612,6 +627,7 @@ impl DispatchingBuilder {
         state: &RawState,
         proxy_group: &RawProxyGroupCfg,
         proxy_group_list: &LinkedHashMap<String, RawProxyGroupCfg>,
+        proxy_chain_list: &LinkedHashMap<String, RawProxyChainCfg>,
         proxy_schema: &HashMap<String, ProxySchema>,
         queued_groups: &mut HashSet<String>,
         wg_history: &mut HashMap<String, bool>,
@@ -631,121 +647,154 @@ impl DispatchingBuilder {
         if !proxy_group.roughly_validate() {
             return Err(ProxyError::Invalid(name.to_string()).into());
         }
-        if let Some(chains) = &proxy_group.chains {
-            // not proxy group, just chains
-            let mut contents = vec![];
-            for p in chains.iter().rev() {
-                let proxy = self.parse_one_proxy(
-                    p,
-                    name,
-                    state,
-                    proxy_group_list,
-                    proxy_schema,
-                    queued_groups,
-                    wg_history,
-                )?;
-                if let GeneralProxy::Single(px) = &proxy
-                    && px.get_impl().simple_description() == "wireguard"
-                    && wg_history.insert(p.clone(), true).is_some()
-                {
-                    tracing::warn!("WireGuard {} should not appear in different chains", p);
-                }
-                contents.push(proxy);
+        // Genuine proxy group, including only proxies and providers
+        let mut arr = Vec::new();
+        let mut selection = None;
+        // proxies
+        for p in proxy_group.proxies.as_ref().unwrap_or(&vec![]) {
+            let content = self.parse_one_proxy(
+                p,
+                name,
+                state,
+                proxy_group_list,
+                proxy_chain_list,
+                proxy_schema,
+                queued_groups,
+                wg_history,
+            )?;
+            if let GeneralProxy::Single(px) = &content
+                && px.get_impl().simple_description() == "wireguard"
+                && wg_history.insert(p.clone(), false) == Some(true)
+            {
+                tracing::warn!("WireGuard {} should not appear in different chains", p);
             }
-            self.proxies.insert(
-                name.to_string(),
-                Arc::new(Proxy::new(name.to_string(), ProxyImpl::Chain(contents))),
-            );
-            Ok(())
-        } else {
-            // Genuine proxy group, including only proxies and providers
-            let mut arr = Vec::new();
-            let mut selection = None;
-            // proxies
-            for p in proxy_group.proxies.as_ref().unwrap_or(&vec![]) {
-                let content = self.parse_one_proxy(
-                    p,
-                    name,
-                    state,
-                    proxy_group_list,
-                    proxy_schema,
-                    queued_groups,
-                    wg_history,
-                )?;
-                if let GeneralProxy::Single(px) = &content
-                    && px.get_impl().simple_description() == "wireguard"
-                    && wg_history.insert(p.clone(), false) == Some(true)
-                {
-                    tracing::warn!("WireGuard {} should not appear in different chains", p);
+            if p == state.group_selection.get(name).unwrap_or(&String::new()) {
+                selection = Some(content.clone());
+            }
+            arr.push(content);
+        }
+
+        // used providers
+        for p in proxy_group.providers.as_ref().unwrap_or(&vec![]) {
+            let valid_proxies: Vec<&str> = match p {
+                RawProxyProviderOption::Name(name) => proxy_schema
+                    .get(name)
+                    .ok_or_else(|| ProviderError::Missing(name.clone()))?
+                    .proxies
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect(),
+                RawProxyProviderOption::Filter { name, filter } => {
+                    let regex = Regex::new(filter)
+                        .map_err(|_| ProviderError::BadFilter(name.clone(), filter.clone()))?;
+                    proxy_schema
+                        .get(name)
+                        .ok_or_else(|| ProviderError::Missing(name.clone()))?
+                        .proxies
+                        .iter()
+                        .filter_map(|entry| {
+                            if regex.is_match(entry.name.as_str()) {
+                                Some(entry.name.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
                 }
+            };
+            for p in valid_proxies {
+                let content = if let Some(single) = self.proxies.get(p) {
+                    GeneralProxy::Single(single.clone())
+                } else {
+                    return Err(ProxyError::UnknownProxyInGroup {
+                        group: name.to_string(),
+                        proxy: p.to_string(),
+                    }
+                    .into());
+                };
                 if p == state.group_selection.get(name).unwrap_or(&String::new()) {
                     selection = Some(content.clone());
                 }
                 arr.push(content);
             }
-
-            // used providers
-            for p in proxy_group.providers.as_ref().unwrap_or(&vec![]) {
-                let valid_proxies: Vec<&str> = match p {
-                    RawProxyProviderOption::Name(name) => proxy_schema
-                        .get(name)
-                        .ok_or_else(|| ProviderError::Missing(name.clone()))?
-                        .proxies
-                        .iter()
-                        .map(|entry| entry.name.as_str())
-                        .collect(),
-                    RawProxyProviderOption::Filter { name, filter } => {
-                        let regex = Regex::new(filter)
-                            .map_err(|_| ProviderError::BadFilter(name.clone(), filter.clone()))?;
-                        proxy_schema
-                            .get(name)
-                            .ok_or_else(|| ProviderError::Missing(name.clone()))?
-                            .proxies
-                            .iter()
-                            .filter_map(|entry| {
-                                if regex.is_match(entry.name.as_str()) {
-                                    Some(entry.name.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    }
-                };
-                for p in valid_proxies {
-                    let content = if let Some(single) = self.proxies.get(p) {
-                        GeneralProxy::Single(single.clone())
-                    } else {
-                        return Err(ProxyError::UnknownProxyInGroup {
-                            group: name.to_string(),
-                            proxy: p.to_string(),
-                        }
-                        .into());
-                    };
-                    if p == state.group_selection.get(name).unwrap_or(&String::new()) {
-                        selection = Some(content.clone());
-                    }
-                    arr.push(content);
-                }
-            }
-            if arr.is_empty() {
-                // No available proxies, skip
-                return Ok(());
-            }
-
-            let first = arr.first().unwrap().clone();
-            // If there is no selection now, select the first.
-            self.groups.insert(
-                name.to_string(),
-                Arc::new(ProxyGroup::new(
-                    name.to_string(),
-                    arr,
-                    selection.unwrap_or(first),
-                    proxy_group.interface.clone(),
-                )),
-            );
-            Ok(())
         }
+        if arr.is_empty() {
+            // No available proxies, skip
+            return Ok(());
+        }
+
+        let first = arr.first().unwrap().clone();
+        // If there is no selection now, select the first.
+        self.groups.insert(
+            name.to_string(),
+            Arc::new(ProxyGroup::new(
+                name.to_string(),
+                arr,
+                selection.unwrap_or(first),
+                proxy_group.interface.clone(),
+            )),
+        );
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_chain(
+        &mut self,
+        name: &str,
+        state: &RawState,
+        proxy_chain: &RawProxyChainCfg,
+        proxy_group_list: &LinkedHashMap<String, RawProxyGroupCfg>,
+        proxy_chain_list: &LinkedHashMap<String, RawProxyChainCfg>,
+        proxy_schema: &HashMap<String, ProxySchema>,
+        queued_groups: &mut HashSet<String>,
+        wg_history: &mut HashMap<String, bool>,
+        dup_as_error: bool,
+    ) -> Result<(), ConfigError> {
+        // Check duplicates
+        if self.groups.contains_key(name)
+            || self.proxies.contains_key(name)
+            || queued_groups.contains(name)
+        {
+            return if dup_as_error {
+                Err(ProxyError::DuplicateProxy(name.to_string()).into())
+            } else {
+                Ok(())
+            };
+        }
+
+        if !proxy_chain.roughly_validate() {
+            return Err(ProxyError::Invalid(name.to_string()).into());
+        }
+
+        let mut contents = vec![];
+        // IMPORTANT: Chains iterate in REVERSE order
+        for p in proxy_chain.chains.iter().rev() {
+            let proxy = self.parse_one_proxy(
+                p,
+                name,
+                state,
+                proxy_group_list,
+                proxy_chain_list,
+                proxy_schema,
+                queued_groups,
+                wg_history,
+            )?;
+
+            // WireGuard tracking for chains uses `true`
+            if let GeneralProxy::Single(px) = &proxy
+                && px.get_impl().simple_description() == "wireguard"
+                && wg_history.insert(p.clone(), true).is_some()
+            {
+                tracing::warn!("WireGuard {} should not appear in different chains", p);
+            }
+            contents.push(proxy);
+        }
+
+        self.proxies.insert(
+            name.to_string(),
+            Arc::new(Proxy::new(name.to_string(), ProxyImpl::Chain(contents))),
+        );
+        Ok(())
     }
 
     // Just to avoid code duplication
@@ -756,6 +805,7 @@ impl DispatchingBuilder {
         name: &str,
         state: &RawState,
         proxy_group_list: &LinkedHashMap<String, RawProxyGroupCfg>,
+        proxy_chain_list: &LinkedHashMap<String, RawProxyChainCfg>,
         proxy_schema: &HashMap<String, ProxySchema>,
         queued_groups: &mut HashSet<String>,
         wg_history: &mut HashMap<String, bool>,
@@ -774,6 +824,19 @@ impl DispatchingBuilder {
                     state,
                     sub,
                     proxy_group_list,
+                    proxy_chain_list,
+                    proxy_schema,
+                    queued_groups,
+                    wg_history,
+                    true,
+                )?;
+            } else if let Some(sub) = proxy_chain_list.get(p) {
+                self.parse_chain(
+                    p,
+                    state,
+                    sub,
+                    proxy_group_list,
+                    proxy_chain_list,
                     proxy_schema,
                     queued_groups,
                     wg_history,

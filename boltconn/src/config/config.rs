@@ -1,5 +1,6 @@
 use crate::config::inbound::RawInboundConfig;
 use crate::config::interception::InterceptionConfig;
+use crate::config::proxy_chain::RawProxyChainCfg;
 use crate::config::proxy_group::RawProxyGroupCfg;
 use crate::config::{
     AuthData, ModuleConfig, PortOrSocketAddr, ProxyProvider, RuleConfigLine, RuleProvider,
@@ -32,6 +33,8 @@ pub struct RawRootCfg {
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
     #[serde(alias = "proxy-provider", default = "default_proxy_provider")]
     pub proxy_provider: HashMap<String, ProxyProvider>,
+    #[serde(alias = "proxy-chain", default = "default_proxy_chain")]
+    pub proxy_chain: LinkedHashMap<String, RawProxyChainCfg>,
     #[serde(alias = "proxy-group")]
     pub proxy_group: LinkedHashMap<String, RawProxyGroupCfg>,
     #[serde(alias = "rule-local")]
@@ -205,6 +208,10 @@ fn default_local_proxy() -> HashMap<String, RawProxyLocalCfg> {
 }
 
 fn default_proxy_provider() -> HashMap<String, ProxyProvider> {
+    Default::default()
+}
+
+fn default_proxy_chain() -> LinkedHashMap<String, RawProxyChainCfg> {
     Default::default()
 }
 

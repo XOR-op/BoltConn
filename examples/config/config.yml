@@ -32,6 +32,16 @@ proxy-provider:
     type: file
     path: ./Remote/US.yaml
 
+proxy-chain:
+  local-chain:
+    chains:
+      - lan_http
+      - lan_socks
+  Chain:
+    chains:
+      - lan_socks
+      - US
+
 proxy-group:
   Relay:
     proxies:
@@ -57,14 +67,6 @@ proxy-group:
     proxies:
       - DIRECT
     interface: tun1
-  local-chain:
-    chains:
-      - lan_http
-      - lan_socks
-  Chain:
-    chains:
-      - lan_socks
-      - US
 
 
 rule-provider:
