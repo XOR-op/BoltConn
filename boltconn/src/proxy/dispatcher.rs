@@ -55,8 +55,8 @@ impl Dispatcher {
         ca_certificate: Certificate,
         modifier: ModifierClosure,
         intercept_mgr: Arc<InterceptionManager>,
+        wireguard_mgr: Arc<WireguardManager>,
     ) -> Self {
-        let wg_mgr = WireguardManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         let ssh_mgr = SshManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         Self {
             iface_name: iface_name.into(),
@@ -67,7 +67,7 @@ impl Dispatcher {
             ca_certificate,
             modifier: ArcSwap::new(Arc::new(modifier)),
             intercept_mgr: ArcSwap::new(intercept_mgr),
-            wireguard_mgr: Arc::new(wg_mgr),
+            wireguard_mgr,
             ssh_mgr: Arc::new(ssh_mgr),
         }
     }

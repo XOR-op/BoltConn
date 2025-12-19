@@ -258,7 +258,9 @@ impl WebController {
             };
             group.clone()
         };
-        Json(json!(server.controller.set_selection(group, args.selected)))
+        Json(json!(
+            server.controller.set_selection(group, args.selected).await
+        ))
     }
 
     async fn update_latency(
@@ -321,7 +323,7 @@ impl WebController {
         State(server): State<Self>,
         Json(limit): Json<u32>,
     ) -> Json<serde_json::Value> {
-        server.controller.set_conn_log_limit(limit);
+        server.controller.set_conn_log_limit(limit).await;
         Json(serde_json::Value::Null)
     }
 

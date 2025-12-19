@@ -1,3 +1,4 @@
+use super::default_false;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -5,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct RawProxyChainCfg {
     pub chains: Vec<String>,
     pub interface: Option<String>,
+    #[serde(alias = "reconnect-when-changed", default = "default_false")]
+    pub reconnect_when_changed: bool,
 }
 
 impl RawProxyChainCfg {

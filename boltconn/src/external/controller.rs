@@ -28,7 +28,7 @@ pub struct Controller {
     dispatching: SharedDispatching,
     tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
     reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
-    state: Arc<std::sync::Mutex<LinkedState>>,
+    state: Arc<tokio::sync::Mutex<LinkedState>>,
     stream_logger: StreamLoggerSend,
     speedtest_url: Arc<std::sync::RwLock<String>>,
 }
@@ -44,7 +44,7 @@ impl Controller {
         dispatching: SharedDispatching,
         global_setting: Arc<std::sync::Mutex<TunConfigure>>,
         reload_sender: tokio::sync::mpsc::Sender<()>,
-        state: Arc<std::sync::Mutex<LinkedState>>,
+        state: Arc<tokio::sync::Mutex<LinkedState>>,
         stream_logger: StreamLoggerSend,
         speedtest_url: Arc<std::sync::RwLock<String>>,
     ) -> Self {
@@ -276,12 +276,13 @@ impl Controller {
         result
     }
 
-    pub fn set_selection(&self, group: String, selected: String) -> bool {
-        let mut state = self.state.lock().unwrap();
+    pub async fn set_selection(&self, group: String, selected: String) -> bool {
+        let mut state = self.state.lock().await;
         if self
             .dispatching
             .load()
             .set_group_selection(group.as_str(), selected.as_str())
+            .await
             .is_ok()
         {
             if let Some(val) = state.state.group_selection.get_mut(&group) {
@@ -296,8 +297,8 @@ impl Controller {
         }
     }
 
-    pub fn add_temporary_rule(&self, rule_literal: String) -> bool {
-        let mut state = self.state.lock().unwrap();
+    pub async fn add_temporary_rule(&self, rule_literal: String) -> bool {
+        let mut state = self.state.lock().await;
         let old = state.state.temporary_list.clone().unwrap_or_default();
         let mut list = vec![RuleConfigLine::Simple(rule_literal.clone())];
         list.extend(old);
@@ -312,8 +313,8 @@ impl Controller {
         }
     }
 
-    pub fn delete_temporary_rule(&self, rule_literal_prefix: String) -> bool {
-        let mut state = self.state.lock().unwrap();
+    pub async fn delete_temporary_rule(&self, rule_literal_prefix: String) -> bool {
+        let mut state = self.state.lock().await;
         let mut list = state.state.temporary_list.clone().unwrap_or_default();
         let Ok(new_rule) = serde_yaml::from_str::<serde_yaml::Sequence>(
             (String::from("[") + rule_literal_prefix.as_str() + "]").as_str(),
@@ -352,8 +353,8 @@ impl Controller {
         }
     }
 
-    pub fn list_temporary_rule(&self) -> Vec<String> {
-        let state = self.state.lock().unwrap();
+    pub async fn list_temporary_rule(&self) -> Vec<String> {
+        let state = self.state.lock().await;
         state
             .state
             .temporary_list
@@ -372,15 +373,15 @@ impl Controller {
             .unwrap_or_default()
     }
 
-    pub fn clear_temporary_rule(&self) {
-        let mut state = self.state.lock().unwrap();
+    pub async fn clear_temporary_rule(&self) {
+        let mut state = self.state.lock().await;
         let _ = self.dispatching.load().update_temporary_list(&[]);
         state.state.temporary_list = None;
         Self::flush_state(&state);
     }
 
-    pub fn set_conn_log_limit(&self, limit: u32) {
-        let mut state = self.state.lock().unwrap();
+    pub async fn set_conn_log_limit(&self, limit: u32) {
+        let mut state = self.state.lock().await;
         self.stat_center.set_conn_log_limit(limit);
         state.state.log_limit = Some(limit);
         Self::flush_state(&state);

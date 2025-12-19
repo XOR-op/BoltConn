@@ -261,7 +261,7 @@ impl ControlService for UdsRpcServer {
     }
 
     async fn set_proxy_for(self, _ctx: Context, group: String, proxy: String) -> bool {
-        self.controller.set_selection(group, proxy)
+        self.controller.set_selection(group, proxy).await
     }
 
     async fn update_group_latency(self, _ctx: Context, group: String) -> bool {
@@ -300,19 +300,21 @@ impl ControlService for UdsRpcServer {
     }
 
     async fn add_temporary_rule(self, _ctx: Context, rule_literal: String) -> bool {
-        self.controller.add_temporary_rule(rule_literal)
+        self.controller.add_temporary_rule(rule_literal).await
     }
 
     async fn delete_temporary_rule(self, _ctx: Context, rule_literal_prefix: String) -> bool {
-        self.controller.delete_temporary_rule(rule_literal_prefix)
+        self.controller
+            .delete_temporary_rule(rule_literal_prefix)
+            .await
     }
 
     async fn list_temporary_rule(self, _ctx: Context) -> Vec<String> {
-        self.controller.list_temporary_rule()
+        self.controller.list_temporary_rule().await
     }
 
     async fn clear_temporary_rule(self, _ctx: Context) {
-        self.controller.clear_temporary_rule()
+        self.controller.clear_temporary_rule().await
     }
 
     async fn real_lookup(self, _ctx: Context, domain: String) -> Option<String> {
@@ -336,7 +338,7 @@ impl ControlService for UdsRpcServer {
     }
 
     async fn set_conn_log_limit(self, _ctx: Context, limit: u32) {
-        self.controller.set_conn_log_limit(limit)
+        self.controller.set_conn_log_limit(limit).await
     }
 
     async fn get_conn_log_limit(self, _ctx: Context) -> u32 {

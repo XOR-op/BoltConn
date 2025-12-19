@@ -1,3 +1,4 @@
+use crate::adapter::WireguardManager;
 use crate::config::{
     LinkedState, LoadedConfig, RawDnsConfig, RawInboundConfig, RawInboundServiceConfig,
     RawInstrumentConfig, RawRootCfg, RawWebControllerConfig, SingleOrVec, default_inbound_ip_addr,
@@ -45,11 +46,12 @@ pub struct App {
     api_dispatching_handler: SharedDispatching,
     tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
     http_capturer: Arc<HttpCapturer>,
-    linked_state: Arc<std::sync::Mutex<LinkedState>>,
+    linked_state: Arc<tokio::sync::Mutex<LinkedState>>,
     speedtest_url: Arc<std::sync::RwLock<String>>,
     receiver: tokio::sync::mpsc::Receiver<()>,
     uds_socket: Arc<UnixListenerGuard>,
     msg_bus: Arc<MessageBus>,
+    wg_mgr: Arc<WireguardManager>,
 }
 
 impl App {
@@ -107,6 +109,13 @@ impl App {
         // initialize instrumentation
         let msg_bus = Arc::new(MessageBus::new());
 
+        // initialize wireguard manager
+        let wg_mgr = Arc::new(WireguardManager::new(
+            &outbound_iface,
+            dns.clone(),
+            Duration::from_secs(180),
+        ));
+
         // dispatch
         let ruleset = load_rulesets(&loaded_config)?;
         let dispatching = Arc::new(
@@ -117,6 +126,7 @@ impl App {
                 &loaded_config,
                 &ruleset,
                 msg_bus.clone(),
+                wg_mgr.clone(),
             )
             .and_then(|b| b.build(&loaded_config))
             .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
@@ -152,6 +162,7 @@ impl App {
                     Arc::new(InterceptModifier::new(hcap_copy.clone(), result, proc_info))
                 }),
                 interception_mgr,
+                wg_mgr.clone(),
             ))
         };
 
@@ -210,7 +221,7 @@ impl App {
         let api_dispatching_handler = Arc::new(ArcSwap::new(dispatching));
         let (reload_sender, reload_receiver) = tokio::sync::mpsc::channel::<()>(1);
         let speedtest_url = Arc::new(std::sync::RwLock::new(config.speedtest_url.clone()));
-        let linked_state = Arc::new(std::sync::Mutex::new(LinkedState {
+        let linked_state = Arc::new(tokio::sync::Mutex::new(LinkedState {
             state_path: LoadedConfig::state_path(&data_path),
             state: loaded_config.state,
         }));
@@ -279,6 +290,7 @@ impl App {
             receiver: reload_receiver,
             uds_socket: uds_listener,
             msg_bus,
+            wg_mgr,
         })
     }
 
@@ -346,6 +358,7 @@ impl App {
                 &loaded_config,
                 &ruleset,
                 self.msg_bus.clone(),
+                self.wg_mgr.clone(),
             )?;
             Arc::new(builder.build(&loaded_config)?)
         };
@@ -372,7 +385,7 @@ impl App {
             SocketAddr::new(Ipv4Addr::new(198, 18, 99, 88).into(), 53),
         );
 
-        self.linked_state.lock().unwrap().state = loaded_config.state;
+        self.linked_state.lock().await.state = loaded_config.state;
 
         self.api_dispatching_handler.store(dispatching.clone());
         let hcap2 = self.http_capturer.clone();
@@ -436,6 +449,11 @@ pub async fn validate_config(
         &loaded_config,
         &ruleset,
         msg_bus.clone(),
+        Arc::new(WireguardManager::new(
+            &outbound_iface,
+            dns.clone(),
+            Duration::from_secs(180),
+        )),
     )
     .and_then(|b| b.build(&loaded_config))
     .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?;

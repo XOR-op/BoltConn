@@ -1,4 +1,4 @@
-use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
+use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config, WireguardManager};
 use crate::config::{
     ConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema, RawProxyChainCfg,
     RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr, RawServerSockAddr,
@@ -27,7 +27,7 @@ use regex::Regex;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use shadowsocks::ServerAddr;
 use shadowsocks::crypto::CipherKind;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -59,6 +59,9 @@ pub struct Dispatching {
     proxies: HashMap<String, Arc<Proxy>>,
     groups: LinkedHashMap<String, Arc<ProxyGroup>>,
     snippet: DispatchingSnippet,
+
+    wg_mgr: Option<Arc<WireguardManager>>,
+    chain_reconnection: HashMap<String, Vec<String>>,
 }
 
 impl Dispatching {
@@ -80,17 +83,60 @@ impl Dispatching {
         Ok(())
     }
 
-    pub fn set_group_selection(&self, group: &str, proxy: &str) -> Result<(), ConfigError> {
-        for (name, g) in self.groups.iter() {
-            if name == group {
-                return Ok(g.set_selection(proxy)?);
-            }
+    pub async fn set_group_selection(&self, group: &str, proxy: &str) -> Result<(), ConfigError> {
+        if let Some(g) = self.get_group(group) {
+            g.set_selection(proxy)?;
+            self.chain_reconnect(group, proxy).await;
+            Ok(())
+        } else {
+            Err(ProxyError::MissingGroup(group.to_string()).into())
         }
-        Err(ProxyError::MissingGroup(group.to_string()).into())
     }
 
     pub fn get_group_list(&self) -> Vec<Arc<ProxyGroup>> {
         self.groups.values().cloned().collect()
+    }
+
+    async fn chain_reconnect(&self, group: &str, proxy: &str) {
+        if let Some(wg_mgr) = &self.wg_mgr {
+            let mut reconnected = HashSet::new();
+            reconnected.insert(proxy.to_string());
+            reconnected.insert(group.to_string());
+            let mut processing_queue = VecDeque::from([group.to_string(), proxy.to_string()]);
+            while let Some(proxy) = processing_queue.pop_front() {
+                if let Some(chain_after) = self.chain_reconnection.get(&proxy) {
+                    for c in chain_after {
+                        if reconnected.contains(c) {
+                            continue;
+                        }
+                        processing_queue.push_back(c.clone());
+                        let real_proxy_name = match self.get_group(c) {
+                            Some(g) => {
+                                processing_queue.push_back(g.get_name());
+                                g.get_selection().selected_instance_name()
+                            }
+                            None => c.clone(),
+                        };
+                        // reconnect if it's a single proxy
+                        if let Some(p) = self.proxies.get(&real_proxy_name) {
+                            match *p.get_impl() {
+                                ProxyImpl::Wireguard(_) => {
+                                    wg_mgr.stop_master_conn(&p.get_name()).await;
+                                }
+                                ProxyImpl::Ssh(_) => {
+                                    tracing::warn!("SSH master reconnection not implemented yet");
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn get_group(&self, name: &str) -> Option<&ProxyGroup> {
+        self.groups.get(name).map(|x| &**x)
     }
 }
 
@@ -111,6 +157,8 @@ pub struct DispatchingBuilder {
     dns: Arc<Dns>,
     mmdb: Option<Arc<MmdbReader>>,
     msg_bus: Arc<MessageBus>,
+    wg_mgr: Option<Arc<WireguardManager>>,
+    chain_reconnection: HashMap<String, Vec<String>>,
 }
 
 impl DispatchingBuilder {
@@ -129,6 +177,8 @@ impl DispatchingBuilder {
             dns,
             mmdb,
             msg_bus,
+            wg_mgr: None,
+            chain_reconnection: Default::default(),
         };
         builder.proxies.insert(
             "DIRECT".into(),
@@ -152,8 +202,10 @@ impl DispatchingBuilder {
         loaded_config: &LoadedConfig,
         ruleset: &RuleSetTable,
         msg_bus: Arc<MessageBus>,
+        wg_mgr: Arc<WireguardManager>,
     ) -> Result<Self, ConfigError> {
         let mut builder = Self::empty(config_path, dns, mmdb, msg_bus);
+        builder.wg_mgr = Some(wg_mgr);
         // start init
         let LoadedConfig {
             config,
@@ -198,6 +250,7 @@ impl DispatchingBuilder {
                 false,
             )?;
         }
+        builder.build_chain_reconnection(config.proxy_chain.values());
         builder.rulesets.clone_from(ruleset);
         Ok(builder)
     }
@@ -233,12 +286,16 @@ impl DispatchingBuilder {
             TemporaryList::empty()
         };
         let proxies = self.proxies.clone();
+        let wg_mgr = self.wg_mgr.clone();
+        let chain_reconnection = self.chain_reconnection.clone();
         Ok(Dispatching {
             temporary_list: ArcSwap::new(Arc::new(temporary_list)),
             templist_builder: self,
             proxies,
             groups,
             snippet: DispatchingSnippet { rules, fallback },
+            wg_mgr,
+            chain_reconnection,
         })
     }
 
@@ -309,6 +366,25 @@ impl DispatchingBuilder {
         }
     }
 
+    fn build_chain_reconnection<'a, T: Iterator<Item = &'a RawProxyChainCfg>>(
+        &mut self,
+        chain_cfgs: T,
+    ) {
+        for chain in chain_cfgs {
+            if chain.reconnect_when_changed {
+                for window in chain.chains.windows(2) {
+                    let entry = self
+                        .chain_reconnection
+                        .entry(window[0].clone())
+                        .or_default();
+                    if !entry.contains(&window[1]) {
+                        entry.push(window[1].clone());
+                    }
+                }
+            }
+        }
+    }
+
     /// Build a filter dispatching: for all encountered rule, return DIRECT; otherwise REJECT
     pub fn build_filter(
         self,
@@ -341,6 +417,8 @@ impl DispatchingBuilder {
                 rules,
                 fallback: GeneralProxy::Single(Arc::new(Proxy::new("REJECT", ProxyImpl::Reject))),
             },
+            wg_mgr: None,
+            chain_reconnection: HashMap::new(),
         })
     }
 
