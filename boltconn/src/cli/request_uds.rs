@@ -168,7 +168,7 @@ impl UdsConnector {
             .await?)
     }
 
-    pub async fn reload_config(&self) -> Result<()> {
+    pub async fn reload_config(&self) -> Result<bool> {
         Ok(self.client.reload(Context::current()).await?)
     }
 

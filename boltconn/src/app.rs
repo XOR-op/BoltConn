@@ -1,4 +1,5 @@
 use crate::adapter::WireguardManager;
+use crate::common::call_chan::CallParameter;
 use crate::config::{
     LinkedState, LoadedConfig, RawDnsConfig, RawInboundConfig, RawInboundServiceConfig,
     RawInstrumentConfig, RawRootCfg, RawWebControllerConfig, SingleOrVec, default_inbound_ip_addr,
@@ -48,7 +49,7 @@ pub struct App {
     http_capturer: Arc<HttpCapturer>,
     linked_state: Arc<tokio::sync::Mutex<LinkedState>>,
     speedtest_url: Arc<std::sync::RwLock<String>>,
-    receiver: tokio::sync::mpsc::Receiver<()>,
+    receiver: tokio::sync::mpsc::Receiver<CallParameter<(), bool>>,
     uds_socket: Arc<UnixListenerGuard>,
     msg_bus: Arc<MessageBus>,
     wg_mgr: Arc<WireguardManager>,
@@ -219,7 +220,8 @@ impl App {
 
         // create controller
         let api_dispatching_handler = Arc::new(ArcSwap::new(dispatching));
-        let (reload_sender, reload_receiver) = tokio::sync::mpsc::channel::<()>(1);
+        let (reload_sender, reload_receiver) =
+            tokio::sync::mpsc::channel::<CallParameter<(), bool>>(1);
         let speedtest_url = Arc::new(std::sync::RwLock::new(config.speedtest_url.clone()));
         let linked_state = Arc::new(tokio::sync::Mutex::new(LinkedState {
             state_path: LoadedConfig::state_path(&data_path),
@@ -301,9 +303,9 @@ impl App {
             select! {
                 _ = tokio::signal::ctrl_c()=>break 'outer,
                 restart = self.receiver.recv() => {
-                    if restart.is_some(){
+                    if let Some(call_param) = restart {
                         // try restarting components
-                       self.reload().await;
+                       self.reload(call_param).await;
                     } else {
                         break 'outer;
                     }
@@ -313,7 +315,7 @@ impl App {
         tun_configure.lock().unwrap().disable(false);
     }
 
-    async fn reload(&self) {
+    async fn reload(&self, call_param: CallParameter<(), bool>) {
         let start = Instant::now();
         match self.reload_inner().await {
             Ok(_) => {
@@ -321,9 +323,11 @@ impl App {
                     "Reloaded config successfully in {}ms",
                     start.elapsed().as_millis()
                 );
+                call_param.ret(true);
             }
             Err(err) => {
                 tracing::error!("Reloading config failed: {}", err);
+                call_param.ret(false);
             }
         }
     }

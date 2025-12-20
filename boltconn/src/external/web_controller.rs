@@ -336,8 +336,8 @@ impl WebController {
         Json(json!(server.controller.get_conn_log_limit()))
     }
 
-    async fn reload(State(server): State<Self>) {
-        server.controller.reload().await
+    async fn reload(State(server): State<Self>) -> Json<serde_json::Value> {
+        Json(json!(server.controller.reload().await))
     }
 }
 

@@ -307,10 +307,16 @@ impl Requester {
     }
 
     pub async fn reload_config(&self) -> Result<()> {
-        match &self.inner {
-            Inner::Web(c) => c.reload_config().await,
-            Inner::Uds(c) => c.reload_config().await,
+        let is_success = match &self.inner {
+            Inner::Web(c) => c.reload_config().await?,
+            Inner::Uds(c) => c.reload_config().await?,
+        };
+        if is_success {
+            println!("{}", "Success".green());
+        } else {
+            println!("{}", "Failed".red());
         }
+        Ok(())
     }
 
     pub async fn master_conn_stats(&self) -> Result<()> {

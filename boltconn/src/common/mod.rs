@@ -15,6 +15,7 @@ pub mod async_session;
 #[cfg(not(target_os = "windows"))]
 pub mod async_socket;
 pub mod async_ws_stream;
+pub mod call_chan;
 pub mod client_hello;
 pub mod duplex_chan;
 pub mod evictable_vec;

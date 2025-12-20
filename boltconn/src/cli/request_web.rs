@@ -157,12 +157,13 @@ impl WebConnector {
         Ok(result)
     }
 
-    pub async fn reload_config(&self) -> Result<()> {
-        reqwest::Client::new()
+    pub async fn reload_config(&self) -> Result<bool> {
+        let res = reqwest::Client::new()
             .post(self.route("/reload"))
             .send()
             .await?;
-        Ok(())
+        let result: bool = serde_json::from_str(res.text().await?.as_str())?;
+        Ok(result)
     }
 
     fn route(&self, s: &str) -> String {

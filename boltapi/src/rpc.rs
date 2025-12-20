@@ -61,7 +61,7 @@ pub trait ControlService {
 
     async fn stop_master_conn(id: String);
 
-    async fn reload();
+    async fn reload() -> bool;
 
     // Streaming
     async fn request_traffic_stream(ctx_id: u64);

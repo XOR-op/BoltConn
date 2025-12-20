@@ -1,3 +1,4 @@
+use crate::common::call_chan::CallParameter;
 use crate::config::{LinkedState, RuleConfigLine};
 use crate::dispatch::{GeneralProxy, Latency};
 use crate::external::{SharedDispatching, StreamLoggerRecv, StreamLoggerSend};
@@ -27,7 +28,7 @@ pub struct Controller {
     dispatcher: Arc<Dispatcher>,
     dispatching: SharedDispatching,
     tun_configure: Arc<std::sync::Mutex<TunConfigure>>,
-    reload_sender: Arc<tokio::sync::mpsc::Sender<()>>,
+    reload_sender: Arc<tokio::sync::mpsc::Sender<CallParameter<(), bool>>>,
     state: Arc<tokio::sync::Mutex<LinkedState>>,
     stream_logger: StreamLoggerSend,
     speedtest_url: Arc<std::sync::RwLock<String>>,
@@ -43,7 +44,7 @@ impl Controller {
         dispatcher: Arc<Dispatcher>,
         dispatching: SharedDispatching,
         global_setting: Arc<std::sync::Mutex<TunConfigure>>,
-        reload_sender: tokio::sync::mpsc::Sender<()>,
+        reload_sender: tokio::sync::mpsc::Sender<CallParameter<(), bool>>,
         state: Arc<tokio::sync::Mutex<LinkedState>>,
         stream_logger: StreamLoggerSend,
         speedtest_url: Arc<std::sync::RwLock<String>>,
@@ -471,8 +472,13 @@ impl Controller {
         }
     }
 
-    pub async fn reload(&self) {
-        let _ = self.reload_sender.send(()).await;
+    pub async fn reload(&self) -> bool {
+        let (call_param, call_fut) = CallParameter::new(());
+        if self.reload_sender.send(call_param).await.is_ok() {
+            call_fut.await.unwrap_or(false)
+        } else {
+            false
+        }
     }
 }
 
