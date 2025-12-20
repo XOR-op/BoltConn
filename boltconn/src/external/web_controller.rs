@@ -55,6 +55,7 @@ impl WebController {
                 "/connections",
                 get(Self::get_all_conn).delete(Self::stop_all_conn),
             )
+            .route("/connections/active", get(Self::get_active_connections))
             .route("/connections/:id", delete(Self::stop_conn))
             .route("/sessions", get(Self::get_sessions))
             .route("/intercept/all", get(Self::get_intercept))
@@ -172,6 +173,10 @@ impl WebController {
 
     async fn get_all_conn(State(server): State<Self>) -> Json<serde_json::Value> {
         Json(json!(server.controller.get_all_conns()))
+    }
+
+    async fn get_active_connections(State(server): State<Self>) -> Json<serde_json::Value> {
+        Json(json!(server.controller.get_active_conns()))
     }
 
     async fn stop_all_conn(State(server): State<Self>) {

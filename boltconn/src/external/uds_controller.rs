@@ -100,6 +100,10 @@ impl UdsController {
         Self { controller }
     }
 
+    pub fn get_active_connections(&self) -> Vec<ConnectionSchema> {
+        self.controller.get_active_conns()
+    }
+
     pub async fn run(self, listener: Arc<UnixListenerGuard>) -> io::Result<()> {
         let mut codec_builder = LengthDelimitedCodec::builder();
         codec_builder.max_frame_length(boltapi::rpc::MAX_CODEC_FRAME_LENGTH);
@@ -289,6 +293,10 @@ impl ControlService for UdsRpcServer {
 
     async fn get_all_conns(self, _ctx: Context) -> Vec<ConnectionSchema> {
         self.controller.get_all_conns()
+    }
+
+    async fn get_active_connections(self, _ctx: Context) -> Vec<ConnectionSchema> {
+        self.controller.get_active_conns()
     }
 
     async fn stop_all_conns(self, _ctx: Context) {

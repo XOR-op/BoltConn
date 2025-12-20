@@ -26,6 +26,8 @@ pub trait ControlService {
     // Connections
     async fn get_all_conns() -> Vec<ConnectionSchema>;
 
+    async fn get_active_connections() -> Vec<ConnectionSchema>;
+
     async fn stop_all_conns();
 
     async fn stop_conn(id: u32) -> bool;
