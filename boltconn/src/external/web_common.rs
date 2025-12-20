@@ -27,10 +27,17 @@ pub(super) async fn web_auth<B>(
     if let Some(auth) = auth.as_ref() {
         let auth_header = request
             .headers()
-            .get("api-key")
+            .get("authorization")
             .and_then(|h| h.to_str().ok());
         match auth_header {
-            Some(header_val) if header_val == auth => Ok(request),
+            Some(header_val) if header_val.starts_with("Bearer ") => {
+                let token = &header_val[7..]; // Skip "Bearer " prefix
+                if token == auth {
+                    Ok(request)
+                } else {
+                    Err(http::StatusCode::UNAUTHORIZED)
+                }
+            }
             _ => Err(http::StatusCode::UNAUTHORIZED),
         }
     } else {
