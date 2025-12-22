@@ -43,7 +43,7 @@ regex = "1.7.0"
 sharded-slab = "0.1.7"
 socket2 = { version = "0.5.1", features = ["all"] }
 thiserror = "1.0.37"
-tokio = { version = "1.40.0", features = [
+tokio = { version = "1.48.0", features = [
     "rt",
     "rt-multi-thread",
     "net",
@@ -79,8 +79,8 @@ reqwest = { version = "0.12.2", default-features = false, features = [
 serde = { version = "1.0.192", features = ["derive"] }
 serde_json = "1.0.108"
 serde_yaml = "0.9.27"
-tarpc = { version = "0.33.0", features = ["serde-transport", "unix"] }
-tokio-serde = { version = "0.8.0", features = ["cbor"] }
+tarpc = { version = "0.37.0", features = ["serde-transport", "unix"] }
+tokio-serde = { version = "0.9.0", features = ["cbor"] }
 tower-http = { version = "0.5.2", features = ["cors"] }
 # Rules
 async-recursion = "1.0.4"

@@ -2,6 +2,7 @@ use crate::cli::request_uds::UdsConnector;
 use boltapi::rpc::ClientStreamService;
 use boltapi::{ConnectionSchema, TrafficResp};
 use colored::Colorize;
+use futures::{FutureExt, StreamExt};
 use serde::Deserialize;
 use std::sync::Arc;
 use tarpc::context::Context;
@@ -27,7 +28,6 @@ impl<T> ChannelCtx<T> {
     }
 }
 
-#[tarpc::server]
 impl ClientStreamService for ClientStreamServer {
     async fn post_traffic(self, _: Context, traffic: TrafficResp) -> u64 {
         let guard = self.traffic_sender.read().await;
@@ -77,14 +77,16 @@ impl ConnectionState {
         let l2 = logs.clone();
         let c2 = conn.clone();
         tokio::spawn(
-            BaseChannel::with_defaults(server_chan).execute(
-                ClientStreamServer {
-                    traffic_sender: traffic,
-                    logs_sender: logs,
-                    conn_sender: conn,
-                }
-                .serve(),
-            ),
+            BaseChannel::with_defaults(server_chan)
+                .execute(
+                    ClientStreamServer {
+                        traffic_sender: traffic,
+                        logs_sender: logs,
+                        conn_sender: conn,
+                    }
+                    .serve(),
+                )
+                .for_each(|rpc| tokio::spawn(rpc).map(|_| ())),
         );
         Ok(Self {
             client,

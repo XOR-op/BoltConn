@@ -7,6 +7,7 @@ use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
     HttpInterceptSchema, MasterConnectionStatus, TrafficResp, TunStatusSchema,
 };
+use futures::{FutureExt, StreamExt};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -126,13 +127,15 @@ impl UdsController {
             );
 
             tokio::spawn(
-                BaseChannel::with_defaults(server_t).execute(
-                    UdsRpcServer {
-                        controller: self.controller.clone(),
-                        sender,
-                    }
-                    .serve(),
-                ),
+                BaseChannel::with_defaults(server_t)
+                    .execute(
+                        UdsRpcServer {
+                            controller: self.controller.clone(),
+                            sender,
+                        }
+                        .serve(),
+                    )
+                    .for_each(|rpc| tokio::spawn(rpc).map(|_| ())),
             );
         }
     }
@@ -254,7 +257,6 @@ struct UdsRpcServer {
     sender: tokio::sync::mpsc::UnboundedSender<ClientRequests>,
 }
 
-#[tarpc::server]
 impl ControlService for UdsRpcServer {
     async fn get_all_proxies(self, _ctx: Context) -> Vec<GetGroupRespSchema> {
         self.controller.get_all_proxies()
