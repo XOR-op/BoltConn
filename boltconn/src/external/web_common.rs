@@ -8,20 +8,44 @@ pub(super) async fn web_auth<B>(
     request: http::Request<B>,
     cors_allow: CorsAllow,
 ) -> Result<http::Request<B>, http::StatusCode> {
-    // Validate websocket origin
-    // The `origin` header will be set automatically by browser
-    if request.headers().contains_key("Upgrade")
-        && request.headers().contains_key("origin")
-        && !cors_allow.validate(
-            request
-                .headers()
-                .get("origin")
-                .unwrap()
-                .to_str()
-                .map_err(|_| http::StatusCode::UNAUTHORIZED)?,
-        )
-    {
-        return Err(http::StatusCode::UNAUTHORIZED);
+    // websocket auth
+    if request.headers().contains_key("Upgrade") {
+        // Validate websocket origin
+        // The `origin` header will be set automatically by browser
+        if request.headers().contains_key("origin")
+            && !cors_allow.validate(
+                request
+                    .headers()
+                    .get("origin")
+                    .unwrap()
+                    .to_str()
+                    .map_err(|_| http::StatusCode::UNAUTHORIZED)?,
+            )
+        {
+            return Err(http::StatusCode::UNAUTHORIZED);
+        }
+        // check `secret` in query parameters if needed
+        return if let Some(auth) = auth.as_ref() {
+            // we have `secret=...` in query parameters
+            if let Some(query_pairs) = request
+                .uri()
+                .query()
+                .map(|v| url::form_urlencoded::parse(v.as_bytes()).into_owned())
+                // valid url encoded string
+                && let Some(secret_param) = query_pairs
+                    .into_iter()
+                    .find(|(k, _)| k == "secret")
+                    .map(|(_, v)| v)
+                // matched
+                && secret_param == *auth
+            {
+                Ok(request)
+            } else {
+                Err(http::StatusCode::UNAUTHORIZED)
+            }
+        } else {
+            Ok(request)
+        };
     }
 
     if let Some(auth) = auth.as_ref() {
