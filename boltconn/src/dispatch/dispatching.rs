@@ -727,6 +727,7 @@ impl DispatchingBuilder {
         }
         // Genuine proxy group, including only proxies and providers
         let mut arr = Vec::new();
+        let mut member_name = HashSet::new();
         let mut selection = None;
         // proxies
         for p in proxy_group.proxies.as_ref().unwrap_or(&vec![]) {
@@ -750,6 +751,14 @@ impl DispatchingBuilder {
                 selection = Some(content.clone());
             }
             arr.push(content);
+            if member_name.contains(p) {
+                return Err(ProxyError::DuplicateProxyInGroup {
+                    proxy: p.clone(),
+                    group: name.to_string(),
+                }
+                .into());
+            }
+            member_name.insert(p.clone());
         }
 
         // used providers
@@ -794,6 +803,14 @@ impl DispatchingBuilder {
                     selection = Some(content.clone());
                 }
                 arr.push(content);
+                if member_name.contains(p) {
+                    return Err(ProxyError::DuplicateProxyInGroup {
+                        proxy: p.to_string(),
+                        group: name.to_string(),
+                    }
+                    .into());
+                }
+                member_name.insert(p.to_string());
             }
         }
         if arr.is_empty() {

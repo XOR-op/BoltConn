@@ -114,4 +114,6 @@ pub enum ProxyError {
     ProxyFieldError(String, &'static str),
     #[error("Unknown proxy {proxy} in group {group}")]
     UnknownProxyInGroup { proxy: String, group: String },
+    #[error("Duplicate proxy {proxy} in group {group}")]
+    DuplicateProxyInGroup { proxy: String, group: String },
 }
