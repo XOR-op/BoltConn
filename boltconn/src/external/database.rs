@@ -216,7 +216,7 @@ impl DatabaseHandle {
                 c.req.method.as_str(),
                 c.resp.status.as_u16(),
                 c.resp.body_len(),
-                (c.resp.time - c.req.time).as_millis() as u64,
+                (c.resp.time.duration_since(c.req.time).unwrap_or_default()).as_millis() as u64,
                 c.req.collect_headers().join("\n"),
                 req_body,
                 c.resp.collect_headers().join("\n"),

@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use http_body_util::BodyExt;
 use hyper::{Request, Response};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::SystemTime;
 
 pub type ModifierClosure =
     Box<dyn Fn(InterceptionResult, Option<ProcessInfo>) -> Arc<dyn Modifier> + Send + Sync>;
@@ -69,7 +69,7 @@ impl Modifier for Recorder {
             version: parts.version,
             headers: parts.headers.clone(),
             body: CapturedBody::FullCapture(whole_body.clone()),
-            time: Instant::now(),
+            time: SystemTime::now(),
         };
         self.pending.insert(ctx.tag, req_copy);
         Ok((
@@ -97,7 +97,7 @@ impl Modifier for Recorder {
             version: parts.version,
             headers: parts.headers.clone(),
             body: CapturedBody::FullCapture(whole_body.clone()),
-            time: Instant::now(),
+            time: SystemTime::now(),
         };
         let req = self
             .pending

@@ -44,7 +44,8 @@ pub struct HttpInterceptSchema {
     pub method: String,
     pub status: u16,
     pub size: Option<u64>,
-    pub time: String,
+    pub start_time: u64,
+    pub duration: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

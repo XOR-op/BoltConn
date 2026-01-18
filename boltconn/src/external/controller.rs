@@ -197,7 +197,13 @@ impl Controller {
                 method: data.req.method.to_string(),
                 status: data.resp.status.as_u16(),
                 size: data.resp.body_len(),
-                time: pretty_latency(data.resp.time - data.req.time),
+                start_time: data.req.time.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                duration: pretty_latency(
+                    data.resp
+                        .time
+                        .duration_since(data.req.time)
+                        .unwrap_or_default(),
+                ),
             };
             result.push(item);
         }

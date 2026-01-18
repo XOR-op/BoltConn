@@ -175,7 +175,7 @@ impl Requester {
                     .with_cell(ele.method)
                     .with_cell(format!("{}", ele.status))
                     .with_cell(ele.size.map_or("N/A".to_string(), pretty_size))
-                    .with_cell(ele.time),
+                    .with_cell(ele.duration),
             );
         }
         println!("{}", table);

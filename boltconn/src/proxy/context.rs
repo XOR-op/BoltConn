@@ -13,7 +13,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
 use tokio::task::JoinHandle;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionProtocol {
@@ -541,7 +541,7 @@ pub struct DumpedRequest {
     pub version: http::Version,
     pub headers: http::HeaderMap<http::HeaderValue>,
     pub body: CapturedBody,
-    pub time: Instant,
+    pub time: SystemTime,
 }
 
 impl DumpedRequest {
@@ -552,7 +552,7 @@ impl DumpedRequest {
             version: parts.version,
             headers: parts.headers.clone(),
             body,
-            time: Instant::now(),
+            time: SystemTime::now(),
         }
     }
 
@@ -570,7 +570,7 @@ pub struct DumpedResponse {
     pub version: http::Version,
     pub headers: http::HeaderMap<http::HeaderValue>,
     pub body: CapturedBody,
-    pub time: Instant,
+    pub time: SystemTime,
 }
 
 impl DumpedResponse {
@@ -580,7 +580,7 @@ impl DumpedResponse {
             version: parts.version,
             headers: parts.headers.clone(),
             body,
-            time: Instant::now(),
+            time: SystemTime::now(),
         }
     }
 

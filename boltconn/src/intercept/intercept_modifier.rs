@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{SystemTime};
 
 enum ReadData {
     Full(Bytes),
@@ -234,7 +234,7 @@ impl Modifier for InterceptModifier {
                                         version: resp_parts.version,
                                         headers: resp_parts.headers.clone(),
                                         body: CapturedBody::FullCapture(resp_body.clone()),
-                                        time: Instant::now(),
+                                        time: SystemTime::now(),
                                     };
                                     let host = match &ctx.conn_info.conn_info.dst {
                                         NetworkAddr::Raw(addr) => addr.ip().to_string(),
