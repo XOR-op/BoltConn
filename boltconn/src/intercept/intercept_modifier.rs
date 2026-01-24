@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{SystemTime};
+use std::time::SystemTime;
 
 enum ReadData {
     Full(Bytes),
