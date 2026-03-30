@@ -1,6 +1,5 @@
 use crate::config::{FirewallSubnetMode, FirewallSubnetPreset, RawDockerMasqueradeConfig};
 use std::io;
-use std::net::IpAddr;
 use std::process::{Command, Stdio};
 
 /// Detects whether to use nft or iptables, and inserts NAT POSTROUTING rules
@@ -100,7 +99,7 @@ fn find_docker_subnets() -> Vec<String> {
     for iface in pnet_datalink::interfaces() {
         if iface.name.starts_with("docker") || iface.name.starts_with("br-") {
             for ip in &iface.ips {
-                if let IpAddr::V4(_) = ip.ip() {
+                if ip.ip().is_ipv4() {
                     subnets.push(ip.to_string());
                 }
             }
@@ -207,10 +206,8 @@ fn remove_rule(backend: FirewallBackend, rule: &FirewallRule) -> io::Result<()> 
         FirewallBackend::Nft => {
             // For nft, we need to find the handle of our rule to delete it.
             // List rules with handles, find ours, then delete by handle.
-            let output = command_output(
-                "nft",
-                &["-a", "list", "chain", "ip", "nat", "POSTROUTING"],
-            )?;
+            let output =
+                command_output("nft", &["-a", "list", "chain", "ip", "nat", "POSTROUTING"])?;
             for line in output.lines() {
                 // Match lines containing our subnet and tun name
                 if line.contains(&rule.subnet)
