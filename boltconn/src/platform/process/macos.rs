@@ -1,4 +1,4 @@
-use crate::platform::process::{NetworkType, ProcessInfo};
+use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo};
 use libc::c_int;
 use libproc::libproc::bsd_info::BSDInfo;
 use libproc::libproc::proc_pid::pidinfo;
@@ -122,14 +122,27 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
 // maybe the source is https://gist.github.com/nonowarn/770696
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
     let (ppid, path, name, cmdline) = get_process_info_inner(pid)?;
-    let p_name = get_process_info_inner(ppid).map(|(_, _, p_name, _)| p_name);
+    let parent = if ppid > 0 && ppid != pid {
+        get_process_info_inner(ppid)
+            .map(|(gppid, ppath, pname, pcmdline)| {
+                ParentProcess::Process(Box::new(ProcessInfo {
+                    pid: ppid,
+                    parent: ParentProcess::Ppid(gppid),
+                    path: ppath,
+                    name: pname,
+                    cmdline: pcmdline,
+                }))
+            })
+            .unwrap_or(ParentProcess::Ppid(ppid))
+    } else {
+        ParentProcess::Ppid(ppid)
+    };
     Some(ProcessInfo {
         pid,
-        ppid,
+        parent,
         path,
         name,
         cmdline,
-        parent_name: p_name,
     })
 }
 

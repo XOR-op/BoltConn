@@ -2,6 +2,7 @@ use crate::config::{ConfigError, InstrumentConfigError};
 use crate::dispatch::RuleImpl;
 use crate::dispatch::{ConnInfo, InboundInfo};
 use crate::instrument::bus::{BusMessage, BusPublisher};
+use crate::platform::process::ParentProcess;
 use interpolator::Formattable;
 use std::collections::HashMap;
 
@@ -122,16 +123,29 @@ impl FormattingObject {
             .process_info
             .as_ref()
             .map_or_else(|| na_str.to_string(), |info| info.pid.to_string());
-        let process_ppid = info
+        let process_parent_pid = info
             .process_info
             .as_ref()
-            .map_or_else(|| na_str.to_string(), |info| info.ppid.to_string());
-        let process_pname = info.process_info.as_ref().map_or_else(
+            .map_or_else(|| na_str.to_string(), |info| info.parent_pid().to_string());
+        let process_parent_name = info.process_info.as_ref().map_or_else(
             || na_str.to_string(),
-            |info| {
-                info.parent_name
-                    .clone()
-                    .unwrap_or_else(|| na_str.to_string())
+            |info| match &info.parent {
+                ParentProcess::Ppid(_) => na_str.to_string(),
+                ParentProcess::Process(parent) => parent.name.clone(),
+            },
+        );
+        let process_parent_path = info.process_info.as_ref().map_or_else(
+            || na_str.to_string(),
+            |info| match &info.parent {
+                ParentProcess::Ppid(_) => na_str.to_string(),
+                ParentProcess::Process(parent) => parent.path.clone(),
+            },
+        );
+        let process_parent_cmdline = info.process_info.as_ref().map_or_else(
+            || na_str.to_string(),
+            |info| match &info.parent {
+                ParentProcess::Ppid(_) => na_str.to_string(),
+                ParentProcess::Process(parent) => parent.cmdline.clone(),
             },
         );
 
@@ -149,8 +163,22 @@ impl FormattingObject {
             ("process.cmdline", Formattable::display(&process_cmdline)),
             ("process.path", Formattable::display(&process_path)),
             ("process.pid", Formattable::display(&process_pid)),
-            ("process.ppid", Formattable::display(&process_ppid)),
-            ("process.parent_name", Formattable::display(&process_pname)),
+            (
+                "process.parent.pid",
+                Formattable::display(&process_parent_pid),
+            ),
+            (
+                "process.parent.name",
+                Formattable::display(&process_parent_name),
+            ),
+            (
+                "process.parent.path",
+                Formattable::display(&process_parent_path),
+            ),
+            (
+                "process.parent.cmdline",
+                Formattable::display(&process_parent_cmdline),
+            ),
             ("time.rfc3389", Formattable::display(&time_rfc3389)),
             ("time.hms_ms", Formattable::display(&time_hms_ms)),
             ("time.datetime", Formattable::display(&time_datetime)),
@@ -168,7 +196,9 @@ fn test_instrument_formatting() {
     local_ip: {ip.local}, conn_type: {conn.type}, \
      inbound_type: {inbound.type}, inbound_port: {inbound.port}, inbound_user: {inbound.user}, \
      process_name: {process.name}, process_cmdline: {process.cmdline}, process_path: {process.path}, \
-     process_pid: {process.pid}, process_ppid: {process.ppid}, process_parent_name: {process.parent_name}\
+     process_pid: {process.pid}, process_parent_pid: {process.parent.pid}, \
+     process_parent_name: {process.parent.name}, process_parent_path: {process.parent.path}, \
+     process_parent_cmdline: {process.parent.cmdline}\
      time: [{time.rfc3389}, {time.hms_ms}, {time.datetime}, {time.datetime_ms}]";
     let info = ConnInfo {
         src: std::net::SocketAddr::V4(std::net::SocketAddrV4::new(

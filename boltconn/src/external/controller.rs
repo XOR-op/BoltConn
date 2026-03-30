@@ -4,14 +4,15 @@ use crate::dispatch::{GeneralProxy, Latency};
 use crate::external::{SharedDispatching, StreamLoggerRecv, StreamLoggerSend};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::Dns;
+use crate::platform::process::ParentProcess;
 use crate::proxy::{
     ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
     latency_test,
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
-    HttpInterceptSchema, MasterConnectionStatus, ProcessSchema, ProxyData, SessionSchema,
-    TrafficResp, TunStatusSchema,
+    HttpInterceptSchema, MasterConnectionStatus, ProcessParentSchema, ProcessSchema, ProxyData,
+    SessionSchema, TrafficResp, TunStatusSchema,
 };
 use std::collections::HashSet;
 use std::io::Write;
@@ -119,13 +120,11 @@ impl Controller {
             destination: info.conn_info.dst.to_string(),
             protocol: info.session_proto.write().unwrap().to_string(),
             proxy: info.outbound_name.clone(),
-            process: info.conn_info.process_info.as_ref().map(|i| ProcessSchema {
-                pid: i.pid,
-                path: i.path.clone(),
-                name: i.name.clone(),
-                cmdline: i.cmdline.clone(),
-                parent_name: i.parent_name.clone(),
-            }),
+            process: info
+                .conn_info
+                .process_info
+                .as_ref()
+                .map(Self::to_process_schema),
             upload: info.upload_traffic.load(Ordering::Relaxed),
             download: info.download_traffic.load(Ordering::Relaxed),
             start_time: info
@@ -134,6 +133,31 @@ impl Controller {
                 .unwrap()
                 .as_secs(),
             active: !info.done.load(Ordering::Relaxed),
+        }
+    }
+
+    fn to_process_schema(info: &crate::platform::process::ProcessInfo) -> ProcessSchema {
+        let parent = match &info.parent {
+            ParentProcess::Ppid(ppid) => ProcessParentSchema {
+                pid: *ppid,
+                name: None,
+                path: None,
+                cmdline: None,
+            },
+            ParentProcess::Process(parent) => ProcessParentSchema {
+                pid: parent.pid,
+                name: Some(parent.name.clone()),
+                path: Some(parent.path.clone()),
+                cmdline: Some(parent.cmdline.clone()),
+            },
+        };
+
+        ProcessSchema {
+            pid: info.pid,
+            path: info.path.clone(),
+            name: info.name.clone(),
+            cmdline: info.cmdline.clone(),
+            parent,
         }
     }
 

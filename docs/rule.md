@@ -560,7 +560,10 @@ Logging and debugging action with template messages.
 - `{addr.dst}` - Destination address
 - `{process.cmdline}` - Process command line
 - `{process.path}` - Process path
-- `{process.parent_name}` - Parent process name
+- `{process.parent.pid}` - Parent process PID
+- `{process.parent.name}` - Parent process name
+- `{process.parent.path}` - Parent process path
+- `{process.parent.cmdline}` - Parent process command line
 
 **Example:**
 
@@ -573,7 +576,7 @@ Logging and debugging action with template messages.
 - .INSTRUMENT:
     id: 101
     matches: PROCESS-NAME, suspicious-app
-    message: "Suspicious app {process.path} (parent: {process.parent_name}) accessing {addr.dst}"
+    message: "Suspicious app {process.path} (parent: {process.parent.name}) accessing {addr.dst}"
 ```
 
 Instrument actions log messages when rules match, useful for debugging rule evaluation.

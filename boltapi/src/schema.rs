@@ -8,7 +8,16 @@ pub struct ProcessSchema {
     pub path: String,
     pub name: String,
     pub cmdline: String,
-    pub parent_name: Option<String>,
+    pub parent: ProcessParentSchema,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessParentSchema {
+    pub pid: i32,
+    pub name: Option<String>,
+    pub path: Option<String>,
+    pub cmdline: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

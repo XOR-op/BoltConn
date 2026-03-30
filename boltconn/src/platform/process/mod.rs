@@ -31,12 +31,39 @@ impl std::fmt::Display for NetworkType {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ParentProcess {
+    Ppid(i32),
+    Process(Box<ProcessInfo>),
+}
+
+impl Default for ParentProcess {
+    fn default() -> Self {
+        Self::Ppid(0)
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ProcessInfo {
     pub pid: i32,
-    pub ppid: i32,
+    pub parent: ParentProcess,
     pub path: String,
     pub name: String,
     pub cmdline: String,
-    pub parent_name: Option<String>,
+}
+
+impl ProcessInfo {
+    pub fn parent_pid(&self) -> i32 {
+        match &self.parent {
+            ParentProcess::Ppid(ppid) => *ppid,
+            ParentProcess::Process(parent) => parent.pid,
+        }
+    }
+
+    pub fn parent_info(&self) -> Option<&ProcessInfo> {
+        match &self.parent {
+            ParentProcess::Ppid(_) => None,
+            ParentProcess::Process(parent) => Some(parent.as_ref()),
+        }
+    }
 }

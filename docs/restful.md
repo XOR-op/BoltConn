@@ -88,7 +88,12 @@ Real-time connection list stream.
       "path": "/usr/bin/firefox",
       "name": "firefox",
       "cmdline": "firefox https://example.com",
-      "parent_name": "bash"
+      "parent": {
+        "pid": 4321,
+        "name": "bash",
+        "path": "/bin/bash",
+        "cmdline": "bash"
+      }
     },
     "upload": 4096,
     "download": 16384,
@@ -232,7 +237,12 @@ Get all active connections.
       "path": "/usr/bin/firefox",
       "name": "firefox",
       "cmdline": "firefox https://example.com",
-      "parent_name": "bash"
+      "parent": {
+        "pid": 4321,
+        "name": "bash",
+        "path": "/bin/bash",
+        "cmdline": "bash"
+      }
     },
     "upload": 4096,
     "download": 16384,
