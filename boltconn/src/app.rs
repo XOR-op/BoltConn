@@ -201,6 +201,8 @@ impl App {
                     .unwrap_or("placeholder device name for rootless mode"),
                 &outbound_iface,
                 rootless_mode,
+                #[cfg(target_os = "linux")]
+                config.inbound.firewall.docker_masquerade.clone(),
             )));
             if will_enable_tun && !rootless_mode {
                 // tokio::time::sleep(Duration::from_secs(5)).await;

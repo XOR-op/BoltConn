@@ -37,6 +37,8 @@ pub struct RawInboundConfig {
     pub enable_icmp_proxy: bool,
     pub http: Option<SingleOrVec<RawInboundServiceConfig>>,
     pub socks5: Option<SingleOrVec<RawInboundServiceConfig>>,
+    #[serde(default)]
+    pub firewall: RawFirewallConfig,
 }
 
 #[test]
@@ -107,6 +109,50 @@ socks5:
     let err: serde_yaml::Result<RawInboundConfig> = serde_yaml::from_str(fail);
     assert!(err.is_err());
     println!("{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}", n, s1, s2, c1, c2, c3);
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct RawFirewallConfig {
+    #[serde(alias = "docker-masquerade", default)]
+    pub docker_masquerade: RawDockerMasqueradeConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RawDockerMasqueradeConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub subnet: FirewallSubnetMode,
+}
+
+impl Default for RawDockerMasqueradeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            subnet: FirewallSubnetMode::default(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum FirewallSubnetMode {
+    Named(FirewallSubnetPreset),
+    List(Vec<String>),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FirewallSubnetPreset {
+    #[default]
+    Default,
+    Auto,
+}
+
+impl Default for FirewallSubnetMode {
+    fn default() -> Self {
+        FirewallSubnetMode::Named(FirewallSubnetPreset::Default)
+    }
 }
 
 pub(crate) fn default_inbound_ip_addr() -> IpAddr {

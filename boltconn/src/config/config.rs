@@ -225,6 +225,7 @@ fn default_inbound_config() -> RawInboundConfig {
         enable_icmp_proxy: true,
         http: None,
         socks5: None,
+        firewall: Default::default(),
     }
 }
 

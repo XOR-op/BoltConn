@@ -1,5 +1,6 @@
 mod controller;
 mod database;
+pub mod firewall;
 mod instrument_server;
 mod logger;
 mod mmdb;

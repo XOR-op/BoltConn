@@ -5,6 +5,11 @@ use ipnet::IpNet;
 use std::io;
 use std::net::Ipv4Addr;
 
+#[cfg(target_os = "linux")]
+use crate::config::RawDockerMasqueradeConfig;
+#[cfg(target_os = "linux")]
+use crate::external::firewall::FirewallGuard;
+
 pub struct TunConfigure {
     dns_addr: Ipv4Addr,
     device_name: String,
@@ -12,6 +17,10 @@ pub struct TunConfigure {
     dns_handle: Option<SystemDnsHandle>,
     routing_table_flag: bool,
     rootless: bool,
+    #[cfg(target_os = "linux")]
+    docker_masquerade_config: RawDockerMasqueradeConfig,
+    #[cfg(target_os = "linux")]
+    firewall_guard: Option<FirewallGuard>,
 }
 
 macro_rules! check_rootless {
@@ -27,7 +36,13 @@ macro_rules! check_rootless {
 }
 
 impl TunConfigure {
-    pub fn new(dns_addr: Ipv4Addr, device_name: &str, outbound_name: &str, rootless: bool) -> Self {
+    pub fn new(
+        dns_addr: Ipv4Addr,
+        device_name: &str,
+        outbound_name: &str,
+        rootless: bool,
+        #[cfg(target_os = "linux")] docker_masquerade_config: RawDockerMasqueradeConfig,
+    ) -> Self {
         Self {
             dns_addr,
             device_name: device_name.to_string(),
@@ -35,6 +50,10 @@ impl TunConfigure {
             dns_handle: None,
             routing_table_flag: false,
             rootless,
+            #[cfg(target_os = "linux")]
+            docker_masquerade_config,
+            #[cfg(target_os = "linux")]
+            firewall_guard: None,
         }
     }
 
@@ -44,6 +63,11 @@ impl TunConfigure {
         if let Err(e) = self.enable_routing_table() {
             self.disable_dns();
             return Err(e);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.firewall_guard =
+                FirewallGuard::setup(&self.device_name, &self.docker_masquerade_config);
         }
         tracing::info!("Tun mode has been enabled");
         Ok(())
@@ -57,6 +81,11 @@ impl TunConfigure {
                 );
             }
             return;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Drop firewall rules before removing routes
+            self.firewall_guard.take();
         }
         self.disable_routing_table();
         self.disable_dns();
