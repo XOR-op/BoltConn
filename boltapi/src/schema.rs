@@ -9,7 +9,7 @@ pub struct ProcessSchema {
     pub name: String,
     pub cmdline: String,
     pub cwd: String,
-    pub parent: ProcessParentSchema,
+    pub parents: Vec<ProcessParentSchema>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

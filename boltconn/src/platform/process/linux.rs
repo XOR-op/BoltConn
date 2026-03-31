@@ -306,21 +306,14 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
     find_pid_by_inode(inode, None)
 }
 
-pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
+pub fn get_process_info(pid: i32, depth: u32) -> Option<ProcessInfo> {
     let (ppid, path, name, cmdline, cwd) = get_process_info_inner(pid)?;
-    let parent = if ppid > 0 && ppid != pid {
-        get_process_info_inner(ppid)
-            .map(|(gppid, ppath, pname, pcmdline, pcwd)| {
-                ParentProcess::Process(Box::new(ProcessInfo {
-                    pid: ppid,
-                    parent: ParentProcess::Ppid(gppid),
-                    path: ppath,
-                    name: pname,
-                    cmdline: pcmdline,
-                    cwd: pcwd,
-                }))
-            })
+    let parent = if depth > 0 && ppid > 0 && ppid != pid {
+        get_process_info(ppid, depth - 1)
+            .map(|info| ParentProcess::Process(Box::new(info)))
             .unwrap_or(ParentProcess::Ppid(ppid))
+    } else if ppid <= 0 || ppid == pid {
+        ParentProcess::None
     } else {
         ParentProcess::Ppid(ppid)
     };

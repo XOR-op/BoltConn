@@ -130,21 +130,21 @@ impl FormattingObject {
         let process_parent_name = info.process_info.as_ref().map_or_else(
             || na_str.to_string(),
             |info| match &info.parent {
-                ParentProcess::Ppid(_) => na_str.to_string(),
+                ParentProcess::None | ParentProcess::Ppid(_) => na_str.to_string(),
                 ParentProcess::Process(parent) => parent.name.clone(),
             },
         );
         let process_parent_path = info.process_info.as_ref().map_or_else(
             || na_str.to_string(),
             |info| match &info.parent {
-                ParentProcess::Ppid(_) => na_str.to_string(),
+                ParentProcess::None | ParentProcess::Ppid(_) => na_str.to_string(),
                 ParentProcess::Process(parent) => parent.path.clone(),
             },
         );
         let process_parent_cmdline = info.process_info.as_ref().map_or_else(
             || na_str.to_string(),
             |info| match &info.parent {
-                ParentProcess::Ppid(_) => na_str.to_string(),
+                ParentProcess::None | ParentProcess::Ppid(_) => na_str.to_string(),
                 ParentProcess::Process(parent) => parent.cmdline.clone(),
             },
         );

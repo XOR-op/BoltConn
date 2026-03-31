@@ -42,6 +42,7 @@ pub struct Dispatcher {
     intercept_mgr: ArcSwap<InterceptionManager>,
     wireguard_mgr: Arc<WireguardManager>,
     ssh_mgr: Arc<SshManager>,
+    pub(crate) process_info_depth: u32,
 }
 
 impl Dispatcher {
@@ -56,6 +57,7 @@ impl Dispatcher {
         modifier: ModifierClosure,
         intercept_mgr: Arc<InterceptionManager>,
         wireguard_mgr: Arc<WireguardManager>,
+        process_info_depth: u32,
     ) -> Self {
         let ssh_mgr = SshManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         Self {
@@ -69,6 +71,7 @@ impl Dispatcher {
             intercept_mgr: ArcSwap::new(intercept_mgr),
             wireguard_mgr,
             ssh_mgr: Arc::new(ssh_mgr),
+            process_info_depth,
         }
     }
 
@@ -279,7 +282,9 @@ impl Dispatcher {
         stream: S,
     ) -> Result<(), DispatchError> {
         let process_info = process::get_pid(src_addr, process::NetworkType::Tcp)
-            .map_or(None, process::get_process_info);
+            .map_or(None, |pid| {
+                process::get_process_info(pid, self.process_info_depth)
+            });
 
         // conn info
         let abort_handle = ConnAbortHandle::new();

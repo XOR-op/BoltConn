@@ -86,8 +86,9 @@ impl UdpInboundInner {
             }
             Entry::Vacant(entry) => {
                 let (send_tx, send_rx) = mpsc::channel(20);
-                let proc_info =
-                    process::get_pid(src, NetworkType::Udp).map_or(None, process::get_process_info);
+                let proc_info = process::get_pid(src, NetworkType::Udp).map_or(None, |pid| {
+                    process::get_process_info(pid, self.dispatcher.process_info_depth)
+                });
                 let probe = self.session_mgr.get_udp_probe(src);
 
                 // push payload

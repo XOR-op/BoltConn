@@ -3,7 +3,7 @@ use crate::common::call_chan::CallParameter;
 use crate::config::{
     LinkedState, LoadedConfig, RawDnsConfig, RawInboundConfig, RawInboundServiceConfig,
     RawInstrumentConfig, RawRootCfg, RawWebControllerConfig, SingleOrVec, default_inbound_ip_addr,
-    safe_join_path,
+    default_process_info_depth, safe_join_path,
 };
 use crate::dispatch::{DispatchingBuilder, InboundManager, RuleSet, RuleSetBuilder};
 use crate::external::{
@@ -164,6 +164,11 @@ impl App {
                 }),
                 interception_mgr,
                 wg_mgr.clone(),
+                config
+                    .dispatching
+                    .as_ref()
+                    .map(|d| d.process_info_depth)
+                    .unwrap_or(default_process_info_depth()),
             ))
         };
 

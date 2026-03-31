@@ -137,22 +137,33 @@ impl Controller {
     }
 
     fn to_process_schema(info: &crate::platform::process::ProcessInfo) -> ProcessSchema {
-        let parent = match &info.parent {
-            ParentProcess::Ppid(ppid) => ProcessParentSchema {
-                pid: *ppid,
-                name: None,
-                path: None,
-                cmdline: None,
-                cwd: None,
-            },
-            ParentProcess::Process(parent) => ProcessParentSchema {
-                pid: parent.pid,
-                name: Some(parent.name.clone()),
-                path: Some(parent.path.clone()),
-                cmdline: Some(parent.cmdline.clone()),
-                cwd: Some(parent.cwd.clone()),
-            },
-        };
+        let mut parents = Vec::new();
+        let mut current = &info.parent;
+        loop {
+            match current {
+                ParentProcess::None => break,
+                ParentProcess::Ppid(ppid) => {
+                    parents.push(ProcessParentSchema {
+                        pid: *ppid,
+                        name: None,
+                        path: None,
+                        cmdline: None,
+                        cwd: None,
+                    });
+                    break;
+                }
+                ParentProcess::Process(p) => {
+                    parents.push(ProcessParentSchema {
+                        pid: p.pid,
+                        name: Some(p.name.clone()),
+                        path: Some(p.path.clone()),
+                        cmdline: Some(p.cmdline.clone()),
+                        cwd: Some(p.cwd.clone()),
+                    });
+                    current = &p.parent;
+                }
+            }
+        }
 
         ProcessSchema {
             pid: info.pid,
@@ -160,7 +171,7 @@ impl Controller {
             name: info.name.clone(),
             cmdline: info.cmdline.clone(),
             cwd: info.cwd.clone(),
-            parent,
+            parents,
         }
     }
 

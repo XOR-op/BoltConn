@@ -54,6 +54,8 @@ pub struct DispatchingConfig {
     pub sni_sniff: bool,
     #[serde(alias = "geoip-db")]
     pub geoip_db: Option<String>,
+    #[serde(alias = "process-info-depth", default = "default_process_info_depth")]
+    pub process_info_depth: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -201,6 +203,10 @@ pub(super) fn default_true() -> bool {
 
 pub(super) fn default_false() -> bool {
     false
+}
+
+pub fn default_process_info_depth() -> u32 {
+    1
 }
 
 fn default_local_proxy() -> HashMap<String, RawProxyLocalCfg> {
