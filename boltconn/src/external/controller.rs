@@ -143,12 +143,14 @@ impl Controller {
                 name: None,
                 path: None,
                 cmdline: None,
+                cwd: None,
             },
             ParentProcess::Process(parent) => ProcessParentSchema {
                 pid: parent.pid,
                 name: Some(parent.name.clone()),
                 path: Some(parent.path.clone()),
                 cmdline: Some(parent.cmdline.clone()),
+                cwd: Some(parent.cwd.clone()),
             },
         };
 
@@ -157,6 +159,7 @@ impl Controller {
             path: info.path.clone(),
             name: info.name.clone(),
             cmdline: info.cmdline.clone(),
+            cwd: info.cwd.clone(),
             parent,
         }
     }

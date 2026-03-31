@@ -50,6 +50,7 @@ pub struct ProcessInfo {
     pub path: String,
     pub name: String,
     pub cmdline: String,
+    pub cwd: String,
 }
 
 impl ProcessInfo {

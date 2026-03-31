@@ -8,6 +8,7 @@ pub struct ProcessSchema {
     pub path: String,
     pub name: String,
     pub cmdline: String,
+    pub cwd: String,
     pub parent: ProcessParentSchema,
 }
 
@@ -18,6 +19,7 @@ pub struct ProcessParentSchema {
     pub name: Option<String>,
     pub path: Option<String>,
     pub cmdline: Option<String>,
+    pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -2,7 +2,7 @@ use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo};
 use libc::c_int;
 use libproc::libproc::bsd_info::BSDInfo;
 use libproc::libproc::proc_pid::pidinfo;
-use std::ffi::{CString, OsStr, c_void};
+use std::ffi::{CStr, CString, OsStr, c_void};
 use std::io;
 use std::io::{ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -121,16 +121,17 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
 // from dalance/procs
 // maybe the source is https://gist.github.com/nonowarn/770696
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
-    let (ppid, path, name, cmdline) = get_process_info_inner(pid)?;
+    let (ppid, path, name, cmdline, cwd) = get_process_info_inner(pid)?;
     let parent = if ppid > 0 && ppid != pid {
         get_process_info_inner(ppid)
-            .map(|(gppid, ppath, pname, pcmdline)| {
+            .map(|(gppid, ppath, pname, pcmdline, pcwd)| {
                 ParentProcess::Process(Box::new(ProcessInfo {
                     pid: ppid,
                     parent: ParentProcess::Ppid(gppid),
                     path: ppath,
                     name: pname,
                     cmdline: pcmdline,
+                    cwd: pcwd,
                 }))
             })
             .unwrap_or(ParentProcess::Ppid(ppid))
@@ -143,10 +144,30 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
         path,
         name,
         cmdline,
+        cwd,
     })
 }
 
-fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
+fn get_process_cwd(pid: i32) -> String {
+    unsafe {
+        let mut vnodeinfo: libc::proc_vnodepathinfo = std::mem::zeroed();
+        let ret = libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            &mut vnodeinfo as *mut _ as *mut c_void,
+            std::mem::size_of::<libc::proc_vnodepathinfo>() as c_int,
+        );
+        if ret <= 0 {
+            return String::new();
+        }
+        CStr::from_ptr(vnodeinfo.pvi_cdir.vip_path.as_ptr() as *const _)
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String, String)> {
     let mut size = get_arg_max()?;
     let mut proc_args = Vec::with_capacity(size);
     let ptr: *mut u8 = proc_args.as_mut_slice().as_mut_ptr();
@@ -205,8 +226,9 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
             }
 
             let bsd_info: BSDInfo = pidinfo(pid, 0).ok()?;
+            let cwd = get_process_cwd(pid);
 
-            Some((bsd_info.pbi_ppid as i32, path, name, cmd.join(" ")))
+            Some((bsd_info.pbi_ppid as i32, path, name, cmd.join(" "), cwd))
         } else {
             None
         }

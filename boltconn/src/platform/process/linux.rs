@@ -307,16 +307,17 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
 }
 
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
-    let (ppid, path, name, cmdline) = get_process_info_inner(pid)?;
+    let (ppid, path, name, cmdline, cwd) = get_process_info_inner(pid)?;
     let parent = if ppid > 0 && ppid != pid {
         get_process_info_inner(ppid)
-            .map(|(gppid, ppath, pname, pcmdline)| {
+            .map(|(gppid, ppath, pname, pcmdline, pcwd)| {
                 ParentProcess::Process(Box::new(ProcessInfo {
                     pid: ppid,
                     parent: ParentProcess::Ppid(gppid),
                     path: ppath,
                     name: pname,
                     cmdline: pcmdline,
+                    cwd: pcwd,
                 }))
             })
             .unwrap_or(ParentProcess::Ppid(ppid))
@@ -329,10 +330,11 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
         path,
         name,
         cmdline,
+        cwd,
     })
 }
 
-fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
+fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String, String)> {
     let proc_object = procfs::process::Process::new(pid).ok()?;
     let proc_stat = proc_object.stat().ok()?;
     let exe_link = format!("/proc/{}/exe", pid);
@@ -358,6 +360,11 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
         .trim_matches(char::from(0))
         .to_string();
 
+    let cwd = std::fs::read_link(format!("/proc/{}/cwd", pid))
+        .ok()
+        .and_then(|p| p.into_os_string().into_string().ok())
+        .unwrap_or_default();
+
     Some((
         proc_stat.ppid,
         path.replace('\n', ""),
@@ -365,6 +372,7 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
             .into_owned()
             .replace('\n', ""),
         cmdline,
+        cwd,
     ))
 }
 

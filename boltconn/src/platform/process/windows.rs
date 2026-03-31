@@ -71,16 +71,17 @@ fn get_table(family: ADDRESS_FAMILY, net_type: NetworkType) -> std::io::Result<V
 }
 
 pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
-    let (ppid, path, name, cmdline) = get_process_info_inner(pid)?;
+    let (ppid, path, name, cmdline, cwd) = get_process_info_inner(pid)?;
     let parent = if ppid > 0 && ppid != pid {
         get_process_info_inner(ppid)
-            .map(|(gppid, ppath, pname, pcmdline)| {
+            .map(|(gppid, ppath, pname, pcmdline, pcwd)| {
                 ParentProcess::Process(Box::new(ProcessInfo {
                     pid: ppid,
                     parent: ParentProcess::Ppid(gppid),
                     path: ppath,
                     name: pname,
                     cmdline: pcmdline,
+                    cwd: pcwd,
                 }))
             })
             .unwrap_or(ParentProcess::Ppid(ppid))
@@ -93,10 +94,11 @@ pub fn get_process_info(pid: i32) -> Option<ProcessInfo> {
         path,
         name,
         cmdline,
+        cwd,
     })
 }
 
-fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
+fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String, String)> {
     match pid {
         0 => {
             return Some((
@@ -104,9 +106,18 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
                 "".to_string(),
                 ":System Idle Process".to_string(),
                 "".to_string(),
+                "".to_string(),
             ));
         }
-        4 => return Some((0, "".to_string(), ":System".to_string(), "".to_string())),
+        4 => {
+            return Some((
+                0,
+                "".to_string(),
+                ":System".to_string(),
+                "".to_string(),
+                "".to_string(),
+            ));
+        }
         _ => {}
     }
     let handle = unsafe {
@@ -144,9 +155,11 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String)> {
         unsafe { read_utf16_from_process(handle, &parameters.CommandLine) }.unwrap_or_default();
     let path =
         unsafe { read_utf16_from_process(handle, &parameters.ImagePathName) }.unwrap_or_default();
+    let cwd = unsafe { read_utf16_from_process(handle, &parameters.CurrentDirectory.DosPath) }
+        .unwrap_or_default();
     let name = path.rsplit('\\').next().unwrap_or("UNKNOWN").to_owned();
     let _ = unsafe { CloseHandle(handle) };
-    Some((ppid, path, name, cmdline))
+    Some((ppid, path, name, cmdline, cwd))
 }
 
 unsafe fn read_from_process<T: Sized>(handle: HANDLE, addr: *const T) -> Option<T> {
