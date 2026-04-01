@@ -296,10 +296,10 @@ fn find_inode_in_other_namespaces(addr: SocketAddr, net_type: NetworkType) -> Re
 
 pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
     // Fast path: host namespace SOCK_DIAG
-    if let Ok((inode, uid)) = get_inode_and_uid(addr, net_type) {
-        if let Ok(pid) = find_pid_by_inode(inode, Some(uid)) {
-            return Ok(pid);
-        }
+    if let Ok((inode, uid)) = get_inode_and_uid(addr, net_type)
+        && let Ok(pid) = find_pid_by_inode(inode, Some(uid))
+    {
+        return Ok(pid);
     }
     // Slow path: search other network namespaces via /proc
     let inode = find_inode_in_other_namespaces(addr, net_type)?;
