@@ -560,10 +560,24 @@ Logging and debugging action with template messages.
 - `{addr.dst}` - Destination address
 - `{process.cmdline}` - Process command line
 - `{process.path}` - Process path
-- `{process.parent.pid}` - Parent process PID
-- `{process.parent.name}` - Parent process name
-- `{process.parent.path}` - Parent process path
-- `{process.parent.cmdline}` - Parent process command line
+- `{process.parent.pid}` - Immediate parent PID
+- `{process.parent.name}` - Immediate parent name
+- `{process.parent.path}` - Immediate parent path
+- `{process.parent.cmdline}` - Immediate parent command line
+- `{process.parent.all.json}` - Compact JSON array of all collected ancestors, nearest parent first
+- `{process.parents.0.pid}` - Immediate parent PID
+- `{process.parents.0.name}` - Immediate parent name
+- `{process.parents.1.name}` - Grandparent name
+- `{process.parents.<n>.pid}` - Ancestor PID at 0-based index `n`
+- `{process.parents.<n>.name}` - Ancestor name at 0-based index `n`
+- `{process.parents.<n>.path}` - Ancestor path at 0-based index `n`
+- `{process.parents.<n>.cmdline}` - Ancestor command line at 0-based index `n`
+
+If the ancestor exists only as a PID fallback, `{process.parents.<n>.pid}` is populated and the
+other fields return `N/A`. If the requested ancestor is unavailable, all fields return `N/A`.
+`{process.parent.all.json}` always returns valid JSON. It uses the same parent element shape as
+the REST connection API and returns `[]` when no parent hierarchy is available. How many ancestors
+are available depends on `dispatching.process-info-depth`.
 
 **Example:**
 
@@ -577,6 +591,16 @@ Logging and debugging action with template messages.
     id: 101
     matches: PROCESS-NAME, suspicious-app
     message: "Suspicious app {process.path} (parent: {process.parent.name}) accessing {addr.dst}"
+
+- .INSTRUMENT:
+    id: 102
+    matches: PROCESS-NAME, curl
+    message: "[{time.hms_ms}] {process.name} <- {process.parents.0.name} <- {process.parents.1.name} <- {process.parents.2.name}"
+
+- .INSTRUMENT:
+    id: 103
+    matches: PROCESS-NAME, curl
+    message: "parent_json={process.parent.all.json}"
 ```
 
 Instrument actions log messages when rules match, useful for debugging rule evaluation.
