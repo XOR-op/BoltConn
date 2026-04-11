@@ -1,4 +1,4 @@
-use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo};
+use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo, ProcessInfoDepth};
 use libc::c_int;
 use libproc::libproc::bsd_info::BSDInfo;
 use libproc::libproc::proc_pid::pidinfo;
@@ -120,10 +120,10 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<i32> {
 
 // from dalance/procs
 // maybe the source is https://gist.github.com/nonowarn/770696
-pub fn get_process_info(pid: i32, depth: u32) -> Option<ProcessInfo> {
+pub fn get_process_info(pid: i32, depth: ProcessInfoDepth) -> Option<ProcessInfo> {
     let (ppid, path, name, cmdline, cwd) = get_process_info_inner(pid)?;
-    let parent = if depth > 0 && ppid > 0 && ppid != pid {
-        get_process_info(ppid, depth - 1)
+    let parent = if let Some(next_depth) = depth.next_level().filter(|_| ppid > 0 && ppid != pid) {
+        get_process_info(ppid, next_depth)
             .map(|info| ParentProcess::Process(Box::new(info)))
             .unwrap_or(ParentProcess::Ppid(ppid))
     } else if ppid <= 0 || ppid == pid {

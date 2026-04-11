@@ -16,6 +16,9 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkType {
     Tcp,
@@ -28,6 +31,90 @@ impl std::fmt::Display for NetworkType {
             NetworkType::Tcp => write!(f, "tcp"),
             NetworkType::Udp => write!(f, "udp"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessInfoDepth {
+    Limited(u32),
+    Unlimited,
+}
+
+impl ProcessInfoDepth {
+    pub fn next_level(self) -> Option<Self> {
+        match self {
+            Self::Limited(0) => None,
+            Self::Limited(depth) => Some(Self::Limited(depth - 1)),
+            Self::Unlimited => Some(Self::Unlimited),
+        }
+    }
+}
+
+impl Serialize for ProcessInfoDepth {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Limited(depth) => serializer.serialize_u32(*depth),
+            Self::Unlimited => serializer.serialize_str("unlimited"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProcessInfoDepth {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ProcessInfoDepthVisitor;
+
+        impl Visitor<'_> for ProcessInfoDepthVisitor {
+            type Value = ProcessInfoDepth;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a non-negative integer or the string \"unlimited\"")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                u32::try_from(value)
+                    .map(ProcessInfoDepth::Limited)
+                    .map_err(|_| E::custom("process_info_depth exceeds u32"))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                let value = u32::try_from(value)
+                    .map_err(|_| E::custom("process_info_depth must be non-negative"))?;
+                Ok(ProcessInfoDepth::Limited(value))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match value {
+                    "unlimited" => Ok(ProcessInfoDepth::Unlimited),
+                    _ => Err(E::custom(format!(
+                        "invalid process_info_depth {value:?}, expected a non-negative integer or \"unlimited\""
+                    ))),
+                }
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(&value)
+            }
+        }
+
+        deserializer.deserialize_any(ProcessInfoDepthVisitor)
     }
 }
 
@@ -63,5 +150,27 @@ impl ProcessInfo {
             ParentProcess::Ppid(_) => None,
             ParentProcess::Process(parent) => Some(parent.as_ref()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProcessInfoDepth;
+
+    #[test]
+    fn test_process_info_depth_next_level_for_limited_depth() {
+        assert_eq!(
+            ProcessInfoDepth::Limited(2).next_level(),
+            Some(ProcessInfoDepth::Limited(1))
+        );
+        assert_eq!(ProcessInfoDepth::Limited(0).next_level(), None);
+    }
+
+    #[test]
+    fn test_process_info_depth_next_level_for_unlimited_depth() {
+        assert_eq!(
+            ProcessInfoDepth::Unlimited.next_level(),
+            Some(ProcessInfoDepth::Unlimited)
+        );
     }
 }

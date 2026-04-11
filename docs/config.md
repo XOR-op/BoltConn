@@ -183,6 +183,7 @@ dispatching:
   sni_sniff: false           # Enable SNI sniffing (default: false)
   geoip_db: /path/to/GeoLite2-Country.mmdb  # Optional GeoIP database
   process_info_depth: 1      # Parent process levels to collect (default: 1)
+  # process_info_depth: unlimited
 ```
 
 **Note:** The `geoip_db` is required if you want to use `GEOIP` or `ASN` rules.
@@ -191,6 +192,8 @@ dispatching:
 REST connection data, and `.INSTRUMENT` templates. A depth of `1` includes the immediate parent,
 `2` includes the grandparent, and so on. For example, to use
 `{process.parents.2.name}` in `.INSTRUMENT`, set `process_info_depth` to at least `3`.
+Set `process_info_depth: unlimited` to keep walking parent processes until the root process
+or until parent metadata can no longer be read.
 
 ### Database Dumping
 

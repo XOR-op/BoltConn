@@ -8,7 +8,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, InboundExtra, InboundInfo, ProxyImpl};
 use crate::intercept::{HttpIntercept, HttpsIntercept, InterceptionManager, ModifierClosure};
 use crate::network::dns::Dns;
-use crate::platform::process::{NetworkType, ProcessInfo};
+use crate::platform::process::{NetworkType, ProcessInfo, ProcessInfoDepth};
 use crate::platform::{get_iface_address, process};
 use crate::proxy::{ConnAbortHandle, ConnContext, ContextManager, NetworkAddr};
 use arc_swap::ArcSwap;
@@ -42,7 +42,7 @@ pub struct Dispatcher {
     intercept_mgr: ArcSwap<InterceptionManager>,
     wireguard_mgr: Arc<WireguardManager>,
     ssh_mgr: Arc<SshManager>,
-    pub(crate) process_info_depth: u32,
+    pub(crate) process_info_depth: ProcessInfoDepth,
 }
 
 impl Dispatcher {
@@ -57,7 +57,7 @@ impl Dispatcher {
         modifier: ModifierClosure,
         intercept_mgr: Arc<InterceptionManager>,
         wireguard_mgr: Arc<WireguardManager>,
-        process_info_depth: u32,
+        process_info_depth: ProcessInfoDepth,
     ) -> Self {
         let ssh_mgr = SshManager::new(iface_name, dns.clone(), Duration::from_secs(180));
         Self {

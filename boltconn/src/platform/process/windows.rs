@@ -17,7 +17,7 @@ use windows::{
     },
 };
 
-use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo};
+use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo, ProcessInfoDepth};
 use std::{
     mem,
     net::{IpAddr, SocketAddr},
@@ -70,10 +70,10 @@ fn get_table(family: ADDRESS_FAMILY, net_type: NetworkType) -> std::io::Result<V
     Err(std::io::ErrorKind::NotFound.into())
 }
 
-pub fn get_process_info(pid: i32, depth: u32) -> Option<ProcessInfo> {
+pub fn get_process_info(pid: i32, depth: ProcessInfoDepth) -> Option<ProcessInfo> {
     let (ppid, path, name, cmdline, cwd) = get_process_info_inner(pid)?;
-    let parent = if depth > 0 && ppid > 0 && ppid != pid {
-        get_process_info(ppid, depth - 1)
+    let parent = if let Some(next_depth) = depth.next_level().filter(|_| ppid > 0 && ppid != pid) {
+        get_process_info(ppid, next_depth)
             .map(|info| ParentProcess::Process(Box::new(info)))
             .unwrap_or(ParentProcess::Ppid(ppid))
     } else if ppid <= 0 || ppid == pid {

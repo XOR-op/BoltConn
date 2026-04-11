@@ -1,4 +1,4 @@
-use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo};
+use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo, ProcessInfoDepth};
 use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload, constants::*};
 use netlink_packet_sock_diag::{
     SockDiagMessage,
@@ -306,10 +306,10 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> Result<libc::pid_t> {
     find_pid_by_inode(inode, None)
 }
 
-pub fn get_process_info(pid: i32, depth: u32) -> Option<ProcessInfo> {
+pub fn get_process_info(pid: i32, depth: ProcessInfoDepth) -> Option<ProcessInfo> {
     let (ppid, path, name, cmdline, cwd) = get_process_info_inner(pid)?;
-    let parent = if depth > 0 && ppid > 0 && ppid != pid {
-        get_process_info(ppid, depth - 1)
+    let parent = if let Some(next_depth) = depth.next_level().filter(|_| ppid > 0 && ppid != pid) {
+        get_process_info(ppid, next_depth)
             .map(|info| ParentProcess::Process(Box::new(info)))
             .unwrap_or(ParentProcess::Ppid(ppid))
     } else if ppid <= 0 || ppid == pid {

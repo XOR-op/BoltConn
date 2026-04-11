@@ -577,7 +577,9 @@ If the ancestor exists only as a PID fallback, `{process.parents.<n>.pid}` is po
 other fields return `N/A`. If the requested ancestor is unavailable, all fields return `N/A`.
 `{process.parent.all.json}` always returns valid JSON. It uses the same parent element shape as
 the REST connection API and returns `[]` when no parent hierarchy is available. How many ancestors
-are available depends on `dispatching.process-info-depth`.
+are available depends on `dispatching.process-info-depth` / `dispatching.process_info_depth`.
+Numeric values cap the collected chain length; `unlimited` keeps walking until the root process
+or until parent metadata cannot be retrieved.
 
 **Example:**
 

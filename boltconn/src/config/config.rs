@@ -6,6 +6,7 @@ use crate::config::{
     AuthData, ModuleConfig, PortOrSocketAddr, ProxyProvider, RuleConfigLine, RuleProvider,
     SingleOrVec,
 };
+use crate::platform::process::ProcessInfoDepth;
 use linked_hash_map::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -55,7 +56,7 @@ pub struct DispatchingConfig {
     #[serde(alias = "geoip-db")]
     pub geoip_db: Option<String>,
     #[serde(alias = "process-info-depth", default = "default_process_info_depth")]
-    pub process_info_depth: u32,
+    pub process_info_depth: ProcessInfoDepth,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -205,8 +206,8 @@ pub(super) fn default_false() -> bool {
     false
 }
 
-pub fn default_process_info_depth() -> u32 {
-    1
+pub fn default_process_info_depth() -> ProcessInfoDepth {
+    ProcessInfoDepth::Limited(1)
 }
 
 fn default_local_proxy() -> HashMap<String, RawProxyLocalCfg> {
@@ -269,4 +270,31 @@ fn test_raw_root_cfg() {
     let config_text = std::fs::read_to_string("../_private/config/config.yml").unwrap();
     let deserialized: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
     println!("{:?}", deserialized)
+}
+
+#[test]
+fn test_dispatching_config_process_info_depth_defaults_to_one() {
+    let config: DispatchingConfig = serde_yaml::from_str("{}").unwrap();
+    assert_eq!(config.process_info_depth, ProcessInfoDepth::Limited(1));
+}
+
+#[test]
+fn test_dispatching_config_process_info_depth_accepts_numeric_depth() {
+    let config: DispatchingConfig = serde_yaml::from_str("process_info_depth: 3").unwrap();
+    assert_eq!(config.process_info_depth, ProcessInfoDepth::Limited(3));
+}
+
+#[test]
+fn test_dispatching_config_process_info_depth_accepts_unlimited() {
+    let config: DispatchingConfig = serde_yaml::from_str("process_info_depth: unlimited").unwrap();
+    assert_eq!(config.process_info_depth, ProcessInfoDepth::Unlimited);
+}
+
+#[test]
+fn test_dispatching_config_process_info_depth_rejects_invalid_string() {
+    let err = serde_yaml::from_str::<DispatchingConfig>("process_info_depth: forever").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("expected a non-negative integer or \"unlimited\"")
+    );
 }
