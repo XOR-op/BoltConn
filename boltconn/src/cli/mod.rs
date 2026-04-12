@@ -266,7 +266,21 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
     let default_uds_path = Some(r"\\.\pipe\boltconn".to_string());
     match args.cmd {
         SubCommand::Run(opts) => {
-            let code = run::run_with_tag(opts);
+            let needs_allowlist = opts.allowlist.is_some();
+            if needs_allowlist && args.url.is_some() {
+                eprintln!("boltconn run: --allowlist does not support --url");
+                exit(-1);
+            }
+            let run_uds_path = if needs_allowlist {
+                Some(validate_uds_path(
+                    default_uds_path.clone(),
+                    unix_default_path,
+                    unix_rootless_fallback_path,
+                ))
+            } else {
+                None
+            };
+            let code = run::run_with_tag(opts, run_uds_path.as_deref()).await;
             exit(code);
         }
         SubCommand::Generate(GenerateOptions::Init(init)) => {

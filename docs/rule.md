@@ -246,6 +246,14 @@ Matches the exact process tag assigned via `boltconn run --tag ...`.
 Matching is case-sensitive. If process metadata is unavailable or the process has no tag,
 the rule does not match.
 
+`boltconn run --allowlist "<entry1;entry2;...>"` adds a temporary top-priority
+`PROCESS-TAG` guard rule for the launched tag. Non-matching destinations are rejected,
+while matching destinations continue through normal rule resolution.
+An empty allowlist (for example `--allowlist ""`) blocks all network destinations
+for that tag.
+Use `--restore` together with `--allowlist` to automatically delete the generated
+temporary rule when the subprocess exits.
+
 #### PROC-PATH-KEYWORD
 
 Process path contains keyword.
