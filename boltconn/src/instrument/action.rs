@@ -98,6 +98,7 @@ struct InstrumentContext<'a> {
     time_hms_ms: String,
     time_datetime: String,
     time_datetime_ms: String,
+    process_token: String,
     process_parent_all_json: String,
 }
 
@@ -131,6 +132,11 @@ impl<'a> InstrumentContext<'a> {
             time_hms_ms: now.format("%H:%M:%S%.3f").to_string(),
             time_datetime: now.format("%Y-%m-%d %H:%M:%S").to_string(),
             time_datetime_ms: now.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+            process_token: info
+                .process_info
+                .as_ref()
+                .and_then(|p| p.token.clone())
+                .unwrap_or_else(|| NA_STR.to_string()),
             process_parent_all_json: Self::serialize_all_parents(info.process_info.as_ref()),
         }
     }
@@ -275,6 +281,7 @@ impl interpolator::Context for InstrumentContext<'_> {
                     .as_ref()
                     .map_or_else(Self::na, |info| Formattable::display(&info.pid)),
             ),
+            "process.token" => Some(Formattable::display(&self.process_token)),
             "process.parent.pid" => self.process_parent_field(0, "pid"),
             "process.parent.name" => self.process_parent_field(0, "name"),
             "process.parent.path" => self.process_parent_field(0, "path"),
@@ -295,7 +302,7 @@ fn test_instrument_formatting() {
 local_ip: {ip.local}, conn_type: {conn.type}, \
 inbound_type: {inbound.type}, inbound_port: {inbound.port}, inbound_user: {inbound.user}, \
 process_name: {process.name}, process_cmdline: {process.cmdline}, process_path: {process.path}, \
-process_pid: {process.pid}, process_parent_pid: {process.parent.pid}, \
+process_pid: {process.pid}, process_token: {process.token}, process_parent_pid: {process.parent.pid}, \
 process_parent_name: {process.parent.name}, process_parent_path: {process.parent.path}, \
 process_parent_cmdline: {process.parent.cmdline}, process_parent_indexed_name: {process.parents.0.name}, \
 process_parent_all_json: {process.parent.all.json}, \
@@ -324,7 +331,7 @@ time: {time.hms_ms}";
 local_ip: N/A, conn_type: tcp, \
 inbound_type: tun, inbound_port: N/A, inbound_user: N/A, \
 process_name: N/A, process_cmdline: N/A, process_path: N/A, \
-process_pid: N/A, process_parent_pid: N/A, \
+process_pid: N/A, process_token: N/A, process_parent_pid: N/A, \
 process_parent_name: N/A, process_parent_path: N/A, \
 process_parent_cmdline: N/A, process_parent_indexed_name: N/A, \
 process_parent_all_json: [], "
@@ -340,6 +347,7 @@ fn mock_process(pid: i32, name: &str, parent: ParentProcess) -> ProcessInfo {
         name: name.to_string(),
         cmdline: format!("{name} --serve"),
         cwd: format!("/tmp/{name}"),
+        token: None,
     }
 }
 
@@ -435,4 +443,25 @@ fn test_instrument_formatting_handles_empty_parent_json() {
 fn test_instrument_template_validation_accepts_parent_json() {
     let template = "ancestor={process.parent.all.json}";
     assert!(FormattingObject::new(template.to_string()).is_ok());
+}
+
+#[test]
+fn test_instrument_formatting_process_token() {
+    // token absent → N/A
+    let info = mock_conn_info(None);
+    let rendered = FormattingObject::format_inner("token={process.token}", &info).unwrap();
+    assert_eq!(rendered, "token=N/A");
+
+    // process present but no token → N/A
+    let process_no_token = mock_process(42, "curl", ParentProcess::None);
+    let info = mock_conn_info(Some(process_no_token));
+    let rendered = FormattingObject::format_inner("token={process.token}", &info).unwrap();
+    assert_eq!(rendered, "token=N/A");
+
+    // process present with token → token value
+    let mut process_with_token = mock_process(42, "curl", ParentProcess::None);
+    process_with_token.token = Some("python".to_string());
+    let info = mock_conn_info(Some(process_with_token));
+    let rendered = FormattingObject::format_inner("token={process.token}", &info).unwrap();
+    assert_eq!(rendered, "token=python");
 }

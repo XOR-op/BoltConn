@@ -273,9 +273,9 @@ fn test_raw_root_cfg() {
 }
 
 #[test]
-fn test_dispatching_config_process_info_depth_defaults_to_one() {
+fn test_dispatching_config_process_info_depth_defaults_to_unlimited() {
     let config: DispatchingConfig = serde_yaml::from_str("{}").unwrap();
-    assert_eq!(config.process_info_depth, ProcessInfoDepth::Limited(1));
+    assert_eq!(config.process_info_depth, ProcessInfoDepth::Unlimited);
 }
 
 #[test]

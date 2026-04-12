@@ -3,6 +3,7 @@ mod clean;
 mod request;
 mod request_uds;
 mod request_web;
+mod run;
 mod streaming;
 
 use crate::ProgramArgs;
@@ -201,6 +202,8 @@ pub(crate) enum MasterConnOptions {
 pub(crate) enum SubCommand {
     /// Start the main program
     Start(StartOptions),
+    /// Run a command with a tracking token
+    Run(run::RunOptions),
     /// Reload configurations
     Reload,
     /// Validate configurations
@@ -262,6 +265,10 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
     #[cfg(windows)]
     let default_uds_path = Some(r"\\.\pipe\boltconn".to_string());
     match args.cmd {
+        SubCommand::Run(opts) => {
+            let code = run::run_with_token(opts);
+            exit(code as i32);
+        }
         SubCommand::Generate(GenerateOptions::Init(init)) => {
             fn create(init: InitOptions) -> anyhow::Result<()> {
                 let (config, data, _) =
@@ -442,6 +449,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
         },
         SubCommand::Start(_)
+        | SubCommand::Run(_)
         | SubCommand::Generate(_)
         | SubCommand::Clean
         | SubCommand::Log

@@ -16,6 +16,13 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
+mod token;
+#[cfg(target_os = "windows")]
+pub use token::setup_token_env;
+#[cfg(unix)]
+pub use token::setup_token_fd;
+pub use token::validate_and_encode_token;
+
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -133,6 +140,8 @@ pub struct ProcessInfo {
     pub name: String,
     pub cmdline: String,
     pub cwd: String,
+    /// Bolt token assigned at launch via `boltconn run`, if present.
+    pub token: Option<String>,
 }
 
 impl ProcessInfo {
