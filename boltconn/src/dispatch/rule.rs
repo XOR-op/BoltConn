@@ -49,17 +49,41 @@ impl FromStr for PortRule {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DstAddrType {
+    Domain,
+    Ip,
+    Ipv4,
+    Ipv6,
+}
+
+impl FromStr for DstAddrType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "DOMAIN" => Ok(Self::Domain),
+            "IP" => Ok(Self::Ip),
+            "IPV4" => Ok(Self::Ipv4),
+            "IPV6" => Ok(Self::Ipv6),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum RuleImpl {
     Inbound(InboundInfo),
     InboundAlias(String),
     ProcessName(String),
+    ProcessTag(String),
     ProcessKeyword(String),
     ProcPathKeyword(String),
     ProcCmdRegex(Regex),
     Domain(String),
     DomainSuffix(String),
     DomainKeyword(String),
+    DstAddrType(DstAddrType),
     LocalIpCidr(IpNet),
     SrcIpCidr(IpNet),
     IpCidr(IpNet),
@@ -105,6 +129,16 @@ impl RuleImpl {
                     false
                 }
             }
+            RuleImpl::DstAddrType(addr_type) => match addr_type {
+                DstAddrType::Domain => matches!(info.dst, NetworkAddr::DomainName { .. }),
+                DstAddrType::Ip => matches!(info.dst, NetworkAddr::Raw(_)),
+                DstAddrType::Ipv4 => {
+                    matches!(info.dst, NetworkAddr::Raw(std::net::SocketAddr::V4(_)))
+                }
+                DstAddrType::Ipv6 => {
+                    matches!(info.dst, NetworkAddr::Raw(std::net::SocketAddr::V6(_)))
+                }
+            },
             RuleImpl::LocalIpCidr(net) => info.local_ip.as_ref().is_some_and(|s| net.contains(s)),
             RuleImpl::SrcIpCidr(net) => net.contains(&info.src.ip()),
             RuleImpl::IpCidr(net) => info.dst_addr().is_some_and(|s| net.contains(&s.ip())),
@@ -142,6 +176,11 @@ impl RuleImpl {
                 .process_info
                 .as_ref()
                 .map_or_else(|| false, |proc_info| proc_info.name == *proc),
+            RuleImpl::ProcessTag(tag) => info
+                .process_info
+                .as_ref()
+                .and_then(|proc_info| proc_info.tag.as_ref())
+                .is_some_and(|proc_tag| proc_tag == tag),
             RuleImpl::ProcessKeyword(proc) => info
                 .process_info
                 .as_ref()
@@ -388,7 +427,12 @@ impl RuleBuilder<'_> {
             "DOMAIN-SUFFIX" => Some(RuleImpl::DomainSuffix(content)),
             "DOMAIN-KEYWORD" => Some(RuleImpl::DomainKeyword(content)),
             "DOMAIN" => Some(RuleImpl::Domain(content)),
+            "DST-ADDR-TYPE" => content
+                .parse::<DstAddrType>()
+                .ok()
+                .map(RuleImpl::DstAddrType),
             "PROCESS-NAME" => Some(RuleImpl::ProcessName(content)),
+            "PROCESS-TAG" => Some(RuleImpl::ProcessTag(content)),
             "PROCESS-KEYWORD" => Some(RuleImpl::ProcessKeyword(content)),
             "PROC-PATH-KEYWORD" => Some(RuleImpl::ProcPathKeyword(content)),
             "PROC-CMD-REGEX" => Some(RuleImpl::ProcCmdRegex(Regex::new(&content).ok()?)),
@@ -461,4 +505,121 @@ fn retrive_string(val: &serde_yaml::Value) -> Option<String> {
 pub enum RuleOrAction {
     Rule(Rule<GeneralProxy>),
     Action(Action),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dispatch::inbound::InboundInfo;
+    use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo};
+    use crate::proxy::NetworkAddr;
+
+    fn mock_process(tag: Option<&str>) -> ProcessInfo {
+        ProcessInfo {
+            pid: 42,
+            parent: ParentProcess::None,
+            path: "/bin/curl".to_string(),
+            name: "curl".to_string(),
+            cmdline: "curl https://example.com".to_string(),
+            cwd: "/tmp".to_string(),
+            tag: tag.map(ToString::to_string),
+        }
+    }
+
+    fn mock_conn_info(process_info: Option<ProcessInfo>) -> ConnInfo {
+        ConnInfo {
+            src: "127.0.0.1:12345".parse().unwrap(),
+            dst: NetworkAddr::DomainName {
+                domain_name: "example.com".to_string(),
+                port: 443,
+            },
+            local_ip: None,
+            inbound: InboundInfo::Tun,
+            resolved_dst: None,
+            connection_type: NetworkType::Tcp,
+            process_info,
+        }
+    }
+
+    fn mock_conn_info_with_dst(dst: NetworkAddr) -> ConnInfo {
+        ConnInfo {
+            src: "127.0.0.1:12345".parse().unwrap(),
+            dst,
+            local_ip: None,
+            inbound: InboundInfo::Tun,
+            resolved_dst: None,
+            connection_type: NetworkType::Tcp,
+            process_info: None,
+        }
+    }
+
+    #[test]
+    fn test_parse_rulesets_process_tag() {
+        let rule = RuleBuilder::parse_rulesets("PROCESS-TAG, alpha", None, None);
+        assert!(matches!(rule, Some(RuleImpl::ProcessTag(tag)) if tag == "alpha"));
+    }
+
+    #[test]
+    fn test_process_tag_rule_matches_exact_case_sensitive() {
+        let rule = RuleImpl::ProcessTag("Alpha".to_string());
+        assert!(rule.matches(&mock_conn_info(Some(mock_process(Some("Alpha"))))));
+        assert!(!rule.matches(&mock_conn_info(Some(mock_process(Some("alpha"))))));
+        assert!(!rule.matches(&mock_conn_info(Some(mock_process(Some("Alpha-1"))))));
+    }
+
+    #[test]
+    fn test_process_tag_rule_requires_process_tag() {
+        let rule = RuleImpl::ProcessTag("alpha".to_string());
+        assert!(!rule.matches(&mock_conn_info(None)));
+        assert!(!rule.matches(&mock_conn_info(Some(mock_process(None)))));
+    }
+
+    #[test]
+    fn test_parse_rulesets_dst_addr_type_case_insensitive() {
+        let rule = RuleBuilder::parse_rulesets("DST-ADDR-TYPE, iPv4", None, None);
+        assert!(matches!(
+            rule,
+            Some(RuleImpl::DstAddrType(DstAddrType::Ipv4))
+        ));
+    }
+
+    #[test]
+    fn test_dst_addr_type_rule_matches_expected_variants() {
+        let domain_info = mock_conn_info_with_dst(NetworkAddr::DomainName {
+            domain_name: "example.com".to_string(),
+            port: 443,
+        });
+        let ip4_info = mock_conn_info_with_dst(NetworkAddr::Raw("1.2.3.4:443".parse().unwrap()));
+        let ip6_info =
+            mock_conn_info_with_dst(NetworkAddr::Raw("[2001:db8::1]:443".parse().unwrap()));
+
+        assert!(RuleImpl::DstAddrType(DstAddrType::Domain).matches(&domain_info));
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Ip).matches(&domain_info));
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Ipv4).matches(&domain_info));
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Ipv6).matches(&domain_info));
+
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Domain).matches(&ip4_info));
+        assert!(RuleImpl::DstAddrType(DstAddrType::Ip).matches(&ip4_info));
+        assert!(RuleImpl::DstAddrType(DstAddrType::Ipv4).matches(&ip4_info));
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Ipv6).matches(&ip4_info));
+
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Domain).matches(&ip6_info));
+        assert!(RuleImpl::DstAddrType(DstAddrType::Ip).matches(&ip6_info));
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Ipv4).matches(&ip6_info));
+        assert!(RuleImpl::DstAddrType(DstAddrType::Ipv6).matches(&ip6_info));
+    }
+
+    #[test]
+    fn test_dst_addr_type_uses_original_dst_not_resolved_dst() {
+        let mut info = mock_conn_info_with_dst(NetworkAddr::DomainName {
+            domain_name: "example.com".to_string(),
+            port: 443,
+        });
+        info.resolved_dst = Some("1.2.3.4:443".parse().unwrap());
+
+        assert!(RuleImpl::DstAddrType(DstAddrType::Domain).matches(&info));
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Ip).matches(&info));
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Ipv4).matches(&info));
+        assert!(!RuleImpl::DstAddrType(DstAddrType::Ipv6).matches(&info));
+    }
 }

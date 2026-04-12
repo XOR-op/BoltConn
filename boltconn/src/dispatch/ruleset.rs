@@ -32,6 +32,7 @@ pub struct RuleSet {
     tun_inbound: bool,
     domain_keyword: AhoCorasick,
     process_name: HashSet<String>,
+    process_tag: HashSet<String>,
     mmdb: Option<(Arc<MmdbReader>, HashSet<u32>, HashSet<String>)>,
     process_keyword: AhoCorasick,
     procpath_keyword: AhoCorasick,
@@ -80,6 +81,10 @@ impl RuleSet {
         }
         if let Some(proc) = &info.process_info
             && (self.process_name.contains(&proc.name)
+                || proc
+                    .tag
+                    .as_ref()
+                    .is_some_and(|tag| self.process_tag.contains(tag))
                 || self.process_keyword.is_match(proc.name.as_str())
                 || self.procpath_keyword.is_match(proc.path.as_str()))
         {
@@ -107,6 +112,7 @@ pub struct RuleSetBuilder {
     src_ip_cidr: IpNetworkTable<()>,
     local_ip_cidr: IpNetworkTable<()>,
     process_name: HashSet<String>,
+    process_tag: HashSet<String>,
     process_keyword: Vec<String>,
     procpath_keyword: Vec<String>,
     src_tcp_port: PortFilter,
@@ -132,6 +138,7 @@ impl RuleSetBuilder {
             src_ip_cidr: Default::default(),
             local_ip_cidr: Default::default(),
             process_name: Default::default(),
+            process_tag: Default::default(),
             process_keyword: vec![],
             procpath_keyword: vec![],
             src_tcp_port: Default::default(),
@@ -183,6 +190,9 @@ impl RuleSetBuilder {
                         }
                         RuleImpl::ProcessName(pn) => {
                             retval.process_name.insert(pn.clone());
+                        }
+                        RuleImpl::ProcessTag(tag) => {
+                            retval.process_tag.insert(tag.clone());
                         }
                         RuleImpl::ProcessKeyword(kw) => retval.process_keyword.push(kw.clone()),
                         RuleImpl::ProcPathKeyword(kw) => retval.procpath_keyword.push(kw.clone()),
@@ -249,6 +259,7 @@ impl RuleSetBuilder {
                         | RuleImpl::Or(..)
                         | RuleImpl::Not(_)
                         | RuleImpl::ProcCmdRegex(_)
+                        | RuleImpl::DstAddrType(_)
                         | RuleImpl::Always
                         | RuleImpl::Never => return None,
                     }
@@ -264,6 +275,7 @@ impl RuleSetBuilder {
             let _ = self.ip_cidr.insert(ip, ());
         });
         self.process_name.extend(rhs.process_name);
+        self.process_tag.extend(rhs.process_tag);
         self.process_keyword.extend(rhs.process_keyword);
         self.procpath_keyword.extend(rhs.procpath_keyword);
         self.src_tcp_port.extend(rhs.src_tcp_port);
@@ -290,6 +302,7 @@ impl RuleSetBuilder {
             domain_keyword: AhoCorasick::new(self.domain_keyword.into_iter())
                 .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
             process_name: self.process_name,
+            process_tag: self.process_tag,
             mmdb: self.mmdb.map(|m| (m, self.asn, self.geoip_country)),
             process_keyword: AhoCorasick::new(self.process_keyword.into_iter())
                 .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
@@ -311,6 +324,7 @@ impl RuleSetBuilder {
             src_ip_cidr: Default::default(),
             local_ip_cidr: Default::default(),
             process_name: Default::default(),
+            process_tag: Default::default(),
             process_keyword: vec![],
             procpath_keyword: vec![],
             src_tcp_port: Default::default(),
@@ -489,4 +503,73 @@ fn test_rule_provider() {
         process_info: None,
     };
     assert!(!ruleset.matches(&info4));
+}
+
+#[test]
+fn test_ruleset_classical_process_tag_exact_match() {
+    use crate::dispatch::inbound::InboundInfo;
+    use crate::platform::process::{ParentProcess, ProcessInfo};
+
+    fn mock_process(tag: Option<&str>) -> ProcessInfo {
+        ProcessInfo {
+            pid: 100,
+            parent: ParentProcess::None,
+            path: "/bin/curl".to_string(),
+            name: "curl".to_string(),
+            cmdline: "curl https://example.com".to_string(),
+            cwd: "/tmp".to_string(),
+            tag: tag.map(ToString::to_string),
+        }
+    }
+
+    let builder = RuleSetBuilder::new(
+        "TestTag",
+        &RuleSchema {
+            behavior: ProviderBehavior::Classical,
+            payload: vec!["PROCESS-TAG, alpha".to_string()],
+        },
+    )
+    .expect("PROCESS-TAG should be supported in classical rulesets");
+    let ruleset = builder.build().expect("ruleset should build");
+
+    let matching = ConnInfo {
+        src: "127.0.0.1:12345".parse().unwrap(),
+        dst: NetworkAddr::DomainName {
+            domain_name: "example.com".to_string(),
+            port: 443,
+        },
+        local_ip: None,
+        inbound: InboundInfo::Tun,
+        resolved_dst: None,
+        connection_type: NetworkType::Tcp,
+        process_info: Some(mock_process(Some("alpha"))),
+    };
+    assert!(ruleset.matches(&matching));
+
+    let case_mismatch = ConnInfo {
+        process_info: Some(mock_process(Some("Alpha"))),
+        ..matching.clone()
+    };
+    assert!(!ruleset.matches(&case_mismatch));
+
+    let missing_tag = ConnInfo {
+        process_info: Some(mock_process(None)),
+        ..matching.clone()
+    };
+    assert!(!ruleset.matches(&missing_tag));
+}
+
+#[test]
+fn test_ruleset_classical_rejects_dst_addr_type() {
+    let builder = RuleSetBuilder::new(
+        "RejectDstAddrType",
+        &RuleSchema {
+            behavior: ProviderBehavior::Classical,
+            payload: vec!["DST-ADDR-TYPE, IP".to_string()],
+        },
+    );
+    assert!(
+        builder.is_none(),
+        "DST-ADDR-TYPE should be rejected in classical rulesets"
+    );
 }

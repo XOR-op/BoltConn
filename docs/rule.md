@@ -184,6 +184,27 @@ Uses the same format as `SRC-PORT`.
 - DST-PORT, 587/tcp, Proxy  # SMTP submission
 ```
 
+#### DST-ADDR-TYPE
+
+Match destination address type.
+
+```yaml
+- DST-ADDR-TYPE, DOMAIN, Proxy
+- DST-ADDR-TYPE, IP, DIRECT
+- DST-ADDR-TYPE, IPV4, DIRECT
+- DST-ADDR-TYPE, IPV6, Proxy
+```
+
+Supported variants:
+- `DOMAIN`: destination is a domain target (`example.com:443`)
+- `IP`: destination is a literal IP target (either IPv4 or IPv6)
+- `IPV4`: destination is a literal IPv4 target
+- `IPV6`: destination is a literal IPv6 target
+
+Matching uses the original destination shape, not `resolved_dst`.
+Values are parsed case-insensitively.
+This rule is not supported in classical `RULE-SET` provider payloads.
+
 ## Process Rules
 
 #### PROCESS-NAME
@@ -211,6 +232,19 @@ Matches if the process name contains the keyword.
 
 Examples:
 - `chrome` matches: `chrome`, `chrome-helper`, `google-chrome`
+
+#### PROCESS-TAG
+
+Exact process tag match.
+
+```yaml
+- PROCESS-TAG, alpha, Proxy
+- PROCESS-TAG, background-job, DIRECT
+```
+
+Matches the exact process tag assigned via `boltconn run --tag ...`.
+Matching is case-sensitive. If process metadata is unavailable or the process has no tag,
+the rule does not match.
 
 #### PROC-PATH-KEYWORD
 
