@@ -251,8 +251,12 @@ the rule does not match.
 while matching destinations continue through normal rule resolution.
 An empty allowlist (for example `--allowlist ""`) blocks all network destinations
 for that tag.
-Use `--restore` together with `--allowlist` to automatically delete the generated
-temporary rule when the subprocess exits.
+By default, the generated rule is removed when the subprocess exits.
+Use `--persistent` to keep the generated rule after exit.
+
+If a generated rule for the same tag already exists:
+- Temporary mode (default) never replaces it.
+- Persistent mode requires `--force` to replace it.
 
 #### PROC-PATH-KEYWORD
 
