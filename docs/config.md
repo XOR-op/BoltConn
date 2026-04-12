@@ -182,8 +182,8 @@ Advanced routing and traffic inspection options.
 dispatching:
   sni_sniff: false           # Enable SNI sniffing (default: false)
   geoip_db: /path/to/GeoLite2-Country.mmdb  # Optional GeoIP database
-  process_info_depth: 1      # Parent process levels to collect (default: 1)
-  # process_info_depth: unlimited
+  process_info_depth: unlimited      # Parent process levels to collect (default: unlimited)
+  # process_info_depth: 1  # Only immediate parent
 ```
 
 **Note:** The `geoip_db` is required if you want to use `GEOIP` or `ASN` rules.

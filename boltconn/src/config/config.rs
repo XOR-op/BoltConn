@@ -207,7 +207,7 @@ pub(super) fn default_false() -> bool {
 }
 
 pub fn default_process_info_depth() -> ProcessInfoDepth {
-    ProcessInfoDepth::Limited(1)
+    ProcessInfoDepth::Unlimited
 }
 
 fn default_local_proxy() -> HashMap<String, RawProxyLocalCfg> {
