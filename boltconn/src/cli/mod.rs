@@ -267,7 +267,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
     match args.cmd {
         SubCommand::Run(opts) => {
             let code = run::run_with_token(opts);
-            exit(code as i32);
+            exit(code);
         }
         SubCommand::Generate(GenerateOptions::Init(init)) => {
             fn create(init: InitOptions) -> anyhow::Result<()> {
