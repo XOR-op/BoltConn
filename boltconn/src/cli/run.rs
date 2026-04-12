@@ -1,35 +1,35 @@
-use crate::platform::process::validate_and_encode_token;
+use crate::platform::process::validate_and_encode_tag;
 use clap::Args;
 
 #[derive(Debug, Args)]
 pub(crate) struct RunOptions {
-    /// Token string to assign to the launched process (must be non-empty and
-    /// base64-encode to at most 19 characters to satisfy the macOS shm name limit)
-    #[arg(short = 't', long = "token")]
-    pub token: String,
+    /// Tag string to assign to the launched process (must be non-empty and
+    /// base64-encode to at most 21 characters to satisfy the macOS shm name limit)
+    #[arg(short = 't', long = "tag")]
+    pub tag: String,
     /// Command and arguments to execute
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
 }
 
-/// Set up the token and exec the command. Returns the child's exit code (or -1 on error).
-pub(crate) fn run_with_token(opts: RunOptions) -> i32 {
-    let encoded = match validate_and_encode_token(&opts.token) {
+/// Set up the tag and exec the command. Returns the child's exit code (or -1 on error).
+pub(crate) fn run_with_tag(opts: RunOptions) -> i32 {
+    let encoded = match validate_and_encode_tag(&opts.tag) {
         Ok(e) => e,
         Err(msg) => {
-            eprintln!("boltconn run: invalid token: {}", msg);
+            eprintln!("boltconn run: invalid tag: {}", msg);
             return 1;
         }
     };
 
     #[cfg(unix)]
-    if let Err(e) = crate::platform::process::setup_token_fd(&encoded) {
-        eprintln!("boltconn run: failed to set up token fd: {}", e);
+    if let Err(e) = crate::platform::process::setup_tag_fd(&encoded) {
+        eprintln!("boltconn run: failed to set up tag fd: {}", e);
         return 1;
     }
 
     #[cfg(target_os = "windows")]
-    crate::platform::process::setup_token_env(&encoded);
+    crate::platform::process::setup_tag_env(&encoded);
 
     let mut iter = opts.command.into_iter();
     let program = match iter.next() {

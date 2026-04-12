@@ -88,7 +88,7 @@ pub fn get_process_info(pid: i32, depth: ProcessInfoDepth) -> Option<ProcessInfo
         name,
         cmdline,
         cwd,
-        token: super::token::get_token_for_pid(pid),
+        tag: super::tag::get_tag_for_pid(pid),
     })
 }
 

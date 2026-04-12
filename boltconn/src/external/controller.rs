@@ -172,7 +172,7 @@ impl Controller {
             cmdline: info.cmdline.clone(),
             cwd: info.cwd.clone(),
             parents,
-            token: info.token.clone(),
+            tag: info.tag.clone(),
         }
     }
 

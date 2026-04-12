@@ -11,7 +11,7 @@ pub struct ProcessSchema {
     pub cwd: String,
     pub parents: Vec<ProcessParentSchema>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub token: Option<String>,
+    pub tag: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

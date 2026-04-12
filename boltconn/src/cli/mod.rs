@@ -202,7 +202,7 @@ pub(crate) enum MasterConnOptions {
 pub(crate) enum SubCommand {
     /// Start the main program
     Start(StartOptions),
-    /// Run a command with a tracking token
+    /// Run a command with a tracking tag
     Run(run::RunOptions),
     /// Reload configurations
     Reload,
@@ -266,7 +266,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
     let default_uds_path = Some(r"\\.\pipe\boltconn".to_string());
     match args.cmd {
         SubCommand::Run(opts) => {
-            let code = run::run_with_token(opts);
+            let code = run::run_with_tag(opts);
             exit(code);
         }
         SubCommand::Generate(GenerateOptions::Init(init)) => {

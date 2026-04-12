@@ -1,27 +1,27 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-/// Reserved fd number for the bolt token on Unix.
-pub const BOLT_TOKEN_FD: libc::c_int = 1021;
+/// Reserved fd number for the bolt tag on Unix.
+pub const BOLT_TAG_FD: libc::c_int = 1021;
 
-const BOLT_TOKEN_PREFIX: &str = "/bolt-token:";
+const BOLT_TAG_PREFIX: &str = "/bolt-tag:";
 /// macOS PSHMNAMLEN = 31 is the most restrictive limit across all three platforms.
 const MAX_SHM_NAME_LEN: usize = 31;
 
-/// Validate and base64-encode a token string.
+/// Validate and base64-encode a tag string.
 ///
-/// Returns the URL-safe no-pad base64 encoding on success, or an error message if the token is
+/// Returns the URL-safe no-pad base64 encoding on success, or an error message if the tag is
 /// empty or the resulting shm name would exceed the OS limit.
-pub fn validate_and_encode_token(token: &str) -> Result<String, String> {
-    if token.is_empty() {
-        return Err("token must not be empty".to_string());
+pub fn validate_and_encode_tag(tag: &str) -> Result<String, String> {
+    if tag.is_empty() {
+        return Err("tag must not be empty".to_string());
     }
-    let encoded = URL_SAFE_NO_PAD.encode(token);
-    let shm_name_len = BOLT_TOKEN_PREFIX.len() + encoded.len();
+    let encoded = URL_SAFE_NO_PAD.encode(tag);
+    let shm_name_len = BOLT_TAG_PREFIX.len() + encoded.len();
     if shm_name_len > MAX_SHM_NAME_LEN {
-        let max_encoded_len = MAX_SHM_NAME_LEN - BOLT_TOKEN_PREFIX.len();
+        let max_encoded_len = MAX_SHM_NAME_LEN - BOLT_TAG_PREFIX.len();
         return Err(format!(
-            "token is too long: base64-encoded value is {} chars but max is {} \
+            "tag is too long: base64-encoded value is {} chars but max is {} \
              (shm name must fit within {} chars on macOS)",
             encoded.len(),
             max_encoded_len,
@@ -31,19 +31,19 @@ pub fn validate_and_encode_token(token: &str) -> Result<String, String> {
     Ok(encoded)
 }
 
-/// Set up fd `1021` with an anonymous shm object whose name encodes the token.
+/// Set up fd `1021` with an anonymous shm object whose name encodes the tag.
 ///
 /// Steps:
-/// 1. `shm_open("/bolt-token:<encoded>", O_RDWR|O_CREAT, 0o600)`
+/// 1. `shm_open("/bolt-tag:<encoded>", O_RDWR|O_CREAT, 0o600)`
 /// 2. Clear `O_CLOEXEC` so the fd survives `exec`
-/// 3. `dup2` the shm fd to slot `BOLT_TOKEN_FD` (closing any prior occupant)
+/// 3. `dup2` the shm fd to slot `BOLT_TAG_FD` (closing any prior occupant)
 /// 4. `shm_unlink` the name immediately to make it anonymous
 #[cfg(unix)]
-pub fn setup_token_fd(encoded_token: &str) -> std::io::Result<()> {
+pub fn setup_tag_fd(encoded_tag: &str) -> std::io::Result<()> {
     use std::ffi::CString;
     use std::io;
 
-    let shm_name = format!("{}{}", BOLT_TOKEN_PREFIX, encoded_token);
+    let shm_name = format!("{}{}", BOLT_TAG_PREFIX, encoded_tag);
     let cname = CString::new(shm_name).map_err(io::Error::other)?;
 
     unsafe {
@@ -59,9 +59,9 @@ pub fn setup_token_fd(encoded_token: &str) -> std::io::Result<()> {
         }
 
         // Free the target slot in case it's already occupied.
-        if fd != BOLT_TOKEN_FD {
-            libc::close(BOLT_TOKEN_FD);
-            if libc::dup2(fd, BOLT_TOKEN_FD) < 0 {
+        if fd != BOLT_TAG_FD {
+            libc::close(BOLT_TAG_FD);
+            if libc::dup2(fd, BOLT_TAG_FD) < 0 {
                 let err = io::Error::last_os_error();
                 libc::close(fd);
                 libc::shm_unlink(cname.as_ptr());
@@ -76,13 +76,13 @@ pub fn setup_token_fd(encoded_token: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Query the bolt token for a running process by reading its fd `1021` metadata.
+/// Query the bolt tag for a running process by reading its fd `1021` metadata.
 ///
 /// Returns `None` if the process was not launched by `boltconn run`, or if the fd does not exist
-/// or does not carry a recognisable token name.
+/// or does not carry a recognisable tag name.
 #[cfg(target_os = "linux")]
-pub fn get_token_for_pid(pid: i32) -> Option<String> {
-    let link_path = format!("/proc/{}/fd/{}", pid, BOLT_TOKEN_FD);
+pub fn get_tag_for_pid(pid: i32) -> Option<String> {
+    let link_path = format!("/proc/{}/fd/{}", pid, BOLT_TAG_FD);
     let target = std::fs::read_link(&link_path).ok()?;
     let mut name = target.to_string_lossy().into_owned();
 
@@ -91,16 +91,16 @@ pub fn get_token_for_pid(pid: i32) -> Option<String> {
         name = base.to_owned();
     }
 
-    // On Linux, shm_open("/bolt-token:<v>") creates /dev/shm/bolt-token:<v>.
-    const LINUX_PREFIX: &str = "/dev/shm/bolt-token:";
+    // On Linux, shm_open("/bolt-tag:<v>") creates /dev/shm/bolt-tag:<v>.
+    const LINUX_PREFIX: &str = "/dev/shm/bolt-tag:";
     let encoded = name.strip_prefix(LINUX_PREFIX)?;
     let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
     String::from_utf8(bytes).ok()
 }
 
-/// Query the bolt token for a running process by reading its fd `1021` metadata.
+/// Query the bolt tag for a running process by reading its fd `1021` metadata.
 #[cfg(target_os = "macos")]
-pub fn get_token_for_pid(pid: i32) -> Option<String> {
+pub fn get_tag_for_pid(pid: i32) -> Option<String> {
     use std::ffi::CStr;
 
     // PROC_PIDFDPSHMINFO (flavor 5) is the correct call for POSIX shared-memory fds
@@ -140,7 +140,7 @@ pub fn get_token_for_pid(pid: i32) -> Option<String> {
     let ret = unsafe {
         libc::proc_pidfdinfo(
             pid,
-            BOLT_TOKEN_FD,
+            BOLT_TAG_FD,
             PROC_PIDFDPSHMINFO,
             &mut info as *mut PshmFdInfo as *mut libc::c_void,
             std::mem::size_of::<PshmFdInfo>() as libc::c_int,
@@ -153,15 +153,15 @@ pub fn get_token_for_pid(pid: i32) -> Option<String> {
     // The kernel stores the shm name as passed to shm_open(), including the leading '/'.
     let name = unsafe { CStr::from_ptr(info.pshminfo.pshm_name.as_ptr()) }.to_string_lossy();
 
-    const MACOS_PREFIX: &str = "/bolt-token:";
+    const MACOS_PREFIX: &str = "/bolt-tag:";
     let encoded = name.strip_prefix(MACOS_PREFIX)?;
     let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
     String::from_utf8(bytes).ok()
 }
 
-/// Query the bolt token from the target process's environment block (Windows).
+/// Query the bolt tag from the target process's environment block (Windows).
 #[cfg(target_os = "windows")]
-pub fn get_token_for_pid(pid: i32) -> Option<String> {
+pub fn get_tag_for_pid(pid: i32) -> Option<String> {
     use windows::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
     use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows::Win32::{
@@ -214,7 +214,7 @@ pub fn get_token_for_pid(pid: i32) -> Option<String> {
 
         let _ = CloseHandle(handle);
 
-        const KEY: &str = "BOLTCONN_TOKEN=";
+        const KEY: &str = "BOLTCONN_TAG=";
         // Scan the environment block for our key.
         let mut i = 0usize;
         while i < env_buf.len() {
@@ -254,10 +254,10 @@ unsafe fn read_vm<T: Sized>(
     Some(buf)
 }
 
-/// Set the `BOLTCONN_TOKEN` environment variable before spawning a child (Windows only).
+/// Set the `BOLTCONN_TAG` environment variable before spawning a child (Windows only).
 #[cfg(target_os = "windows")]
-pub fn setup_token_env(encoded_token: &str) {
-    std::env::set_var("BOLTCONN_TOKEN", encoded_token);
+pub fn setup_tag_env(encoded_tag: &str) {
+    std::env::set_var("BOLTCONN_TAG", encoded_tag);
 }
 
 #[cfg(test)]
@@ -265,51 +265,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_empty_token_fails() {
-        assert!(validate_and_encode_token("").is_err());
+    fn test_validate_empty_tag_fails() {
+        assert!(validate_and_encode_tag("").is_err());
     }
 
     #[test]
-    fn test_validate_short_token_ok() {
-        // "python" → base64 "cHl0aG9u" (8 chars) → shm name 20 chars ≤ 31
-        let result = validate_and_encode_token("python");
+    fn test_validate_short_tag_ok() {
+        // "python" → base64 "cHl0aG9u" (8 chars) → shm name 18 chars ≤ 31
+        let result = validate_and_encode_tag("python");
         assert!(result.is_ok(), "{:?}", result);
         assert_eq!(result.unwrap(), "cHl0aG9u");
     }
 
     #[test]
-    fn test_validate_token_at_exact_limit() {
-        // Find the longest raw token whose base64 is exactly 19 chars.
-        // 19-char base64 URL_SAFE_NO_PAD encodes 14 bytes (floor(19*6/8)=14, 14*8/6=18.67→padded to 19 would be 20 with pad...).
-        // Actually URL_SAFE_NO_PAD for 14 bytes → ceil(14*4/3) = ceil(18.67) = 19 chars. ✓
-        let token = "a".repeat(14); // 14 bytes
-        let result = validate_and_encode_token(&token);
-        assert!(result.is_ok(), "14-byte token should fit: {:?}", result);
+    fn test_validate_tag_at_max_fit() {
+        // The effective max encoded length is 21 chars (31 - "/bolt-tag:".len()).
+        // URL_SAFE_NO_PAD for 15 bytes → ceil(15*4/3) = 20 chars, so total shm name is 10 + 20 = 30.
+        // URL_SAFE_NO_PAD for 16 bytes → ceil(16*4/3) = 22 chars, so 10 + 22 = 32 > 31.
+        let tag = "a".repeat(15); // 15 bytes
+        let result = validate_and_encode_tag(&tag);
+        assert!(result.is_ok(), "15-byte tag should fit: {:?}", result);
         let encoded = result.unwrap();
         assert_eq!(
-            BOLT_TOKEN_PREFIX.len() + encoded.len(),
-            MAX_SHM_NAME_LEN,
-            "should be exactly at limit"
+            BOLT_TAG_PREFIX.len() + encoded.len(),
+            30,
+            "should fit under limit"
         );
     }
 
     #[test]
-    fn test_validate_token_too_long() {
-        // 15 bytes → base64 is 20 chars → total 32 > 31
-        let token = "a".repeat(15);
-        assert!(validate_and_encode_token(&token).is_err());
+    fn test_validate_tag_too_long() {
+        // 16 bytes → base64 is 22 chars → total 32 > 31
+        let tag = "a".repeat(16);
+        let err = validate_and_encode_tag(&tag).unwrap_err();
+        assert!(err.contains("max is 21"), "unexpected error: {err}");
     }
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn test_get_token_for_pid_linux_path_parsing() {
-        // Simulate what get_token_for_pid does internally by testing the parsing logic.
+    fn test_get_tag_for_pid_linux_path_parsing() {
+        // Simulate what get_tag_for_pid does internally by testing the parsing logic.
         fn parse(raw: &str) -> Option<String> {
             let mut name = raw.to_owned();
             if let Some(base) = name.strip_suffix(" (deleted)") {
                 name = base.to_owned();
             }
-            const LINUX_PREFIX: &str = "/dev/shm/bolt-token:";
+            const LINUX_PREFIX: &str = "/dev/shm/bolt-tag:";
             let encoded = name.strip_prefix(LINUX_PREFIX)?;
             let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
             String::from_utf8(bytes).ok()
@@ -317,12 +318,12 @@ mod tests {
 
         // With "(deleted)" suffix
         assert_eq!(
-            parse("/dev/shm/bolt-token:cHl0aG9u (deleted)"),
+            parse("/dev/shm/bolt-tag:cHl0aG9u (deleted)"),
             Some("python".to_string())
         );
         // Without "(deleted)" suffix (still linked)
         assert_eq!(
-            parse("/dev/shm/bolt-token:cHl0aG9u"),
+            parse("/dev/shm/bolt-tag:cHl0aG9u"),
             Some("python".to_string())
         );
         // Non-matching prefix → None
