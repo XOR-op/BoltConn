@@ -41,6 +41,11 @@ impl TemporaryList {
                         }
                     }
                     Action::Instrument(r) => r.execute(info).await,
+                    Action::Request(r) => {
+                        if let Some(result) = r.execute(info, verbose).await {
+                            return Some(result);
+                        }
+                    }
                 },
             }
         }

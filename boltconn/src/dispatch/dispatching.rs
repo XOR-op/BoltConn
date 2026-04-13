@@ -1,8 +1,8 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config, WireguardManager};
 use crate::config::{
-    ConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema, RawProxyChainCfg,
-    RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr, RawServerSockAddr,
-    RawState, RuleAction, RuleConfigLine, RuleError, SingleOrVec,
+    ConfigError, InstrumentConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema,
+    RawProxyChainCfg, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr,
+    RawServerSockAddr, RawState, RuleAction, RuleConfigLine, RuleError, SingleOrVec,
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
@@ -13,6 +13,7 @@ use crate::dispatch::{GeneralProxy, InboundInfo, Proxy, ProxyGroup, RuleSetTable
 use crate::external::MmdbReader;
 use crate::instrument::action::InstrumentAction;
 use crate::instrument::bus::MessageBus;
+use crate::instrument::request_action::{RequestAction, RouteDecision};
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
@@ -31,6 +32,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub struct ConnInfo {
@@ -140,7 +142,7 @@ impl Dispatching {
     }
 }
 
-fn stringfy_process(info: &ConnInfo) -> &str {
+pub(crate) fn stringfy_process(info: &ConnInfo) -> &str {
     match &info.process_info {
         None => "UNKNOWN",
         Some(s) => s.name.as_str(),
@@ -337,6 +339,27 @@ impl DispatchingBuilder {
                                 ins.message.clone(),
                                 self.msg_bus.create_publisher(ins.id),
                             )?,
+                        )))
+                    }
+                    RuleAction::Request(req) => {
+                        let matches = rule_builder.parse_incomplete(req.matches.as_str())?;
+                        let request_route = RouteDecision::from_str(&req.request_route)
+                            .ok_or_else(|| {
+                                InstrumentConfigError::BadRequestRoute(req.request_route.clone())
+                            })?;
+                        let fallback = RouteDecision::from_str(&req.fallback).ok_or_else(|| {
+                            InstrumentConfigError::BadRequestRoute(req.fallback.clone())
+                        })?;
+                        rule_builder.append(RuleOrAction::Action(Action::Request(
+                            RequestAction::new(
+                                matches,
+                                req.id,
+                                Duration::from_secs(req.timeout),
+                                request_route,
+                                fallback,
+                                self.msg_bus.clone(),
+                                self.msg_bus.create_publisher(req.id),
+                            ),
                         )))
                     }
                 },
@@ -986,6 +1009,11 @@ impl DispatchingSnippet {
                         }
                     }
                     Action::Instrument(r) => r.execute(info).await,
+                    Action::Request(r) => {
+                        if let Some(result) = r.execute(info, verbose).await {
+                            return result;
+                        }
+                    }
                 },
             }
         }

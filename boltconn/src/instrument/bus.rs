@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::oneshot;
 
 pub type SubId = u64;
 
@@ -9,6 +11,8 @@ pub struct MessageBus {
     ingress_sender_handle: flume::Sender<BusMessage>,
     ingress_receiver: flume::Receiver<BusMessage>,
     egress_senders: Mutex<HashMap<SubId, flume::Sender<BusMessage>>>,
+    pending_responses: Mutex<HashMap<u64, (SubId, oneshot::Sender<String>)>>,
+    next_request_id: AtomicU64,
 }
 
 impl MessageBus {
@@ -18,6 +22,44 @@ impl MessageBus {
             ingress_sender_handle: ingress_sender,
             ingress_receiver,
             egress_senders: Mutex::new(HashMap::new()),
+            pending_responses: Mutex::new(HashMap::new()),
+            next_request_id: AtomicU64::new(0),
+        }
+    }
+
+    pub fn has_subscriber(&self, sub_id: SubId) -> bool {
+        self.egress_senders
+            .lock()
+            .unwrap()
+            .get(&sub_id)
+            .map(|s| !s.is_disconnected())
+            .unwrap_or(false)
+    }
+
+    pub fn alloc_request_id(&self) -> u64 {
+        self.next_request_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn register_pending_response(
+        &self,
+        sub_id: SubId,
+        request_id: u64,
+    ) -> oneshot::Receiver<String> {
+        let (tx, rx) = oneshot::channel();
+        self.pending_responses
+            .lock()
+            .unwrap()
+            .insert(request_id, (sub_id, tx));
+        rx
+    }
+
+    pub fn resolve_pending_response(&self, sub_id: SubId, request_id: u64, route: String) {
+        let mut map = self.pending_responses.lock().unwrap();
+        if let Entry::Occupied(e) = map.entry(request_id)
+            && e.get().0 == sub_id
+        {
+            let (_, tx) = e.remove();
+            let _ = tx.send(route);
         }
     }
 

@@ -653,6 +653,104 @@ or until parent metadata cannot be retrieved.
 
 Instrument actions log messages when rules match, useful for debugging rule evaluation.
 
+### .REQUEST
+
+Interactive action that pauses rule evaluation and asks a connected WebSocket client how to route the connection. The client has a configurable timeout to respond; if it does not, a fallback route is used.
+
+```yaml
+- .REQUEST:
+    id: <sub-id>
+    matches: <rule-without-proxy>
+    timeout: 60               # seconds, optional, default 60
+    request_route: CONTINUE   # optional, default CONTINUE
+    fallback: REJECT          # optional, default REJECT
+```
+
+**Fields:**
+
+| Field | Default | Description |
+|---|---|---|
+| `id` | required | Instrument subscriber ID shared with `.INSTRUMENT` |
+| `matches` | required | Rule condition (same syntax as other rule types) |
+| `timeout` | `60` | Seconds to wait for a client response |
+| `request_route` | `CONTINUE` | Route hint sent to client as `suggested_route` |
+| `fallback` | `REJECT` | Route used when no client is connected, or timeout/error |
+
+**Route values** (for `request_route`, `fallback`, and client responses):
+
+| Value | Behavior |
+|---|---|
+| `CONTINUE` | Continue evaluating the next rule in the chain |
+| `REJECT` | Immediately reject the connection |
+| `BLACKHOLE` | Accept the connection but silently discard all data |
+
+**Decision logic:**
+
+1. If the `matches` condition is not met, skip this action and continue.
+2. If no live client is subscribed to `id`, use `fallback` immediately.
+3. Otherwise, send a request payload to the client and wait up to `timeout` seconds.
+   - Valid response received → use the route in the response.
+   - Unrecognized route in response → use `fallback`.
+   - Timeout or all clients disconnect mid-wait → use `fallback`.
+
+**WebSocket protocol:**
+
+`.REQUEST` reuses the same instrument server WebSocket endpoint (`/subscribe?id=<id>`) as `.INSTRUMENT`. Both server-to-client notifications and request payloads are delivered over the same connection.
+
+*Server → client* (inside the standard `{id}:{message}` envelope, `message` is JSON):
+
+```json
+{
+  "sub_id": 200,
+  "request_id": 42,
+  "suggested_route": "CONTINUE",
+  "addr_src": "192.168.1.5:54321",
+  "addr_dst": "api.example.com:443",
+  "addr_resolved_dst": "1.2.3.4:443",
+  "ip_local": "10.0.0.1",
+  "inbound_type": "tun",
+  "inbound_port": null,
+  "inbound_user": null,
+  "conn_type": "tcp",
+  "process_name": "curl",
+  "process_cmdline": "curl https://api.example.com",
+  "process_path": "/usr/bin/curl",
+  "process_pid": 12345,
+  "process_tag": null,
+  "process_parent_all": [
+    {"pid": 999, "name": "bash", "path": "/bin/bash", "cmdline": "bash", "cwd": "/home/user"}
+  ],
+  "time_hms_ms": "14:23:01.456"
+}
+```
+
+Optional fields (`addr_resolved_dst`, `ip_local`, `inbound_port`, `inbound_user`, `process_*`) are omitted when unavailable rather than set to null.
+
+*Client → server* (plain JSON text frame on the same WebSocket):
+
+```json
+{
+  "sub_id": 200,
+  "request_id": 42,
+  "route": "REJECT"
+}
+```
+
+The server verifies that `sub_id` in the response matches the one stored for `request_id`. Responses with a mismatched `sub_id` are silently ignored.
+
+**Example:**
+
+```yaml
+- .REQUEST:
+    id: 200
+    matches: PROCESS-NAME, untrusted-app
+    timeout: 30
+    request_route: CONTINUE
+    fallback: REJECT
+```
+
+A client connected to the instrument server on `id=200` receives the connection details and decides whether to allow (`CONTINUE`), block (`REJECT`), or sink (`BLACKHOLE`) the connection. If the client doesn't respond within 30 seconds, the connection is rejected.
+
 ## Rule Providers
 
 Load rules from external sources for better organization and automatic updates.

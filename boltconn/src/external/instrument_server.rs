@@ -9,6 +9,7 @@ use axum::middleware::map_request;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use boltapi::instrument::InstrumentData;
+use boltapi::instrument::RequestResponse;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -88,29 +89,35 @@ impl InstrumentServer {
         let Some(sub) = server.msg_bus.create_subscriber(ids.iter().copied()) else {
             return refusal_resp(http::StatusCode::CONFLICT);
         };
-        ws.on_upgrade(move |socket| Self::subscribe_inner(socket, sub))
+        let msg_bus = server.msg_bus.clone();
+        ws.on_upgrade(move |socket| Self::subscribe_inner(socket, sub, msg_bus))
     }
 
-    async fn subscribe_inner(mut socket: WebSocket, sub: BusSubscriber) {
+    async fn subscribe_inner(mut socket: WebSocket, sub: BusSubscriber, bus: Arc<MessageBus>) {
         loop {
-            let msg = select! {
+            select! {
                 r = socket.recv() => {
-                    // client disconnected
-                    if r.is_none(){
-                        return;
+                    match r {
+                        None => return,
+                        Some(Ok(ws::Message::Text(text))) => {
+                            if let Ok(resp) = serde_json::from_str::<RequestResponse>(&text) {
+                                bus.resolve_pending_response(resp.sub_id, resp.request_id, resp.route);
+                            }
+                        }
+                        Some(Err(_)) => return,
+                        _ => {}
                     }
-                    // some messages, maybe error
-                    continue;
                 }
-                Some(msg) = sub.recv() => msg,
-            };
-            let wire_msg = InstrumentData {
-                id: msg.sub_id,
-                message: msg.msg,
-            };
-            let _ = socket
-                .send(ws::Message::Text(wire_msg.encode_string()))
-                .await;
+                Some(msg) = sub.recv() => {
+                    let wire_msg = InstrumentData {
+                        id: msg.sub_id,
+                        message: msg.msg,
+                    };
+                    let _ = socket
+                        .send(ws::Message::Text(wire_msg.encode_string()))
+                        .await;
+                }
+            }
         }
     }
 }

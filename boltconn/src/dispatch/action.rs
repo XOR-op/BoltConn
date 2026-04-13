@@ -1,6 +1,7 @@
 use crate::dispatch::RuleImpl;
 use crate::dispatch::{ConnInfo, DispatchingSnippet, ProxyImpl};
 use crate::instrument::action::InstrumentAction;
+use crate::instrument::request_action::RequestAction;
 use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
 use async_recursion::async_recursion;
@@ -11,6 +12,7 @@ pub enum Action {
     LocalResolve(LocalResolve),
     SubDispatch(SubDispatch),
     Instrument(InstrumentAction),
+    Request(RequestAction),
 }
 
 //----------------------------------------------------------------------

@@ -15,6 +15,28 @@ pub struct InstrumentConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RequestConfig {
+    pub matches: String,
+    pub id: u64,
+    #[serde(default = "default_request_timeout")]
+    pub timeout: u64,
+    #[serde(default = "default_request_route")]
+    pub request_route: String,
+    #[serde(default = "default_request_fallback")]
+    pub fallback: String,
+}
+
+fn default_request_timeout() -> u64 {
+    60
+}
+fn default_request_route() -> String {
+    "CONTINUE".to_string()
+}
+fn default_request_fallback() -> String {
+    "REJECT".to_string()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RuleAction {
     #[serde(alias = ".LOCAL-RESOLVE")]
     LocalResolve,
@@ -22,6 +44,8 @@ pub enum RuleAction {
     SubDispatch(SubDispatchConfig),
     #[serde(alias = ".INSTRUMENT")]
     Instrument(InstrumentConfig),
+    #[serde(alias = ".REQUEST")]
+    Request(RequestConfig),
 }
 
 // Warning: order matters here; changing order may result in break

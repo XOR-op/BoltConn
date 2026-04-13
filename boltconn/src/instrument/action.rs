@@ -207,43 +207,43 @@ impl<'a> InstrumentContext<'a> {
         }
     }
 
-    fn collect_all_parents(info: Option<&ProcessInfo>) -> Vec<ProcessParentSchema> {
-        let mut parents = Vec::new();
-        let Some(info) = info else {
-            return parents;
-        };
-        let mut current = &info.parent;
-        loop {
-            match current {
-                ParentProcess::None => break,
-                ParentProcess::Ppid(ppid) => {
-                    parents.push(ProcessParentSchema {
-                        pid: *ppid,
-                        name: None,
-                        path: None,
-                        cmdline: None,
-                        cwd: None,
-                    });
-                    break;
-                }
-                ParentProcess::Process(parent) => {
-                    parents.push(ProcessParentSchema {
-                        pid: parent.pid,
-                        name: Some(parent.name.clone()),
-                        path: Some(parent.path.clone()),
-                        cmdline: Some(parent.cmdline.clone()),
-                        cwd: Some(parent.cwd.clone()),
-                    });
-                    current = &parent.parent;
-                }
+    fn serialize_all_parents(info: Option<&ProcessInfo>) -> String {
+        serde_json::to_string(&collect_all_parents(info)).unwrap_or_else(|_| "[]".to_string())
+    }
+}
+
+pub(crate) fn collect_all_parents(info: Option<&ProcessInfo>) -> Vec<ProcessParentSchema> {
+    let mut parents = Vec::new();
+    let Some(info) = info else {
+        return parents;
+    };
+    let mut current = &info.parent;
+    loop {
+        match current {
+            ParentProcess::None => break,
+            ParentProcess::Ppid(ppid) => {
+                parents.push(ProcessParentSchema {
+                    pid: *ppid,
+                    name: None,
+                    path: None,
+                    cmdline: None,
+                    cwd: None,
+                });
+                break;
+            }
+            ParentProcess::Process(parent) => {
+                parents.push(ProcessParentSchema {
+                    pid: parent.pid,
+                    name: Some(parent.name.clone()),
+                    path: Some(parent.path.clone()),
+                    cmdline: Some(parent.cmdline.clone()),
+                    cwd: Some(parent.cwd.clone()),
+                });
+                current = &parent.parent;
             }
         }
-        parents
     }
-
-    fn serialize_all_parents(info: Option<&ProcessInfo>) -> String {
-        serde_json::to_string(&Self::collect_all_parents(info)).unwrap_or_else(|_| "[]".to_string())
-    }
+    parents
 }
 
 impl interpolator::Context for InstrumentContext<'_> {

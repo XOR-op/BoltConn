@@ -28,6 +28,8 @@ pub enum ConfigError {
 pub enum InstrumentConfigError {
     #[error("Bad template {0}: {1}")]
     BadTemplate(String, String),
+    #[error("Invalid request route: {0}")]
+    BadRequestRoute(String),
 }
 
 #[derive(Error, Debug)]
