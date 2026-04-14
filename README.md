@@ -76,6 +76,7 @@ See `boltconn --help` for more help.
 Learn more about BoltConn's configuration, proxy behavior, RESTful API, and rule system:
 
 - [config.md](./docs/config.md) covers configuration and state behavior.
+- [instrument.md](./docs/instrument.md) documents the instrument WebSocket protocol and rule integration.
 - [proxy.md](./docs/proxy.md) documents proxy and outbound behavior.
 - [rule.md](./docs/rule.md) explains rule syntax and matching behavior.
 - [restful.md](./docs/restful.md) covers BoltConn's RESTful API.
