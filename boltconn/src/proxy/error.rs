@@ -6,8 +6,6 @@ pub enum RuntimeError {
     Transport(#[from] TransportError),
     #[error("Intercept error: {0}")]
     Intercept(#[from] InterceptError),
-    #[error("Database error: {0}")]
-    Database(#[from] DatabaseError),
     #[error("System error: {0}")]
     System(#[from] SystemError),
     #[error("Latency test: {0}")]
@@ -90,16 +88,4 @@ pub enum CertificateError {
     RcGen(#[from] rcgen::Error),
     #[error("PemFile error: {0}")]
     PemFile(std::io::Error),
-}
-
-#[derive(Error, Debug)]
-pub enum DatabaseError {
-    #[error("RuSqlite error: {0}")]
-    RuSqlite(#[from] rusqlite::Error),
-    #[error("Missing table: {0}")]
-    MissingTable(&'static str),
-    #[error("Invalid table schema {0}")]
-    InvalidSchema(&'static str),
-    #[error("Chown error: {0}")]
-    Chown(std::io::Error),
 }

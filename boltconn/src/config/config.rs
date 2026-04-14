@@ -23,6 +23,7 @@ pub struct RawRootCfg {
     pub web_controller: Option<RawWebControllerConfig>,
     #[serde(alias = "instrument")]
     pub instrument: Option<RawInstrumentConfig>,
+    /// Deprecated compatibility option. Accepted but ignored.
     #[serde(default = "default_false")]
     pub enable_dump: bool,
     pub dispatching: Option<DispatchingConfig>,

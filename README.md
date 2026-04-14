@@ -27,7 +27,7 @@ All efforts made to make you fully control your network. Experimental webui & de
 - **Fine-grained Traffic Control**: Allow VPN-style global control, or dedicated http/socks5 per-inbound control.
 - **Rule-based Blocking**: Block ad/tracking traffic on a per-process/per-website/flexible way.
 - **Rule-based Tunneling**: Flexible way to tunnel traffic through http/socks5/wireguard/etc outbounds. Able to use compatible rules from similar community.
-- **Audit Traffic**: Audit traffic history by accessing API or dumping into SQLite.
+- **Audit Traffic**: Audit recent traffic history through the control APIs.
 - **Modify HTTPS Data**: Manipulate requests and responses inside HTTPS traffic to redirect, block or modify them. Support injecting Javascript now.
 
 For the full features, see [features.md](./docs/features.md).

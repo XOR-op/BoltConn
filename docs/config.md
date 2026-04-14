@@ -195,13 +195,10 @@ REST connection data, and `.INSTRUMENT` templates. A depth of `1` includes the i
 Set `process_info_depth: unlimited` to keep walking parent processes until the root process
 or until parent metadata can no longer be read.
 
-### Database Dumping
+### Deprecated Dumping Option
 
-Enable connection database for persistence.
-
-```yaml
-enable_dump: false  # Default: false
-```
+`enable_dump` is deprecated and ignored. It is still accepted in `config.yml`
+for compatibility, but BoltConn no longer writes SQLite traffic logs.
 
 ### Speed Test URL
 

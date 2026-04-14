@@ -7,8 +7,8 @@ use crate::config::{
 };
 use crate::dispatch::{DispatchingBuilder, InboundManager, RuleSet, RuleSetBuilder};
 use crate::external::{
-    Controller, DatabaseHandle, InstrumentServer, MmdbReader, SharedDispatching, StreamLoggerSend,
-    UdsController, UnixListenerGuard, WebController,
+    Controller, InstrumentServer, MmdbReader, SharedDispatching, StreamLoggerSend, UdsController,
+    UnixListenerGuard, WebController,
 };
 use crate::instrument::bus::MessageBus;
 use crate::intercept::{InterceptModifier, InterceptionManager};
@@ -86,21 +86,14 @@ impl App {
 
         let outbound_iface = detect_interface(config)?;
 
-        let (ctx_manager, http_capturer) = {
-            let conn_handle = if config.enable_dump {
-                Some(open_database_handle(data_path.as_path())?)
-            } else {
-                None
-            };
-            let intercept_handle = conn_handle.clone();
-            (
-                Arc::new(ContextManager::new(
-                    conn_handle,
-                    loaded_config.state.log_limit.unwrap_or(50),
-                )),
-                Arc::new(HttpCapturer::new(intercept_handle)),
-            )
-        };
+        if config.enable_dump {
+            tracing::warn!("`enable_dump` is deprecated and ignored");
+        }
+
+        let ctx_manager = Arc::new(ContextManager::new(
+            loaded_config.state.log_limit.unwrap_or(50),
+        ));
+        let http_capturer = Arc::new(HttpCapturer::new());
 
         // initialize resources
         let bootstrap =
@@ -693,18 +686,6 @@ fn load_cert_and_key(cert_path: &Path) -> anyhow::Result<Certificate> {
     let params = CertificateParams::from_ca_cert_pem(cert_str.as_str(), key_pair)?;
     let cert = Certificate::from_params(params)?;
     Ok(cert)
-}
-
-fn open_database_handle(data_path: &Path) -> anyhow::Result<DatabaseHandle> {
-    let path = data_path.join("data.sqlite");
-    match DatabaseHandle::open(path) {
-        Ok(h) => Ok(h),
-        Err(e) => Err(anyhow!(
-            "Open data.sqlite from {:?} failed: {}",
-            data_path,
-            e
-        )),
-    }
 }
 
 #[allow(clippy::type_complexity)]

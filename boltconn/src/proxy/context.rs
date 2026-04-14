@@ -2,7 +2,6 @@ use crate::adapter::OutboundType;
 use crate::common::evictable_vec::EvictableVec;
 use crate::config::RawServerAddr;
 use crate::dispatch::ConnInfo;
-use crate::external::DatabaseHandle;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use arc_swap::ArcSwap;
 use boltapi::CapturedBodySchema;
@@ -405,18 +404,16 @@ struct ContextManagerInner {
     inactive_ctx: EvictableVec<Arc<ConnContext>>,
     log_limit: u32,
     grace_threshold: usize,
-    db_handle: Option<DatabaseHandle>,
 }
 
 impl ContextManager {
-    pub fn new(db_handle: Option<DatabaseHandle>, log_limit: u32) -> Self {
+    pub fn new(log_limit: u32) -> Self {
         Self {
             inner: RwLock::new(ContextManagerInner {
                 active_ctx: Default::default(),
                 inactive_ctx: EvictableVec::new(),
                 log_limit,
                 grace_threshold: 5,
-                db_handle,
             }),
             global_upload: Arc::new(Default::default()),
             global_download: Arc::new(Default::default()),
@@ -489,29 +486,9 @@ impl ContextManagerInner {
             self.active_ctx.retain(|k, _| !to_remove.contains(k));
         }
         if self.inactive_ctx.real_len() > log_limit + self.grace_threshold {
-            self.inactive_ctx.evict_until(
-                |_c, left| -> bool { left > log_limit },
-                |data| {
-                    if let Some(handle) = &mut self.db_handle {
-                        handle.add_connections(data)
-                    }
-                },
-            );
+            self.inactive_ctx
+                .evict_until(|_c, left| -> bool { left > log_limit }, |_| {});
         }
-    }
-}
-
-impl Drop for ContextManagerInner {
-    fn drop(&mut self) {
-        let active_list: Vec<_> = self.active_ctx.values().cloned().collect();
-        if let Some(handle) = &mut self.db_handle {
-            handle.add_connections(active_list)
-        }
-        self.inactive_ctx.evict_with(0, |data| {
-            if let Some(handle) = &mut self.db_handle {
-                handle.add_connections(data)
-            }
-        })
     }
 }
 
@@ -641,20 +618,18 @@ pub struct HttpCapturer {
 struct HttpCapturerInner {
     /// how many elements are allowed to return to caller
     keep_count: usize,
-    // how many extra elements are allowed to reside in memory, in order to reduce database operation times.
+    // how many extra elements are allowed to reside in memory before eviction.
     grace_threshold: usize,
     contents: EvictableVec<HttpInterceptData>,
-    db_handle: Option<DatabaseHandle>,
 }
 
 impl HttpCapturer {
-    pub fn new(db_handle: Option<DatabaseHandle>) -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Mutex::new(HttpCapturerInner {
                 keep_count: 20,
                 grace_threshold: 3,
                 contents: EvictableVec::new(),
-                db_handle,
             }),
         }
     }
@@ -715,22 +690,8 @@ impl HttpCapturerInner {
 
     fn evict(&mut self) {
         if self.contents.real_len() > self.keep_count + self.grace_threshold {
-            self.contents.evict_with(self.keep_count, |data| {
-                if let Some(handle) = &mut self.db_handle {
-                    handle.add_interceptions(data)
-                }
-            })
+            self.contents.evict_with(self.keep_count, |_| {})
         }
-    }
-}
-
-impl Drop for HttpCapturerInner {
-    fn drop(&mut self) {
-        self.contents.evict_with(0, |data| {
-            if let Some(handle) = &mut self.db_handle {
-                handle.add_interceptions(data)
-            }
-        })
     }
 }
 
