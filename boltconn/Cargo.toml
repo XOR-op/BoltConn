@@ -116,6 +116,7 @@ smoltcp = { version = "0.12.0", features = ["socket-tcp-cubic"] }
 clap = { version = "4.4.6", features = ["derive"] }
 clap_complete = "4.4.3"
 colored = "2.0.0"
+crossterm = { version = "0.29", features = ["event-stream"] }
 tabular = "0.2.0"
 git-version = "0.3.9"
 const_format = "0.2.34"

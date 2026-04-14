@@ -1,3 +1,4 @@
+mod approve;
 mod cert;
 mod clean;
 mod request;
@@ -156,6 +157,19 @@ pub(crate) struct InitOptions {
     pub app_data: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct ApproveOptions {
+    /// Path of configuration. Default to $HOME/.config/boltconn
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+    /// Comma-separated instrument subscriber IDs
+    #[arg(short = 'i', long)]
+    pub id: String,
+    /// Override instrument WebSocket secret; skips config loading when used
+    #[arg(long)]
+    pub secret: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Subcommand)]
 pub(crate) enum PromptOptions {
     Bash,
@@ -208,6 +222,8 @@ pub(crate) enum SubCommand {
     Reload,
     /// Validate configurations
     Validate(StartOptions),
+    /// Review `.REQUEST` approvals from the instrument server
+    Approve(ApproveOptions),
     /// Connection settings
     #[command(subcommand)]
     Conn(ConnOptions),
@@ -397,6 +413,13 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 exit(0)
             }
         }
+        SubCommand::Approve(opt) => {
+            if let Err(err) = approve::run(opt, args.url).await {
+                eprintln!("{}", err);
+                exit(-1)
+            }
+            exit(0)
+        }
         _ => (),
     }
 
@@ -467,7 +490,8 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         | SubCommand::Generate(_)
         | SubCommand::Clean
         | SubCommand::Log
-        | SubCommand::Validate(_) => {
+        | SubCommand::Validate(_)
+        | SubCommand::Approve(_) => {
             unreachable!()
         }
         #[cfg(feature = "internal-test")]

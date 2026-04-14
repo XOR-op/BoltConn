@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use boltapi::instrument::RequestPayload;
-use serde_json::Value;
 
 use crate::dispatch::{ConnInfo, InboundInfo, ProxyImpl, RuleImpl};
 use crate::instrument::action::collect_all_parents;
@@ -74,26 +73,29 @@ impl RequestAction {
         if !self.rule.matches(info) {
             return None;
         }
-        if !self.bus.has_subscriber(self.sub_id) {
-            return self.apply(self.fallback, info, false, verbose);
-        }
-
         let request_id = self.bus.alloc_request_id();
-        let rx = self.bus.register_pending_response(self.sub_id, request_id);
+        let Some(rx) = self.bus.register_pending_response(self.sub_id, request_id) else {
+            return self.apply(self.fallback, info, false, verbose);
+        };
 
-        let payload = build_request_payload(self.sub_id, request_id, self.request_route, info);
+        let payload = build_request_payload(
+            self.sub_id,
+            request_id,
+            self.request_route,
+            self.timeout,
+            info,
+        );
         self.bus_publisher.publish(BusMessage::new(
             self.sub_id,
             serde_json::to_string(&payload).expect("infallible"),
         ));
 
         let (decision, active_decision) = match tokio::time::timeout(self.timeout, rx).await {
-            Ok(Ok(route_str)) => match RouteDecision::from_str(&route_str) {
-                Some(d) => (d, true),
-                None => (self.fallback, false),
-            },
-            _ => (self.fallback, false),
+            Ok(Ok(route_str)) => resolve_route_choice(Some(route_str.as_str()), self.fallback),
+            _ => resolve_route_choice(None, self.fallback),
         };
+        // Best-effort completion cleanup. Disconnect cleanup may have removed it already.
+        self.bus.remove_pending_response(request_id);
         self.apply(decision, info, active_decision, verbose)
     }
 
@@ -137,16 +139,16 @@ fn build_request_payload(
     sub_id: SubId,
     request_id: u64,
     request_route: RouteDecision,
+    timeout: Duration,
     info: &ConnInfo,
 ) -> RequestPayload {
     let now = chrono::Local::now();
-    let parents = collect_all_parents(info.process_info.as_ref());
-    let process_parent_all = serde_json::to_value(&parents).unwrap_or(Value::Array(vec![]));
 
     RequestPayload {
         sub_id,
         request_id,
         suggested_route: request_route.as_str().to_string(),
+        timeout: timeout.as_secs(),
         addr_src: info.src.to_string(),
         addr_dst: info.dst.to_string(),
         addr_resolved_dst: info.resolved_dst.map(|a| a.to_string()),
@@ -169,9 +171,40 @@ fn build_request_payload(
         process_name: info.process_info.as_ref().map(|p| p.name.clone()),
         process_cmdline: info.process_info.as_ref().map(|p| p.cmdline.clone()),
         process_path: info.process_info.as_ref().map(|p| p.path.clone()),
+        process_cwd: info.process_info.as_ref().map(|p| p.cwd.clone()),
         process_pid: info.process_info.as_ref().map(|p| p.pid),
         process_tag: info.process_info.as_ref().and_then(|p| p.tag.clone()),
-        process_parent_all,
+        process_parent_all: collect_all_parents(info.process_info.as_ref()),
         time_hms_ms: now.format("%H:%M:%S%.3f").to_string(),
+    }
+}
+
+fn resolve_route_choice(route_str: Option<&str>, fallback: RouteDecision) -> (RouteDecision, bool) {
+    match route_str {
+        Some("FALLBACK") => (fallback, true),
+        Some(route) => match RouteDecision::from_str(route) {
+            Some(decision) => (decision, true),
+            None => (fallback, false),
+        },
+        None => (fallback, false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RouteDecision, resolve_route_choice};
+
+    #[test]
+    fn test_resolve_route_choice_accepts_fallback_response() {
+        let (decision, active) = resolve_route_choice(Some("FALLBACK"), RouteDecision::BlackHole);
+        assert!(active);
+        assert!(matches!(decision, RouteDecision::BlackHole));
+    }
+
+    #[test]
+    fn test_resolve_route_choice_keeps_invalid_route_on_default_fallback() {
+        let (decision, active) = resolve_route_choice(Some("NOPE"), RouteDecision::Reject);
+        assert!(!active);
+        assert!(matches!(decision, RouteDecision::Reject));
     }
 }

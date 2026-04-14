@@ -676,13 +676,22 @@ Interactive action that pauses rule evaluation and asks a connected WebSocket cl
 | `request_route` | `CONTINUE` | Route hint sent to client as `suggested_route` |
 | `fallback` | `REJECT` | Route used when no client is connected, or timeout/error |
 
-**Route values** (for `request_route`, `fallback`, and client responses):
+**Config route values** (for `request_route` and `fallback`):
 
 | Value | Behavior |
 |---|---|
 | `CONTINUE` | Continue evaluating the next rule in the chain |
 | `REJECT` | Immediately reject the connection |
 | `BLACKHOLE` | Accept the connection but silently discard all data |
+
+**Client response route values**:
+
+| Value | Behavior |
+|---|---|
+| `CONTINUE` | Continue evaluating the next rule in the chain |
+| `REJECT` | Immediately reject the connection |
+| `BLACKHOLE` | Accept the connection but silently discard all data |
+| `FALLBACK` | Apply the rule's configured `fallback` immediately |
 
 **Decision logic:**
 
@@ -704,6 +713,7 @@ Interactive action that pauses rule evaluation and asks a connected WebSocket cl
   "sub_id": 200,
   "request_id": 42,
   "suggested_route": "CONTINUE",
+  "timeout": 30,
   "addr_src": "192.168.1.5:54321",
   "addr_dst": "api.example.com:443",
   "addr_resolved_dst": "1.2.3.4:443",
@@ -715,6 +725,7 @@ Interactive action that pauses rule evaluation and asks a connected WebSocket cl
   "process_name": "curl",
   "process_cmdline": "curl https://api.example.com",
   "process_path": "/usr/bin/curl",
+  "process_cwd": "/home/user",
   "process_pid": 12345,
   "process_tag": null,
   "process_parent_all": [
@@ -732,7 +743,7 @@ Optional fields (`addr_resolved_dst`, `ip_local`, `inbound_port`, `inbound_user`
 {
   "sub_id": 200,
   "request_id": 42,
-  "route": "REJECT"
+  "route": "FALLBACK"
 }
 ```
 
@@ -749,7 +760,7 @@ The server verifies that `sub_id` in the response matches the one stored for `re
     fallback: REJECT
 ```
 
-A client connected to the instrument server on `id=200` receives the connection details and decides whether to allow (`CONTINUE`), block (`REJECT`), or sink (`BLACKHOLE`) the connection. If the client doesn't respond within 30 seconds, the connection is rejected.
+A client connected to the instrument server on `id=200` receives the connection details and decides whether to allow (`CONTINUE`), block (`REJECT`), sink (`BLACKHOLE`), or immediately apply the configured fallback (`FALLBACK`). If the client doesn't respond within 30 seconds, the connection is rejected.
 
 ## Rule Providers
 

@@ -176,15 +176,16 @@ impl<'a> InstrumentContext<'a> {
                 "name" => Some(Formattable::display(&info.name)),
                 "path" => Some(Formattable::display(&info.path)),
                 "cmdline" => Some(Formattable::display(&info.cmdline)),
+                "cwd" => Some(Formattable::display(&info.cwd)),
                 _ => None,
             },
             Some(ProcessAncestor::Pid(pid)) => match field {
                 "pid" => Some(Formattable::display(pid)),
-                "name" | "path" | "cmdline" => Some(Self::na()),
+                "name" | "path" | "cmdline" | "cwd" => Some(Self::na()),
                 _ => None,
             },
             None => match field {
-                "pid" | "name" | "path" | "cmdline" => Some(Self::na()),
+                "pid" | "name" | "path" | "cmdline" | "cwd" => Some(Self::na()),
                 _ => None,
             },
         }
@@ -275,6 +276,12 @@ impl interpolator::Context for InstrumentContext<'_> {
                     .as_ref()
                     .map_or_else(Self::na, |info| Formattable::display(&info.path)),
             ),
+            "process.cwd" => Some(
+                self.info
+                    .process_info
+                    .as_ref()
+                    .map_or_else(Self::na, |info| Formattable::display(&info.cwd)),
+            ),
             "process.pid" => Some(
                 self.info
                     .process_info
@@ -286,6 +293,7 @@ impl interpolator::Context for InstrumentContext<'_> {
             "process.parent.name" => self.process_parent_field(0, "name"),
             "process.parent.path" => self.process_parent_field(0, "path"),
             "process.parent.cmdline" => self.process_parent_field(0, "cmdline"),
+            "process.parent.cwd" => self.process_parent_field(0, "cwd"),
             "process.parent.all.json" => Some(Formattable::display(&self.process_parent_all_json)),
             "time.rfc3389" => Some(Formattable::display(&self.time_rfc3389)),
             "time.hms_ms" => Some(Formattable::display(&self.time_hms_ms)),
@@ -301,10 +309,10 @@ fn test_instrument_formatting() {
     let template = "src: {addr.src}, dst: {addr.dst}, resolved_dst: {addr.resolved_dst}, \
 local_ip: {ip.local}, conn_type: {conn.type}, \
 inbound_type: {inbound.type}, inbound_port: {inbound.port}, inbound_user: {inbound.user}, \
-process_name: {process.name}, process_cmdline: {process.cmdline}, process_path: {process.path}, \
+process_name: {process.name}, process_cmdline: {process.cmdline}, process_path: {process.path}, process_cwd: {process.cwd}, \
 process_pid: {process.pid}, process_tag: {process.tag}, process_parent_pid: {process.parent.pid}, \
 process_parent_name: {process.parent.name}, process_parent_path: {process.parent.path}, \
-process_parent_cmdline: {process.parent.cmdline}, process_parent_indexed_name: {process.parents.0.name}, \
+process_parent_cmdline: {process.parent.cmdline}, process_parent_cwd: {process.parent.cwd}, process_parent_indexed_name: {process.parents.0.name}, \
 process_parent_all_json: {process.parent.all.json}, \
 time: {time.hms_ms}";
     let info = ConnInfo {
@@ -330,10 +338,10 @@ time: {time.hms_ms}";
         "src: 192.168.0.1:8080, dst: example.com:443, resolved_dst: N/A, \
 local_ip: N/A, conn_type: tcp, \
 inbound_type: tun, inbound_port: N/A, inbound_user: N/A, \
-process_name: N/A, process_cmdline: N/A, process_path: N/A, \
+process_name: N/A, process_cmdline: N/A, process_path: N/A, process_cwd: N/A, \
 process_pid: N/A, process_tag: N/A, process_parent_pid: N/A, \
 process_parent_name: N/A, process_parent_path: N/A, \
-process_parent_cmdline: N/A, process_parent_indexed_name: N/A, \
+process_parent_cmdline: N/A, process_parent_cwd: N/A, process_parent_indexed_name: N/A, \
 process_parent_all_json: [], "
     );
     assert!(chrono::NaiveTime::parse_from_str(time_suffix, "%H:%M:%S%.3f").is_ok());
@@ -387,8 +395,9 @@ fn test_instrument_formatting_supports_deep_parent_chain() {
     let info = mock_conn_info(Some(process_info));
     let template = "\
 process={process.name} \
-parent={process.parent.name}/{process.parents.0.name}/{process.parents.0.pid} \
-grandparent={process.parents.1.name}/{process.parents.1.cmdline} \
+cwd={process.cwd} \
+parent={process.parent.name}/{process.parents.0.name}/{process.parents.0.pid}/{process.parent.cwd} \
+grandparent={process.parents.1.name}/{process.parents.1.cmdline}/{process.parents.1.cwd} \
 great={process.parents.2.path} \
 all={process.parent.all.json}";
 
@@ -396,7 +405,7 @@ all={process.parent.all.json}";
 
     assert_eq!(
         rendered,
-        "process=curl parent=python/python/20 grandparent=bash/bash --serve great=/bin/launchd all=[{\"pid\":20,\"name\":\"python\",\"path\":\"/bin/python\",\"cmdline\":\"python --serve\",\"cwd\":\"/tmp/python\"},{\"pid\":30,\"name\":\"bash\",\"path\":\"/bin/bash\",\"cmdline\":\"bash --serve\",\"cwd\":\"/tmp/bash\"},{\"pid\":40,\"name\":\"launchd\",\"path\":\"/bin/launchd\",\"cmdline\":\"launchd --serve\",\"cwd\":\"/tmp/launchd\"}]"
+        "process=curl cwd=/tmp/curl parent=python/python/20//tmp/python grandparent=bash/bash --serve//tmp/bash great=/bin/launchd all=[{\"pid\":20,\"name\":\"python\",\"path\":\"/bin/python\",\"cmdline\":\"python --serve\",\"cwd\":\"/tmp/python\"},{\"pid\":30,\"name\":\"bash\",\"path\":\"/bin/bash\",\"cmdline\":\"bash --serve\",\"cwd\":\"/tmp/bash\"},{\"pid\":40,\"name\":\"launchd\",\"path\":\"/bin/launchd\",\"cmdline\":\"launchd --serve\",\"cwd\":\"/tmp/launchd\"}]"
     );
 }
 
@@ -413,8 +422,8 @@ fn test_instrument_formatting_handles_pid_only_parent_leaf() {
     );
     let info = mock_conn_info(Some(process_info));
     let template = "\
-parent={process.parents.0.name}/{process.parents.0.pid} \
-ancestor_pid_only={process.parents.1.pid}/{process.parents.1.name}/{process.parents.1.path} \
+parent={process.parents.0.name}/{process.parents.0.pid}/{process.parents.0.cwd} \
+ancestor_pid_only={process.parents.1.pid}/{process.parents.1.name}/{process.parents.1.path}/{process.parents.1.cwd} \
 missing={process.parents.2.pid} \
 all={process.parent.all.json}";
 
@@ -422,7 +431,7 @@ all={process.parent.all.json}";
 
     assert_eq!(
         rendered,
-        "parent=python/20 ancestor_pid_only=999/N/A/N/A missing=N/A all=[{\"pid\":20,\"name\":\"python\",\"path\":\"/bin/python\",\"cmdline\":\"python --serve\",\"cwd\":\"/tmp/python\"},{\"pid\":999,\"name\":null,\"path\":null,\"cmdline\":null,\"cwd\":null}]"
+        "parent=python/20//tmp/python ancestor_pid_only=999/N/A/N/A/N/A missing=N/A all=[{\"pid\":20,\"name\":\"python\",\"path\":\"/bin/python\",\"cmdline\":\"python --serve\",\"cwd\":\"/tmp/python\"},{\"pid\":999,\"name\":null,\"path\":null,\"cmdline\":null,\"cwd\":null}]"
     );
 }
 

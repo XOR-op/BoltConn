@@ -94,17 +94,19 @@ impl InstrumentServer {
     }
 
     async fn subscribe_inner(mut socket: WebSocket, sub: BusSubscriber, bus: Arc<MessageBus>) {
+        let sub_ids = sub.sub_ids().to_vec();
+        let sub_token = sub.token();
         loop {
             select! {
                 r = socket.recv() => {
                     match r {
-                        None => return,
+                        None => break,
                         Some(Ok(ws::Message::Text(text))) => {
                             if let Ok(resp) = serde_json::from_str::<RequestResponse>(&text) {
                                 bus.resolve_pending_response(resp.sub_id, resp.request_id, resp.route);
                             }
                         }
-                        Some(Err(_)) => return,
+                        Some(Err(_)) => break,
                         _ => {}
                     }
                 }
@@ -113,12 +115,21 @@ impl InstrumentServer {
                         id: msg.sub_id,
                         message: msg.msg,
                     };
-                    let _ = socket
+                    if socket
                         .send(ws::Message::Text(wire_msg.encode_string()))
-                        .await;
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             }
         }
+        drop(sub);
+        // Tear down only this WebSocket session and wake any `.REQUEST` waiters registered
+        // through it so they fall back immediately instead of waiting for timeout.
+        bus.remove_subscriber(sub_ids.as_slice(), sub_token);
+        bus.cancel_pending_responses_for_token(sub_token);
     }
 }
 
