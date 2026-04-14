@@ -30,7 +30,7 @@ All efforts made to make you fully control your network. Experimental webui & de
 - **Audit Traffic**: Audit recent traffic history through the control APIs.
 - **Modify HTTPS Data**: Manipulate requests and responses inside HTTPS traffic to redirect, block or modify them. Support injecting Javascript now.
 
-For the full features, see [features.md](./docs/features.md).
+For configuration, API, rule, and proxy details, see the documentation below.
 
 ## Getting Started
 
@@ -73,14 +73,12 @@ boltconn [conn/proxy/rule/tun/reload/...]
 See `boltconn --help` for more help.
 
 ## Documentations
-> [!NOTE]
-> Documentations are outdated now. Please wait for our update.
+Learn more about BoltConn's configuration, proxy behavior, RESTful API, and rule system:
 
-Learn more about BoltConn's architecture, RESTful API, and how it compares to other related projects:
-
-- [design.md](./docs/design.md) explains BoltConn's architecture.
+- [config.md](./docs/config.md) covers configuration and state behavior.
+- [proxy.md](./docs/proxy.md) documents proxy and outbound behavior.
+- [rule.md](./docs/rule.md) explains rule syntax and matching behavior.
 - [restful.md](./docs/restful.md) covers BoltConn's RESTful API.
-- [features.md](./docs/features.md) lists full features of BoltConn.
 
 ## Future Plan
 - Stablize Windows support with Wintun driver (it's experimental now).
