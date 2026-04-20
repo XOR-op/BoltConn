@@ -17,6 +17,7 @@ pub mod async_socket;
 pub mod async_ws_stream;
 pub mod call_chan;
 pub mod client_hello;
+mod domain_name;
 pub mod duplex_chan;
 pub mod evictable_vec;
 pub mod host_matcher;
@@ -24,6 +25,7 @@ mod hostname_parse;
 mod sync;
 pub mod utils;
 
+pub(crate) use domain_name::is_valid_domain_name;
 pub(crate) use hostname_parse::{parse_http_host, parse_tls_sni};
 
 pub use sync::{AbortCanary, local_async_run};

@@ -129,29 +129,32 @@ async fn load_remote_config<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    let io_error = |e| FileError::Io(path.to_string(), e);
     let serde_error = |e| FileError::Serde(path.to_string(), e);
+    let text = load_remote_text(url, path, root_path, force_update).await?;
+    serde_yaml::from_str(text.as_str()).map_err(serde_error)
+}
+
+pub(crate) async fn load_remote_text(
+    url: &str,
+    path: &str,
+    root_path: impl AsRef<Path>,
+    force_update: bool,
+) -> Result<String, FileError> {
+    let io_error = |e| FileError::Io(path.to_string(), e);
     let http_error = |e| FileError::Http(url.to_string(), e);
     let full_path = safe_join_path(root_path.as_ref(), path).map_err(io_error)?;
-    let content: T = if !force_update && full_path.as_path().exists() {
-        serde_yaml::from_str(
-            fs::read_to_string(full_path.as_path())
-                .map_err(io_error)?
-                .as_str(),
-        )
-        .map_err(serde_error)?
+    if !force_update && full_path.as_path().exists() {
+        fs::read_to_string(full_path.as_path()).map_err(io_error)
     } else {
         tracing::debug!("Downloading external resource from {}", url);
         let resp = reqwest::get(url).await.map_err(http_error)?;
         let text = resp.text().await.map_err(http_error)?;
-        let content: T = serde_yaml::from_str(text.as_str()).map_err(serde_error)?;
         // security: `full_path` should be (layers of) subdir of `root_path`,
         //           so arbitrary write should not happen
-        fs::write(full_path.as_path(), text).map_err(io_error)?;
+        fs::write(full_path.as_path(), text.as_str()).map_err(io_error)?;
         set_real_ownership(&full_path).map_err(io_error)?;
-        content
-    };
-    Ok(content)
+        Ok(text)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

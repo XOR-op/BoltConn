@@ -90,6 +90,8 @@ pub enum ProviderError {
     Missing(String),
     #[error("Invalid provider: {0}")]
     Invalid(String),
+    #[error("Provider {0} has unsupported format: {1}")]
+    UnsupportedFormat(String, &'static str),
     #[error("Provider {0} has bad filter: {1}")]
     BadFilter(String, String),
 }

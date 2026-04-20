@@ -775,6 +775,7 @@ rule_provider:
   my-rules:
     type: file
     behavior: domain          # domain, ipcidr, or classical
+    format: yaml              # yaml (default) or adblock for domain providers
     path: ./rules/my-rules.yaml
 ```
 
@@ -785,6 +786,7 @@ rule_provider:
   remote-rules:
     type: http
     behavior: domain
+    format: yaml
     url: https://example.com/rules.yaml
     path: ./cache/rules.yaml
     interval: 86400  # Update every 24 hours
@@ -839,6 +841,28 @@ payload:
   - IP-CIDR, 1.2.3.0/24
 ```
 
+For `behavior: domain`, you can also load adblock text with `format: adblock`:
+
+```yaml
+rule_provider:
+  ad-blocking:
+    type: http
+    behavior: domain
+    format: adblock
+    url: https://example.com/ad-rules.txt
+    path: ./cache/ad-rules.txt
+    interval: 86400
+```
+
+Accepted adblock lines are intentionally limited:
+
+- `example.com` translates to an exact domain match, equivalent to `DOMAIN, example.com`
+- `||example.com^` translates to a domain suffix match, equivalent to `DOMAIN-SUFFIX, example.com`
+- Empty lines, comments starting with `!` or `#`, and lines starting with `[` are ignored
+- Exception rules starting with `@@`, modifiers using `$`, regex rules like `/.../`, and every other adblock pattern are skipped
+
+`format: adblock` is only supported with `behavior: domain`.
+
 ### Using Rule Providers
 
 ```yaml
@@ -856,8 +880,9 @@ rule_provider:
   ad-blocking:
     type: http
     behavior: domain
-    url: https://example.com/ad-rules.yaml
-    path: ./cache/ad-rules.yaml
+    format: adblock
+    url: https://example.com/ad-rules.txt
+    path: ./cache/ad-rules.txt
     interval: 86400
 
 rule_local:
@@ -888,8 +913,9 @@ rule_provider:
   ad-blocking:
     type: http
     behavior: domain
+    format: adblock
     url: https://anti-ad.net/domains.txt
-    path: ./cache/ad-blocking.yaml
+    path: ./cache/ad-blocking.txt
     interval: 86400
 
   private-ip:

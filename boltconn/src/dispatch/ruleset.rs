@@ -573,3 +573,90 @@ fn test_ruleset_classical_rejects_dst_addr_type() {
         "DST-ADDR-TYPE should be rejected in classical rulesets"
     );
 }
+
+#[test]
+fn test_ruleset_domain_provider_exact_entry_matches_exact_only() {
+    use crate::dispatch::inbound::InboundInfo;
+    use crate::platform::process::NetworkType;
+
+    let builder = RuleSetBuilder::new(
+        "DomainExact",
+        &RuleSchema {
+            behavior: ProviderBehavior::Domain,
+            payload: vec!["example.com".to_string()],
+        },
+    )
+    .expect("domain provider should build");
+    let ruleset = builder.build().expect("ruleset should build");
+
+    let exact = ConnInfo {
+        src: "127.0.0.1:12345".parse().unwrap(),
+        dst: NetworkAddr::DomainName {
+            domain_name: "example.com".to_string(),
+            port: 443,
+        },
+        local_ip: None,
+        inbound: InboundInfo::Tun,
+        resolved_dst: None,
+        connection_type: NetworkType::Tcp,
+        process_info: None,
+    };
+    assert!(ruleset.matches(&exact));
+
+    let subdomain = ConnInfo {
+        dst: NetworkAddr::DomainName {
+            domain_name: "www.example.com".to_string(),
+            port: 443,
+        },
+        ..exact.clone()
+    };
+    assert!(!ruleset.matches(&subdomain));
+}
+
+#[test]
+fn test_ruleset_domain_provider_suffix_entry_matches_domain_and_subdomains() {
+    use crate::dispatch::inbound::InboundInfo;
+    use crate::platform::process::NetworkType;
+
+    let builder = RuleSetBuilder::new(
+        "DomainSuffix",
+        &RuleSchema {
+            behavior: ProviderBehavior::Domain,
+            payload: vec!["*.example.com".to_string()],
+        },
+    )
+    .expect("domain provider should build");
+    let ruleset = builder.build().expect("ruleset should build");
+
+    let root = ConnInfo {
+        src: "127.0.0.1:12345".parse().unwrap(),
+        dst: NetworkAddr::DomainName {
+            domain_name: "example.com".to_string(),
+            port: 443,
+        },
+        local_ip: None,
+        inbound: InboundInfo::Tun,
+        resolved_dst: None,
+        connection_type: NetworkType::Tcp,
+        process_info: None,
+    };
+    assert!(ruleset.matches(&root));
+
+    let subdomain = ConnInfo {
+        dst: NetworkAddr::DomainName {
+            domain_name: "www.example.com".to_string(),
+            port: 443,
+        },
+        ..root.clone()
+    };
+    assert!(ruleset.matches(&subdomain));
+
+    let non_match = ConnInfo {
+        dst: NetworkAddr::DomainName {
+            domain_name: "example.com.test".to_string(),
+            port: 443,
+        },
+        ..root
+    };
+    assert!(!ruleset.matches(&non_match));
+}

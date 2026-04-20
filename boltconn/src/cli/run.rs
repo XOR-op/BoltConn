@@ -1,4 +1,5 @@
 use crate::cli::request_uds::UdsConnector;
+use crate::common::is_valid_domain_name;
 use crate::platform::process::validate_and_encode_tag;
 use clap::Args;
 use ipnet::IpNet;
@@ -479,27 +480,6 @@ fn parse_allowlist_atom(token: &str) -> anyhow::Result<AllowlistAtom> {
         return Ok(AllowlistAtom::Domain(token.to_string()));
     }
     anyhow::bail!("invalid allowlist entry '{}'", token)
-}
-
-fn is_valid_domain_name(domain: &str) -> bool {
-    if domain.is_empty() || domain.len() > 253 {
-        return false;
-    }
-    if domain.starts_with('.') || domain.ends_with('.') {
-        return false;
-    }
-    for label in domain.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            return false;
-        }
-        if label.starts_with('-') || label.ends_with('-') {
-            return false;
-        }
-        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return false;
-        }
-    }
-    true
 }
 
 fn build_generated_allowlist_rule_literal(

@@ -340,6 +340,7 @@ rule_provider:
   reject-ads:
     type: http
     behavior: domain
+    format: adblock
     url: https://example.com/ad-rules.yaml
     path: ./cache/ad-rules.yaml
 
@@ -348,6 +349,9 @@ rule_local:
   - RULE-SET, cn-direct, DIRECT
   - RULE-SET, reject-ads, REJECT
 ```
+
+`format` defaults to YAML `payload:` files. Set `format: adblock` only for `behavior: domain`
+providers that load an AdGuard Home style text list.
 
 ## HTTP/HTTPS Interception
 
