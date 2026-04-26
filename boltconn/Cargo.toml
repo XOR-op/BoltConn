@@ -86,7 +86,7 @@ tower-http = { version = "0.5.2", features = ["cors"] }
 # Rules
 async-recursion = "1.0.4"
 maxminddb = "0.23.0"
-radix_trie = "0.3"
+zerotrie = {version = "0.2", features = ["alloc"]}
 
 # Interception
 aho-corasick = "1.0.2"

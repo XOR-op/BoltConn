@@ -1,4 +1,4 @@
-use radix_trie::{Trie, TrieCommon};
+use zerotrie::ZeroTrieSimpleAscii;
 
 #[derive(Debug, Clone, Copy)]
 enum HostType {
@@ -6,31 +6,62 @@ enum HostType {
     Suffix,
 }
 
-pub struct HostMatcher(Trie<String, HostType>);
+impl HostType {
+    fn from_usize(value: usize) -> Option<Self> {
+        match value {
+            0 => Some(Self::Exact),
+            1 => Some(Self::Suffix),
+            _ => None,
+        }
+    }
+
+    fn matches_host(self, key_len: usize, rev_dn: &[u8]) -> bool {
+        match self {
+            Self::Exact => key_len == rev_dn.len(),
+            Self::Suffix => {
+                key_len == rev_dn.len()
+                    || (key_len < rev_dn.len() && rev_dn[key_len] == b'.')
+            }
+        }
+    }
+}
+
+impl From<HostType> for usize {
+    fn from(value: HostType) -> Self {
+        match value {
+            HostType::Exact => 0,
+            HostType::Suffix => 1,
+        }
+    }
+}
+
+pub struct HostMatcher(ZeroTrieSimpleAscii<Vec<u8>>);
 
 impl HostMatcher {
     pub fn matches(&self, host: &str) -> bool {
         let rev_dn: String = host.chars().rev().collect();
-        if let Some(result) = self.0.get_ancestor(rev_dn.as_str())
-            && let Some(val) = result.value()
+        let rev_dn_bytes = rev_dn.as_bytes();
+        let mut cursor = self.0.cursor();
+
+        if let Some(value) = cursor.take_value()
+            && let Some(host_type) = HostType::from_usize(value)
+            && host_type.matches_host(0, rev_dn_bytes)
         {
-            let key = result.key().unwrap();
-            match val {
-                HostType::Exact => {
-                    if key.len() == rev_dn.len() {
-                        // DOMAIN rule
-                        return true;
-                    }
-                }
-                HostType::Suffix => {
-                    if key.len() == rev_dn.len()
-                        || (key.len() < rev_dn.len()
-                            && rev_dn.chars().nth(key.len()).unwrap() == '.')
-                    {
-                        // DOMAIN-SUFFIX rule
-                        return true;
-                    }
-                }
+            return true;
+        }
+
+        // Walk every ancestor in the reversed hostname and accept the first
+        // rule that matches the original exact/suffix semantics.
+        for (idx, byte) in rev_dn_bytes.iter().copied().enumerate() {
+            cursor.step(byte);
+            if let Some(value) = cursor.take_value()
+                && let Some(host_type) = HostType::from_usize(value)
+                && host_type.matches_host(idx + 1, rev_dn_bytes)
+            {
+                return true;
+            }
+            if cursor.is_empty() {
+                break;
             }
         }
         false
@@ -67,7 +98,9 @@ impl HostMatcherBuilder {
     }
 
     pub fn build(self) -> HostMatcher {
-        HostMatcher(Trie::from_iter(self.0))
+        HostMatcher(ZeroTrieSimpleAscii::from_iter(
+            self.0.into_iter().map(|(k, v)| (k, v.into())),
+        ))
     }
 
     pub fn merge(&mut self, rhs: Self) {
@@ -96,4 +129,15 @@ fn test_matcher() {
     assert!(matcher.matches("hi.ogle.com"));
     assert!(!matcher.matches("google.com"));
     assert!(!matcher.matches("hi.google.com"));
+}
+
+#[test]
+fn test_matcher_ancestor_preference() {
+    let mut builder = HostMatcher::builder();
+    builder.add_suffix("com");
+    builder.add_exact("google.com");
+    let matcher = builder.build();
+
+    assert!(matcher.matches("google.com"));
+    assert!(matcher.matches("mail.google.com"));
 }
