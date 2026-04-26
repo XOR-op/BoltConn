@@ -7,6 +7,7 @@ readme = "README.md"
 
 [features]
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
+profiling = ["dep:pprof"]
 internal-test = []
 
 [dependencies]
@@ -85,7 +86,8 @@ tower-http = { version = "0.5.2", features = ["cors"] }
 # Rules
 async-recursion = "1.0.4"
 maxminddb = "0.23.0"
-radix_trie = "0.2.1"
+radix_trie = "0.3"
+
 # Interception
 aho-corasick = "1.0.2"
 brotli = "3.4.0"
@@ -124,6 +126,12 @@ russh = "0.55.0"
 
 # features(tokio-console)
 console-subscriber = { version = "0.1.10", optional = true }
+
+# features(profiling)
+pprof = { version = "0.15", features = [
+    "flamegraph",
+    "protobuf-codec",
+], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58.0", features = [

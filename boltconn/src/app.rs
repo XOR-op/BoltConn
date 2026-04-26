@@ -2,8 +2,8 @@ use crate::adapter::WireguardManager;
 use crate::common::call_chan::CallParameter;
 use crate::config::{
     LinkedState, LoadedConfig, RawDnsConfig, RawInboundConfig, RawInboundServiceConfig,
-    RawInstrumentConfig, RawRootCfg, RawWebControllerConfig, SingleOrVec, default_inbound_ip_addr,
-    default_process_info_depth, safe_join_path,
+    RawInstrumentConfig, RawRootCfg, RawWebControllerConfig, RuleSchema, SingleOrVec,
+    default_inbound_ip_addr, default_process_info_depth, safe_join_path,
 };
 use crate::dispatch::{DispatchingBuilder, InboundManager, RuleSet, RuleSetBuilder};
 use crate::external::{
@@ -669,14 +669,41 @@ fn start_controller_services(
 }
 
 fn load_rulesets(loaded_config: &LoadedConfig) -> anyhow::Result<HashMap<String, Arc<RuleSet>>> {
-    let mut ruleset = HashMap::new();
-    for (name, schema) in &loaded_config.rule_schema {
-        let Some(builder) = RuleSetBuilder::new(name.as_str(), schema) else {
+    // for parallel build
+    fn build_ruleset(name: &str, schema: &RuleSchema) -> anyhow::Result<Arc<RuleSet>> {
+        let Some(builder) = RuleSetBuilder::new(name, schema) else {
             return Err(anyhow!("Filter: failed to parse provider {}", name));
         };
-        ruleset.insert(name.clone(), Arc::new(builder.build()?));
+        Ok(Arc::new(builder.build()?))
     }
-    Ok(ruleset)
+
+    let mut large_tasks = Vec::new();
+    let mut small_rulesets = HashMap::new();
+
+    for (name, schema) in &loaded_config.rule_schema {
+        if schema.payload.len() > 1000 {
+            let task_name = name.clone();
+            let task_schema = schema.clone();
+            large_tasks.push((
+                name.clone(),
+                std::thread::spawn(move || build_ruleset(task_name.as_str(), &task_schema)),
+            ));
+            continue;
+        }
+
+        small_rulesets.insert(name.clone(), build_ruleset(name.as_str(), schema)?);
+    }
+
+    let mut large_rulesets = HashMap::with_capacity(large_tasks.len());
+    for (name, task) in large_tasks {
+        let ruleset = task
+            .join()
+            .map_err(|_| anyhow!("Filter: failed to parse provider {}", name))??;
+        large_rulesets.insert(name, ruleset);
+    }
+
+    small_rulesets.extend(large_rulesets);
+    Ok(small_rulesets)
 }
 
 fn load_cert_and_key(cert_path: &Path) -> anyhow::Result<Certificate> {
