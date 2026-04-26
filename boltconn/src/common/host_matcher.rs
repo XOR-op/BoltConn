@@ -19,8 +19,7 @@ impl HostType {
         match self {
             Self::Exact => key_len == rev_dn.len(),
             Self::Suffix => {
-                key_len == rev_dn.len()
-                    || (key_len < rev_dn.len() && rev_dn[key_len] == b'.')
+                key_len == rev_dn.len() || (key_len < rev_dn.len() && rev_dn[key_len] == b'.')
             }
         }
     }
