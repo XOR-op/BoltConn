@@ -299,14 +299,14 @@ impl RuleSetBuilder {
             socks5_inbound: self.socks5_inbound,
             inbound_alias: self.inbound_alias,
             tun_inbound: self.tun_inbound,
-            domain_keyword: AhoCorasick::new(self.domain_keyword.into_iter())
+            domain_keyword: AhoCorasick::new(self.domain_keyword)
                 .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
             process_name: self.process_name,
             process_tag: self.process_tag,
             mmdb: self.mmdb.map(|m| (m, self.asn, self.geoip_country)),
-            process_keyword: AhoCorasick::new(self.process_keyword.into_iter())
+            process_keyword: AhoCorasick::new(self.process_keyword)
                 .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
-            procpath_keyword: AhoCorasick::new(self.procpath_keyword.into_iter())
+            procpath_keyword: AhoCorasick::new(self.procpath_keyword)
                 .map_err(|_| RuleError::RulesetExceededLimit(self.name.clone()))?,
         })
     }

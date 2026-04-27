@@ -330,11 +330,10 @@ async fn wait_for_reconnect_or_exit(
                     return Ok(true);
                 };
                 match event? {
-                    Event::Key(key) => {
-                        if is_exit_key(&key) {
+                    Event::Key(key)
+                        if is_exit_key(&key) => {
                             return Ok(true);
                         }
-                    }
                     Event::Resize(_, _) => {
                         terminal.draw(state)?;
                     }
