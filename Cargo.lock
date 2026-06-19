@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "boltconn"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -719,11 +719,12 @@ dependencies = [
 
 [[package]]
 name = "boringtun"
-version = "0.6.0"
-source = "git+https://github.com/XOR-op/boringtun?branch=master#f672bb6c1e1e371240a8d151f15854687eb740bb"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15dd6a8a89cbe8997f37ca0cf035e6ea4d64cd2ecea4aed83ffb9f99f7126939"
 dependencies = [
  "aead",
- "base64 0.13.1",
+ "base64 0.22.1",
  "blake2",
  "chacha20poly1305",
  "hex",
@@ -731,8 +732,9 @@ dependencies = [
  "ip_network",
  "ip_network_table",
  "libc",
- "nix 0.25.1",
+ "nix 0.31.3",
  "parking_lot",
+ "portable-atomic",
  "rand_core 0.6.4",
  "ring 0.17.8",
  "tracing",
@@ -2154,9 +2156,9 @@ dependencies = [
 
 [[package]]
 name = "heapless"
-version = "0.8.0"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
 dependencies = [
  "hash32",
  "stable_deref_trait",
@@ -2881,9 +2883,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.184"
+version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
+checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libcrux-intrinsics"
@@ -3256,18 +3258,6 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f346ff70e7dbfd675fe90590b92d59ef2de15a8779ae305ebcbfd3f0caf59be4"
-dependencies = [
- "autocfg",
- "bitflags 1.3.2",
- "cfg-if",
- "libc",
-]
-
-[[package]]
-name = "nix"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "598beaf3cc6fdd9a5dfb1630c2800c7acd31df7aaf0f565796fba2b53ca1af1b"
@@ -3282,6 +3272,18 @@ name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.11.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.11.1",
  "cfg-if",
@@ -3759,6 +3761,12 @@ dependencies = [
  "opaque-debug",
  "universal-hash",
 ]
+
+[[package]]
+name = "portable-atomic"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "powerfmt"
@@ -4898,8 +4906,8 @@ checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
 
 [[package]]
 name = "smoltcp"
-version = "0.12.0"
-source = "git+https://github.com/XOR-op/smoltcp.git?branch=rcv-buf-pinned#89b7dc984eee4683f85f426df582d783470dcf4b"
+version = "0.13.1"
+source = "git+https://github.com/XOR-op/smoltcp.git?branch=0.13-rcv-buf-pinned#03c750fef97902c80f3ecfe8cf852da5454d4a7b"
 dependencies = [
  "bitflags 1.3.2",
  "byteorder",
