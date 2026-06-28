@@ -40,6 +40,8 @@ pub enum TransportError {
     Socks5Extra(&'static str),
     #[error("Trojan error: {0}")]
     Trojan(&'static str),
+    #[error("AnyTLS error: {0}")]
+    Anytls(&'static str),
     #[error("WireGuard error: {0}")]
     WireGuard(&'static str),
     #[error("SSH error: {0}")]

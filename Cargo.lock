@@ -675,6 +675,7 @@ dependencies = [
  "libproc",
  "linked-hash-map",
  "maxminddb",
+ "md5 0.8.0",
  "mimalloc",
  "netlink-packet-core",
  "netlink-packet-sock-diag",
@@ -2841,7 +2842,7 @@ name = "ja-tools"
 version = "0.1.0"
 source = "git+https://github.com/XOR-op/ja-tools.git?branch=main#c63d3b70a23622b83dc1b704af56594b1e4514a6"
 dependencies = [
- "md5",
+ "md5 0.7.0",
  "rand 0.8.5",
  "rustls 0.23.12",
  "sha2",
@@ -3129,6 +3130,12 @@ name = "md5"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
+name = "md5"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
 
 [[package]]
 name = "memchr"
@@ -4368,7 +4375,7 @@ dependencies = [
  "internal-russh-forked-ssh-key",
  "libcrux-ml-kem",
  "log",
- "md5",
+ "md5 0.7.0",
  "num-bigint",
  "p256 0.13.2",
  "p384 0.13.0",

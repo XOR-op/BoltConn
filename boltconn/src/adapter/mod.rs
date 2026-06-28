@@ -11,6 +11,7 @@ use tokio::select;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 
+mod anytls;
 mod chain;
 mod direct;
 mod http;
@@ -31,6 +32,8 @@ use crate::network::dns::Dns;
 use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
+#[allow(unused_imports)]
+pub use anytls::*;
 pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
@@ -105,6 +108,7 @@ pub enum OutboundType {
     Wireguard,
     Chain,
     Ssh,
+    Anytls,
 }
 
 impl Display for OutboundType {
@@ -118,6 +122,7 @@ impl Display for OutboundType {
             OutboundType::Wireguard => "wireguard",
             OutboundType::Chain => "chain",
             OutboundType::Ssh => "ssh",
+            OutboundType::Anytls => "anytls",
         })
     }
 }
@@ -143,7 +148,8 @@ impl OutboundType {
             | OutboundType::Socks5
             | OutboundType::Http
             | OutboundType::Shadowsocks
-            | OutboundType::Trojan => TcpTransferType::Tcp,
+            | OutboundType::Trojan
+            | OutboundType::Anytls => TcpTransferType::Tcp,
             OutboundType::Wireguard => TcpTransferType::TcpOverUdp,
             OutboundType::Chain => TcpTransferType::NotApplicable,
             OutboundType::Ssh => TcpTransferType::Tcp,
@@ -157,6 +163,7 @@ impl OutboundType {
             OutboundType::Http => UdpTransferType::NotApplicable,
             OutboundType::Shadowsocks => UdpTransferType::Udp,
             OutboundType::Trojan => UdpTransferType::UdpOverTcp,
+            OutboundType::Anytls => UdpTransferType::UdpOverTcp,
             OutboundType::Wireguard => UdpTransferType::Udp,
             OutboundType::Chain => UdpTransferType::NotApplicable,
             OutboundType::Ssh => UdpTransferType::NotApplicable,
