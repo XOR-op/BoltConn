@@ -1,7 +1,8 @@
 use crate::adapter::{
-    AddrConnector, ChainOutbound, Connector, DirectOutbound, HttpOutbound, Outbound, OutboundType,
-    SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager, SshOutboundHandle, TcpAdapter,
-    TrojanOutbound, TunUdpAdapter, WireguardHandle, WireguardManager,
+    AddrConnector, AnytlsManager, AnytlsOutboundHandle, ChainOutbound, Connector, DirectOutbound,
+    HttpOutbound, Outbound, OutboundType, SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager,
+    SshOutboundHandle, TcpAdapter, TrojanOutbound, TunUdpAdapter, WireguardHandle,
+    WireguardManager,
 };
 use crate::common::StreamOutboundTrait;
 use crate::common::duplex_chan::DuplexChan;
@@ -42,6 +43,7 @@ pub struct Dispatcher {
     intercept_mgr: ArcSwap<InterceptionManager>,
     wireguard_mgr: Arc<WireguardManager>,
     ssh_mgr: Arc<SshManager>,
+    anytls_mgr: Arc<AnytlsManager>,
     pub(crate) process_info_depth: ProcessInfoDepth,
 }
 
@@ -71,6 +73,7 @@ impl Dispatcher {
             intercept_mgr: ArcSwap::new(intercept_mgr),
             wireguard_mgr,
             ssh_mgr: Arc::new(ssh_mgr),
+            anytls_mgr: Arc::new(AnytlsManager::new()),
             process_info_depth,
         }
     }
@@ -158,6 +161,17 @@ impl Dispatcher {
                     cfg.clone(),
                 )),
                 OutboundType::Trojan,
+            ),
+            ProxyImpl::Anytls(cfg) => (
+                Box::new(AnytlsOutboundHandle::new(
+                    proxy_name,
+                    iface_name,
+                    dst_addr.clone(),
+                    self.dns.clone(),
+                    cfg.clone(),
+                    self.anytls_mgr.clone(),
+                )),
+                OutboundType::Anytls,
             ),
             ProxyImpl::Wireguard(cfg) => (
                 Box::new(WireguardHandle::new(

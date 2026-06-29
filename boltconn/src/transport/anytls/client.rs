@@ -17,6 +17,7 @@ impl AnytlsClient {
     pub fn new(config: &AnytlsConfig) -> Self {
         Self::with_options(
             config.session_options(),
+            config.reuse_session,
             config.idle_session_check_interval,
             config.idle_session_timeout,
             config.min_idle_session,
@@ -25,6 +26,7 @@ impl AnytlsClient {
 
     pub fn with_options(
         options: AnytlsSessionOptions,
+        reuse_session: bool,
         idle_session_check_interval: Duration,
         idle_session_timeout: Duration,
         min_idle_session: usize,
@@ -35,6 +37,7 @@ impl AnytlsClient {
                 sessions: tokio::sync::Mutex::new(Vec::new()),
                 next_seq: AtomicU64::new(0),
                 closed: AtomicBool::new(false),
+                reuse_session,
                 idle_session_check_interval,
                 idle_session_timeout,
                 min_idle_session,
@@ -57,7 +60,7 @@ impl AnytlsClient {
         }
 
         self.cleanup_idle_sessions().await;
-        while !self.inner.closed.load(Ordering::Acquire) {
+        while self.inner.reuse_session && !self.inner.closed.load(Ordering::Acquire) {
             let session = self.latest_idle_session().await;
             let Some(session) = session else {
                 break;
@@ -83,9 +86,17 @@ impl AnytlsClient {
 
         let stream = connect().await?;
         let seq = self.inner.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let session = AnytlsSession::new_with_seq(stream, self.inner.options.clone(), seq).await?;
+        let session = AnytlsSession::new_with_seq(
+            stream,
+            self.inner.options.clone(),
+            seq,
+            !self.inner.reuse_session,
+        )
+        .await?;
         let anytls_stream = session.open_stream(dst).await?;
-        self.inner.sessions.lock().await.push(session);
+        if self.inner.reuse_session {
+            self.inner.sessions.lock().await.push(session);
+        }
         Ok(anytls_stream)
     }
 
@@ -179,6 +190,7 @@ struct AnytlsClientInner {
     sessions: tokio::sync::Mutex<Vec<AnytlsSession>>,
     next_seq: AtomicU64,
     closed: AtomicBool,
+    reuse_session: bool,
     idle_session_check_interval: Duration,
     idle_session_timeout: Duration,
     min_idle_session: usize,

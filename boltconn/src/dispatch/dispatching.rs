@@ -1,8 +1,9 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config, WireguardManager};
+use crate::common::cert::{CertVerify, load_pinned_cert};
 use crate::config::{
     ConfigError, InstrumentConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema,
-    RawProxyChainCfg, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption, RawServerAddr,
-    RawServerSockAddr, RawState, RuleAction, RuleConfigLine, RuleError, SingleOrVec,
+    RawCertVerify, RawProxyChainCfg, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption,
+    RawServerAddr, RawServerSockAddr, RawState, RuleAction, RuleConfigLine, RuleError, SingleOrVec,
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
@@ -17,6 +18,7 @@ use crate::instrument::request_action::{RequestAction, RouteDecision};
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
+use crate::transport::anytls::AnytlsConfig;
 use crate::transport::ssh::{SshAuthentication, SshConfig};
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
@@ -537,6 +539,42 @@ impl DispatchingBuilder {
                             udp: *udp,
                         }),
                     ))
+                }
+                RawProxyLocalCfg::Anytls {
+                    server,
+                    port,
+                    password,
+                    sni,
+                    cert_verify,
+                    reuse_session,
+                    udp,
+                } => {
+                    let addr = match server {
+                        RawServerAddr::IpAddr(ip) => NetworkAddr::Raw(SocketAddr::new(*ip, *port)),
+                        RawServerAddr::DomainName(dn) => NetworkAddr::DomainName {
+                            domain_name: dn.clone(),
+                            port: *port,
+                        },
+                    };
+                    let cert_verify = match cert_verify {
+                        RawCertVerify::Toggle(true) => CertVerify::Verify,
+                        RawCertVerify::Toggle(false) => CertVerify::SkipVerify,
+                        RawCertVerify::Certificate(src) => CertVerify::Pinned(
+                            load_pinned_cert(self.config_path.as_path(), src).map_err(|_| {
+                                ProxyError::ProxyFieldError(
+                                    name.clone(),
+                                    "Invalid cert_verify certificate",
+                                )
+                            })?,
+                        ),
+                    };
+                    // idle session / client name parameters are intentionally not
+                    // user-configurable and keep their hardcoded defaults.
+                    let mut config =
+                        AnytlsConfig::new(addr, password.clone(), sni.clone(), cert_verify);
+                    config.udp = *udp;
+                    config.reuse_session = *reuse_session;
+                    Arc::new(Proxy::new(name.clone(), ProxyImpl::Anytls(config)))
                 }
                 RawProxyLocalCfg::Wireguard {
                     local_addr,

@@ -1,6 +1,7 @@
 use crate::adapter::{
     AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
 };
+use crate::common::cert::{CertVerify, make_tls_config};
 use crate::common::{StreamOutboundTrait, as_io_err, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
@@ -8,7 +9,6 @@ use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use crate::transport::anytls::{AnytlsClient, AnytlsConfig, AnytlsStream, UDP_OVER_TCP_DOMAIN};
-use crate::transport::trojan::make_tls_config;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -313,11 +313,8 @@ struct AnytlsClientKey {
     server_addr: NetworkAddr,
     password: String,
     sni: String,
-    skip_cert_verify: bool,
-    idle_session_check_interval: Duration,
-    idle_session_timeout: Duration,
-    min_idle_session: usize,
-    client_name: String,
+    cert_verify: CertVerify,
+    reuse_session: bool,
 }
 
 impl Hash for AnytlsClientKey {
@@ -325,11 +322,15 @@ impl Hash for AnytlsClientKey {
         self.server_addr.hash(state);
         self.password.hash(state);
         self.sni.hash(state);
-        self.skip_cert_verify.hash(state);
-        self.idle_session_check_interval.hash(state);
-        self.idle_session_timeout.hash(state);
-        self.min_idle_session.hash(state);
-        self.client_name.hash(state);
+        match &self.cert_verify {
+            CertVerify::Verify => 0u8.hash(state),
+            CertVerify::SkipVerify => 1u8.hash(state),
+            CertVerify::Pinned(cert) => {
+                2u8.hash(state);
+                cert.as_ref().hash(state);
+            }
+        }
+        self.reuse_session.hash(state);
     }
 }
 
@@ -339,11 +340,8 @@ impl From<&AnytlsConfig> for AnytlsClientKey {
             server_addr: value.server_addr.clone(),
             password: value.password.clone(),
             sni: value.sni.clone(),
-            skip_cert_verify: value.skip_cert_verify,
-            idle_session_check_interval: value.idle_session_check_interval,
-            idle_session_timeout: value.idle_session_timeout,
-            min_idle_session: value.min_idle_session,
-            client_name: value.client_name.clone(),
+            cert_verify: value.cert_verify.clone(),
+            reuse_session: value.reuse_session,
         }
     }
 }
@@ -355,7 +353,7 @@ async fn connect_proxy(
     let server_name = ServerName::try_from(config.sni.as_str())
         .map_err(as_io_err)?
         .to_owned();
-    let tls_conn = TlsConnector::from(make_tls_config(config.skip_cert_verify));
+    let tls_conn = TlsConnector::from(make_tls_config(&config.cert_verify));
     let stream = tls_conn.connect(server_name, outbound).await?;
     Ok(stream)
 }

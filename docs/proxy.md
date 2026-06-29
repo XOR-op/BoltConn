@@ -160,6 +160,52 @@ proxy_local:
     udp: true
 ```
 
+### AnyTLS
+
+AnyTLS protocol proxy with TLS and session multiplexing. Multiple logical streams
+are carried over pooled TLS sessions, with UDP relayed over TCP.
+
+**Configuration:**
+
+```yaml
+proxy_local:
+  my-anytls:
+    type: anytls
+    server: anytls.example.com
+    port: 443
+    password: mypassword
+    sni: anytls.example.com         # Server Name Indication
+    cert_verify: true               # Required: true | false | <cert path or PEM>
+    udp: true                       # Default: true
+    reuse_session: true             # Default: true
+```
+
+**Fields:**
+- `type`: `anytls` (required)
+- `server`: Server address - IP address or domain name (required)
+- `port`: Port number (required)
+- `password`: Password (required)
+- `sni`: Server Name Indication for TLS (required)
+- `cert_verify`: TLS certificate verification policy (**required**, no default). One of:
+  - `true` — verify the server certificate against the system root store
+  - `false` — skip certificate verification entirely
+  - a certificate — pin the server to this exact certificate; accepts either inline PEM or a path to a PEM file. The path is resolved within the config directory (like other config-referenced files) and cannot point outside it
+- `udp`: Enable UDP relay (optional, default: `true`)
+- `reuse_session`: Reuse pooled idle TLS sessions for new streams. Set to `false` to open a fresh session per connection (optional, default: `true`)
+
+**Example with certificate pinning:**
+
+```yaml
+proxy_local:
+  pinned-anytls:
+    type: anytls
+    server: anytls.example.com
+    port: 443
+    password: mypassword
+    sni: anytls.example.com
+    cert_verify: ./certs/server.pem
+```
+
 ### WireGuard
 
 WireGuard VPN protocol with IPv4/IPv6 support.

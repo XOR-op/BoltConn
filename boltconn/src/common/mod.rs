@@ -16,6 +16,7 @@ pub mod async_session;
 pub mod async_socket;
 pub mod async_ws_stream;
 pub mod call_chan;
+pub mod cert;
 pub mod client_hello;
 mod domain_name;
 pub mod duplex_chan;

@@ -1,3 +1,4 @@
+use crate::common::cert::CertVerify;
 use crate::proxy::NetworkAddr;
 use crate::proxy::error::TransportError;
 use bytes::Bytes;
@@ -34,7 +35,9 @@ pub struct AnytlsConfig {
     pub(crate) server_addr: NetworkAddr,
     pub(crate) password: String,
     pub(crate) sni: String,
-    pub(crate) skip_cert_verify: bool,
+    pub(crate) cert_verify: CertVerify,
+    pub(crate) udp: bool,
+    pub(crate) reuse_session: bool,
     pub(crate) idle_session_check_interval: Duration,
     pub(crate) idle_session_timeout: Duration,
     pub(crate) min_idle_session: usize,
@@ -46,13 +49,15 @@ impl AnytlsConfig {
         server_addr: NetworkAddr,
         password: impl Into<String>,
         sni: impl Into<String>,
-        skip_cert_verify: bool,
+        cert_verify: CertVerify,
     ) -> Self {
         Self {
             server_addr,
             password: password.into(),
             sni: sni.into(),
-            skip_cert_verify,
+            cert_verify,
+            udp: true,
+            reuse_session: true,
             idle_session_check_interval: DEFAULT_IDLE_SESSION_CHECK_INTERVAL,
             idle_session_timeout: DEFAULT_IDLE_SESSION_TIMEOUT,
             min_idle_session: DEFAULT_MIN_IDLE_SESSION,

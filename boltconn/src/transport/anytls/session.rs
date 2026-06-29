@@ -24,13 +24,16 @@ impl AnytlsSession {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        Self::new_with_seq(stream, options, 0).await
+        Self::new_with_seq(stream, options, 0, false).await
     }
 
+    /// `auto_close` closes the session as soon as its last stream finishes,
+    /// instead of keeping it idle in a pool for reuse.
     pub async fn new_with_seq<S>(
         mut stream: S,
         options: AnytlsSessionOptions,
         seq: u64,
+        auto_close: bool,
     ) -> Result<Self, TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -55,6 +58,7 @@ impl AnytlsSession {
             padding_md5: padding_scheme.md5_hex().to_string(),
             client_name: options.client_name,
             seq,
+            auto_close,
         });
 
         let writer_shared = Arc::clone(&shared);
@@ -214,6 +218,7 @@ pub(super) struct SessionShared {
     padding_md5: String,
     client_name: String,
     seq: u64,
+    auto_close: bool,
 }
 
 impl SessionShared {
@@ -264,7 +269,13 @@ impl SessionShared {
             ) {
                 Ok(_) => {
                     if current == 1 && self.is_alive() {
-                        *lock_mutex(&self.idle_since) = Some(Instant::now());
+                        if self.auto_close {
+                            // Not reusing sessions: tear down once the last
+                            // stream finishes instead of pooling it.
+                            self.close();
+                        } else {
+                            *lock_mutex(&self.idle_since) = Some(Instant::now());
+                        }
                     }
                     return;
                 }
@@ -398,13 +409,13 @@ fn handle_synack(frame: FrameRead, shared: &Arc<SessionShared>) {
     let mut close_entry = None;
     {
         let mut streams = lock_mutex(&shared.streams);
-        if let Some(entry) = streams.get(&frame.stream_id) {
-            if let Some(sender) = lock_mutex(&entry.synack).take() {
-                let _ = sender.send(match error.clone() {
-                    Some(message) => Err(message),
-                    None => Ok(()),
-                });
-            }
+        if let Some(entry) = streams.get(&frame.stream_id)
+            && let Some(sender) = lock_mutex(&entry.synack).take()
+        {
+            let _ = sender.send(match error.clone() {
+                Some(message) => Err(message),
+                None => Ok(()),
+            });
         }
         if error.is_some() {
             close_entry = streams.remove(&frame.stream_id);
@@ -415,5 +426,62 @@ fn handle_synack(frame: FrameRead, shared: &Arc<SessionShared>) {
         let message = error.unwrap_or_else(|| "remote stream open failed".to_string());
         let _ = entry.events.send(StreamEvent::Reset(message));
         entry.state.close(false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AnytlsSession;
+    use crate::proxy::NetworkAddr;
+    use crate::transport::anytls::AnytlsSessionOptions;
+    use std::net::SocketAddr;
+    use tokio::io::{AsyncReadExt, DuplexStream};
+
+    /// Continuously drain the peer end so session writes never block.
+    fn spawn_drain(mut server: DuplexStream) {
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            while let Ok(n) = server.read(&mut buf).await {
+                if n == 0 {
+                    break;
+                }
+            }
+        });
+    }
+
+    fn dst() -> NetworkAddr {
+        NetworkAddr::Raw("1.1.1.1:80".parse::<SocketAddr>().unwrap())
+    }
+
+    #[tokio::test]
+    async fn auto_close_session_closes_after_last_stream() {
+        let (client, server) = tokio::io::duplex(8192);
+        spawn_drain(server);
+        let session =
+            AnytlsSession::new_with_seq(client, AnytlsSessionOptions::new("password"), 1, true)
+                .await
+                .unwrap();
+        let stream = session.open_stream(dst()).await.unwrap();
+        assert!(session.is_alive());
+
+        // Dropping the last stream tears the (non-reused) session down.
+        drop(stream);
+        assert!(!session.is_alive());
+    }
+
+    #[tokio::test]
+    async fn pooled_session_stays_idle_after_last_stream() {
+        let (client, server) = tokio::io::duplex(8192);
+        spawn_drain(server);
+        let session =
+            AnytlsSession::new_with_seq(client, AnytlsSessionOptions::new("password"), 1, false)
+                .await
+                .unwrap();
+        let stream = session.open_stream(dst()).await.unwrap();
+
+        // A reusable session survives its stream and becomes idle for pooling.
+        drop(stream);
+        assert!(session.is_alive());
+        assert!(session.is_idle());
     }
 }

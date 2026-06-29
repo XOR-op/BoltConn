@@ -122,6 +122,17 @@ pub struct RawInstrumentConfig {
     pub cors_allowed_list: Vec<String>,
 }
 
+/// TLS certificate verification policy for AnyTLS.
+///
+/// Deserializes from either a boolean (`true` = verify, `false` = skip) or a
+/// string pointing at a certificate to pin (a file path or inline PEM).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum RawCertVerify {
+    Toggle(bool),
+    Certificate(String),
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields, tag = "type")]
 pub enum RawProxyLocalCfg {
@@ -158,6 +169,21 @@ pub enum RawProxyLocalCfg {
         skip_cert_verify: bool,
         #[serde(alias = "websocket-path")]
         websocket_path: Option<String>,
+        #[serde(default = "default_true")]
+        udp: bool,
+    },
+    #[serde(alias = "anytls")]
+    Anytls {
+        server: RawServerAddr,
+        port: u16,
+        password: String,
+        sni: String,
+        // Mandatory: `true` to verify, `false` to skip, or a certificate
+        // (path or inline PEM) to pin against.
+        #[serde(alias = "cert-verify")]
+        cert_verify: RawCertVerify,
+        #[serde(alias = "reuse-session", default = "default_true")]
+        reuse_session: bool,
         #[serde(default = "default_true")]
         udp: bool,
     },
@@ -298,4 +324,33 @@ fn test_dispatching_config_process_info_depth_rejects_invalid_string() {
         err.to_string()
             .contains("expected a non-negative integer or \"unlimited\"")
     );
+}
+
+#[test]
+fn test_anytls_cert_verify_parsing() {
+    let cfg = "
+type: anytls
+server: anytls.example.com
+port: 443
+password: secret
+sni: anytls.example.com
+cert_verify: true
+";
+    let parsed: RawProxyLocalCfg = serde_yaml::from_str(cfg).unwrap();
+    let RawProxyLocalCfg::Anytls { cert_verify, .. } = parsed else {
+        panic!("expected anytls config");
+    };
+    assert!(matches!(cert_verify, RawCertVerify::Toggle(true)));
+
+    // A string value is interpreted as a certificate to pin.
+    let cfg = cfg.replace("cert_verify: true", "cert_verify: ./certs/server.pem");
+    let parsed: RawProxyLocalCfg = serde_yaml::from_str(&cfg).unwrap();
+    let RawProxyLocalCfg::Anytls { cert_verify, .. } = parsed else {
+        panic!("expected anytls config");
+    };
+    assert!(matches!(cert_verify, RawCertVerify::Certificate(s) if s == "./certs/server.pem"));
+
+    // cert_verify has no default and must be supplied.
+    let cfg = cfg.replace("cert_verify: ./certs/server.pem\n", "");
+    assert!(serde_yaml::from_str::<RawProxyLocalCfg>(&cfg).is_err());
 }

@@ -1,6 +1,7 @@
 use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config};
 use crate::config::ProxyError;
 use crate::proxy::NetworkAddr;
+use crate::transport::anytls::AnytlsConfig;
 use crate::transport::ssh::SshConfig;
 use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
@@ -58,6 +59,7 @@ pub enum ProxyImpl {
     Socks5(Socks5Config),
     Shadowsocks(ShadowSocksConfig),
     Trojan(TrojanConfig),
+    Anytls(AnytlsConfig),
     Wireguard(Box<WireguardConfig>),
     Ssh(SshConfig),
     Chain(Vec<GeneralProxy>),
@@ -73,6 +75,7 @@ impl ProxyImpl {
             ProxyImpl::Socks5(c) => c.udp,
             ProxyImpl::Shadowsocks(c) => c.udp,
             ProxyImpl::Trojan(c) => c.udp,
+            ProxyImpl::Anytls(c) => c.udp,
             ProxyImpl::Wireguard(_) => true,
             ProxyImpl::Ssh(_) => false,
             // since it's hard to determine, we just assume it true
@@ -89,6 +92,7 @@ impl ProxyImpl {
             ProxyImpl::Socks5(_) => "socks5",
             ProxyImpl::Shadowsocks(_) => "shadowsocks",
             ProxyImpl::Trojan(_) => "trojan",
+            ProxyImpl::Anytls(_) => "anytls",
             ProxyImpl::Wireguard(_) => "wireguard",
             ProxyImpl::Ssh(_) => "ssh",
             ProxyImpl::Chain(_) => "chain",
@@ -110,6 +114,7 @@ impl ProxyImpl {
                 }
             }),
             ProxyImpl::Trojan(c) => Some(c.server_addr.clone()),
+            ProxyImpl::Anytls(c) => Some(c.server_addr.clone()),
             ProxyImpl::Wireguard(c) => Some(c.endpoint.clone()),
             ProxyImpl::Ssh(c) => Some(c.server.clone()),
         }
