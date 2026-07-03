@@ -135,7 +135,7 @@ impl Outbound for SshOutboundHandle {
         });
         comp_rx
             .await
-            .map_err(|_| TransportError::ShadowSocks("Aborted"))
+            .map_err(|_| TransportError::Io(io_err("SSH aborted")))
     }
 
     fn spawn_udp(

@@ -86,7 +86,7 @@ tower-http = { version = "0.5.2", features = ["cors"] }
 # Rules
 async-recursion = "1.0.4"
 maxminddb = "0.23.0"
-zerotrie = {version = "0.2", features = ["alloc"]}
+zerotrie = { version = "0.2", features = ["alloc"] }
 
 # Interception
 aho-corasick = "1.0.2"
@@ -96,7 +96,6 @@ http-body = "1.0.0"
 http-body-util = "0.1.1"
 hyper = { version = "1.2.0", features = ["server", "client", "http1", "http2"] }
 hyper-util = { version = "0.1.11", features = ["http1", "http2"] }
-ja-tools = { git = "https://github.com/XOR-op/ja-tools.git", branch = "main" }
 rcgen = { version = "0.12.1", features = ["pem", "x509-parser"] }
 rquickjs = { version = "0.10.0", features = [
     "bindgen",
@@ -113,7 +112,10 @@ fast-socks5 = "0.9.1"
 boringtun = "0.7"
 sha2 = "0.10.8"
 md5 = "0.8.0"
-shadowsocks = { version = "1.16.0", default-features = false }
+shadowsocks = { version = "1.24.0", default-features = false, features = [
+    "aead-cipher",
+    "aead-cipher-2022",
+] }
 smoltcp = { version = "0.13.0", features = ["socket-tcp-cubic"] }
 # Command line
 clap = { version = "4.4.6", features = ["derive"] }
@@ -160,9 +162,9 @@ ioctl-sys = "0.8.0"
 libproc = "0.13.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-netlink-sys = "0.8.3"
-netlink-packet-core = "0.5.0"
-netlink-packet-sock-diag = "0.4.0"
+netlink-sys = "0.8.8"
+netlink-packet-core = "0.7.0"
+netlink-packet-sock-diag = "0.4.2"
 procfs = "0.16.0"
 mimalloc = "0.1.43"
 

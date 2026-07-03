@@ -30,11 +30,6 @@ pub struct ShadowSocksConfig {
     pub(crate) udp: bool,
 }
 
-impl From<ShadowSocksConfig> for ServerConfig {
-    fn from(value: ShadowSocksConfig) -> Self {
-        ServerConfig::new(value.server_addr, value.password, value.cipher_kind)
-    }
-}
 
 #[derive(Clone)]
 pub struct SSOutbound {
@@ -42,7 +37,7 @@ pub struct SSOutbound {
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
-    config: ServerConfig,
+    config: ShadowSocksConfig,
 }
 
 impl SSOutbound {
@@ -58,12 +53,12 @@ impl SSOutbound {
             iface_name: iface_name.to_string(),
             dst,
             dns,
-            config: config.into(),
+            config
         }
     }
 
     async fn get_server_addr(&self) -> io::Result<SocketAddr> {
-        Ok(match self.config.addr() {
+        Ok(match &self.config.server_addr {
             ServerAddr::SocketAddr(addr) => *addr,
             ServerAddr::DomainName(addr, port) => {
                 lookup(
@@ -81,7 +76,7 @@ impl SSOutbound {
     async fn create_internal(
         &self,
         server_addr: SocketAddr,
-    ) -> (relay::Address, SharedContext, ServerConfig) {
+    ) -> Result<(relay::Address, SharedContext, ServerConfig), TransportError> {
         let target_addr = match &self.dst {
             NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(*s),
             NetworkAddr::DomainName { domain_name, port } => {
@@ -91,8 +86,9 @@ impl SSOutbound {
         // ss configs
         let context = shadowsocks::context::Context::new_shared(ServerType::Local);
         let resolved_config =
-            ServerConfig::new(server_addr, self.config.password(), self.config.method());
-        (target_addr, context, resolved_config)
+            ServerConfig::new(server_addr, &self.config.password, self.config.cipher_kind)
+                .map_err(|e| TransportError::ShadowSocks(format!("{:?}", e)))?;
+        Ok((target_addr, context, resolved_config))
     }
 
     async fn run_tcp<S>(
@@ -105,7 +101,7 @@ impl SSOutbound {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let (target_addr, context, resolved_config) = self.create_internal(server_addr).await;
+        let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
         let ss_stream =
             ProxyClientStream::from_stream(context, outbound, &resolved_config, target_addr);
         established_tcp(self.name, inbound, ss_stream, abort_handle).await;
@@ -120,7 +116,7 @@ impl SSOutbound {
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
     ) -> Result<(), TransportError> {
-        let (_, context, resolved_config) = self.create_internal(server_addr).await;
+        let (_, context, resolved_config) = self.create_internal(server_addr).await?;
         let proxy_socket = ShadowsocksUdpAdapter::new(context, &resolved_config, adapter_or_socket);
         established_udp(
             self.name,
@@ -311,7 +307,7 @@ impl UdpSocketAdapter for ShadowsocksUdpAdapter {
             &mut data[..len],
             None,
         )
-        .map_err(|_| TransportError::ShadowSocks("Decrypt client UDP payload"))?;
+        .map_err(|_| TransportError::ShadowSocks("Decrypt client UDP payload".into()))?;
         Ok((
             decrypted_size,
             match addr {

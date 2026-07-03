@@ -12,5 +12,4 @@ opt-level = 0
 debug = true
 
 [patch.crates-io]
-rustls = { git = "https://github.com/XOR-op/rustls.delta.git", branch = "v0.23.12" }
 smoltcp = { git = "https://github.com/XOR-op/smoltcp.git", branch = "0.13-rcv-buf-pinned" }

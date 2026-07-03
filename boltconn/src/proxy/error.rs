@@ -31,7 +31,7 @@ pub enum TransportError {
     #[error("DNS error: {0}")]
     Dns(#[from] DnsError),
     #[error("ShadowSocks error: {0}")]
-    ShadowSocks(&'static str),
+    ShadowSocks(String),
     #[error("HTTP proxy error: {0}")]
     Http(&'static str),
     #[error("Socks5 error: {0}")]

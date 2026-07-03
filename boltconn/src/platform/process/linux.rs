@@ -1,5 +1,5 @@
 use crate::platform::process::{NetworkType, ParentProcess, ProcessInfo, ProcessInfoDepth};
-use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload, constants::*};
+use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};
 use netlink_packet_sock_diag::{
     SockDiagMessage,
     constants::*,
@@ -24,7 +24,7 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
     diag_sock.connect(&netlink_sys::SocketAddr::new(0, 0))?;
 
     let mut header = NetlinkHeader::default();
-    header.flags = NLM_F_REQUEST | NLM_F_DUMP;
+    header.flags = netlink_packet_core::NLM_F_REQUEST | netlink_packet_core::NLM_F_DUMP;
     let mut packet = NetlinkMessage::new(
         header,
         SockDiagMessage::InetRequest(InetRequest {
@@ -59,7 +59,9 @@ fn get_inode_and_uid(addr: SocketAddr, net_type: NetworkType) -> Result<(u32, u3
             let rx_packet = <NetlinkMessage<SockDiagMessage>>::deserialize(bytes).unwrap();
 
             match rx_packet.payload {
-                NetlinkPayload::Noop | NetlinkPayload::Ack(_) => {}
+                // Noop or Ack
+                NetlinkPayload::Noop
+                | NetlinkPayload::Error(netlink_packet_core::ErrorMessage { code: None, .. }) => {}
                 NetlinkPayload::InnerMessage(SockDiagMessage::InetResponse(response)) => {
                     return Ok((response.header.inode, response.header.uid));
                 }

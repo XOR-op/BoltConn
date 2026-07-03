@@ -1,5 +1,4 @@
 use crate::adapter::{Connector, Outbound};
-use crate::common::client_hello::get_overrider;
 use crate::common::create_tls_connector;
 use crate::common::duplex_chan::DuplexChan;
 use crate::common::utils::IdGenerator;
@@ -110,7 +109,8 @@ impl HttpsIntercept {
 
         // tls client
         let client_tls = create_tls_connector(if self.parrot_fingerprint {
-            Some(get_overrider())
+            tracing::warn!("Parror fingerprinting temporarily not supported for current version, using default fingerprint instead");
+            None
         } else {
             None
         });
