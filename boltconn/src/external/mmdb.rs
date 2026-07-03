@@ -8,23 +8,29 @@ pub struct MmdbReader {
 }
 
 impl MmdbReader {
-    pub fn read_from_file(path: impl AsRef<Path>) -> Result<Self, maxminddb::MaxMindDBError> {
+    pub fn read_from_file(path: impl AsRef<Path>) -> Result<Self, maxminddb::MaxMindDbError> {
         let reader = maxminddb::Reader::open_readfile(path)?;
         Ok(Self { reader })
     }
 
     pub fn search_asn(&self, ip: IpAddr) -> Option<u32> {
-        let asn: geoip2::Asn = self.reader.lookup(ip).ok()?;
+        let asn: geoip2::Asn = self
+            .reader
+            .lookup(ip)
+            .ok()?
+            .decode::<geoip2::Asn>()
+            .ok()??;
         asn.autonomous_system_number
     }
 
     pub fn search_country(&self, ip: IpAddr) -> Option<&str> {
-        let country: geoip2::Country = self.reader.lookup(ip).ok()?;
-        country
-            .country
-            .as_ref()
-            .and_then(|c| c.iso_code)
-            .or_else(|| country.registered_country.as_ref().and_then(|c| c.iso_code))
+        let country: geoip2::Country = self
+            .reader
+            .lookup(ip)
+            .ok()?
+            .decode::<geoip2::Country>()
+            .ok()??;
+        country.registered_country.iso_code
     }
 }
 

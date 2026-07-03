@@ -30,7 +30,6 @@ pub struct ShadowSocksConfig {
     pub(crate) udp: bool,
 }
 
-
 #[derive(Clone)]
 pub struct SSOutbound {
     name: String,
@@ -53,7 +52,7 @@ impl SSOutbound {
             iface_name: iface_name.to_string(),
             dst,
             dns,
-            config
+            config,
         }
     }
 

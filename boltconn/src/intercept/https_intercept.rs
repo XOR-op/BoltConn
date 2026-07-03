@@ -109,7 +109,9 @@ impl HttpsIntercept {
 
         // tls client
         let client_tls = create_tls_connector(if self.parrot_fingerprint {
-            tracing::warn!("Parror fingerprinting temporarily not supported for current version, using default fingerprint instead");
+            tracing::warn!(
+                "Parror fingerprinting temporarily not supported for current version, using default fingerprint instead"
+            );
             None
         } else {
             None

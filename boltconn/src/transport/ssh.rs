@@ -74,7 +74,7 @@ impl SshTunnel {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let ru_config = Arc::new(russh::client::Config {
-            client_id: SshId::Standard("SSH-2.0-OpenSSH_8.2p1".to_string()),
+            client_id: SshId::Standard("SSH-2.0-OpenSSH_8.2p1".into()),
             ..Default::default()
         });
         Ok(Self {
