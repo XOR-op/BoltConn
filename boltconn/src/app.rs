@@ -64,6 +64,10 @@ impl App {
         enable_tun: Option<bool>,
         rootless_mode: bool,
     ) -> anyhow::Result<Self> {
+        // install rustls provider
+        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .expect("Failed to install aws_lc_rs for rustls");
         // tracing
         let stream_logger = StreamLoggerSend::new();
         external::init_tracing(&stream_logger)?;
