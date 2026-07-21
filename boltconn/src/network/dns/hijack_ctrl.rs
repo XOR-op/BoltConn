@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
 enum AddressType {
     All,
     Limited(HashSet<IpAddr>),

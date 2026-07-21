@@ -217,8 +217,8 @@ impl App {
             tun_configure
         };
         let dns_hijack = Arc::new(DnsHijackController::new(
-            config.dns.tun_bypass_list.clone(),
             config.dns.tun_hijack_list.clone(),
+            config.dns.tun_bypass_list.clone(),
             SocketAddr::new(fake_dns_server.into(), 53),
         ));
 
