@@ -27,9 +27,26 @@ impl DnsHijackController {
         bypass_list: Option<Vec<PortOrSocketAddr>>,
         fake_server: SocketAddr,
     ) -> Self {
+        let mut hijack_list = hijack_list.map_or_else(HashMap::new, parse_list);
+        if cfg!(target_os = "macos") {
+            use crate::platform::MACOS_PLACEHOLDER_DNS;
+            // On macOS, we need to hijack the placeholder DNS server too
+            match hijack_list.get_mut(&53) {
+                Some(AddressType::All) => {}
+                Some(AddressType::Limited(addrs)) => {
+                    addrs.insert(MACOS_PLACEHOLDER_DNS.into());
+                }
+                None => {
+                    hijack_list.insert(
+                        53,
+                        AddressType::Limited(HashSet::from_iter([MACOS_PLACEHOLDER_DNS.into()])),
+                    );
+                }
+            }
+        }
         Self {
             inner: ArcSwap::new(Arc::new(DnsHijackControllerInner {
-                hijack_list: hijack_list.map_or_else(HashMap::new, parse_list),
+                hijack_list,
                 bypass_list: bypass_list.map_or_else(HashMap::new, parse_list),
                 fake_server,
             })),

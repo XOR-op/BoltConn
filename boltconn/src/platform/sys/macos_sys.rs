@@ -13,6 +13,8 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
 use std::{io, mem};
 
+pub const MACOS_PLACEHOLDER_DNS: Ipv4Addr = Ipv4Addr::new(1, 0, 0, 1);
+
 pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     let mut name_buf = [0u8; 32];
     let mut name_len: socklen_t = 32;
@@ -206,7 +208,18 @@ impl SystemDnsHandle {
 
         // overwrite them
         for s in services.iter() {
-            run_command_with_args("networksetup", ["-setdnsservers", s, &ip.to_string()])?
+            let new_server = if s == "Wi-Fi" {
+                // Workaround for getaddrinfo() fails after waking up
+                // When waking up, captiveagent will try to probe the network,
+                // but fakeIP dns is not reachable via en0.
+                //
+                // We use a placeholder IP address together with dns hijacking to
+                // hijack the DNS query to our fakeIP DNS server.
+                MACOS_PLACEHOLDER_DNS.to_string()
+            } else {
+                ip.to_string()
+            };
+            run_command_with_args("networksetup", ["-setdnsservers", s, &new_server])?;
         }
         Ok(Self { old_dns })
     }

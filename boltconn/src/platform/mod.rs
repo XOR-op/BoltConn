@@ -7,6 +7,8 @@ pub mod route;
 
 pub mod process;
 mod sys;
+#[cfg(target_os = "macos")]
+pub use sys::MACOS_PLACEHOLDER_DNS;
 pub use sys::*;
 
 pub fn errno_err(msg: &str) -> io::Error {

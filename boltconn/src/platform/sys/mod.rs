@@ -10,6 +10,8 @@ use std::net::IpAddr;
 
 #[cfg(target_os = "macos")]
 pub use macos_ffi as ffi;
+#[cfg(target_os = "macos")]
+pub use macos_sys::MACOS_PLACEHOLDER_DNS;
 
 #[cfg(target_os = "linux")]
 pub mod linux_ffi;
