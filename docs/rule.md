@@ -73,10 +73,15 @@ IPv4 CIDR range match.
 - IP-CIDR, 192.168.0.0/16, DIRECT
 - IP-CIDR, 10.0.0.0/8, DIRECT
 - IP-CIDR, 1.1.1.1/32, Proxy
-- IP-CIDR, 8.8.8.8/32, Proxy, no-resolve
 ```
 
-**Optional `no-resolve` flag:** Skip DNS resolution. Use this to avoid resolving domain names to IPs before checking the rule. Useful for performance or when you want domain-based rules to take precedence.
+`IP-CIDR` does not perform DNS resolution. It matches a literal destination IP, or the
+resolved destination if an earlier `.LOCAL-RESOLVE` action populated one. Without that
+action, a domain destination does not match an `IP-CIDR` rule.
+
+The optional `no-resolve` suffix is accepted for compatibility with Clash rule lists,
+but it has no effect. In particular, it does not discard a result already produced by
+`.LOCAL-RESOLVE`. Omit the suffix in new configurations.
 
 **Common use cases:**
 ```yaml
@@ -96,10 +101,11 @@ IPv6 CIDR range match.
 ```yaml
 - IP-CIDR6, 2001:db8::/32, Proxy
 - IP-CIDR6, fe80::/10, DIRECT
-- IP-CIDR6, ::1/128, DIRECT, no-resolve
+- IP-CIDR6, ::1/128, DIRECT
 ```
 
-Also supports the optional `no-resolve` flag.
+DNS behavior is the same as for `IP-CIDR`: this rule never initiates resolution, and an
+optional `no-resolve` suffix is a compatibility no-op.
 
 #### LOCAL-IP-CIDR
 
@@ -993,9 +999,11 @@ rule_local:
        url: https://example.com/10000-domains.yaml
    ```
 
-5. **Use `no-resolve` carefully:** For IP-CIDR rules on domains, use `no-resolve` to avoid DNS leaks
+5. **Resolve domains explicitly for IP rules:** `IP-CIDR` rules do not resolve domain destinations by default. Place `.LOCAL-RESOLVE` immediately before IP rules that should also inspect a domain's resolved address.
    ```yaml
-   - IP-CIDR, 8.8.8.8/32, Proxy, no-resolve
+   - DOMAIN-SUFFIX, internal.example, DIRECT
+   - .LOCAL-RESOLVE
+   - IP-CIDR, 10.0.0.0/8, DIRECT
    ```
 
 6. **Test with .INSTRUMENT:** Use instrument actions to debug rule matching
@@ -1017,7 +1025,7 @@ rule_local:
 8. **Optimize for performance:**
    - Put frequently matched rules at the top
    - Use `RULE-SET` for large lists instead of many individual rules
-   - Use `no-resolve` when DNS resolution isn't needed
+   - Add `.LOCAL-RESOLVE` only when later IP-based rules need the resolved destination
 
 9. **Security considerations:**
    - Block dangerous domains early with `REJECT`
