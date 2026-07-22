@@ -346,11 +346,50 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 resp.add_answer(ans);
                 Ok(resp.to_vec()?)
             }
-            RecordType::AAAA | RecordType::PTR => Ok(resp.to_vec()?),
-            _ => err,
+            // Fake DNS only synthesizes A records. Return NODATA for every other valid
+            // query type so clients do not mistake an unsupported type for a dead resolver.
+            _ => Ok(resp.to_vec()?),
         }
     }
 }
 
 impl_genuine_lookup!(genuine_lookup_one_v4, ipv4_lookup);
 impl_genuine_lookup!(genuine_lookup_one_v6, ipv6_lookup);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_proto::op::Query;
+    use hickory_proto::rr::Name;
+
+    #[test]
+    fn respond_to_query_returns_nodata_for_svcb() {
+        let dns = Dns::with_config(
+            "test",
+            "unused",
+            DnsPreference::PreferIpv4,
+            &HashMap::new(),
+            NameserverPolicies::empty(),
+            Vec::new(),
+        );
+        let mut request = Message::new();
+        request
+            .set_id(0x1234)
+            .set_message_type(MessageType::Query)
+            .add_query(Query::query(
+                Name::from_ascii("_dns.resolver.arpa.").unwrap(),
+                RecordType::SVCB,
+            ));
+
+        let response = dns
+            .respond_to_query(&request.to_vec().unwrap())
+            .expect("SVCB queries should receive an empty DNS response");
+        let response = Message::from_vec(&response).unwrap();
+
+        assert_eq!(response.id(), request.id());
+        assert_eq!(response.message_type(), MessageType::Response);
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert_eq!(response.queries(), request.queries());
+        assert!(response.answers().is_empty());
+    }
+}
