@@ -27,26 +27,9 @@ impl DnsHijackController {
         bypass_list: Option<Vec<PortOrSocketAddr>>,
         fake_server: SocketAddr,
     ) -> Self {
-        let mut hijack_list = hijack_list.map_or_else(HashMap::new, parse_list);
-        if cfg!(target_os = "macos") {
-            use crate::platform::MACOS_PLACEHOLDER_DNS;
-            // On macOS, we need to hijack the placeholder DNS server too
-            match hijack_list.get_mut(&53) {
-                Some(AddressType::All) => {}
-                Some(AddressType::Limited(addrs)) => {
-                    addrs.insert(MACOS_PLACEHOLDER_DNS.into());
-                }
-                None => {
-                    hijack_list.insert(
-                        53,
-                        AddressType::Limited(HashSet::from_iter([MACOS_PLACEHOLDER_DNS.into()])),
-                    );
-                }
-            }
-        }
         Self {
             inner: ArcSwap::new(Arc::new(DnsHijackControllerInner {
-                hijack_list,
+                hijack_list: build_hijack_list(hijack_list),
                 bypass_list: bypass_list.map_or_else(HashMap::new, parse_list),
                 fake_server,
             })),
@@ -85,11 +68,38 @@ impl DnsHijackController {
         fake_server: SocketAddr,
     ) {
         self.inner.store(Arc::new(DnsHijackControllerInner {
-            hijack_list: hijack_list.map_or_else(HashMap::new, parse_list),
+            hijack_list: build_hijack_list(hijack_list),
             bypass_list: bypass_list.map_or_else(HashMap::new, parse_list),
             fake_server,
         }));
     }
+}
+
+fn build_hijack_list(list: Option<Vec<PortOrSocketAddr>>) -> HashMap<u16, AddressType> {
+    let hijack_list = list.map_or_else(HashMap::new, parse_list);
+
+    #[cfg(target_os = "macos")]
+    let hijack_list = {
+        use crate::platform::MACOS_PLACEHOLDER_DNS;
+
+        let mut hijack_list = hijack_list;
+        // macOS system DNS points at this placeholder, so reloads must preserve its hijack.
+        match hijack_list.get_mut(&53) {
+            Some(AddressType::All) => {}
+            Some(AddressType::Limited(addrs)) => {
+                addrs.insert(MACOS_PLACEHOLDER_DNS.into());
+            }
+            None => {
+                hijack_list.insert(
+                    53,
+                    AddressType::Limited(HashSet::from_iter([MACOS_PLACEHOLDER_DNS.into()])),
+                );
+            }
+        }
+        hijack_list
+    };
+
+    hijack_list
 }
 
 fn parse_list(list: Vec<PortOrSocketAddr>) -> HashMap<u16, AddressType> {
@@ -117,4 +127,23 @@ fn parse_list(list: Vec<PortOrSocketAddr>) -> HashMap<u16, AddressType> {
         }
     }
     map
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use crate::platform::MACOS_PLACEHOLDER_DNS;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn update_preserves_macos_placeholder_dns_hijack() {
+        let fake_server = SocketAddr::new(Ipv4Addr::new(198, 18, 99, 88).into(), 53);
+        let placeholder = SocketAddr::new(MACOS_PLACEHOLDER_DNS.into(), 53);
+        let controller = DnsHijackController::new(None, None, fake_server);
+
+        assert!(controller.should_hijack(&placeholder));
+        controller.update(None, None, fake_server);
+
+        assert!(controller.should_hijack(&placeholder));
+    }
 }
