@@ -399,7 +399,7 @@ impl WireguardManager {
 
     pub async fn stop_master_conn(&self, name: &str) {
         let mut stopped = false;
-        for (_, ep) in self.active_conn.read().await.iter() {
+        for ep in self.active_conn.read().await.values() {
             if ep.name == name {
                 stopped = true;
                 ep.abort_connection();
@@ -416,7 +416,7 @@ impl WireguardManager {
 
     pub async fn debug_internal_state(&self) -> Vec<boltapi::MasterConnectionStatus> {
         let mut ret = Vec::new();
-        for (_, ep) in self.active_conn.read().await.iter() {
+        for ep in self.active_conn.read().await.values() {
             let r = ep.debug_internal_state().await;
             ret.push(r);
         }

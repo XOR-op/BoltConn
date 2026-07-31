@@ -78,7 +78,7 @@ impl App {
         // Read initial config
         let loaded_config = LoadedConfig::load_config(&config_path, &data_path)
             .await
-            .map_err(|e| anyhow!("Load config from {:?} failed: {}", &config_path, e))?;
+            .map_err(|e| anyhow!("Load config from {:?} failed: {}", config_path, e))?;
         let config = &loaded_config.config;
         let mmdb = load_mmdb(
             config
