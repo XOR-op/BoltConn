@@ -59,7 +59,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> AsyncRead for AsyncWsStrea
                         }
                     }
                     Message::Close(_) => {
-                        return Poll::Ready(Err(io::ErrorKind::ConnectionAborted.into()));
+                        // A WebSocket close frame is an orderly EOF for AsyncRead.
+                        return Poll::Ready(Ok(()));
                     }
                     _ => {
                         return Poll::Ready(Err(io_err("Unexpected websocket message")));
@@ -102,5 +103,26 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + Sync> AsyncWrite for AsyncWsStre
         );
         let _ = Pin::new(&mut self.stream).start_send(Message::Close(None));
         Pin::new(&mut self.stream).poll_close(cx).map_err(as_io_err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::SinkExt;
+    use tokio::io::AsyncReadExt;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    #[tokio::test]
+    async fn close_frame_is_reported_as_eof() {
+        let (client_io, server_io) = tokio::io::duplex(1024);
+        let client = WebSocketStream::from_raw_socket(client_io, Role::Client, None).await;
+        let mut server = WebSocketStream::from_raw_socket(server_io, Role::Server, None).await;
+        let mut stream = AsyncWsStream::new(client);
+
+        server.send(Message::Close(None)).await.unwrap();
+
+        let mut byte = [0_u8; 1];
+        assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
     }
 }

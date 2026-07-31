@@ -204,7 +204,12 @@ where
     ) -> Result<(usize, NetworkAddr), TransportError> {
         let mut header_buf = [0u8; 256];
         let mut reader = self.read_half.lock().await;
-        reader.read_exact(&mut header_buf[..1]).await?;
+        if reader.read(&mut header_buf[..1]).await? == 0 {
+            // The UDP relay uses a zero length as its clean EOF signal and ignores
+            // the accompanying address.
+            let eof_addr = NetworkAddr::Raw(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0));
+            return Ok((0, eof_addr));
+        }
         // read source address
         let src_addr = match header_buf[0] {
             0x01 => {
