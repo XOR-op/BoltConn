@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct SubDispatchConfig {
     pub matches: String,
     pub subrules: Vec<RuleConfigLine>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct InstrumentConfig {
     #[serde(alias = "sub-id")]
     pub id: u64,
@@ -15,6 +17,7 @@ pub struct InstrumentConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RequestConfig {
     pub matches: String,
     pub id: u64,
@@ -38,13 +41,13 @@ fn default_request_fallback() -> String {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RuleAction {
-    #[serde(alias = ".LOCAL-RESOLVE")]
+    #[serde(rename = ".LOCAL-RESOLVE")]
     LocalResolve,
-    #[serde(alias = ".SUB-DISPATCH")]
+    #[serde(rename = ".SUB-DISPATCH")]
     SubDispatch(SubDispatchConfig),
-    #[serde(alias = ".INSTRUMENT")]
+    #[serde(rename = ".INSTRUMENT")]
     Instrument(InstrumentConfig),
-    #[serde(alias = ".REQUEST")]
+    #[serde(rename = ".REQUEST")]
     Request(RequestConfig),
 }
 

@@ -1,31 +1,31 @@
 use crate::config::interception::InterceptionConfig;
 use crate::config::{
-    ConfigError, FileError, RuleConfigLine, RuleProvider, config::default_interception_vec,
-    config::default_rule_provider, safe_join_path,
+    ConfigError, FileError, FragmentSequenceEntry, RuleConfigLine, RuleProvider, safe_join_path,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
-use tokio::task::JoinHandle;
+use std::path::{Path, PathBuf};
 
+/// Topic-oriented content exported by a module.
+///
+/// Ordered exports are inert until referenced by the corresponding root section.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct ModuleSchema {
-    #[serde(alias = "rule-local", default = "default_rule_local")]
-    pub rule_local: Vec<RuleConfigLine>,
-    #[serde(alias = "rule-provider", default = "default_rule_provider")]
-    pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(default = "default_interception_vec")]
-    pub interception: Vec<InterceptionConfig>,
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ModuleDocument {
+    #[serde(default)]
+    pub rules: Vec<FragmentSequenceEntry<RuleConfigLine>>,
+    #[serde(default)]
+    pub rule_providers: HashMap<String, RuleProvider>,
+    #[serde(default)]
+    pub interception: Vec<FragmentSequenceEntry<InterceptionConfig>>,
 }
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum ModuleLocation {
-    #[serde(alias = "file")]
-    File { path: String },
-    #[serde(alias = "http")]
+    File {
+        path: String,
+    },
     Http {
         url: String,
         path: String,
@@ -33,77 +33,62 @@ pub enum ModuleLocation {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ModuleConfig {
-    pub name: String,
-    #[serde(flatten)]
-    pub content: ModuleLocation,
+#[derive(Debug, Clone)]
+pub(crate) struct LoadedModuleDocument {
+    pub source_path: PathBuf,
+    pub document: ModuleDocument,
 }
 
-pub async fn read_module_schema(
+pub async fn read_module_documents(
     config_path: &Path,
-    modules: &[ModuleConfig],
+    modules: &HashMap<String, ModuleLocation>,
     force_update: bool,
-) -> Result<Vec<ModuleSchema>, ConfigError> {
-    let mut list = Vec::new();
-    // concurrently download rules
-    #[allow(clippy::redundant_iter_cloned)]
-    // false positive in https://github.com/rust-lang/rust-clippy/issues/16012
-    let tasks: Vec<JoinHandle<Result<ModuleSchema, ConfigError>>> = modules
-        .iter()
-        .cloned()
-        .map(|cfg| {
-            let root_path = config_path.to_path_buf();
-            tokio::spawn(async move {
-                match &cfg.content {
-                    ModuleLocation::File { path } => {
-                        let io_error = |e| FileError::Io(path.clone(), e);
-                        let content: ModuleSchema = serde_yaml::from_str(
-                            fs::read_to_string(safe_join_path(&root_path, path).map_err(io_error)?)
-                                .map_err(io_error)?
-                                .as_str(),
-                        )
-                        .map_err(|e| FileError::Serde(path.clone(), e))?;
-                        Ok(content)
-                    }
-                    ModuleLocation::Http { url, path, .. } => {
-                        let io_error = |e| FileError::Io(path.clone(), e);
-                        let serde_error = |e| FileError::Serde(url.clone(), e);
-                        let http_error = |e| FileError::Http(url.clone(), e);
+) -> Result<HashMap<String, LoadedModuleDocument>, ConfigError> {
+    // A sorted traversal makes load failures deterministic even though module
+    // declaration order has no semantic meaning.
+    let mut names: Vec<&String> = modules.keys().collect();
+    names.sort();
 
-                        let full_path = safe_join_path(&root_path, path).map_err(io_error)?;
-                        let content: ModuleSchema = if !force_update && full_path.as_path().exists()
-                        {
-                            serde_yaml::from_str(
-                                fs::read_to_string(full_path.as_path())
-                                    .map_err(io_error)?
-                                    .as_str(),
-                            )
-                            .map_err(serde_error)?
-                        } else {
-                            let resp = reqwest::get(url).await.map_err(http_error)?;
-                            let text = resp.text().await.map_err(http_error)?;
-                            let content: ModuleSchema =
-                                serde_yaml::from_str(text.as_str()).map_err(serde_error)?;
-                            fs::write(full_path.as_path(), text).map_err(io_error)?;
-                            content
-                        };
-                        Ok(content)
-                    }
-                }
-            })
-        })
-        .collect();
-    for task in tasks.into_iter() {
-        let content = match task.await? {
-            Ok(c) => c,
-            Err(e) => return Err(e),
+    let mut loaded = HashMap::with_capacity(modules.len());
+    for name in names {
+        let location = modules
+            .get(name)
+            .expect("module key came from the same map");
+        let (source_path, document) = match location {
+            ModuleLocation::File { path } => {
+                let io_error = |error| FileError::Io(path.clone(), error);
+                let source_path = safe_join_path(config_path, path).map_err(io_error)?;
+                let text = fs::read_to_string(&source_path).map_err(io_error)?;
+                let document = serde_yaml::from_str(&text)
+                    .map_err(|error| FileError::Serde(path.clone(), error))?;
+                (source_path, document)
+            }
+            ModuleLocation::Http { url, path, .. } => {
+                let io_error = |error| FileError::Io(path.clone(), error);
+                let serde_error = |error| FileError::Serde(url.clone(), error);
+                let http_error = |error| FileError::Http(url.clone(), error);
+                let source_path = safe_join_path(config_path, path).map_err(io_error)?;
+
+                let document = if !force_update && source_path.exists() {
+                    let text = fs::read_to_string(&source_path).map_err(io_error)?;
+                    serde_yaml::from_str(&text).map_err(serde_error)?
+                } else {
+                    let response = reqwest::get(url).await.map_err(http_error)?;
+                    let text = response.text().await.map_err(http_error)?;
+                    let document = serde_yaml::from_str(&text).map_err(serde_error)?;
+                    fs::write(&source_path, text).map_err(io_error)?;
+                    document
+                };
+                (source_path, document)
+            }
         };
-        list.push(content);
+        loaded.insert(
+            name.clone(),
+            LoadedModuleDocument {
+                source_path,
+                document,
+            },
+        );
     }
-    Ok(list)
-}
-
-fn default_rule_local() -> Vec<RuleConfigLine> {
-    Default::default()
+    Ok(loaded)
 }

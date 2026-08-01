@@ -1,31 +1,30 @@
-# Unable to reload
 interface: auto
-http-port: 7890
-socks5-port: 7890
-web-controller:
-  api-port: 18086
-  #api-key: 123
-  #cors-allowed-list: ["http://localhost:5173"]
-  #cors-allowed-list: ["*"]
+inbound:
+  http: 7890
+  socks5: 7891
 
-# Able to reload
+web-controller:
+  api-addr: 18086
+  api-key: null
+
 dns:
   bootstrap:
-    - 114.114.114.114
+    - 1.1.1.1
   nameserver:
-    #    - dot-preset, cloudflare
-    #    - doh-preset, google
     - doh, dns.adguard.com
     - udp, 8.8.8.8
+
 proxy-local:
-  lan_http:
+  lan-http:
     type: http
     server: 172.17.10.1
     port: 8080
-  lan_socks:
+    auth: null
+  lan-socks:
     type: socks5
     server: 192.168.1.1
     port: 1080
+    auth: null
 
 proxy-provider:
   US:
@@ -35,65 +34,52 @@ proxy-provider:
 proxy-chain:
   local-chain:
     chains:
-      - lan_http
-      - lan_socks
-  Chain:
-    chains:
-      - lan_socks
-      - US
+      - lan-http
+      - lan-socks
 
 proxy-group:
   Relay:
     proxies:
-      - lan_http
-      - lan_socks
-      - Chain
-      - DIRECT
-      - VPN
-    providers:
-      - US
-  Home:
-    proxies:
+      - lan-http
+      - lan-socks
       - local-chain
       - DIRECT
+    providers:
+      - US
   US:
     providers:
       - US
-  SanJose:
-    providers:
-      - name: US
-        filter: '.*View.*'
-  VPN:
+  Default:
     proxies:
+      - Relay
       - DIRECT
-    interface: tun1
 
-
-rule-provider:
+rule-providers:
   APPLE:
     type: file
+    behavior: classical
     path: ./Rules/Apple
   TELEGRAM:
     type: file
+    behavior: classical
     path: ./Rules/Telegram
 
-rule-local:
-  - DOMAIN-SUFFIX, wikipedia.org, VPN
-  - DOMAIN-SUFFIX, google.com, Relay
-  - DOMAIN-SUFFIX, twitter.com, REJECT
-  - RULE-SET, APPLE, US
-  - RULE-SET, TELEGRAM, lan_socks
-  - FALLBACK, DIRECT
-
-intercept-rule:
-  - DOMAIN-SUFFIX, twitter.com
-  - AND, [DOMAIN-SUFFIX, wikipedia.org], [PROCESS-NAME, curl]
-
-rewrite:
-  - url, ^https://img.twitter.com, 404
-  - header-resp, ^https://www.reddit.com, set, Set-Cookie, NO-API-FEE
-
-module:
-  - name: Google
+modules:
+  Google:
     type: file
     path: ./Module/google.yaml
+
+rules:
+  - include: ./Rules/local.yaml
+  - module: Google
+  - RULE-SET, APPLE, US
+  - RULE-SET, TELEGRAM, lan-socks
+  - FALLBACK, Default
+
+interception:
+  - module: Google
+  - name: local-capture
+    filters:
+      - DOMAIN-SUFFIX, wikipedia.org
+    actions:
+      - capture

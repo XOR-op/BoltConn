@@ -2,7 +2,7 @@ use crate::adapter::WireguardManager;
 use crate::common::call_chan::CallParameter;
 use crate::config::{
     LinkedState, LoadedConfig, RawDnsConfig, RawInboundConfig, RawInboundServiceConfig,
-    RawInstrumentConfig, RawRootCfg, RawWebControllerConfig, RuleSchema, SingleOrVec,
+    RawInstrumentConfig, RawWebControllerConfig, ResolvedRootCfg, RuleSchema, SingleOrVec,
     default_inbound_ip_addr, default_process_info_depth, safe_join_path,
 };
 use crate::dispatch::{DispatchingBuilder, InboundManager, RuleSet, RuleSetBuilder};
@@ -89,10 +89,6 @@ impl App {
         )?;
 
         let outbound_iface = detect_interface(config)?;
-
-        if config.enable_dump {
-            tracing::warn!("`enable_dump` is deprecated and ignored");
-        }
 
         let ctx_manager = Arc::new(ContextManager::new(
             loaded_config.state.log_limit.unwrap_or(50),
@@ -477,6 +473,61 @@ pub async fn validate_config(
     Ok(())
 }
 
+/// Parse, expand, and semantically validate configuration without runtime-only
+/// state such as certificates, a live DNS resolver, or a detected interface.
+pub async fn validate_config_only(config_path: &Path) -> anyhow::Result<()> {
+    let loaded_config = LoadedConfig::load_config_only(config_path)
+        .await
+        .map_err(|error| anyhow!("Load config from {:?} failed: {}", config_path, error))?;
+    let config = &loaded_config.config;
+    let mmdb = load_mmdb(
+        config
+            .dispatching
+            .as_ref()
+            .and_then(|dispatching| dispatching.geoip_db.as_ref()),
+        config_path,
+    )?;
+
+    // Semantic validation does not perform DNS queries. Builders only need a
+    // DNS handle to construct proxy and rule objects, so an empty resolver is
+    // sufficient and keeps `config check` deterministic and offline.
+    let dns = Arc::new(Dns::with_config(
+        "config-check",
+        "config-check",
+        config.dns.preference,
+        &config.dns.hosts,
+        NameserverPolicies::empty(),
+        Vec::new(),
+    ));
+    let msg_bus = Arc::new(MessageBus::new());
+    let ruleset = load_rulesets(&loaded_config)?;
+    let _dispatching = DispatchingBuilder::new(
+        config_path,
+        dns.clone(),
+        mmdb.clone(),
+        &loaded_config,
+        &ruleset,
+        msg_bus.clone(),
+        Arc::new(WireguardManager::new(
+            "config-check",
+            dns.clone(),
+            Duration::from_secs(180),
+        )),
+    )
+    .and_then(|builder| builder.build(&loaded_config))
+    .map_err(|error| anyhow!("Parse routing rules failed: {}", error))?;
+    let _interception = InterceptionManager::new(
+        config_path,
+        config.interception.as_slice(),
+        dns,
+        mmdb,
+        &ruleset,
+        msg_bus,
+    )
+    .map_err(|error| anyhow!("Load interception rules failed: {}", error))?;
+    Ok(())
+}
+
 fn load_mmdb(db_path: Option<&String>, cfg_path: &Path) -> anyhow::Result<Option<Arc<MmdbReader>>> {
     Ok(match db_path {
         None => None,
@@ -487,7 +538,7 @@ fn load_mmdb(db_path: Option<&String>, cfg_path: &Path) -> anyhow::Result<Option
     })
 }
 
-fn detect_interface(config: &RawRootCfg) -> anyhow::Result<String> {
+fn detect_interface(config: &ResolvedRootCfg) -> anyhow::Result<String> {
     Ok(if config.interface != "auto" {
         tracing::info!("Use pre-configured interface: {}", config.interface);
         config.interface.clone()
@@ -681,6 +732,16 @@ fn load_rulesets(loaded_config: &LoadedConfig) -> anyhow::Result<HashMap<String,
         Ok(Arc::new(builder.build()?))
     }
 
+    fn attach_source(
+        source: Option<&crate::config::SourceLocation>,
+        error: anyhow::Error,
+    ) -> anyhow::Error {
+        match source {
+            Some(source) => anyhow!("{source}: {error}"),
+            None => error,
+        }
+    }
+
     let mut large_tasks = Vec::new();
     let mut small_rulesets = HashMap::new();
 
@@ -688,21 +749,30 @@ fn load_rulesets(loaded_config: &LoadedConfig) -> anyhow::Result<HashMap<String,
         if schema.payload.len() > 1000 {
             let task_name = name.clone();
             let task_schema = schema.clone();
+            let task_source = loaded_config.rule_provider_sources.get(name).cloned();
             large_tasks.push((
                 name.clone(),
-                std::thread::spawn(move || build_ruleset(task_name.as_str(), &task_schema)),
+                std::thread::spawn(move || {
+                    build_ruleset(task_name.as_str(), &task_schema)
+                        .map_err(|error| attach_source(task_source.as_ref(), error))
+                }),
             ));
             continue;
         }
 
-        small_rulesets.insert(name.clone(), build_ruleset(name.as_str(), schema)?);
+        let ruleset = build_ruleset(name.as_str(), schema)
+            .map_err(|error| attach_source(loaded_config.rule_provider_sources.get(name), error))?;
+        small_rulesets.insert(name.clone(), ruleset);
     }
 
     let mut large_rulesets = HashMap::with_capacity(large_tasks.len());
     for (name, task) in large_tasks {
-        let ruleset = task
-            .join()
-            .map_err(|_| anyhow!("Filter: failed to parse provider {}", name))??;
+        let ruleset = task.join().map_err(|_| {
+            attach_source(
+                loaded_config.rule_provider_sources.get(&name),
+                anyhow!("Filter: failed to parse provider {}", name),
+            )
+        })??;
         large_rulesets.insert(name, ruleset);
     }
 
@@ -788,5 +858,19 @@ pub(crate) fn app_uds_addr(rootless_mode: bool) -> String {
         } else {
             String::from("/var/run/boltconn.sock")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_config_only;
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn checked_in_example_is_semantically_valid() {
+        let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/config");
+        validate_config_only(&config_path)
+            .await
+            .expect("checked-in example configuration should remain valid");
     }
 }

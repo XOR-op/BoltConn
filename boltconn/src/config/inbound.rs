@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[serde(deny_unknown_fields, untagged, rename_all_fields = "kebab-case")]
 pub enum RawInboundServiceConfig {
     Simple(PortOrSocketAddr),
     Complex {
@@ -20,7 +20,7 @@ pub enum RawInboundServiceConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[serde(deny_unknown_fields, untagged, rename_all_fields = "kebab-case")]
 pub enum RawInboundServiceEntryConfig {
     Password(String),
     Complex {
@@ -30,10 +30,11 @@ pub enum RawInboundServiceEntryConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawInboundConfig {
-    #[serde(alias = "enable-tun", default = "default_true")]
+    #[serde(default = "default_true")]
     pub enable_tun: bool,
-    #[serde(alias = "enable-icmp-proxy", default = "default_true")]
+    #[serde(default = "default_true")]
     pub enable_icmp_proxy: bool,
     pub http: Option<SingleOrVec<RawInboundServiceConfig>>,
     pub socks5: Option<SingleOrVec<RawInboundServiceConfig>>,
@@ -112,12 +113,14 @@ socks5:
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawFirewallConfig {
-    #[serde(alias = "docker-masquerade", default)]
+    #[serde(default)]
     pub docker_masquerade: RawDockerMasqueradeConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawDockerMasqueradeConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,

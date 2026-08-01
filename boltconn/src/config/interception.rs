@@ -2,12 +2,12 @@ use super::config::{default_false, default_true};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct InterceptionConfig {
     pub name: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(alias = "parrot-fingerprint", default = "default_false")]
+    #[serde(default = "default_false")]
     pub parrot_fingerprint: bool,
     pub filters: Vec<String>,
     pub actions: Vec<ActionConfig>,
@@ -20,7 +20,7 @@ pub enum ActionConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ScriptActionConfig {
     #[serde(alias = "script-name")]
     pub name: Option<String>,

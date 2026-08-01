@@ -1,4 +1,4 @@
-use crate::config::{ActionConfig, ConfigError, InterceptConfigError, InterceptionConfig};
+use crate::config::{ActionConfig, ConfigError, InterceptConfigError, InterceptionConfig, Sourced};
 use crate::dispatch::{ConnInfo, Dispatching, DispatchingBuilder, ProxyImpl, RuleSetTable};
 use crate::external::MmdbReader;
 use crate::instrument::bus::MessageBus;
@@ -106,21 +106,24 @@ pub struct InterceptionManager {
 impl InterceptionManager {
     pub fn new(
         config_path: &Path,
-        entries: &[InterceptionConfig],
+        entries: &[Sourced<InterceptionConfig>],
         dns: Arc<Dns>,
         mmdb: Option<Arc<MmdbReader>>,
         rulesets: &RuleSetTable,
         msg_bus: Arc<MessageBus>,
     ) -> Result<Self, ConfigError> {
         let mut res = vec![];
-        for i in entries.iter() {
+        for entry in entries {
+            let i = &entry.value;
             if !i.enabled {
                 continue;
             }
             let filters =
                 DispatchingBuilder::empty(config_path, dns.clone(), mmdb.clone(), msg_bus.clone())
-                    .build_filter(i.filters.as_slice(), rulesets)?;
-            let payload = InterceptionPayload::parse_actions(i.actions.as_slice())?;
+                    .build_filter(i.filters.as_slice(), rulesets)
+                    .map_err(|error| error.at(entry.source.clone()))?;
+            let payload = InterceptionPayload::parse_actions(i.actions.as_slice())
+                .map_err(|error| error.at(entry.source.clone()))?;
             res.push(InterceptionEntry {
                 filters,
                 parrot_fingerprint: i.parrot_fingerprint,

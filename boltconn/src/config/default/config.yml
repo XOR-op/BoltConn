@@ -12,5 +12,5 @@ proxy-group:
     proxies:
       - DIRECT
 
-rule-local:
+rules:
   - FALLBACK, Default

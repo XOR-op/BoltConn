@@ -6,12 +6,11 @@ use std::path::Path;
 use tokio::task::JoinHandle;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
-// not deny_unknown_fields, in order to achieve compatibility
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum ProxyProvider {
-    #[serde(alias = "file")]
-    File { path: String },
-    #[serde(alias = "http")]
+    File {
+        path: String,
+    },
     Http {
         url: String,
         path: String,
@@ -20,6 +19,7 @@ pub enum ProxyProvider {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case")]
 pub struct RawProxyProviderCfg {
     pub name: String,
     #[serde(flatten)]

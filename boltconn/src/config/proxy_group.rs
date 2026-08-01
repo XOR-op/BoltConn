@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawProxyGroupCfg {
     pub proxies: Option<Vec<String>>,
     pub providers: Option<Vec<RawProxyProviderOption>>,
@@ -9,7 +9,7 @@ pub struct RawProxyGroupCfg {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(deny_unknown_fields, untagged)]
+#[serde(deny_unknown_fields, untagged, rename_all_fields = "kebab-case")]
 pub enum RawProxyProviderOption {
     Name(String),
     Filter { name: String, filter: String },

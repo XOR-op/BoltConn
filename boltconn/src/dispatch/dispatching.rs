@@ -4,6 +4,7 @@ use crate::config::{
     ConfigError, InstrumentConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema,
     RawCertVerify, RawProxyChainCfg, RawProxyGroupCfg, RawProxyLocalCfg, RawProxyProviderOption,
     RawServerAddr, RawServerSockAddr, RawState, RuleAction, RuleConfigLine, RuleError, SingleOrVec,
+    SourceLocation, Sourced,
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
@@ -272,7 +273,7 @@ impl DispatchingBuilder {
     }
 
     pub fn build(self, loaded_config: &LoadedConfig) -> Result<Dispatching, ConfigError> {
-        let (rules, fallback) = self.build_rules(loaded_config.config.rule_local.as_slice())?;
+        let (rules, fallback) = self.build_sourced_rules(&loaded_config.config.rules)?;
 
         let groups = {
             let mut g = LinkedHashMap::new();
@@ -307,6 +308,20 @@ impl DispatchingBuilder {
         &self,
         rules: &[RuleConfigLine],
     ) -> Result<(Vec<RuleOrAction>, Option<GeneralProxy>), ConfigError> {
+        self.build_rule_entries(
+            rules.len(),
+            rules.iter().map(|rule| (rule, None::<&SourceLocation>)),
+        )
+    }
+
+    fn build_rule_entries<'a, I>(
+        &self,
+        rules_len: usize,
+        rules: I,
+    ) -> Result<(Vec<RuleOrAction>, Option<GeneralProxy>), ConfigError>
+    where
+        I: IntoIterator<Item = (&'a RuleConfigLine, Option<&'a SourceLocation>)>,
+    {
         let mut rule_builder = RuleBuilder::new(
             self.dns.clone(),
             self.mmdb.clone(),
@@ -314,65 +329,81 @@ impl DispatchingBuilder {
             &self.groups,
             &self.rulesets,
         );
-        for (idx, line) in rules.iter().enumerate() {
-            match line {
-                RuleConfigLine::Complex(action) => match action {
-                    RuleAction::LocalResolve => rule_builder.append_local_resolve(),
-                    RuleAction::SubDispatch(sub) => {
-                        let matches = rule_builder.parse_incomplete(sub.matches.as_str())?;
-                        let (sub_rules, sub_fallback) =
-                            self.build_rules(sub.subrules.as_slice())?;
-                        rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
-                            SubDispatch::new(
-                                matches,
-                                DispatchingSnippet {
-                                    rules: sub_rules,
-                                    fallback: sub_fallback,
-                                },
-                            ),
-                        )))
-                    }
-                    RuleAction::Instrument(ins) => {
-                        let matches = rule_builder.parse_incomplete(ins.matches.as_str())?;
-                        rule_builder.append(RuleOrAction::Action(Action::Instrument(
-                            InstrumentAction::new(
-                                matches,
-                                ins.id,
-                                ins.message.clone(),
-                                self.msg_bus.create_publisher(ins.id),
-                            )?,
-                        )))
-                    }
-                    RuleAction::Request(req) => {
-                        let matches = rule_builder.parse_incomplete(req.matches.as_str())?;
-                        let request_route = RouteDecision::from_str(&req.request_route)
-                            .ok_or_else(|| {
-                                InstrumentConfigError::BadRequestRoute(req.request_route.clone())
-                            })?;
-                        let fallback = RouteDecision::from_str(&req.fallback).ok_or_else(|| {
-                            InstrumentConfigError::BadRequestRoute(req.fallback.clone())
-                        })?;
-                        rule_builder.append(RuleOrAction::Action(Action::Request(
-                            RequestAction::new(
-                                matches,
-                                req.id,
-                                Duration::from_secs(req.timeout),
-                                request_route,
-                                fallback,
-                                self.msg_bus.clone(),
-                                self.msg_bus.create_publisher(req.id),
-                            ),
-                        )))
-                    }
-                },
-                RuleConfigLine::Simple(r) => {
-                    if idx == rules.len() - 1 {
-                        // check Fallback
-                        if let Ok(fallback) = rule_builder.parse_fallback(r.as_str()) {
-                            return Ok((rule_builder.emit_all(), Some(fallback)));
+        for (idx, (line, source)) in rules.into_iter().enumerate() {
+            let result = (|| -> Result<Option<GeneralProxy>, ConfigError> {
+                match line {
+                    RuleConfigLine::Complex(action) => match action {
+                        RuleAction::LocalResolve => rule_builder.append_local_resolve(),
+                        RuleAction::SubDispatch(sub) => {
+                            let matches = rule_builder.parse_incomplete(sub.matches.as_str())?;
+                            let (sub_rules, sub_fallback) =
+                                self.build_rules(sub.subrules.as_slice())?;
+                            rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
+                                SubDispatch::new(
+                                    matches,
+                                    DispatchingSnippet {
+                                        rules: sub_rules,
+                                        fallback: sub_fallback,
+                                    },
+                                ),
+                            )))
                         }
+                        RuleAction::Instrument(ins) => {
+                            let matches = rule_builder.parse_incomplete(ins.matches.as_str())?;
+                            rule_builder.append(RuleOrAction::Action(Action::Instrument(
+                                InstrumentAction::new(
+                                    matches,
+                                    ins.id,
+                                    ins.message.clone(),
+                                    self.msg_bus.create_publisher(ins.id),
+                                )?,
+                            )))
+                        }
+                        RuleAction::Request(req) => {
+                            let matches = rule_builder.parse_incomplete(req.matches.as_str())?;
+                            let request_route = RouteDecision::from_str(&req.request_route)
+                                .ok_or_else(|| {
+                                    InstrumentConfigError::BadRequestRoute(
+                                        req.request_route.clone(),
+                                    )
+                                })?;
+                            let fallback =
+                                RouteDecision::from_str(&req.fallback).ok_or_else(|| {
+                                    InstrumentConfigError::BadRequestRoute(req.fallback.clone())
+                                })?;
+                            rule_builder.append(RuleOrAction::Action(Action::Request(
+                                RequestAction::new(
+                                    matches,
+                                    req.id,
+                                    Duration::from_secs(req.timeout),
+                                    request_route,
+                                    fallback,
+                                    self.msg_bus.clone(),
+                                    self.msg_bus.create_publisher(req.id),
+                                ),
+                            )))
+                        }
+                    },
+                    RuleConfigLine::Simple(rule) => {
+                        if idx + 1 == rules_len
+                            && let Ok(fallback) = rule_builder.parse_fallback(rule)
+                        {
+                            return Ok(Some(fallback));
+                        }
+                        rule_builder.append_literal(rule)?;
                     }
-                    rule_builder.append_literal(r.as_str())?;
+                }
+                Ok(None)
+            })();
+
+            match result {
+                Ok(Some(fallback)) => return Ok((rule_builder.emit_all(), Some(fallback))),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(match source {
+                        Some(source) => error.at(source.clone()),
+                        None => error,
+                    });
                 }
             }
         }
@@ -389,6 +420,19 @@ impl DispatchingBuilder {
         } else {
             Err(RuleError::MissingFallback.into())
         }
+    }
+
+    fn build_sourced_rules(
+        &self,
+        rules: &[Sourced<RuleConfigLine>],
+    ) -> Result<(Vec<RuleOrAction>, GeneralProxy), ConfigError> {
+        let (list, fallback) = self.build_rule_entries(
+            rules.len(),
+            rules.iter().map(|rule| (&rule.value, Some(&rule.source))),
+        )?;
+        fallback
+            .map(|fallback| (list, fallback))
+            .ok_or_else(|| RuleError::MissingFallback.into())
     }
 
     fn build_chain_reconnection<'a, T: Iterator<Item = &'a RawProxyChainCfg>>(

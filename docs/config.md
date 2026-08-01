@@ -5,6 +5,9 @@
 
 Boltconn uses YAML format for configuration files. This guide explains the overall structure and available configuration options.
 
+Configuration keys use kebab-case (`proxy-group`, `rule-providers`,
+`process-info-depth`). Underscore spellings are not accepted.
+
 ## Configuration File Structure
 
 The main configuration file consists of several top-level sections:
@@ -22,19 +25,20 @@ inbound:
   ...
 
 # Proxy groups (required)
-proxy_group:
+proxy-group:
   ...
 
 # Additional optional sections
-web_controller: ...
+web-controller: ...
 instrument: ...
 dispatching: ...
-proxy_local: ...
-proxy_provider: ...
-rule_local: ...
-rule_provider: ...
+proxy-local: ...
+proxy-provider: ...
+proxy-chain: ...
+rules: ...
+rule-providers: ...
 interception: ...
-module: ...
+modules: ...
 ```
 
 ## Required Configuration Sections
@@ -67,7 +71,7 @@ dns:
 Define proxy groups for routing. This is required even if you only use `DIRECT` connections. See [proxy.md](proxy.md) for detailed proxy configuration.
 
 ```yaml
-proxy_group:
+proxy-group:
   Proxy:
     proxies:
       - my-proxy
@@ -83,16 +87,16 @@ Configure inbound proxy services (TUN, HTTP, SOCKS5).
 **Default values** (when `inbound` is not specified):
 ```yaml
 inbound:
-  enable_tun: true
-  enable_icmp_proxy: true
+  enable-tun: true
+  enable-icmp-proxy: true
 ```
 
 **Full configuration:**
 
 ```yaml
 inbound:
-  enable_tun: true           # Enable TUN device (default: true)
-  enable_icmp_proxy: true    # Enable ICMP proxying (default: true)
+  enable-tun: true           # Enable TUN device (default: true)
+  enable-icmp-proxy: true    # Enable ICMP proxying (default: true)
 
   # HTTP inbound service
   http:
@@ -155,10 +159,10 @@ inbound:
 Enable the RESTful API for remote control. See [restful.md](restful.md) for API documentation.
 
 ```yaml
-web_controller:
-  api_addr: 9000                    # Port number or socket address
-  api_key: your-secret-key          # Optional authentication
-  cors_allowed_list:                # Optional CORS origins
+web-controller:
+  api-addr: 9000                    # Port number or socket address
+  api-key: your-secret-key          # Optional authentication
+  cors-allowed-list:                # Optional CORS origins
     - "http://localhost:3000"
 ```
 
@@ -168,9 +172,9 @@ Enable instrumentation/telemetry server for monitoring.
 
 ```yaml
 instrument:
-  api_addr: 9001
+  api-addr: 9001
   secret: instrument-secret
-  cors_allowed_list:
+  cors-allowed-list:
     - "http://localhost:3000"
 ```
 
@@ -180,32 +184,27 @@ Advanced routing and traffic inspection options.
 
 ```yaml
 dispatching:
-  sni_sniff: false           # Enable SNI sniffing (default: false)
-  geoip_db: /path/to/GeoLite2-Country.mmdb  # Optional GeoIP database
-  process_info_depth: unlimited      # Parent process levels to collect (default: unlimited)
-  # process_info_depth: 1  # Only immediate parent
+  sni-sniff: false           # Enable SNI sniffing (default: false)
+  geoip-db: /path/to/GeoLite2-Country.mmdb  # Optional GeoIP database
+  process-info-depth: unlimited      # Parent process levels to collect (default: unlimited)
+  # process-info-depth: 1  # Only immediate parent
 ```
 
-**Note:** The `geoip_db` is required if you want to use `GEOIP` or `ASN` rules.
+**Note:** The `geoip-db` is required if you want to use `GEOIP` or `ASN` rules.
 
-`process_info_depth` controls how many parent levels are collected for process-aware routing,
+`process-info-depth` controls how many parent levels are collected for process-aware routing,
 REST connection data, and `.INSTRUMENT` templates. A depth of `1` includes the immediate parent,
 `2` includes the grandparent, and so on. For example, to use
-`{process.parents.2.name}` in `.INSTRUMENT`, set `process_info_depth` to at least `3`.
-Set `process_info_depth: unlimited` to keep walking parent processes until the root process
+`{process.parents.2.name}` in `.INSTRUMENT`, set `process-info-depth` to at least `3`.
+Set `process-info-depth: unlimited` to keep walking parent processes until the root process
 or until parent metadata can no longer be read.
-
-### Deprecated Dumping Option
-
-`enable_dump` is deprecated and ignored. It is still accepted in `config.yml`
-for compatibility, but BoltConn no longer writes SQLite traffic logs.
 
 ### Speed Test URL
 
 Customize the URL used for proxy latency testing.
 
 ```yaml
-speedtest_url: "http://www.gstatic.com/generate_204"  # Default
+speedtest-url: "http://www.gstatic.com/generate_204"  # Default
 ```
 
 ## DNS Configuration
@@ -267,15 +266,15 @@ dns:
     local.dev: 127.0.0.1
 
   # Domain-specific DNS routing
-  nameserver_policy:
+  nameserver-policy:
     "example.com": "doh, 1.1.1.1"
 
   # TUN DNS hijacking/bypassing
-  tun_hijack_list:
+  tun-hijack-list:
     - 53/udp              # Hijack UDP port 53
     - 8.8.8.8:53          # Hijack specific DNS server
 
-  tun_bypass_list:
+  tun-bypass-list:
     - 127.0.0.1:53        # Don't hijack localhost DNS
 ```
 
@@ -286,7 +285,7 @@ Define local proxies and proxy providers. See [proxy.md](proxy.md) for complete 
 ### Local Proxies
 
 ```yaml
-proxy_local:
+proxy-local:
   my-proxy:
     type: socks5
     server: 127.0.0.1
@@ -305,7 +304,7 @@ proxy_local:
 Load proxies from external sources:
 
 ```yaml
-proxy_provider:
+proxy-provider:
   my-provider:
     type: http
     url: https://example.com/proxies.yaml
@@ -317,10 +316,10 @@ proxy_provider:
 
 Define routing rules to determine which proxy to use. See [rule.md](rule.md) for complete rule syntax.
 
-### Local Rules
+### Ordered Rules
 
 ```yaml
-rule_local:
+rules:
   - DOMAIN-SUFFIX, google.com, Proxy
   - DOMAIN-SUFFIX, local, DIRECT
   - FALLBACK, Proxy
@@ -331,7 +330,7 @@ rule_local:
 Load rules from external sources:
 
 ```yaml
-rule_provider:
+rule-providers:
   cn-direct:
     type: file
     behavior: domain
@@ -345,7 +344,7 @@ rule_provider:
     path: ./cache/ad-rules.yaml
 
 # Use in rules
-rule_local:
+rules:
   - RULE-SET, cn-direct, DIRECT
   - RULE-SET, reject-ads, REJECT
 ```
@@ -370,14 +369,14 @@ interception:
       - capture  # Capture full HTTP traffic
 
       # Modify requests
-      - type: req
-        name: add-header
+      - script-type: req
+        name: add_header
         script: |
           headers["X-Custom-Header"] = "value";
 
       # Modify responses
-      - type: resp
-        name: modify-json
+      - script-type: resp
+        name: modify_json
         pattern: "application/json"
         script: |
           let data = JSON.parse(body);
@@ -391,43 +390,62 @@ interception:
 - Header modification (req/resp)
 - JavaScript-based body modification
 
-## Module System
+## Modules and ordered subfiles
 
-Split configuration into multiple files for better organization.
-
-```yaml
-module:
-  # File-based module
-  - name: custom-rules
-    type: file
-    path: ./modules/custom-rules.yaml
-
-  # HTTP-based module
-  - name: remote-config
-    type: http
-    url: https://example.com/config.yaml
-    path: ./cache/remote-config.yaml
-    interval: 3600
-```
-
-**Module File Format:**
+A module is a named, topic-oriented bundle. Declaring it loads its document and
+registers its `rule-providers`, but does not implicitly insert its ordered
+`rules` or `interception` exports:
 
 ```yaml
-# modules/custom-rules.yaml
-rule-local:
-  - DOMAIN, example.com, DIRECT
-
-rule-provider:
-  my-rules:
+modules:
+  privacy:
     type: file
-    path: ./my-rules.yaml
+    path: ./modules/privacy.yaml
+
+rules:
+  - DOMAIN-SUFFIX, internal.example, DIRECT
+  - module: privacy
+  - include: ./rules/applications.yaml
+  - FALLBACK, Default
 
 interception:
-  - name: example
-    enabled: true
-    filters: [...]
-    actions: [...]
+  - module: privacy
 ```
+
+`module: privacy` inserts the corresponding export at that exact position. A
+module can be referenced once per root section. References are root-only so the
+effective order remains visible in `config.yml`.
+
+```yaml
+# modules/privacy.yaml
+rule-providers:
+  ad-blocking:
+    type: file
+    behavior: domain
+    path: ./providers/ads.yaml
+
+rules:
+  - RULE-SET, ad-blocking, REJECT
+  - include: ./rules/telemetry.yaml
+
+interception:
+  - name: privacy_headers
+    filters: ["DOMAIN-SUFFIX, tracking.example"]
+    actions: [capture]
+```
+
+An `include` file is a bare YAML sequence and is spliced in lexical order. It
+may include other files of the same kind. Paths are relative to the document
+that declares them and must stay inside the configuration directory. Include
+cycles are errors. Rule modules and fragments cannot contain `FALLBACK`; the
+root `rules` list owns exactly one final fallback.
+
+Module and root provider definitions share one registry. Duplicate provider
+names are errors, and module provider paths are relative to the module file.
+
+Use `boltconn config check --config <directory>` for offline semantic validation
+and `boltconn config explain --config <directory>` to print effective entry
+indices and origins.
 
 ## Complete Example
 
@@ -443,34 +461,34 @@ dns:
   nameserver:
     - "doh, 1.1.1.1"
     - "udp, 8.8.8.8"
-  nameserver_policy:
+  nameserver-policy:
     "*.internal": "udp, 192.168.1.1"
 
 inbound:
-  enable_tun: true
+  enable-tun: true
   http: 7890
   socks5: 1080
 
-web_controller:
-  api_addr: 9000
-  api_key: secret-key
+web-controller:
+  api-addr: 9000
+  api-key: secret-key
 
 dispatching:
-  geoip_db: ./GeoLite2-Country.mmdb
+  geoip-db: ./GeoLite2-Country.mmdb
 
-proxy_local:
+proxy-local:
   my-proxy:
     type: socks5
     server: 127.0.0.1
     port: 7891
 
-proxy_group:
+proxy-group:
   Proxy:
     proxies:
       - my-proxy
       - DIRECT
 
-rule_local:
+rules:
   - DOMAIN-SUFFIX, google.com, Proxy
   - DOMAIN-SUFFIX, local, DIRECT
   - FALLBACK, Proxy

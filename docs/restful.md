@@ -10,17 +10,17 @@ Boltconn provides a RESTful API for remote control and monitoring. This document
 Enable the API server in your configuration:
 
 ```yaml
-web_controller:
-  api_addr: 9000                    # Port or socket address
-  api_key: your-secret-key          # Optional authentication
-  cors_allowed_list:                # Optional CORS origins
+web-controller:
+  api-addr: 9000                    # Port or socket address
+  api-key: your-secret-key          # Optional authentication
+  cors-allowed-list:                # Optional CORS origins
     - "http://localhost:3000"
     - "https://dashboard.example.com"
 ```
 
 ## Authentication
 
-If `api_key` is configured, all requests must include authentication. The exact mechanism depends on the implementation, but typically uses a header or query parameter.
+If `api-key` is configured, all requests must include authentication. The exact mechanism depends on the implementation, but typically uses a header or query parameter.
 
 **Example with API key:**
 
@@ -31,7 +31,7 @@ curl -H "Authorization: Bearer your-secret-key" \
 
 ## CORS
 
-Configure `cors_allowed_list` to allow requests from web applications hosted on different origins.
+Configure `cors-allowed-list` to allow requests from web applications hosted on different origins.
 
 ## WebSocket Endpoints
 
@@ -877,17 +877,17 @@ The API does not implement rate limiting by default, but you should avoid making
 
 ## Security Considerations
 
-1. **API Key:** Always use an `api_key` when the API is accessible from untrusted networks
-2. **CORS:** Restrict `cors_allowed_list` to trusted origins only
+1. **API Key:** Always use an `api-key` when the API is accessible from untrusted networks
+2. **CORS:** Restrict `cors-allowed-list` to trusted origins only
 3. **Bind Address:** Bind to `127.0.0.1` if only local access is needed
 4. **HTTPS:** Consider using a reverse proxy with HTTPS for production deployments
 
 **Example secure configuration:**
 
 ```yaml
-web_controller:
-  api_addr: 127.0.0.1:9000  # Local only
-  api_key: $(openssl rand -base64 32)
-  cors_allowed_list:
+web-controller:
+  api-addr: 127.0.0.1:9000  # Local only
+  api-key: $(openssl rand -base64 32)
+  cors-allowed-list:
     - "https://dashboard.example.com"
 ```

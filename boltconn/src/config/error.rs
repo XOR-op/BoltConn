@@ -1,3 +1,4 @@
+use crate::config::SourceLocation;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -20,8 +21,57 @@ pub enum ConfigError {
     Instrument(#[from] InstrumentConfigError),
     #[error("Interception error: {0}")]
     Intercept(#[from] InterceptConfigError),
+    #[error("Configuration composition error: {0}")]
+    Composition(#[source] Box<CompositionError>),
+    #[error("{location}: {error}")]
+    AtSource {
+        location: SourceLocation,
+        error: Box<ConfigError>,
+    },
     #[error("Internal error: {0}")]
     Internal(&'static str),
+}
+
+impl ConfigError {
+    pub fn at(self, location: SourceLocation) -> Self {
+        Self::AtSource {
+            location,
+            error: Box::new(self),
+        }
+    }
+}
+
+impl From<CompositionError> for ConfigError {
+    fn from(error: CompositionError) -> Self {
+        Self::Composition(Box::new(error))
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum CompositionError {
+    #[error("Unknown module {name:?} referenced from {location}")]
+    MissingModule {
+        name: String,
+        location: SourceLocation,
+    },
+    #[error("Module {name:?} is referenced more than once in {section}")]
+    DuplicateModuleReference { name: String, section: &'static str },
+    #[error("Duplicate {kind} {name:?}: first defined at {first}, then at {second}")]
+    DuplicateDefinition {
+        kind: &'static str,
+        name: String,
+        first: SourceLocation,
+        second: SourceLocation,
+    },
+    #[error("Include cycle: {0}")]
+    IncludeCycle(String),
+    #[error("Include path {path:?} from {location} is outside the configuration root")]
+    PathEscape {
+        path: String,
+        location: SourceLocation,
+    },
+    #[error("Top-level FALLBACK is only allowed directly in root rules ({0})")]
+    FallbackOutsideRoot(SourceLocation),
 }
 
 #[derive(Error, Debug)]

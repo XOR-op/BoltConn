@@ -7,20 +7,29 @@ This document explains the routing rule system in Boltconn, which determines how
 
 ## Overview
 
-Rules are evaluated in order from top to bottom. The first matching rule determines which proxy group or action is used. Rules are specified in the `rule_local` section as YAML arrays.
+Rules are evaluated in order from top to bottom. The first matching rule determines which proxy group or action is used. Rules are specified in the `rules` section as YAML arrays.
 
 ## Rule Syntax
 
 Rules use a simple array format:
 
 ```yaml
-rule_local:
+rules:
   - RULE-TYPE, CONTENT, PROXY-OR-GROUP
 ```
 
 - **RULE-TYPE:** The type of rule (e.g., `DOMAIN`, `IP-CIDR`, `GEOIP`)
 - **CONTENT:** The matching criterion (e.g., domain name, IP range)
 - **PROXY-OR-GROUP:** Which proxy group or action to use (`DIRECT`, `REJECT`, etc.)
+
+The root sequence may also contain `module: <name>` and `include: <path>`
+entries. They are expanded at their written position before matching begins.
+Included rule files are bare YAML sequences; modules export topic-related rules
+and are placed explicitly from the root. Neither may contain the root
+`FALLBACK` rule. See [Modules and ordered subfiles](config.md#modules-and-ordered-subfiles).
+
+Rule providers are different: a provider is an unordered named matcher used by
+one `RULE-SET` rule, and does not splice its payload into the ordered sequence.
 
 ## Domain Matching Rules
 
@@ -347,7 +356,7 @@ inbound:
       alias: personal-proxy
 
 # Rules
-rule_local:
+rules:
   - INBOUND-ALIAS, work-proxy, Work-Proxies
   - INBOUND-ALIAS, personal-proxy, Personal-Proxies
 ```
@@ -356,7 +365,7 @@ More flexible than `INBOUND` as aliases can be descriptive names.
 
 ## GeoIP Rules
 
-**Note:** Requires `geoip_db` to be configured in `dispatching` section.
+**Note:** Requires `geoip-db` to be configured in `dispatching` section.
 
 #### GEOIP
 
@@ -368,7 +377,7 @@ Match by country code (ISO 3166-1 alpha-2).
 - GEOIP, CN, CN-Proxies
 ```
 
-**Note:** Requires a GeoIP database (e.g., GeoLite2-Country.mmdb) configured via `dispatching.geoip_db`.
+**Note:** Requires a GeoIP database (e.g., GeoLite2-Country.mmdb) configured via `dispatching.geoip-db`.
 
 #### ASN
 
@@ -392,7 +401,7 @@ Use rules from an external rule provider.
 
 ```yaml
 # Define provider
-rule_provider:
+rule-providers:
   custom-domains:
     type: file
     behavior: domain
@@ -406,7 +415,7 @@ rule_provider:
     interval: 86400
 
 # Use in rules
-rule_local:
+rules:
   - RULE-SET, custom-domains, DIRECT
   - RULE-SET, ad-blocking, REJECT
   - FALLBACK, Proxy
@@ -518,7 +527,7 @@ Never matches (useful for testing or with logical operators).
 Default rule when no other rules match. Should be the last rule.
 
 ```yaml
-rule_local:
+rules:
   - DOMAIN-SUFFIX, google.com, Proxy
   - FALLBACK, Proxy
 ```
@@ -534,7 +543,7 @@ Special actions modify rule evaluation behavior instead of specifying a proxy.
 Force local DNS resolution at this point in the rule chain.
 
 ```yaml
-rule_local:
+rules:
   - DOMAIN-SUFFIX, example.com, Proxy
   - .LOCAL-RESOLVE
   - IP-CIDR, 1.2.3.0/24, DIRECT
@@ -629,7 +638,7 @@ If the ancestor exists only as a PID fallback, `{process.parents.<n>.pid}` is po
 other fields return `N/A`. If the requested ancestor is unavailable, all fields return `N/A`.
 `{process.parent.all.json}` always returns valid JSON. It uses the same parent element shape as
 the REST connection API and returns `[]` when no parent hierarchy is available. How many ancestors
-are available depends on `dispatching.process-info-depth` / `dispatching.process_info_depth`.
+are available depends on `dispatching.process-info-depth`.
 Numeric values cap the collected chain length; `unlimited` keeps walking until the root process
 or until parent metadata cannot be retrieved.
 
@@ -668,7 +677,7 @@ Interactive action that pauses rule evaluation and asks a connected WebSocket cl
     id: <sub-id>
     matches: <rule-without-proxy>
     timeout: 60               # seconds, optional, default 60
-    request_route: CONTINUE   # optional, default CONTINUE
+    request-route: CONTINUE   # optional, default CONTINUE
     fallback: REJECT          # optional, default REJECT
 ```
 
@@ -679,10 +688,10 @@ Interactive action that pauses rule evaluation and asks a connected WebSocket cl
 | `id` | required | Instrument subscriber ID shared with `.INSTRUMENT` |
 | `matches` | required | Rule condition (same syntax as other rule types) |
 | `timeout` | `60` | Seconds to wait for a client response |
-| `request_route` | `CONTINUE` | Route hint sent to client as `suggested_route` |
+| `request-route` | `CONTINUE` | Route hint sent to client as `suggested_route` |
 | `fallback` | `REJECT` | Route used when no client is connected, or timeout/error |
 
-**Config route values** (for `request_route` and `fallback`):
+**Config route values** (for `request-route` and `fallback`):
 
 | Value | Behavior |
 |---|---|
@@ -762,7 +771,7 @@ The server verifies that `sub_id` in the response matches the one stored for `re
     id: 200
     matches: PROCESS-NAME, untrusted-app
     timeout: 30
-    request_route: CONTINUE
+    request-route: CONTINUE
     fallback: REJECT
 ```
 
@@ -777,7 +786,7 @@ Load rules from external sources for better organization and automatic updates.
 #### File Provider
 
 ```yaml
-rule_provider:
+rule-providers:
   my-rules:
     type: file
     behavior: domain          # domain, ipcidr, or classical
@@ -788,7 +797,7 @@ rule_provider:
 #### HTTP Provider
 
 ```yaml
-rule_provider:
+rule-providers:
   remote-rules:
     type: http
     behavior: domain
@@ -805,7 +814,7 @@ rule_provider:
    payload:
      - google.com
      - youtube.com
-     - ".facebook.com"  # Suffix match (prefix with dot)
+     - "*.facebook.com"  # Suffix match
    ```
 
 2. **ipcidr** - Contains IP-CIDR rules only
@@ -832,7 +841,7 @@ rule_provider:
 payload:
   - google.com
   - youtube.com
-  - ".githubusercontent.com"  # Dot prefix = suffix match
+  - "*.githubusercontent.com"  # `*.` or `+.` prefix = suffix match
 
 # For ipcidr behavior
 payload:
@@ -850,7 +859,7 @@ payload:
 For `behavior: domain`, you can also load adblock text with `format: adblock`:
 
 ```yaml
-rule_provider:
+rule-providers:
   ad-blocking:
     type: http
     behavior: domain
@@ -872,7 +881,7 @@ Accepted adblock lines are intentionally limited:
 ### Using Rule Providers
 
 ```yaml
-rule_provider:
+rule-providers:
   custom-domains:
     type: file
     behavior: domain
@@ -891,7 +900,7 @@ rule_provider:
     path: ./cache/ad-rules.txt
     interval: 86400
 
-rule_local:
+rules:
   # Use providers
   - RULE-SET, custom-domains, DIRECT
   - RULE-SET, private-networks, DIRECT
@@ -907,10 +916,10 @@ rule_local:
 ```yaml
 # Configure GeoIP database
 dispatching:
-  geoip_db: ./GeoLite2-Country.mmdb
+  geoip-db: ./GeoLite2-Country.mmdb
 
 # Define rule providers
-rule_provider:
+rule-providers:
   custom-domains:
     type: file
     behavior: domain
@@ -930,7 +939,7 @@ rule_provider:
     path: ./rules/private-networks.yaml
 
 # Define routing rules
-rule_local:
+rules:
   # Block ads
   - RULE-SET, ad-blocking, REJECT
 
@@ -993,7 +1002,7 @@ rule_local:
 
 4. **Use rule providers:** For large rule sets, use providers instead of inline rules
    ```yaml
-   rule_provider:
+   rule-providers:
      large-list:
        type: http
        url: https://example.com/10000-domains.yaml

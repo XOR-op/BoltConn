@@ -11,10 +11,10 @@ Boltconn supports various proxy types and allows you to organize them into group
 
 ## Local Proxy Configuration
 
-Define proxies in the `proxy_local` section of your configuration:
+Define proxies in the `proxy-local` section of your configuration:
 
 ```yaml
-proxy_local:
+proxy-local:
   my-proxy:
     type: socks5
     server: 127.0.0.1
@@ -37,7 +37,7 @@ HTTP proxy with optional authentication.
 **Configuration:**
 
 ```yaml
-proxy_local:
+proxy-local:
   my-http:
     type: http
     server: proxy.example.com  # IP address or domain
@@ -62,7 +62,7 @@ SOCKS5 proxy with optional authentication and UDP support.
 **Configuration:**
 
 ```yaml
-proxy_local:
+proxy-local:
   my-socks5:
     type: socks5
     server: 127.0.0.1
@@ -89,7 +89,7 @@ Shadowsocks proxy with various cipher support.
 **Configuration:**
 
 ```yaml
-proxy_local:
+proxy-local:
   my-ss:
     type: ss
     server: ss.example.com
@@ -123,15 +123,15 @@ Trojan protocol proxy with TLS support.
 **Configuration:**
 
 ```yaml
-proxy_local:
+proxy-local:
   my-trojan:
     type: trojan
     server: trojan.example.com
     port: 443
     password: mypassword
     sni: trojan.example.com         # Server Name Indication
-    skip_cert_verify: false         # Default: true
-    websocket_path: /ws             # Optional WebSocket path
+    skip-cert-verify: false         # Default: true
+    websocket-path: /ws             # Optional WebSocket path
     udp: true                       # Default: true
 ```
 
@@ -141,22 +141,22 @@ proxy_local:
 - `port`: Port number (required)
 - `password`: Password (required)
 - `sni`: Server Name Indication for TLS (required)
-- `skip_cert_verify`: Skip TLS certificate verification (optional, default: `true`)
-- `websocket_path`: WebSocket path for WebSocket transport (optional)
+- `skip-cert-verify`: Skip TLS certificate verification (optional, default: `true`)
+- `websocket-path`: WebSocket path for WebSocket transport (optional)
 - `udp`: Enable UDP relay (optional, default: `true`)
 
 **Example with WebSocket:**
 
 ```yaml
-proxy_local:
+proxy-local:
   trojan-ws:
     type: trojan
     server: example.com
     port: 443
     password: password123
     sni: example.com
-    skip_cert_verify: false
-    websocket_path: /trojan
+    skip-cert-verify: false
+    websocket-path: /trojan
     udp: true
 ```
 
@@ -168,16 +168,16 @@ are carried over pooled TLS sessions, with UDP relayed over TCP.
 **Configuration:**
 
 ```yaml
-proxy_local:
+proxy-local:
   my-anytls:
     type: anytls
     server: anytls.example.com
     port: 443
     password: mypassword
     sni: anytls.example.com         # Server Name Indication
-    cert_verify: true               # Required: true | false | <cert path or PEM>
+    cert-verify: true               # Required: true | false | <cert path or PEM>
     udp: true                       # Default: true
-    reuse_session: true             # Default: true
+    reuse-session: true             # Default: true
 ```
 
 **Fields:**
@@ -186,24 +186,24 @@ proxy_local:
 - `port`: Port number (required)
 - `password`: Password (required)
 - `sni`: Server Name Indication for TLS (required)
-- `cert_verify`: TLS certificate verification policy (**required**, no default). One of:
+- `cert-verify`: TLS certificate verification policy (**required**, no default). One of:
   - `true` — verify the server certificate against the system root store
   - `false` — skip certificate verification entirely
   - a certificate — pin the server to this exact certificate; accepts either inline PEM or a path to a PEM file. The path is resolved within the config directory (like other config-referenced files) and cannot point outside it
 - `udp`: Enable UDP relay (optional, default: `true`)
-- `reuse_session`: Reuse pooled idle TLS sessions for new streams. Set to `false` to open a fresh session per connection (optional, default: `true`)
+- `reuse-session`: Reuse pooled idle TLS sessions for new streams. Set to `false` to open a fresh session per connection (optional, default: `true`)
 
 **Example with certificate pinning:**
 
 ```yaml
-proxy_local:
+proxy-local:
   pinned-anytls:
     type: anytls
     server: anytls.example.com
     port: 443
     password: mypassword
     sni: anytls.example.com
-    cert_verify: ./certs/server.pem
+    cert-verify: ./certs/server.pem
 ```
 
 ### WireGuard
@@ -213,38 +213,38 @@ WireGuard VPN protocol with IPv4/IPv6 support.
 **Configuration:**
 
 ```yaml
-proxy_local:
+proxy-local:
   my-wg:
     type: wireguard
-    local_addr: 10.33.0.2                    # Optional IPv4 address
-    local_addr_v6: 2606:4700:110:1::2        # Optional IPv6 address
-    private_key: YourBase64PrivateKey==
-    public_key: ServerBase64PublicKey==
+    local-addr: 10.33.0.2                    # Optional IPv4 address
+    local-addr-v6: 2606:4700:110:1::2        # Optional IPv6 address
+    private-key: YourBase64PrivateKey==
+    public-key: ServerBase64PublicKey==
     endpoint: vpn.example.com:51820          # IP:port or domain:port
     dns: 1.1.1.1                             # DNS server
-    dns_preference: prefer-ipv4              # Default: prefer-ipv4
+    dns-preference: prefer-ipv4              # Default: prefer-ipv4
     mtu: 1420                                # MTU size
-    preshared_key: Base64PresharedKey==      # Optional
+    preshared-key: Base64PresharedKey==      # Optional
     keepalive: 25                            # Optional, in seconds
     reserved: [134, 77, 85]                  # Optional, 3 bytes
-    over_tcp: false                          # Default: false
+    over-tcp: false                          # Default: false
 ```
 
 **Fields:**
 - `type`: `wireguard` (required)
-- `local_addr`: Local IPv4 address (optional)
-- `local_addr_v6`: Local IPv6 address (optional)
-- `private_key`: Base64-encoded private key (required)
-- `public_key`: Base64-encoded server public key (required)
+- `local-addr`: Local IPv4 address (optional)
+- `local-addr-v6`: Local IPv6 address (optional)
+- `private-key`: Base64-encoded private key (required)
+- `public-key`: Base64-encoded server public key (required)
 - `endpoint`: Server endpoint - IP:port or domain:port (required)
 - `dns`: DNS server IP address (required)
-- `dns_preference`: IP version preference (optional, default: `prefer-ipv4`)
+- `dns-preference`: IP version preference (optional, default: `prefer-ipv4`)
   - Options: `ipv4-only`, `ipv6-only`, `prefer-ipv4`, `prefer-ipv6`
 - `mtu`: Maximum Transmission Unit size (required)
-- `preshared_key`: Base64-encoded pre-shared key (optional)
+- `preshared-key`: Base64-encoded pre-shared key (optional)
 - `keepalive`: Keepalive interval in seconds (optional)
 - `reserved`: Reserved bytes as array of 3 integers (optional)
-- `over_tcp`: Use TCP transport instead of UDP (optional, default: `false`)
+- `over-tcp`: Use TCP transport instead of UDP (optional, default: `false`)
 
 **Note:** WireGuard creates a persistent connection. Monitor it via the `/connections/master` API endpoint.
 
@@ -255,16 +255,16 @@ SSH tunnel proxy with password or key-based authentication.
 **Configuration:**
 
 ```yaml
-proxy_local:
+proxy-local:
   my-ssh:
     type: ssh
     server: ssh.example.com
     port: 22
     user: myuser
     password: mypassword             # Optional (password auth)
-    private_key: ~/.ssh/id_rsa       # Optional (key auth)
-    key_passphrase: keypass          # Optional (for encrypted keys)
-    host_pubkey:                     # Optional (verify server key)
+    private-key: ~/.ssh/id_rsa       # Optional (key auth)
+    key-passphrase: keypass          # Optional (for encrypted keys)
+    host-pubkey:                     # Optional (verify server key)
       - "ssh-ed25519 AAAAC3..."
       - "ssh-rsa AAAAB3..."
 ```
@@ -275,9 +275,9 @@ proxy_local:
 - `port`: Port number (required)
 - `user`: Username (required)
 - `password`: Password for password authentication (optional)
-- `private_key`: Path to private key file (optional)
-- `key_passphrase`: Passphrase for encrypted private key (optional)
-- `host_pubkey`: Server public key fingerprints for verification (optional)
+- `private-key`: Path to private key file (optional)
+- `key-passphrase`: Passphrase for encrypted private key (optional)
+- `host-pubkey`: Server public key fingerprints for verification (optional)
   - Can be a single string or array of strings
 
 **Authentication Methods:**
@@ -299,7 +299,7 @@ proxy_local:
      server: example.com
      port: 22
      user: alice
-     private_key: ~/.ssh/id_ed25519
+     private-key: ~/.ssh/id_ed25519
    ```
 
 3. **Encrypted key with passphrase:**
@@ -309,8 +309,8 @@ proxy_local:
      server: example.com
      port: 22
      user: alice
-     private_key: ~/.ssh/id_rsa
-     key_passphrase: mykeypass
+     private-key: ~/.ssh/id_rsa
+     key-passphrase: mykeypass
    ```
 
 4. **With host key verification:**
@@ -320,8 +320,8 @@ proxy_local:
      server: example.com
      port: 22
      user: alice
-     private_key: ~/.ssh/id_rsa
-     host_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGz..."
+     private-key: ~/.ssh/id_rsa
+     host-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGz..."
    ```
 
 **Note:** SSH creates a persistent connection. Monitor it via the `/connections/master` API endpoint.
@@ -337,7 +337,7 @@ Load proxies from a local or remote file.
 **Configuration:**
 
 ```yaml
-proxy_provider:
+proxy-provider:
   my-file-provider:
     type: file
     path: ./proxies/my-proxies.yaml
@@ -354,7 +354,7 @@ Automatically fetch and update proxies from HTTP(S) URL.
 **Configuration:**
 
 ```yaml
-proxy_provider:
+proxy-provider:
   my-http-provider:
     type: http
     url: https://example.com/proxies.yaml
@@ -407,7 +407,7 @@ Allow selecting one proxy from a list for routing.
 **Configuration:**
 
 ```yaml
-proxy_group:
+proxy-group:
   Proxy:
     proxies:                  # Direct proxy names
       - my-proxy
@@ -432,7 +432,7 @@ proxy_group:
 **Example with Filtering:**
 
 ```yaml
-proxy_group:
+proxy-group:
   US-Proxies:
     providers:
       - name: all-proxies
@@ -451,7 +451,7 @@ Chain multiple proxies sequentially (proxy through proxy).
 **Configuration:**
 
 ```yaml
-proxy_group:
+proxy-group:
   MyChain:
     chains:
       - proxy-1
@@ -467,7 +467,7 @@ proxy_group:
 **Example:**
 
 ```yaml
-proxy_local:
+proxy-local:
   entry-proxy:
     type: socks5
     server: entry.example.com
@@ -480,7 +480,7 @@ proxy_local:
     password: password
     cipher: chacha20-ietf-poly1305
 
-proxy_group:
+proxy-group:
   DoubleHop:
     chains:
       - entry-proxy
@@ -500,7 +500,7 @@ Boltconn provides built-in proxy names for common actions:
 Direct connection without any proxy.
 
 ```yaml
-rule_local:
+rules:
   - DOMAIN-SUFFIX, local, DIRECT
 ```
 
@@ -509,7 +509,7 @@ rule_local:
 Reject the connection (connection will fail).
 
 ```yaml
-rule_local:
+rules:
   - DOMAIN-SUFFIX, ads.example.com, REJECT
 ```
 
@@ -518,7 +518,7 @@ rule_local:
 Silently drop the connection (no response).
 
 ```yaml
-rule_local:
+rules:
   - DOMAIN, spam.example.com, BLACKHOLE
 ```
 
@@ -554,7 +554,7 @@ Here's a complete example combining local proxies, providers, and groups:
 
 ```yaml
 # Local proxy definitions
-proxy_local:
+proxy-local:
   local-socks:
     type: socks5
     server: 127.0.0.1
@@ -569,15 +569,15 @@ proxy_local:
 
   my-wg:
     type: wireguard
-    local_addr: 10.33.0.2
-    private_key: privatekey==
-    public_key: publickey==
+    local-addr: 10.33.0.2
+    private-key: privatekey==
+    public-key: publickey==
     endpoint: wg.example.com:51820
     dns: 1.1.1.1
     mtu: 1420
 
 # Proxy providers
-proxy_provider:
+proxy-provider:
   subscription:
     type: http
     url: https://provider.example.com/proxies.yaml
@@ -589,7 +589,7 @@ proxy_provider:
     path: ./proxies/backup.yaml
 
 # Proxy groups
-proxy_group:
+proxy-group:
   # Selection group with mixed sources
   Proxy:
     proxies:
@@ -615,10 +615,9 @@ proxy_group:
     interface: en0
 
 # Use in rules
-rule_local:
+rules:
   - DOMAIN-SUFFIX, google.com, Proxy
   - GEOIP, US, US
   - DOMAIN, sensitive.example.com, DoubleHop
   - FALLBACK, Proxy
 ```
-

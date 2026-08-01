@@ -148,6 +148,21 @@ pub(crate) struct StartOptions {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct ConfigPathOptions {
+    /// Path of configuration. Default to $HOME/.config/boltconn
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ConfigOptions {
+    /// Parse, expand, and semantically validate configuration
+    Check(ConfigPathOptions),
+    /// Print effective ordered entries and their source files
+    Explain(ConfigPathOptions),
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct InitOptions {
     /// Path of configuration. Default to $HOME/.config/boltconn
     #[arg(short, long)]
@@ -222,6 +237,9 @@ pub(crate) enum SubCommand {
     Reload,
     /// Validate configurations
     Validate(StartOptions),
+    /// Inspect configuration without requiring runtime state
+    #[command(subcommand)]
+    Config(ConfigOptions),
     /// Review `.REQUEST` approvals from the instrument server
     Approve(ApproveOptions),
     /// Connection settings
@@ -413,6 +431,43 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 exit(0)
             }
         }
+        SubCommand::Config(command) => {
+            let options = match &command {
+                ConfigOptions::Check(options) | ConfigOptions::Explain(options) => options,
+            };
+            let (config_path, _, _) =
+                match crate::config::parse_paths(&options.config, &None, &None) {
+                    Ok(paths) => paths,
+                    Err(error) => {
+                        eprintln!("Failed to resolve config path: {error}");
+                        exit(-1)
+                    }
+                };
+            if !config_path.try_exists().is_ok_and(|exists| exists) {
+                eprintln!("Config path {} not found", config_path.display());
+                exit(-1)
+            }
+
+            match command {
+                ConfigOptions::Check(_) => {
+                    if let Err(error) = crate::app::validate_config_only(&config_path).await {
+                        eprintln!("{error}");
+                        exit(-1)
+                    }
+                    println!("{}", "Configuration is valid".green());
+                }
+                ConfigOptions::Explain(_) => {
+                    match crate::config::LoadedConfig::load_config_only(&config_path).await {
+                        Ok(config) => print!("{}", config.explain()),
+                        Err(error) => {
+                            eprintln!("{error}");
+                            exit(-1)
+                        }
+                    }
+                }
+            }
+            exit(0)
+        }
         SubCommand::Approve(opt) => {
             if let Err(err) = approve::run(opt, args.url).await {
                 eprintln!("{}", err);
@@ -491,6 +546,7 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         | SubCommand::Clean
         | SubCommand::Log
         | SubCommand::Validate(_)
+        | SubCommand::Config(_)
         | SubCommand::Approve(_) => {
             unreachable!()
         }

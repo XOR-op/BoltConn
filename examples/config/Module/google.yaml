@@ -1,12 +1,16 @@
-rule-local:
-  - DOMAIN-SUFFIX, google.com, Relay
+rule-providers:
+  GOOGLE:
+    type: file
+    behavior: domain
+    path: ../Rules/Google
 
-intercept-rule:
-  - DOMAIN-SUFFIX, google.com
-  - DOMAIN-SUFFIX, google.co.uk
+rules:
+  - include: ./google-rules.yaml
+  - RULE-SET, GOOGLE, Relay
 
-rewrite:
-  - url, ^https://www.google.co.uk(.*), 302, https://www.google.com
-  - url, ^https://careers.google.com, 404
-#  - header-req, ^https://(.*)google.com, set, User-Agent, wget/22.04
-#  - header-resp, ^https://mail.google.com, set, Set-Cookie, 123455678
+interception:
+  - name: google-redirects
+    filters:
+      - DOMAIN-SUFFIX, google.co.uk
+    actions:
+      - url, ^https://www.google.co.uk(.*), 302, https://www.google.com

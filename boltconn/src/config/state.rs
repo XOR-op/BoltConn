@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawState {
     pub group_selection: HashMap<String, String>,
     pub temporary_list: Option<Vec<RuleConfigLine>>,
@@ -19,6 +19,12 @@ pub struct LinkedState {
 
 fn default_list() -> Vec<RuleConfigLine> {
     Default::default()
+}
+
+#[test]
+fn embedded_default_state_uses_the_current_schema() {
+    serde_yaml::from_str::<RawState>(include_str!("default/state.yml"))
+        .expect("generated default state must use the canonical schema");
 }
 
 #[ignore]

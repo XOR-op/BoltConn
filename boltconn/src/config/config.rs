@@ -3,8 +3,8 @@ use crate::config::interception::InterceptionConfig;
 use crate::config::proxy_chain::RawProxyChainCfg;
 use crate::config::proxy_group::RawProxyGroupCfg;
 use crate::config::{
-    AuthData, ModuleConfig, PortOrSocketAddr, ProxyProvider, RuleConfigLine, RuleProvider,
-    SingleOrVec,
+    AuthData, ModuleLocation, PortOrSocketAddr, ProxyProvider, RootSequenceEntry, RuleConfigLine,
+    RuleProvider, SingleOrVec, Sourced,
 };
 use crate::platform::process::ProcessInfoDepth;
 use linked_hash_map::LinkedHashMap;
@@ -14,49 +14,86 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawRootCfg {
     pub interface: String,
     #[serde(default = "default_inbound_config")]
     pub inbound: RawInboundConfig,
-    #[serde(alias = "web-controller")]
     pub web_controller: Option<RawWebControllerConfig>,
-    #[serde(alias = "instrument")]
     pub instrument: Option<RawInstrumentConfig>,
-    /// Deprecated compatibility option. Accepted but ignored.
-    #[serde(default = "default_false")]
-    pub enable_dump: bool,
     pub dispatching: Option<DispatchingConfig>,
     // From now on, all the configs should be reloaded properly
-    #[serde(alias = "speedtest-url", default = "default_speedtest_url")]
+    #[serde(default = "default_speedtest_url")]
     pub speedtest_url: String,
     pub dns: RawDnsConfig,
-    #[serde(alias = "proxy-local", default = "default_local_proxy")]
+    #[serde(default = "default_local_proxy")]
     pub proxy_local: HashMap<String, RawProxyLocalCfg>,
-    #[serde(alias = "proxy-provider", default = "default_proxy_provider")]
+    #[serde(default = "default_proxy_provider")]
     pub proxy_provider: HashMap<String, ProxyProvider>,
-    #[serde(alias = "proxy-chain", default = "default_proxy_chain")]
+    #[serde(default = "default_proxy_chain")]
     pub proxy_chain: LinkedHashMap<String, RawProxyChainCfg>,
-    #[serde(alias = "proxy-group")]
     pub proxy_group: LinkedHashMap<String, RawProxyGroupCfg>,
-    #[serde(alias = "rule-local")]
-    pub rule_local: Vec<RuleConfigLine>,
-    #[serde(alias = "rule-provider", default = "default_rule_provider")]
-    pub rule_provider: HashMap<String, RuleProvider>,
-    #[serde(default = "default_interception_vec")]
-    pub interception: Vec<InterceptionConfig>,
+    pub rules: Vec<RootSequenceEntry<RuleConfigLine>>,
+    #[serde(default = "default_rule_provider")]
+    pub rule_providers: HashMap<String, RuleProvider>,
+    #[serde(default)]
+    pub interception: Vec<RootSequenceEntry<InterceptionConfig>>,
     #[serde(default = "default_module")]
-    pub module: Vec<ModuleConfig>,
+    pub modules: HashMap<String, ModuleLocation>,
+}
+
+/// Runtime configuration after modules and includes have been fully resolved.
+#[derive(Debug, Clone)]
+pub struct ResolvedRootCfg {
+    pub interface: String,
+    pub inbound: RawInboundConfig,
+    pub web_controller: Option<RawWebControllerConfig>,
+    pub instrument: Option<RawInstrumentConfig>,
+    pub dispatching: Option<DispatchingConfig>,
+    pub speedtest_url: String,
+    pub dns: RawDnsConfig,
+    pub proxy_local: HashMap<String, RawProxyLocalCfg>,
+    pub proxy_provider: HashMap<String, ProxyProvider>,
+    pub proxy_chain: LinkedHashMap<String, RawProxyChainCfg>,
+    pub proxy_group: LinkedHashMap<String, RawProxyGroupCfg>,
+    pub rules: Vec<Sourced<RuleConfigLine>>,
+    pub rule_providers: HashMap<String, RuleProvider>,
+    pub interception: Vec<Sourced<InterceptionConfig>>,
+}
+
+impl RawRootCfg {
+    pub(crate) fn into_resolved(
+        self,
+        rules: Vec<Sourced<RuleConfigLine>>,
+        rule_providers: HashMap<String, RuleProvider>,
+        interception: Vec<Sourced<InterceptionConfig>>,
+    ) -> ResolvedRootCfg {
+        ResolvedRootCfg {
+            interface: self.interface,
+            inbound: self.inbound,
+            web_controller: self.web_controller,
+            instrument: self.instrument,
+            dispatching: self.dispatching,
+            speedtest_url: self.speedtest_url,
+            dns: self.dns,
+            proxy_local: self.proxy_local,
+            proxy_provider: self.proxy_provider,
+            proxy_chain: self.proxy_chain,
+            proxy_group: self.proxy_group,
+            rules,
+            rule_providers,
+            interception,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct DispatchingConfig {
-    #[serde(alias = "sni-sniff", default = "default_false")]
+    #[serde(default = "default_false")]
     pub sni_sniff: bool,
-    #[serde(alias = "geoip-db")]
     pub geoip_db: Option<String>,
-    #[serde(alias = "process-info-depth", default = "default_process_info_depth")]
+    #[serde(default = "default_process_info_depth")]
     pub process_info_depth: ProcessInfoDepth,
 }
 
@@ -75,18 +112,16 @@ pub enum RawServerSockAddr {
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+#[serde(rename_all = "kebab-case")]
 pub enum DnsPreference {
-    #[serde(alias = "ipv4-only")]
     Ipv4Only,
-    #[serde(alias = "ipv6-only")]
     Ipv6Only,
-    #[serde(alias = "prefer-ipv4")]
     PreferIpv4,
-    #[serde(alias = "prefer-ipv6")]
     PreferIpv6,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawDnsConfig {
     #[serde(default = "default_dns_pref")]
     pub preference: DnsPreference,
@@ -94,31 +129,28 @@ pub struct RawDnsConfig {
     pub nameserver: Vec<String>,
     #[serde(default = "default_hosts")]
     pub hosts: HashMap<String, IpAddr>,
-    #[serde(alias = "nameserver-policy", default = "default_str_str_mapping")]
+    #[serde(default = "default_str_str_mapping")]
     pub nameserver_policy: HashMap<String, String>,
-    #[serde(alias = "tun-hijack-list")]
     pub tun_hijack_list: Option<Vec<PortOrSocketAddr>>,
-    #[serde(alias = "tun-bypass-list")]
     pub tun_bypass_list: Option<Vec<PortOrSocketAddr>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawWebControllerConfig {
-    #[serde(alias = "api-port", alias = "api-addr")]
     pub api_addr: PortOrSocketAddr,
-    #[serde(alias = "api-key")]
     pub api_key: Option<String>,
-    #[serde(alias = "cors-allowed-list", default = "default_str_vec")]
+    #[serde(default = "default_str_vec")]
     pub cors_allowed_list: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawInstrumentConfig {
-    #[serde(alias = "api-port", alias = "api-addr")]
+    #[serde(alias = "api-port")]
     pub api_addr: PortOrSocketAddr,
     pub secret: Option<String>,
-    #[serde(alias = "cors-allowed-list", default = "default_str_vec")]
+    #[serde(default = "default_str_vec")]
     pub cors_allowed_list: Vec<String>,
 }
 
@@ -134,15 +166,18 @@ pub enum RawCertVerify {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields, tag = "type")]
+#[serde(
+    deny_unknown_fields,
+    tag = "type",
+    rename_all = "lowercase",
+    rename_all_fields = "kebab-case"
+)]
 pub enum RawProxyLocalCfg {
-    #[serde(alias = "http")]
     Http {
         server: RawServerAddr,
         port: u16,
         auth: Option<AuthData>,
     },
-    #[serde(alias = "socks5")]
     Socks5 {
         server: RawServerAddr,
         port: u16,
@@ -150,7 +185,7 @@ pub enum RawProxyLocalCfg {
         #[serde(default = "default_true")]
         udp: bool,
     },
-    #[serde(alias = "ss")]
+    #[serde(rename = "ss")]
     Shadowsocks {
         server: RawServerAddr,
         port: u16,
@@ -159,20 +194,17 @@ pub enum RawProxyLocalCfg {
         #[serde(default = "default_true")]
         udp: bool,
     },
-    #[serde(alias = "trojan")]
     Trojan {
         server: RawServerAddr,
         port: u16,
         password: String,
         sni: String,
-        #[serde(alias = "skip-cert-verify", default = "default_true")]
+        #[serde(default = "default_true")]
         skip_cert_verify: bool,
-        #[serde(alias = "websocket-path")]
         websocket_path: Option<String>,
         #[serde(default = "default_true")]
         udp: bool,
     },
-    #[serde(alias = "anytls")]
     Anytls {
         server: RawServerAddr,
         port: u16,
@@ -180,46 +212,36 @@ pub enum RawProxyLocalCfg {
         sni: String,
         // Mandatory: `true` to verify, `false` to skip, or a certificate
         // (path or inline PEM) to pin against.
-        #[serde(alias = "cert-verify")]
         cert_verify: RawCertVerify,
-        #[serde(alias = "reuse-session", default = "default_true")]
+        #[serde(default = "default_true")]
         reuse_session: bool,
         #[serde(default = "default_true")]
         udp: bool,
     },
-    #[serde(alias = "wireguard")]
     Wireguard {
-        #[serde(alias = "local-addr")]
         local_addr: Option<Ipv4Addr>,
         #[serde(alias = "local-addr6")]
         local_addr_v6: Option<Ipv6Addr>,
-        #[serde(alias = "private-key")]
         private_key: String,
-        #[serde(alias = "public-key")]
         public_key: String,
         endpoint: RawServerSockAddr,
         dns: String,
-        #[serde(alias = "dns-preference", default = "default_dns_pref")]
+        #[serde(default = "default_dns_pref")]
         dns_preference: DnsPreference,
         mtu: usize,
-        #[serde(alias = "preshared-key")]
         preshared_key: Option<String>,
         keepalive: Option<u16>,
         reserved: Option<[u8; 3]>,
-        #[serde(alias = "over-tcp", default = "default_false")]
+        #[serde(default = "default_false")]
         over_tcp: bool,
     },
-    #[serde(alias = "ssh")]
     Ssh {
         server: RawServerAddr,
         port: u16,
         user: String,
         password: Option<String>,
-        #[serde(alias = "private-key")]
         private_key: Option<PathBuf>,
-        #[serde(alias = "key-passphrase")]
         key_passphrase: Option<String>,
-        #[serde(alias = "host-pubkey")]
         host_pubkey: Option<SingleOrVec<String>>,
     },
 }
@@ -267,7 +289,7 @@ pub(super) fn default_rule_provider() -> HashMap<String, RuleProvider> {
     Default::default()
 }
 
-fn default_module() -> Vec<ModuleConfig> {
+fn default_module() -> HashMap<String, ModuleLocation> {
     Default::default()
 }
 
@@ -287,16 +309,19 @@ pub(super) fn default_str_vec() -> Vec<String> {
     Default::default()
 }
 
-pub(super) fn default_interception_vec() -> Vec<InterceptionConfig> {
-    Default::default()
-}
-
 #[ignore]
 #[test]
 fn test_raw_root_cfg() {
     let config_text = std::fs::read_to_string("../_private/config/config.yml").unwrap();
     let deserialized: RawRootCfg = serde_yaml::from_str(&config_text).unwrap();
     println!("{:?}", deserialized)
+}
+
+#[test]
+fn embedded_default_config_uses_the_current_schema() {
+    let config: RawRootCfg = serde_yaml::from_str(include_str!("default/config.yml"))
+        .expect("generated default config must use the canonical schema");
+    assert_eq!(config.rules.len(), 1);
 }
 
 #[test]
@@ -307,19 +332,19 @@ fn test_dispatching_config_process_info_depth_defaults_to_unlimited() {
 
 #[test]
 fn test_dispatching_config_process_info_depth_accepts_numeric_depth() {
-    let config: DispatchingConfig = serde_yaml::from_str("process_info_depth: 3").unwrap();
+    let config: DispatchingConfig = serde_yaml::from_str("process-info-depth: 3").unwrap();
     assert_eq!(config.process_info_depth, ProcessInfoDepth::Limited(3));
 }
 
 #[test]
 fn test_dispatching_config_process_info_depth_accepts_unlimited() {
-    let config: DispatchingConfig = serde_yaml::from_str("process_info_depth: unlimited").unwrap();
+    let config: DispatchingConfig = serde_yaml::from_str("process-info-depth: unlimited").unwrap();
     assert_eq!(config.process_info_depth, ProcessInfoDepth::Unlimited);
 }
 
 #[test]
 fn test_dispatching_config_process_info_depth_rejects_invalid_string() {
-    let err = serde_yaml::from_str::<DispatchingConfig>("process_info_depth: forever").unwrap_err();
+    let err = serde_yaml::from_str::<DispatchingConfig>("process-info-depth: forever").unwrap_err();
     assert!(
         err.to_string()
             .contains("expected a non-negative integer or \"unlimited\"")
@@ -334,23 +359,25 @@ server: anytls.example.com
 port: 443
 password: secret
 sni: anytls.example.com
-cert_verify: true
+cert-verify: true
 ";
     let parsed: RawProxyLocalCfg = serde_yaml::from_str(cfg).unwrap();
     let RawProxyLocalCfg::Anytls { cert_verify, .. } = parsed else {
         panic!("expected anytls config");
     };
     assert!(matches!(cert_verify, RawCertVerify::Toggle(true)));
+    let underscore_cfg = cfg.replace("cert-verify", "cert_verify");
+    assert!(serde_yaml::from_str::<RawProxyLocalCfg>(&underscore_cfg).is_err());
 
     // A string value is interpreted as a certificate to pin.
-    let cfg = cfg.replace("cert_verify: true", "cert_verify: ./certs/server.pem");
+    let cfg = cfg.replace("cert-verify: true", "cert-verify: ./certs/server.pem");
     let parsed: RawProxyLocalCfg = serde_yaml::from_str(&cfg).unwrap();
     let RawProxyLocalCfg::Anytls { cert_verify, .. } = parsed else {
         panic!("expected anytls config");
     };
     assert!(matches!(cert_verify, RawCertVerify::Certificate(s) if s == "./certs/server.pem"));
 
-    // cert_verify has no default and must be supplied.
-    let cfg = cfg.replace("cert_verify: ./certs/server.pem\n", "");
+    // cert-verify has no default and must be supplied.
+    let cfg = cfg.replace("cert-verify: ./certs/server.pem\n", "");
     assert!(serde_yaml::from_str::<RawProxyLocalCfg>(&cfg).is_err());
 }

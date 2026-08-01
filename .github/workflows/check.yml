@@ -6,7 +6,6 @@ on:
       - '.github/**'
       - 'assets/**'
       - 'docs/**'
-      - 'examples/**'
       - 'README.md'
       - 'LICENSE'
   pull_request:
@@ -16,7 +15,6 @@ on:
       - '.github/**'
       - 'assets/**'
       - 'docs/**'
-      - 'examples/**'
       - 'README.md'
       - 'LICENSE'
 

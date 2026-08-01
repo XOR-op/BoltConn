@@ -1,6 +1,6 @@
 use crate::common::is_valid_domain_name;
 use crate::config;
-use crate::config::{ConfigError, FileError, ProviderError, load_remote_text};
+use crate::config::{ConfigError, FileError, ProviderError, SourceLocation, load_remote_text};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -22,7 +22,7 @@ pub enum RuleLocation {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub struct RuleProvider {
     #[serde(default = "default_rule_provider_format")]
     pub format: RuleProviderFormat,
@@ -59,7 +59,7 @@ fn default_classical() -> ProviderBehavior {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawRuleSchema {
     pub payload: Vec<String>,
 }
@@ -157,6 +157,7 @@ fn is_regex_rule(line: &str) -> bool {
 pub async fn read_rule_schema(
     config_path: &Path,
     providers: &HashMap<String, RuleProvider>,
+    provider_sources: &HashMap<String, SourceLocation>,
     force_update: bool,
 ) -> Result<HashMap<String, RuleSchema>, ConfigError> {
     let mut table = HashMap::new();
@@ -202,10 +203,14 @@ pub async fn read_rule_schema(
         })
         .collect();
     for (name, task) in tasks {
-        let content = match task.await? {
-            Ok(c) => c,
-            Err(e) => return Err(e),
-        };
+        let content = task
+            .await
+            .map_err(ConfigError::from)
+            .and_then(|result| result)
+            .map_err(|error| match provider_sources.get(&name) {
+                Some(source) => error.at(source.clone()),
+                None => error,
+            })?;
         table.insert(name, content);
     }
     Ok(table)
