@@ -12,13 +12,13 @@ internal-test = []
 
 [dependencies]
 # Core
-anyhow = "1.0.66"
+anyhow.workspace = true
 arc-swap = "1.6.0"
 arrayref = "0.3.6"
 async-trait = "0.1.58"
 axum = { version = "0.7.5", features = ["ws"] }
 base64 = "0.21.0"
-boltapi = { path = "../boltapi" }
+boltapi.workspace = true
 bytes = "1.2.1"
 chrono = { version = "0.4.31", default-features = false, features = [
     "clock",
@@ -28,7 +28,7 @@ dashmap = "5.5.3"
 dhcproto = "0.12.0"
 fastrand = "2.0.0"
 flume = "0.11.0"
-futures = "0.3.25"
+futures.workspace = true
 http = "1.1.0"
 httparse = "1.8.0"
 ipnet = "2.5.1"
@@ -43,8 +43,8 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 regex = "1.7.0"
 sharded-slab = "0.1.7"
 socket2 = { version = "0.5.1", features = ["all"] }
-thiserror = "1.0.37"
-tokio = { version = "1.48.0", features = [
+thiserror.workspace = true
+tokio = { workspace = true, features = [
     "rt",
     "rt-multi-thread",
     "net",
@@ -55,7 +55,7 @@ tokio = { version = "1.48.0", features = [
     "time",
 ] }
 tokio-rustls = "0.26.0"
-tokio-tungstenite = "0.23.1"
+tokio-tungstenite.workspace = true
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = [
     "env-filter",
@@ -71,16 +71,16 @@ hickory-resolver = { version = "0.24.0", features = [
     'dns-over-tls',
     'webpki-roots',
 ] }
-url = "2.3.1"
+url.workspace = true
 # Configuration
 reqwest = { version = "0.12.2", default-features = false, features = [
     "rustls-tls",
     "json",
 ] }
-serde = { version = "1.0.192", features = ["derive"] }
-serde_json = "1.0.108"
-serde_yaml = "0.9.27"
-tarpc = { version = "0.37.0", features = ["serde-transport", "unix"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tarpc = { workspace = true, features = ["serde-transport", "unix"] }
 tokio-serde = { version = "0.9.0", features = ["cbor"] }
 tower-http = { version = "0.5.2", features = ["cors"] }
 # Rules
@@ -118,10 +118,9 @@ shadowsocks = { version = "1.24.0", default-features = false, features = [
 ] }
 smoltcp = { version = "0.13.0", features = ["socket-tcp-cubic"] }
 # Command line
-clap = { version = "4.4.6", features = ["derive"] }
+clap.workspace = true
 clap_complete = "4.4.3"
 colored = "2.0.0"
-crossterm = { version = "0.29", features = ["event-stream"] }
 tabular = "0.2.0"
 git-version = "0.3.9"
 const_format = "0.2.34"

@@ -45,7 +45,7 @@ const fn get_version() -> &'static str {
 #[derive(Debug, Parser)]
 #[clap(name = "boltconn", about = "CLI interface of BoltConn", version = get_version())]
 struct ProgramArgs {
-    /// REST API base URL for controller commands, or instrument host:port for `boltconn approve`.
+    /// REST API base URL for controller commands.
     #[arg(short, long)]
     pub url: Option<String>,
     #[command(subcommand)]

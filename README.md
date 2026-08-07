@@ -39,7 +39,8 @@ For configuration, API, rule, and proxy details, see the documentation below.
 - Download pre-built binaries from [release](https://github.com/XOR-op/BoltConn/releases) and add the path of the binary to `$PATH`.
 #### Install latest git version with cargo
 ```bash
-cargo install --locked --git https://github.com/XOR-op/BoltConn
+cargo install --locked --git https://github.com/XOR-op/BoltConn --package boltconn
+cargo install --locked --git https://github.com/XOR-op/BoltConn --package bolt-tui
 ```
 
 ### Configuration
@@ -71,6 +72,9 @@ boltconn start --rootless
 boltconn [conn/proxy/rule/tun/reload/...]
 ```
 See `boltconn --help` for more help.
+
+Interactive `.REQUEST` approvals are handled by the separate `bolt-tui` binary. See
+[`instrument.md`](./docs/instrument.md#bolt-tui) for its configuration and controls.
 
 ## Documentations
 Learn more about BoltConn's configuration, proxy behavior, RESTful API, and rule system:

@@ -1,6 +1,20 @@
 [workspace]
-members = ["boltapi", "boltconn"]
+members = ["bolt-tui", "boltapi", "boltconn"]
 resolver = "2"
+
+[workspace.dependencies]
+anyhow = "1.0.66"
+boltapi = { path = "boltapi" }
+clap = { version = "4.4.6", features = ["derive"] }
+futures = "0.3.28"
+serde = { version = "1.0.192", features = ["derive"] }
+serde_json = "1.0.108"
+serde_yaml = "0.9.27"
+tarpc = { version = "0.37.0", default-features = false }
+thiserror = "1.0.40"
+tokio = "1.48.0"
+tokio-tungstenite = "0.23.1"
+url = "2.3.1"
 
 [profile.release]
 opt-level = 3

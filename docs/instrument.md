@@ -266,18 +266,18 @@ The client replies on the same WebSocket:
 - Invalid `route`: use `fallback`
 - Timeout or disconnect while waiting: use `fallback`
 
-## `boltconn approve`
+## `bolt-tui`
 
-BoltConn ships an inline approval client for `.REQUEST`:
+BoltConn ships a separate terminal approval client for `.REQUEST`:
 
 ```bash
-boltconn approve -i 31,32,100
+bolt-tui approve -i 31,32,100
 ```
 
 Override mode skips config lookup entirely:
 
 ```bash
-boltconn approve -i 31,32 --url 127.0.0.1:9001 --secret instrument-secret
+bolt-tui approve -i 31,32 --url 127.0.0.1:9001 --secret instrument-secret
 ```
 
 **Arguments:**

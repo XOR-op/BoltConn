@@ -1,5 +1,4 @@
-use crate::cli::ApproveOptions;
-use crate::config::{self, RawInstrumentConfig, default_inbound_ip_addr};
+use crate::ApproveArgs;
 use anyhow::{Context, Result, anyhow, bail};
 use boltapi::ProcessParentSchema;
 use boltapi::instrument::{InstrumentData, RequestPayload, RequestResponse};
@@ -14,7 +13,8 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::{Instant, MissedTickBehavior};
 use tokio_tungstenite::connect_async;
@@ -29,7 +29,31 @@ const REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Deserialize)]
 struct ApproveConfigFile {
-    instrument: Option<RawInstrumentConfig>,
+    instrument: Option<InstrumentConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct InstrumentConfig {
+    #[serde(alias = "api-port")]
+    api_addr: PortOrSocketAddr,
+    secret: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PortOrSocketAddr {
+    Port(u16),
+    SocketAddr(SocketAddr),
+}
+
+impl PortOrSocketAddr {
+    fn as_socket_addr(&self) -> SocketAddr {
+        match self {
+            Self::Port(port) => SocketAddr::from((IpAddr::V4(Ipv4Addr::LOCALHOST), *port)),
+            Self::SocketAddr(addr) => *addr,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -176,10 +200,10 @@ impl ApproveState {
     }
 }
 
-pub(crate) async fn run(opt: ApproveOptions, url_override: Option<String>) -> Result<()> {
-    let ids = parse_subscriber_ids(opt.id.as_str())?;
+pub(crate) async fn run(args: ApproveArgs) -> Result<()> {
+    let ids = parse_subscriber_ids(args.id.as_str())?;
     let ids_label = ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
-    let connection = resolve_connection_settings(opt.config.as_ref(), url_override, opt.secret)?;
+    let connection = resolve_connection_settings(args.config.as_deref(), args.url, args.secret)?;
     let subscribe_url = build_subscribe_url(
         connection.authority.as_str(),
         ids.as_slice(),
@@ -379,14 +403,14 @@ fn selected_response(state: &ApproveState, route: &str) -> Option<RequestRespons
 }
 
 fn resolve_connection_settings(
-    config_override: Option<&PathBuf>,
+    config_override: Option<&Path>,
     url_override: Option<String>,
     secret_override: Option<String>,
 ) -> Result<ApproveConnectionSettings> {
     if url_override.is_some() || secret_override.is_some() {
         let authority = url_override.ok_or_else(|| {
             anyhow!(
-                "`boltconn approve`: --url <host:port> is required when override flags are used"
+                "`bolt-tui approve`: --url <host:port> is required when override flags are used"
             )
         })?;
         return Ok(ApproveConnectionSettings {
@@ -399,10 +423,9 @@ fn resolve_connection_settings(
 }
 
 fn load_connection_settings_from_config(
-    config_override: Option<&PathBuf>,
+    config_override: Option<&Path>,
 ) -> Result<ApproveConnectionSettings> {
-    let (config_path, _, _) = config::parse_paths(&config_override.cloned(), &None, &None)
-        .context("Failed to resolve config path")?;
+    let config_path = resolve_config_path(config_override)?;
     let config_file_path = config_path.join("config.yml");
     let config_text = fs::read_to_string(&config_file_path)
         .with_context(|| format!("Failed to read {}", config_file_path.to_string_lossy()))?;
@@ -415,12 +438,20 @@ fn load_connection_settings_from_config(
         )
     })?;
     Ok(ApproveConnectionSettings {
-        authority: instrument
-            .api_addr
-            .as_socket_addr(default_inbound_ip_addr)
-            .to_string(),
+        authority: instrument.api_addr.as_socket_addr().to_string(),
         secret: instrument.secret,
     })
+}
+
+fn resolve_config_path(config_override: Option<&Path>) -> Result<PathBuf> {
+    if let Some(config_path) = config_override {
+        return Ok(config_path.to_path_buf());
+    }
+
+    let home = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .ok_or_else(|| anyhow!("Failed to resolve config path: HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".config").join("boltconn"))
 }
 
 fn parse_subscriber_ids(raw: &str) -> Result<Vec<u64>> {
@@ -429,17 +460,17 @@ fn parse_subscriber_ids(raw: &str) -> Result<Vec<u64>> {
     for part in raw.split(',') {
         let trimmed = part.trim();
         if trimmed.is_empty() {
-            bail!("`boltconn approve`: empty subscriber id in `{}`", raw);
+            bail!("`bolt-tui approve`: empty subscriber id in `{}`", raw);
         }
         let id = trimmed
             .parse::<u64>()
-            .with_context(|| format!("`boltconn approve`: invalid subscriber id `{}`", trimmed))?;
+            .with_context(|| format!("`bolt-tui approve`: invalid subscriber id `{}`", trimmed))?;
         if seen.insert(id) {
             ids.push(id);
         }
     }
     if ids.is_empty() {
-        bail!("`boltconn approve`: at least one subscriber id is required");
+        bail!("`bolt-tui approve`: at least one subscriber id is required");
     }
     Ok(ids)
 }
@@ -452,11 +483,11 @@ fn normalize_authority(authority: &str) -> Result<String> {
         || authority.contains('?')
         || authority.contains('#')
     {
-        bail!("`boltconn approve`: --url must be a bare host:port value");
+        bail!("`bolt-tui approve`: --url must be a bare host:port value");
     }
     Url::parse(format!("ws://{authority}/subscribe").as_str()).with_context(|| {
         format!(
-            "`boltconn approve`: invalid --url authority `{}`",
+            "`bolt-tui approve`: invalid --url authority `{}`",
             authority
         )
     })?;
@@ -900,8 +931,8 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApproveState, PANE_HEIGHT, UI_HEIGHT, build_subscribe_url, parse_subscriber_ids, render_ui,
-        resolve_connection_settings,
+        ApproveConfigFile, ApproveState, PANE_HEIGHT, UI_HEIGHT, build_subscribe_url,
+        parse_subscriber_ids, render_ui, resolve_connection_settings,
     };
     use boltapi::instrument::RequestPayload;
     use std::time::Duration;
@@ -951,6 +982,25 @@ mod tests {
     fn test_override_requires_url() {
         let err = resolve_connection_settings(None, None, Some("secret".to_string())).unwrap_err();
         assert!(err.to_string().contains("--url <host:port> is required"));
+    }
+
+    #[test]
+    fn test_instrument_config_accepts_supported_address_forms() {
+        let cases = [
+            ("api-addr: 9001", "127.0.0.1:9001"),
+            ("api-addr: 0.0.0.0:9002", "0.0.0.0:9002"),
+            ("api-port: 9003", "127.0.0.1:9003"),
+        ];
+
+        for (address_config, expected) in cases {
+            let config: ApproveConfigFile = serde_yaml::from_str(&format!(
+                "instrument:\n  {address_config}\n  secret: test\n  cors-allowed-list: []\n"
+            ))
+            .unwrap();
+            let instrument = config.instrument.unwrap();
+            assert_eq!(instrument.api_addr.as_socket_addr().to_string(), expected);
+            assert_eq!(instrument.secret.as_deref(), Some("test"));
+        }
     }
 
     #[test]

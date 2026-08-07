@@ -1,0 +1,17 @@
+[package]
+name = "bolt-tui"
+version = "0.11.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+boltapi.workspace = true
+clap.workspace = true
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "macros"] }
+tokio-tungstenite.workspace = true
+url.workspace = true
