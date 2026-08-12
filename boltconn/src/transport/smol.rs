@@ -10,10 +10,9 @@ use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use flume::TryRecvError;
-use hickory_proto::TokioTime;
-use hickory_proto::iocompat::AsyncIoTokioAsStd;
-use hickory_resolver::TokioHandle;
-use hickory_resolver::name_server::RuntimeProvider;
+use hickory_resolver::net::runtime::{
+    RuntimeProvider, TokioHandle, TokioTime, iocompat::AsyncIoTokioAsStd,
+};
 use rand::Rng;
 use smoltcp::iface::{Interface, PollResult, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -851,6 +850,8 @@ impl RuntimeProvider for SmolDnsProvider {
     fn connect_tcp(
         &self,
         server_addr: SocketAddr,
+        _bind_addr: Option<SocketAddr>,
+        _timeout: Option<Duration>,
     ) -> Pin<Box<dyn Send + Future<Output = io::Result<Self::Tcp>>>> {
         let smol = self.smol.upgrade();
         let handle = self.abort_handle.clone();

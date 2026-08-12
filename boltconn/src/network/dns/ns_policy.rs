@@ -3,9 +3,8 @@ use crate::config::DnsConfigError;
 use crate::network::dns::bootstrap::BootstrapResolver;
 use crate::network::dns::provider::{IfaceProvider, PlainProvider};
 use crate::network::dns::{AuxiliaryResolver, NameServerConfigEnum, parse_single_dns};
-use hickory_resolver::AsyncResolver;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::GenericConnector;
+use hickory_resolver::Resolver;
+use hickory_resolver::config::ResolverConfig;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -14,8 +13,8 @@ pub struct NameserverPolicies {
 }
 
 pub(super) enum DispatchedDnsResolver {
-    Iface(AuxiliaryResolver<AsyncResolver<GenericConnector<IfaceProvider>>>),
-    Plain(AsyncResolver<GenericConnector<PlainProvider>>),
+    Iface(AuxiliaryResolver<Resolver<IfaceProvider>>),
+    Plain(Resolver<PlainProvider>),
 }
 
 impl NameserverPolicies {
@@ -71,18 +70,22 @@ impl NameserverPolicies {
                 let resolver = match c {
                     NameServerConfigEnum::Normal(c) => {
                         if follow_tun {
-                            DispatchedDnsResolver::Plain(AsyncResolver::new(
-                                ResolverConfig::from_parts(None, vec![], c),
-                                ResolverOpts::default(),
-                                GenericConnector::new(PlainProvider::new()),
-                            ))
+                            DispatchedDnsResolver::Plain(
+                                Resolver::builder_with_config(
+                                    ResolverConfig::from_parts(None, vec![], c),
+                                    PlainProvider::new(),
+                                )
+                                .build()
+                                .expect("rustls miscompiled"),
+                            )
                         } else {
                             DispatchedDnsResolver::Iface(AuxiliaryResolver::new_normal(
-                                AsyncResolver::new(
+                                Resolver::builder_with_config(
                                     ResolverConfig::from_parts(None, vec![], c),
-                                    ResolverOpts::default(),
-                                    GenericConnector::new(IfaceProvider::new(outbound_iface)),
-                                ),
+                                    IfaceProvider::new(outbound_iface),
+                                )
+                                .build()
+                                .expect("rustls miscompiled"),
                             ))
                         }
                     }

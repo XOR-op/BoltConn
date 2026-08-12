@@ -25,7 +25,7 @@ use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use arc_swap::ArcSwap;
 use base64::Engine;
-use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
+use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
@@ -707,7 +707,7 @@ impl DispatchingBuilder {
                             })?;
                         let group: Vec<NameServerConfig> = list
                             .into_iter()
-                            .map(|i| NameServerConfig::new(SocketAddr::new(i, 53), Protocol::Udp))
+                            .map(|i| NameServerConfig::new(i, true, vec![ConnectionConfig::udp()]))
                             .collect();
                         ResolverConfig::from_parts(None, vec![], group)
                     };

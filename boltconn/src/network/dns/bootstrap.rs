@@ -1,14 +1,13 @@
 use crate::network::dns::provider::IfaceProvider;
-use hickory_resolver::AsyncResolver;
-use hickory_resolver::name_server::GenericConnector;
+use hickory_resolver::Resolver;
 use std::net::{IpAddr, Ipv4Addr};
 
 pub struct BootstrapResolver {
-    resolver: Option<AsyncResolver<GenericConnector<IfaceProvider>>>,
+    resolver: Option<Resolver<IfaceProvider>>,
 }
 
 impl BootstrapResolver {
-    pub fn new(resolver: AsyncResolver<GenericConnector<IfaceProvider>>) -> Self {
+    pub fn new(resolver: Resolver<IfaceProvider>) -> Self {
         Self {
             resolver: Some(resolver),
         }
@@ -23,7 +22,7 @@ impl BootstrapResolver {
     pub async fn lookup_ip(
         &self,
         domain: &str,
-    ) -> Result<Vec<IpAddr>, hickory_resolver::error::ResolveError> {
+    ) -> Result<Vec<IpAddr>, hickory_resolver::net::NetError> {
         if let Some(resolver) = &self.resolver {
             Ok(resolver.lookup_ip(domain).await?.iter().collect())
         } else {

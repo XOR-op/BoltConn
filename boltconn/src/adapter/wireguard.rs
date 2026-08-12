@@ -12,11 +12,9 @@ use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
 use bytes::Bytes;
-use hickory_resolver::AsyncResolver;
+use hickory_resolver::Resolver;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::GenericConnector;
-use hickory_resolver::proto::TokioTime;
-use hickory_resolver::proto::udp::DnsUdpSocket;
+use hickory_resolver::net::runtime::{DnsUdpSocket, TokioTime};
 use std::collections::HashMap;
 use std::io;
 use std::io::ErrorKind;
@@ -71,15 +69,17 @@ impl Endpoint {
                 opts.timeout = Duration::from_millis(1500);
                 opts.attempts = 3;
                 let resolver = {
-                    AsyncResolver::new(
+                    Resolver::builder_with_config(
                         config.dns.clone(),
-                        opts,
-                        GenericConnector::new(SmolDnsProvider::new(
+                        SmolDnsProvider::new(
                             me.clone(),
                             ConnAbortHandle::placeholder(),
                             notify.clone(),
-                        )),
+                        ),
                     )
+                    .with_options(opts)
+                    .build()
+                    .expect("rustls miscompiled")
                 };
                 let dns = Arc::new(GenericDns::new_with_resolver(
                     name,

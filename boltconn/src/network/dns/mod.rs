@@ -11,41 +11,26 @@ use crate::config::DnsConfigError;
 use crate::proxy::error::DnsError;
 pub use bootstrap::BootstrapResolver;
 pub use dns::{Dns, GenericDns};
-use hickory_resolver::AsyncResolver;
+use hickory_resolver::Resolver;
 use hickory_resolver::config::{
-    NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
+    CLOUDFLARE, ConnectionConfig, GOOGLE, NameServerConfig, QUAD9, ResolverConfig, ResolverOpts,
 };
-use hickory_resolver::name_server::GenericConnector;
 pub use hijack_ctrl::DnsHijackController;
 pub use ns_policy::NameserverPolicies;
 use provider::IfaceProvider;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub enum NameServerConfigEnum {
-    Normal(NameServerConfigGroup),
+    Normal(Vec<NameServerConfig>),
     Dhcp(String),
 }
 
-fn add_tls_server(
-    ips: &[IpAddr],
-    protocol: Protocol,
-    port: u16,
-    tls_name: &str,
-) -> NameServerConfigGroup {
-    let mut arr = vec![];
-    for ip in ips {
-        arr.push(NameServerConfig {
-            socket_addr: SocketAddr::new(*ip, port),
-            protocol,
-            tls_dns_name: Some(tls_name.to_string()),
-            trust_negative_responses: false,
-            tls_config: None,
-            bind_addr: None,
-        })
-    }
-    NameServerConfigGroup::from(arr)
+fn encrypted_server_configs(ips: &[IpAddr], connection: ConnectionConfig) -> Vec<NameServerConfig> {
+    ips.iter()
+        .map(|ip| NameServerConfig::new(*ip, false, vec![connection.clone()]))
+        .collect()
 }
 
 async fn resolve_dns(bootstrap: &BootstrapResolver, dn: &str) -> Result<Vec<IpAddr>, DnsError> {
@@ -63,17 +48,13 @@ pub fn new_bootstrap_resolver(iface_name: &str, addr: &[IpAddr]) -> BootstrapRes
     let cfg = ResolverConfig::from_parts(
         None,
         vec![],
-        NameServerConfigGroup::from(
-            addr.iter()
-                .map(|ip| NameServerConfig::new(SocketAddr::new(*ip, 53), Protocol::Udp))
-                .collect::<Vec<NameServerConfig>>(),
-        ),
+        addr.iter().copied().map(NameServerConfig::udp).collect(),
     );
-    BootstrapResolver::new(AsyncResolver::new(
-        cfg,
-        ResolverOpts::default(),
-        GenericConnector::new(IfaceProvider::new(iface_name)),
-    ))
+    BootstrapResolver::new(
+        Resolver::builder_with_config(cfg, IfaceProvider::new(iface_name))
+            .build()
+            .expect("rustls miscompiled"),
+    )
 }
 
 pub async fn parse_dns_config(
@@ -104,50 +85,38 @@ pub async fn parse_single_dns(
         "dhcp" => {
             return Ok(NameServerConfigEnum::Dhcp(content.to_string()));
         }
-        "udp" => NameServerConfigGroup::from(vec![NameServerConfig::new(
-            SocketAddr::new(
-                content
-                    .parse::<IpAddr>()
-                    .map_err(|_| DnsConfigError::Invalid(content.to_string()))?,
-                53,
-            ),
-            Protocol::Udp,
-        )]),
-        "dot" => add_tls_server(
+        "udp" => vec![NameServerConfig::udp(
+            content
+                .parse::<IpAddr>()
+                .map_err(|_| DnsConfigError::Invalid(content.to_string()))?,
+        )],
+        "dot" => encrypted_server_configs(
             resolve_dns(bootstrap, content).await?.as_slice(),
-            Protocol::Tls,
-            853,
-            content,
+            ConnectionConfig::tls(content.into()),
         ),
-        "doh" => add_tls_server(
+        "doh" => encrypted_server_configs(
             resolve_dns(bootstrap, content).await?.as_slice(),
-            Protocol::Https,
-            443,
-            content,
+            ConnectionConfig::https(content.into(), None),
         ),
         "dot-preset" => match content {
-            "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_tls(),
-            "quad9" => NameServerConfigGroup::quad9_tls(),
+            "cloudflare" | "cf" => ResolverConfig::tls(&CLOUDFLARE).name_servers,
+            "quad9" => ResolverConfig::tls(&QUAD9).name_servers,
             _ => return Err(DnsConfigError::InvalidPreset("dot", content.to_string())),
         },
         "doh-preset" => match content {
-            "cloudflare" | "cf" => NameServerConfigGroup::cloudflare_https(),
-            "quad9" => NameServerConfigGroup::quad9_https(),
-            "google" => NameServerConfigGroup::google_https(),
+            "cloudflare" | "cf" => ResolverConfig::https(&CLOUDFLARE).name_servers,
+            "quad9" => ResolverConfig::https(&QUAD9).name_servers,
+            "google" => ResolverConfig::https(&GOOGLE).name_servers,
             _ => return Err(DnsConfigError::InvalidPreset("doh", content.to_string())),
         },
         _ => return Err(DnsConfigError::InvalidType(proto.to_string())),
     }))
 }
 
-pub fn extract_address(group: &[NameServerConfigGroup]) -> Vec<IpAddr> {
+pub fn extract_address(group: &[Vec<NameServerConfig>]) -> Vec<IpAddr> {
     group
         .iter()
-        .flat_map(|cg| {
-            cg.iter()
-                .map(|cfg| cfg.socket_addr.ip())
-                .collect::<Vec<IpAddr>>()
-        })
+        .flat_map(|configs| configs.iter().map(|config| config.ip))
         .collect()
 }
 
@@ -163,7 +132,7 @@ struct DhcpDnsRecord {
     iface_addr: IpAddr,
     ns_addr: IpAddr,
     last_checked: std::time::Instant,
-    resolver: Arc<AsyncResolver<GenericConnector<IfaceProvider>>>,
+    resolver: Arc<Resolver<IfaceProvider>>,
 }
 
 impl DhcpDnsRecord {
@@ -215,26 +184,17 @@ impl DhcpDnsRecord {
         }
     }
 
-    fn create_resolver(
-        new_dns: IpAddr,
-        iface: &str,
-    ) -> Arc<AsyncResolver<GenericConnector<IfaceProvider>>> {
-        let cfg = ResolverConfig::from_parts(
-            None,
-            vec![],
-            NameServerConfigGroup::from(vec![NameServerConfig::new(
-                SocketAddr::new(new_dns, 53),
-                Protocol::Udp,
-            )]),
-        );
-        Arc::new(AsyncResolver::new(
-            cfg,
-            default_resolver_opt(),
-            GenericConnector::new(IfaceProvider::new(iface)),
-        ))
+    fn create_resolver(new_dns: IpAddr, iface: &str) -> Arc<Resolver<IfaceProvider>> {
+        let cfg = ResolverConfig::from_parts(None, vec![], vec![NameServerConfig::udp(new_dns)]);
+        Arc::new(
+            Resolver::builder_with_config(cfg, IfaceProvider::new(iface))
+                .with_options(default_resolver_opt())
+                .build()
+                .expect("rustls miscompiled"),
+        )
     }
 
-    pub fn get_resolver(&self) -> Arc<AsyncResolver<GenericConnector<IfaceProvider>>> {
+    pub fn get_resolver(&self) -> Arc<Resolver<IfaceProvider>> {
         self.resolver.clone()
     }
 }

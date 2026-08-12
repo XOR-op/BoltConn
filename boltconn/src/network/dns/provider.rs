@@ -1,11 +1,11 @@
+use crate::common::io_err;
 use crate::network::egress::Egress;
-use hickory_resolver::TokioHandle;
-use hickory_resolver::name_server::RuntimeProvider;
-use hickory_resolver::proto::TokioTime;
-use hickory_resolver::proto::iocompat::AsyncIoTokioAsStd;
-use std::future::Future;
+use hickory_resolver::net::runtime::{
+    RuntimeProvider, TokioHandle, TokioTime, iocompat::AsyncIoTokioAsStd,
+};
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::{future::Future, time::Duration};
 use tokio::net::{TcpStream, UdpSocket};
 
 #[derive(Clone)]
@@ -36,10 +36,18 @@ impl RuntimeProvider for IfaceProvider {
     fn connect_tcp(
         &self,
         server_addr: SocketAddr,
+        _bind_addr: Option<SocketAddr>,
+        timeout: Option<Duration>,
     ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Tcp>>>> {
         let iface = self.interface_name.clone();
         Box::pin(async move {
-            let tcp = Egress::new(iface.as_str()).tcp_stream(server_addr).await?;
+            let tcp = if let Some(timeout) = timeout {
+                tokio::time::timeout(timeout, Egress::new(iface.as_str()).tcp_stream(server_addr))
+                    .await
+                    .map_err(|_| io_err("timeout"))??
+            } else {
+                Egress::new(iface.as_str()).tcp_stream(server_addr).await?
+            };
             Ok(AsyncIoTokioAsStd(tcp))
         })
     }
@@ -94,9 +102,17 @@ impl RuntimeProvider for PlainProvider {
     fn connect_tcp(
         &self,
         server_addr: SocketAddr,
+        _bind_addr: Option<SocketAddr>,
+        timeout: Option<Duration>,
     ) -> Pin<Box<dyn Send + Future<Output = std::io::Result<Self::Tcp>>>> {
         Box::pin(async move {
-            let tcp = TcpStream::connect(server_addr).await?;
+            let tcp = if let Some(timeout) = timeout {
+                tokio::time::timeout(timeout, TcpStream::connect(server_addr))
+                    .await
+                    .map_err(|_| io_err("timeout"))??
+            } else {
+                TcpStream::connect(server_addr).await?
+            };
             Ok(AsyncIoTokioAsStd(tcp))
         })
     }

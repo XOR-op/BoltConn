@@ -7,11 +7,10 @@ use crate::network::dns::{AuxiliaryResolver, NameServerConfigEnum, default_resol
 use crate::proxy::error::TransportError;
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
-use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
-use hickory_resolver::AsyncResolver;
+use hickory_proto::rr::{RData, Record, RecordType};
+use hickory_resolver::Resolver;
 use hickory_resolver::config::*;
-use hickory_resolver::error::ResolveErrorKind;
-use hickory_resolver::name_server::{GenericConnector, RuntimeProvider};
+use hickory_resolver::net::{NetError, runtime::RuntimeProvider};
 use std::collections::HashMap;
 use std::io;
 use std::net::IpAddr;
@@ -23,7 +22,7 @@ macro_rules! impl_genuine_lookup {
         async fn $func_name<R: RuntimeProvider>(
             name: &str,
             domain_name: &str,
-            resolver: &AsyncResolver<GenericConnector<R>>,
+            resolver: &Resolver<R>,
         ) -> Result<Option<IpAddr>, TransportError> {
             const TIMEOUT_SEC: u64 = 5;
             if let Ok(r) = tokio::time::timeout(
@@ -33,9 +32,21 @@ macro_rules! impl_genuine_lookup {
             .await
             {
                 return match r {
-                    Ok(result) => Ok(result.iter().next().map(|i| i.0.into())),
-                    Err(e) => match e.kind().clone() {
-                        ResolveErrorKind::Io(err) => Err(TransportError::Io(err)),
+                    Ok(result) => {
+                        Ok(result
+                            .answers()
+                            .iter()
+                            .find_map(|record| match record.data {
+                                RData::A(address) => Some(IpAddr::V4(address.0)),
+                                RData::AAAA(address) => Some(IpAddr::V6(address.0)),
+                                _ => None,
+                            }))
+                    }
+                    Err(e) => match e {
+                        NetError::Io(err) => Err(TransportError::Io(io::Error::new(
+                            err.kind(),
+                            err.to_string(),
+                        ))),
                         _ => Ok(None),
                     },
                 };
@@ -86,7 +97,7 @@ pub struct GenericDns<P: RuntimeProvider> {
     preference: DnsPreference,
     host_resolver: ArcSwap<HostsResolver>,
     ns_policy: ArcSwap<NameserverPolicies>,
-    resolvers: ArcSwap<Vec<AuxiliaryResolver<AsyncResolver<GenericConnector<P>>>>>,
+    resolvers: ArcSwap<Vec<AuxiliaryResolver<Resolver<P>>>>,
 }
 
 pub type Dns = GenericDns<IfaceProvider>;
@@ -130,17 +141,18 @@ impl Dns {
     fn build_resolvers(
         iface_name: &str,
         configs: Vec<NameServerConfigEnum>,
-    ) -> Vec<AuxiliaryResolver<AsyncResolver<GenericConnector<IfaceProvider>>>> {
+    ) -> Vec<AuxiliaryResolver<Resolver<IfaceProvider>>> {
         let mut resolvers = Vec::new();
         for config in configs.into_iter() {
             let resolver = match config {
                 NameServerConfigEnum::Normal(config) => {
                     let cfg = ResolverConfig::from_parts(None, vec![], config);
-                    AuxiliaryResolver::new_normal(AsyncResolver::new(
-                        cfg,
-                        default_resolver_opt(),
-                        GenericConnector::new(IfaceProvider::new(iface_name)),
-                    ))
+                    AuxiliaryResolver::new_normal(
+                        Resolver::builder_with_config(cfg, IfaceProvider::new(iface_name))
+                            .with_options(default_resolver_opt())
+                            .build()
+                            .expect("rustls miscompiled"),
+                    )
                 }
                 NameServerConfigEnum::Dhcp(dhcp) => AuxiliaryResolver::new_dhcp(&dhcp),
             };
@@ -151,11 +163,7 @@ impl Dns {
 }
 
 impl<P: RuntimeProvider> GenericDns<P> {
-    pub fn new_with_resolver(
-        name: &str,
-        resolver: AsyncResolver<GenericConnector<P>>,
-        preference: DnsPreference,
-    ) -> Self {
+    pub fn new_with_resolver(name: &str, resolver: Resolver<P>, preference: DnsPreference) -> Self {
         Self {
             name: name.to_string(),
             table: DnsTable::new(),
@@ -314,41 +322,41 @@ impl<P: RuntimeProvider> GenericDns<P> {
         // https://stackoverflow.com/questions/55092830/how-to-perform-dns-lookup-with-multiple-questions
         // There should be no >1 questions in on query
         let err = Err(io::Error::new(io::ErrorKind::InvalidData, "fail to answer"));
-        let req = Message::from_vec(pkt)?;
-        if req.queries().is_empty() {
+        let req = Message::from_vec(pkt)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if req.queries.is_empty() {
             return err;
         }
-        let q = &req.queries()[0];
+        let q = &req.queries[0];
         // validate
         let domain = q.name().to_string();
 
-        let mut resp = Message::new();
-        resp.set_id(req.id())
-            .set_message_type(MessageType::Response)
-            .set_op_code(req.op_code())
-            .set_response_code(ResponseCode::NoError)
-            .set_recursion_desired(req.recursion_desired())
-            .set_recursion_available(req.recursion_desired()) // not a typo
-            .set_checking_disabled(req.checking_disabled())
-            .add_query(q.clone());
+        let mut resp = Message::new(req.id, MessageType::Response, req.op_code);
+        resp.metadata.response_code = ResponseCode::NoError;
+        resp.metadata.recursion_desired = req.recursion_desired;
+        resp.metadata.recursion_available = req.recursion_desired; // not a typo
+        resp.metadata.checking_disabled = req.checking_disabled;
+        resp.add_query(q.clone());
         match q.query_type() {
             RecordType::A => {
                 let fake_ip = match self.domain_to_fake_ip(&domain) {
                     IpAddr::V4(addr) => addr,
                     IpAddr::V6(_) => return err,
                 };
-                let mut ans = Record::new();
-                ans.set_name(domain.parse()?)
-                    .set_rr_type(RecordType::A)
-                    .set_dns_class(DNSClass::IN)
-                    .set_ttl(60)
-                    .set_data(Some(RData::A(hickory_proto::rr::rdata::A(fake_ip))));
+                let ans = Record::from_rdata(
+                    q.name().clone(),
+                    60,
+                    RData::A(hickory_proto::rr::rdata::A(fake_ip)),
+                );
                 resp.add_answer(ans);
-                Ok(resp.to_vec()?)
+                resp.to_vec()
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
             }
             // Fake DNS only synthesizes A records. Return NODATA for every other valid
             // query type so clients do not mistake an unsupported type for a dead resolver.
-            _ => Ok(resp.to_vec()?),
+            _ => resp
+                .to_vec()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
         }
     }
 }
@@ -359,7 +367,7 @@ impl_genuine_lookup!(genuine_lookup_one_v6, ipv6_lookup);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hickory_proto::op::Query;
+    use hickory_proto::op::{OpCode, Query};
     use hickory_proto::rr::Name;
 
     #[test]
@@ -372,24 +380,21 @@ mod tests {
             NameserverPolicies::empty(),
             Vec::new(),
         );
-        let mut request = Message::new();
-        request
-            .set_id(0x1234)
-            .set_message_type(MessageType::Query)
-            .add_query(Query::query(
-                Name::from_ascii("_dns.resolver.arpa.").unwrap(),
-                RecordType::SVCB,
-            ));
+        let mut request = Message::new(0x1234, MessageType::Query, OpCode::Query);
+        request.add_query(Query::query(
+            Name::from_ascii("_dns.resolver.arpa.").unwrap(),
+            RecordType::SVCB,
+        ));
 
         let response = dns
             .respond_to_query(&request.to_vec().unwrap())
             .expect("SVCB queries should receive an empty DNS response");
         let response = Message::from_vec(&response).unwrap();
 
-        assert_eq!(response.id(), request.id());
-        assert_eq!(response.message_type(), MessageType::Response);
-        assert_eq!(response.response_code(), ResponseCode::NoError);
-        assert_eq!(response.queries(), request.queries());
-        assert!(response.answers().is_empty());
+        assert_eq!(response.id, request.id);
+        assert_eq!(response.message_type, MessageType::Response);
+        assert_eq!(response.response_code, ResponseCode::NoError);
+        assert_eq!(response.queries, request.queries);
+        assert!(response.answers.is_empty());
     }
 }
