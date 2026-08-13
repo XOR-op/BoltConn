@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 
-use super::SessionManager;
+use super::MappingSessionManager;
 
 pub struct MixedInbound {
     sock_addr: SocketAddr,
@@ -15,7 +15,7 @@ pub struct MixedInbound {
     http_mgr: Arc<InboundManager>,
     socks_mgr: Arc<InboundManager>,
     dispatcher: Arc<Dispatcher>,
-    session_mgr: Arc<SessionManager>,
+    session_mgr: Arc<MappingSessionManager>,
     dns: Arc<Dns>,
 }
 
@@ -25,7 +25,7 @@ impl MixedInbound {
         http_mgr: InboundManager,
         socks_mgr: InboundManager,
         dispatcher: Arc<Dispatcher>,
-        session_mgr: Arc<SessionManager>,
+        session_mgr: Arc<MappingSessionManager>,
         dns: Arc<Dns>,
     ) -> io::Result<Self> {
         let server = TcpListener::bind(sock_addr).await?;
@@ -77,7 +77,7 @@ impl MixedInbound {
         socks_mgr: Arc<InboundManager>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
-        session_mgr: Arc<SessionManager>,
+        session_mgr: Arc<MappingSessionManager>,
         dns: Arc<Dns>,
     ) -> Result<(), TransportError> {
         let mut first_byte = [0u8; 1];

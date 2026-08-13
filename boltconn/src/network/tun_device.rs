@@ -2,7 +2,7 @@ use crate::common::MAX_PKT_SIZE;
 use crate::network;
 use crate::network::TunInstance;
 use crate::network::packet::icmp::Icmpv4Pkt;
-use crate::proxy::SessionManager;
+use crate::proxy::MappingSessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use bytes::{BufMut, Bytes, BytesMut};
 use ipnet::Ipv4Net;
@@ -24,7 +24,7 @@ pub struct TunDevice {
     gw_name: String,
     // (addr, mask)
     addr: Option<Ipv4Net>,
-    session_mgr: Arc<SessionManager>,
+    session_mgr: Arc<MappingSessionManager>,
     udp_tx: flume::Sender<Bytes>,
     udp_rx: flume::Receiver<Bytes>,
     ipv6_enabled: bool,
@@ -33,7 +33,7 @@ pub struct TunDevice {
 
 impl TunDevice {
     pub fn open(
-        session_mgr: Arc<SessionManager>,
+        session_mgr: Arc<MappingSessionManager>,
         outbound_iface: &str,
         udp_tx: flume::Sender<Bytes>,
         udp_rx: flume::Receiver<Bytes>,

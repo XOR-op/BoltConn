@@ -6,7 +6,7 @@ use crate::network::configure::TunConfigure;
 use crate::network::dns::Dns;
 use crate::platform::process::ParentProcess;
 use crate::proxy::{
-    ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, SessionManager,
+    ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, MappingSessionManager,
     latency_test,
 };
 use boltapi::{
@@ -22,7 +22,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct Controller {
-    manager: Arc<SessionManager>,
+    manager: Arc<MappingSessionManager>,
     dns: Arc<Dns>,
     stat_center: Arc<ContextManager>,
     http_capturer: Option<Arc<HttpCapturer>>,
@@ -38,7 +38,7 @@ pub struct Controller {
 impl Controller {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        manager: Arc<SessionManager>,
+        manager: Arc<MappingSessionManager>,
         dns: Arc<Dns>,
         stat_center: Arc<ContextManager>,
         http_capturer: Option<Arc<HttpCapturer>>,

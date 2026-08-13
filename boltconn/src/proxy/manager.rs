@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
-pub struct SessionManager {
+/// Mapping port for SOCKS5 UDP association and TUN.
+pub struct MappingSessionManager {
     // (is_ipv6, port) -> SessionCtl
     tcp_records: Arc<DashMap<(bool, u16), TcpSessionCtl>>,
     udp_records: Arc<DashMap<(bool, u16), UdpSessionCtl>>,
@@ -18,7 +19,7 @@ pub struct SessionManager {
     udp_stale_time: Duration,
 }
 
-impl SessionManager {
+impl MappingSessionManager {
     pub fn new() -> Self {
         Self {
             tcp_records: Default::default(),

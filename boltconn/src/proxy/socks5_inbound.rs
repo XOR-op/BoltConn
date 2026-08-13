@@ -13,14 +13,14 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
-use super::{SessionManager, SocksUdpInbound};
+use super::{MappingSessionManager, SocksUdpInbound};
 
 pub struct Socks5Inbound {
     sock_addr: SocketAddr,
     server: TcpListener,
     inbound_mgr: Arc<InboundManager>,
     dispatcher: Arc<Dispatcher>,
-    session_mgr: Arc<SessionManager>,
+    session_mgr: Arc<MappingSessionManager>,
     dns: Arc<Dns>,
 }
 
@@ -29,7 +29,7 @@ impl Socks5Inbound {
         sock_addr: SocketAddr,
         inbound_mgr: InboundManager,
         dispatcher: Arc<Dispatcher>,
-        session_mgr: Arc<SessionManager>,
+        session_mgr: Arc<MappingSessionManager>,
         dns: Arc<Dns>,
     ) -> io::Result<Self> {
         let server = TcpListener::bind(sock_addr).await?;
@@ -74,7 +74,7 @@ impl Socks5Inbound {
         inbound_mgr: Arc<InboundManager>,
         src_addr: SocketAddr,
         dispatcher: Arc<Dispatcher>,
-        session_mgr: Arc<SessionManager>,
+        session_mgr: Arc<MappingSessionManager>,
         dns: Arc<Dns>,
     ) -> Result<(), TransportError> {
         let inbound_extra = Self::process_auth(&mut socks_stream, &inbound_mgr).await?;

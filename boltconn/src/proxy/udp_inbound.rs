@@ -5,7 +5,7 @@ use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::error::TransportError;
-use crate::proxy::{Dispatcher, NetworkAddr, SessionManager};
+use crate::proxy::{Dispatcher, NetworkAddr, MappingSessionManager};
 use bytes::Bytes;
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, UdpPacket};
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ struct UdpSession {
 struct UdpInboundInner {
     dispatcher: Arc<Dispatcher>,
     mapping: HashMap<SocketAddr, UdpSession>,
-    session_mgr: Arc<SessionManager>,
+    session_mgr: Arc<MappingSessionManager>,
     dns: Arc<Dns>,
 }
 
@@ -157,7 +157,7 @@ impl TunUdpInbound {
         pkt_chan: flume::Receiver<Bytes>,
         tun_tx: flume::Sender<Bytes>,
         dispatcher: Arc<Dispatcher>,
-        session_mgr: Arc<SessionManager>,
+        session_mgr: Arc<MappingSessionManager>,
         dns: Arc<Dns>,
         hijack_ctrl: Arc<DnsHijackController>,
     ) -> Self {
@@ -274,7 +274,7 @@ impl SocksUdpInbound {
         src_addr: SocketAddr,
         inbound_extra: InboundExtra,
         dispatcher: Arc<Dispatcher>,
-        session_mgr: Arc<SessionManager>,
+        session_mgr: Arc<MappingSessionManager>,
         dns: Arc<Dns>,
         indicator: Arc<AtomicBool>,
     ) -> Self {

@@ -1,7 +1,7 @@
 use crate::Dns;
 use crate::dispatch::InboundInfo;
 use crate::proxy::dispatcher::DispatchError;
-use crate::proxy::manager::SessionManager;
+use crate::proxy::manager::MappingSessionManager;
 use crate::proxy::{Dispatcher, NetworkAddr};
 use std::io::Result;
 use std::net::SocketAddr;
@@ -11,7 +11,7 @@ use tokio::net::TcpListener;
 
 pub struct TunTcpInbound {
     nat_addr: SocketAddr,
-    session_mgr: Arc<SessionManager>,
+    session_mgr: Arc<MappingSessionManager>,
     dispatcher: Arc<Dispatcher>,
     dns: Arc<Dns>,
 }
@@ -19,7 +19,7 @@ pub struct TunTcpInbound {
 impl TunTcpInbound {
     pub fn new(
         addr: SocketAddr,
-        session_mgr: Arc<SessionManager>,
+        session_mgr: Arc<MappingSessionManager>,
         dispatcher: Arc<Dispatcher>,
         dns: Arc<Dns>,
     ) -> Self {

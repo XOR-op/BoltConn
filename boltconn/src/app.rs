@@ -20,7 +20,7 @@ use crate::network::dns::{
 use crate::network::tun_device::TunDevice;
 use crate::platform::get_default_v4_route;
 use crate::proxy::{
-    ContextManager, Dispatcher, HttpCapturer, HttpInbound, MixedInbound, SessionManager,
+    ContextManager, Dispatcher, HttpCapturer, HttpInbound, MixedInbound, MappingSessionManager,
     Socks5Inbound, TunTcpInbound, TunUdpInbound,
 };
 use crate::{external, platform};
@@ -99,7 +99,7 @@ impl App {
         let bootstrap =
             new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice());
         let dns = initialize_dns(bootstrap, &config.dns, outbound_iface.as_str()).await?;
-        let manager = Arc::new(SessionManager::new());
+        let manager = Arc::new(MappingSessionManager::new());
         // initialize instrumentation
         let msg_bus = Arc::new(MessageBus::new());
 
@@ -593,7 +593,7 @@ fn start_instrument_services(bus: Arc<MessageBus>, config: Option<&RawInstrument
 #[allow(clippy::too_many_arguments)]
 async fn start_tun_services(
     nat_addr: SocketAddr,
-    manager: Arc<SessionManager>,
+    manager: Arc<MappingSessionManager>,
     dispatcher: Arc<Dispatcher>,
     dns: Arc<Dns>,
     tun: TunDevice,
@@ -662,7 +662,7 @@ async fn start_tun_services(
 fn start_inbound_services(
     config: &RawInboundConfig,
     dispatcher: Arc<Dispatcher>,
-    session_mgr: Arc<SessionManager>,
+    session_mgr: Arc<MappingSessionManager>,
     dns: Arc<Dns>,
 ) {
     for (sock_addr, http_auth, socks_auth) in
