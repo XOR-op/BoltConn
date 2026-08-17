@@ -6,8 +6,8 @@ use crate::network::configure::TunConfigure;
 use crate::network::dns::Dns;
 use crate::platform::process::ParentProcess;
 use crate::proxy::{
-    ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, MappingSessionManager,
-    latency_test,
+    ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData,
+    MappingSessionManager, latency_test,
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,

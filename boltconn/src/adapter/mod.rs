@@ -4,10 +4,9 @@ use std::fmt::{Display, Formatter};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::select;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 
@@ -218,6 +217,166 @@ fn empty_handle() -> JoinHandle<Result<(), TransportError>> {
     tokio::spawn(async move { Err(TransportError::Internal("Invalid spawn")) })
 }
 
+const TCP_HALF_CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Debug)]
+struct TcpRelayActivity(Arc<TcpRelayActivityInner>);
+
+#[derive(Debug)]
+struct TcpRelayActivityInner {
+    // Instant itself is not atomic, so activity is stored as a millisecond offset from one
+    // monotonic epoch shared by both relay directions.
+    epoch: tokio::time::Instant,
+    last_activity_millis: AtomicU64,
+}
+
+impl TcpRelayActivity {
+    fn new() -> Self {
+        Self(Arc::new(TcpRelayActivityInner {
+            epoch: tokio::time::Instant::now(),
+            last_activity_millis: AtomicU64::new(0),
+        }))
+    }
+
+    fn touch(&self) {
+        // Multiple relay directions may report progress concurrently. fetch_max prevents an
+        // older observation from replacing a newer timestamp.
+        self.0
+            .last_activity_millis
+            .fetch_max(self.elapsed_millis(), Ordering::Relaxed);
+    }
+
+    fn idle_duration(&self) -> Duration {
+        let last_activity = self.0.last_activity_millis.load(Ordering::Relaxed);
+        Duration::from_millis(self.elapsed_millis().saturating_sub(last_activity))
+    }
+
+    fn elapsed_millis(&self) -> u64 {
+        u64::try_from(self.0.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
+async fn relay_reader_to_channel<R, F>(
+    mut reader: ReadHalf<R>,
+    tx: mpsc::Sender<Bytes>,
+    stop_when_receiver_closes: bool,
+    activity: TcpRelayActivity,
+    mut on_chunk: F,
+) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    F: FnMut(&[u8]),
+{
+    loop {
+        let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
+        // Outbound streams do not need another read after their consumer has gone away. The
+        // inbound adapter disables this shortcut so a closed relay remains an explicit error.
+        let read_size = tokio::select! {
+            _ = tx.closed(), if stop_when_receiver_closes => return Ok(()),
+            result = read_to_bytes_mut(&mut buf, &mut reader) => result?,
+        };
+        if read_size == 0 {
+            return Ok(());
+        }
+
+        on_chunk(buf.as_ref());
+        tx.send(buf.freeze())
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "TCP relay channel closed"))?;
+        activity.touch();
+    }
+}
+
+async fn relay_channel_to_writer<W, F>(
+    mut rx: mpsc::Receiver<Bytes>,
+    mut writer: WriteHalf<W>,
+    flush_each_chunk: bool,
+    activity: TcpRelayActivity,
+    mut on_chunk: F,
+) -> io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+    F: FnMut(&[u8]),
+{
+    while let Some(buf) = rx.recv().await {
+        on_chunk(buf.as_ref());
+        writer.write_all(buf.as_ref()).await?;
+        activity.touch();
+        if flush_each_chunk {
+            // Flushing is best-effort, matching the original established TCP relay. A later
+            // write still reports a meaningful connection failure if the stream is unusable.
+            let _ = writer.flush().await;
+        }
+    }
+    Ok(())
+}
+
+async fn drain_tcp_peer<F>(
+    label: &str,
+    completed_direction: &str,
+    peer: F,
+    activity: &TcpRelayActivity,
+) -> io::Result<()>
+where
+    F: Future<Output = io::Result<()>>,
+{
+    tokio::pin!(peer);
+    // Activity before the half-close must not shorten the drain period.
+    activity.touch();
+    loop {
+        let remaining = TCP_HALF_CLOSE_TIMEOUT.saturating_sub(activity.idle_duration());
+        if remaining.is_zero() {
+            tracing::debug!(
+                "{} {} direction closed; peer was inactive for {:?}",
+                label,
+                completed_direction,
+                TCP_HALF_CLOSE_TIMEOUT
+            );
+            return Ok(());
+        }
+
+        tokio::select! {
+            result = &mut peer => return result,
+            _ = tokio::time::sleep(remaining) => {}
+        }
+    }
+}
+
+async fn relay_tcp_bidirectional<U, D>(
+    label: &str,
+    upload: U,
+    download: D,
+    activity: TcpRelayActivity,
+) -> io::Result<()>
+where
+    U: Future<Output = io::Result<()>>,
+    D: Future<Output = io::Result<()>>,
+{
+    tokio::pin!(upload, download);
+    // An error stops both directions immediately. EOF is a TCP half-close, so the peer direction
+    // may continue while it makes progress and stops after a bounded period of inactivity.
+    tokio::select! {
+        result = &mut upload => match result {
+            Ok(()) => drain_tcp_peer(
+                label,
+                "upload",
+                &mut download,
+                &activity,
+            ).await,
+            Err(error) => Err(error),
+        },
+        result = &mut download => match result {
+            Ok(()) => drain_tcp_peer(
+                label,
+                "download",
+                &mut upload,
+                &activity,
+            ).await,
+            Err(error) => Err(error),
+        },
+    }
+}
+
 #[tracing::instrument(skip_all)]
 async fn established_tcp<T>(
     name: String,
@@ -227,49 +386,17 @@ async fn established_tcp<T>(
 ) where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
-    let (mut out_read, mut out_write) = tokio::io::split(outbound);
-    let Connector { tx, mut rx } = inbound;
-    // recv from inbound and send to outbound
-    let abort_handle2 = abort_handle.clone();
-    let name2 = name.clone();
-    let _guard = DuplexCloseGuard::new(
-        tokio::spawn(async move {
-            while let Some(buf) = rx.recv().await {
-                let res = out_write.write_all(buf.as_ref()).await;
-                if let Err(err) = res {
-                    tracing::debug!("[{}] write to outbound failed: {}", name2, err);
-                    abort_handle2.cancel();
-                    break;
-                }
-                let _ = out_write.flush().await;
-            }
-        }),
-        abort_handle.clone(),
-    );
-    // recv from outbound and send to inbound
-    loop {
-        let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
-
-        select! {
-            _ = tx.closed() => break,
-            data = read_to_bytes_mut(&mut buf, &mut out_read) => match data {
-                Ok(0) => {
-                    break;
-                }
-                Ok(_) => {
-                    if tx.send(buf.freeze()).await.is_err() {
-                        abort_handle.cancel();
-                        break;
-                    }
-                }
-                Err(err) => {
-                    tracing::debug!("[{}] outbound read error: {}", name, err);
-                    abort_handle.cancel();
-                    break;
-                }
-            }
-        }
+    let (out_read, out_write) = tokio::io::split(outbound);
+    let Connector { tx, rx } = inbound;
+    let activity = TcpRelayActivity::new();
+    let upload = relay_channel_to_writer(rx, out_write, true, activity.clone(), |_| {});
+    let download = relay_reader_to_channel(out_read, tx, true, activity.clone(), |_| {});
+    if let Err(error) =
+        relay_tcp_bidirectional(&format!("[{name}]"), upload, download, activity).await
+    {
+        tracing::debug!("[{}] TCP relay failed: {}", name, error);
     }
+    abort_handle.cancel();
 }
 
 #[tracing::instrument(skip_all)]
@@ -464,4 +591,69 @@ pub(super) async fn connect_timeout<F: Future<Output = Result<(), TransportError
             tracing::debug!("{} timeout after 10s", component_str);
             Err(TransportError::Timeout("connect"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn established_tcp_drains_response_after_upload_half_close() {
+        let (established_connector, peer_connector) = Connector::new_pair(4);
+        let Connector {
+            tx: peer_tx,
+            rx: mut peer_rx,
+        } = peer_connector;
+        let (mut remote, outbound) = tokio::io::duplex(1024);
+        let task = tokio::spawn(established_tcp(
+            "test".to_string(),
+            established_connector,
+            outbound,
+            ConnAbortHandle::placeholder(),
+        ));
+
+        peer_tx.send(Bytes::from_static(b"request")).await.unwrap();
+        let mut request = [0; 7];
+        remote.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"request");
+
+        // Closing the request direction must not discard a response that is still in flight.
+        drop(peer_tx);
+        remote.write_all(b"response").await.unwrap();
+        assert_eq!(
+            peer_rx.recv().await.unwrap(),
+            Bytes::from_static(b"response")
+        );
+
+        remote.shutdown().await.unwrap();
+        drop(remote);
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("established TCP relay did not stop")
+            .expect("established TCP relay panicked");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drain_timeout_restarts_after_activity() {
+        let activity = TcpRelayActivity::new();
+        let task_activity = activity.clone();
+        let task = tokio::spawn(async move {
+            drain_tcp_peer("test", "upload", std::future::pending(), &task_activity).await
+        });
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(29)).await;
+        assert!(!task.is_finished());
+        activity.touch();
+
+        // The original deadline passes, but recent activity keeps the peer alive.
+        tokio::time::advance(Duration::from_secs(29)).await;
+        assert!(!task.is_finished());
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        task.await
+            .expect("drain task panicked")
+            .expect("drain task returned an error");
+    }
 }

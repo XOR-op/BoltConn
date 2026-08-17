@@ -20,7 +20,7 @@ use crate::network::dns::{
 use crate::network::tun_device::TunDevice;
 use crate::platform::get_default_v4_route;
 use crate::proxy::{
-    ContextManager, Dispatcher, HttpCapturer, HttpInbound, MixedInbound, MappingSessionManager,
+    ContextManager, Dispatcher, HttpCapturer, HttpInbound, MappingSessionManager, MixedInbound,
     Socks5Inbound, TunTcpInbound, TunUdpInbound,
 };
 use crate::{external, platform};

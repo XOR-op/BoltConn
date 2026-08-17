@@ -168,4 +168,5 @@ procfs = "0.16.0"
 mimalloc = "0.1.43"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tracing-test = "0.2.4"

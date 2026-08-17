@@ -1,4 +1,7 @@
-use crate::adapter::{Connector, DuplexCloseGuard, TcpIndicatorGuard, TcpStatus};
+use crate::adapter::{
+    Connector, TcpIndicatorGuard, TcpRelayActivity, TcpStatus, relay_channel_to_writer,
+    relay_reader_to_channel, relay_tcp_bidirectional,
+};
 use crate::common::{
     MAX_PKT_SIZE, StreamOutboundTrait, parse_http_host, parse_tls_sni, read_to_bytes_mut,
 };
@@ -6,12 +9,13 @@ use crate::proxy::error::TransportError;
 use crate::proxy::{
     ConnAbortHandle, ConnContext, NetworkAddr, SessionProtocol, check_tcp_protocol,
 };
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
-use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{ReadHalf, WriteHalf};
+use tokio::sync::mpsc;
 
 pub struct TcpAdapter<S> {
     stat: TcpStatus,
@@ -23,8 +27,6 @@ pub struct TcpAdapter<S> {
 }
 
 impl<S: StreamOutboundTrait> TcpAdapter<S> {
-    const BUF_SIZE: usize = 65536;
-
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         src_addr: SocketAddr,
@@ -72,91 +74,193 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         }
     }
 
+    async fn upload(
+        in_read: ReadHalf<S>,
+        tx: mpsc::Sender<Bytes>,
+        first_packet_buffer: Option<BytesMut>,
+        mut need_parse_first_packet: bool,
+        activity: TcpRelayActivity,
+        info: Arc<ConnContext>,
+        _indicator_guard: TcpIndicatorGuard,
+    ) -> io::Result<()> {
+        if let Some(first_packet) = first_packet_buffer {
+            info.more_upload(first_packet.len());
+            tx.send(first_packet.freeze())
+                .await
+                .map_err(|_| Self::channel_closed_error(&info, "send first packet to outbound"))?;
+            activity.touch();
+        }
+
+        let callback_info = info.clone();
+        relay_reader_to_channel(in_read, tx, false, activity, move |buf| {
+            if need_parse_first_packet {
+                need_parse_first_packet = false;
+                callback_info.update_proto(buf);
+            }
+            callback_info.more_upload(buf.len());
+        })
+        .await
+        .map_err(|error| Self::io_error(&info, "forward client data to outbound", error))
+    }
+
+    async fn download(
+        in_write: WriteHalf<S>,
+        rx: mpsc::Receiver<Bytes>,
+        activity: TcpRelayActivity,
+        info: Arc<ConnContext>,
+        _indicator_guard: TcpIndicatorGuard,
+    ) -> io::Result<()> {
+        let callback_info = info.clone();
+        relay_channel_to_writer(rx, in_write, false, activity, move |buf| {
+            callback_info.more_download(buf.len());
+        })
+        .await
+        .map_err(|error| Self::io_error(&info, "forward outbound data to client", error))
+    }
+
+    fn channel_closed_error(info: &ConnContext, operation: &'static str) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!(
+                "TcpAdapter #{}({}) failed to {}: channel closed",
+                info.id, info.conn_info.dst, operation
+            ),
+        )
+    }
+
+    fn io_error(info: &ConnContext, operation: &'static str, error: io::Error) -> io::Error {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "TcpAdapter #{}({}) failed to {}: {}",
+                info.id, info.conn_info.dst, operation, error
+            ),
+        )
+    }
+
     pub async fn run(self, info: Arc<ConnContext>) -> io::Result<()> {
-        let mut need_parse_first_packet = self.first_packet_buffer.is_none();
-        let Connector { tx, mut rx } = self.connector;
-        let dest = info.conn_info.dst.clone();
-        let abort_handle = self.abort_handle.clone();
-        let conn_id = info.id;
-        let mut in_read = self.in_read;
-        let mut in_write = self.in_write;
+        let need_parse_first_packet = self.first_packet_buffer.is_none();
+        let Connector { tx, rx } = self.connector;
+        let activity = TcpRelayActivity::new();
 
-        let _duplex_guard = {
-            let ingoing_indicator = self.stat.available.clone();
-            let dest2 = dest.clone();
-            let info = info.clone();
-            DuplexCloseGuard::new(
-                tokio::spawn(async move {
-                    // recv from outbound and send to inbound
-                    let _guard = TcpIndicatorGuard {
-                        indicator: ingoing_indicator,
-                        info: info.clone(),
-                    };
-                    while let Some(buf) = rx.recv().await {
-                        info.more_download(buf.len());
-                        if let Err(err) = in_write.write_all(buf.as_ref()).await {
-                            tracing::warn!(
-                                "TcpAdapter #{}({}) write to client failed: {}",
-                                conn_id,
-                                dest2,
-                                err
-                            );
-                            self.abort_handle.cancel();
-                            break;
-                        }
-                    }
-                }),
-                abort_handle.clone(),
-            )
-        };
-
-        // recv from inbound and send to outbound
-        let outgoing_indicator = self.stat.available.clone();
-        let _guard = TcpIndicatorGuard {
-            indicator: outgoing_indicator,
+        // Construct both guards before polling either future. This ensures both sides update the
+        // connection status even when one branch completes before the other is first polled.
+        let upload_guard = TcpIndicatorGuard {
+            indicator: self.stat.available.clone(),
             info: info.clone(),
         };
-        if let Some(first_packet) = self.first_packet_buffer {
-            info.more_upload(first_packet.len());
-            if tx.send(first_packet.freeze()).await.is_err() {
-                tracing::warn!("TcpAdapter #{}({}) tx send err", conn_id, dest);
-                abort_handle.cancel();
-                return Ok(());
-            }
-        }
+        let download_guard = TcpIndicatorGuard {
+            indicator: self.stat.available.clone(),
+            info: info.clone(),
+        };
 
-        loop {
-            let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
-            let read_size = match read_to_bytes_mut(&mut buf, &mut in_read).await {
-                Ok(0) => {
-                    // CLOSE_WAIT
-                    break;
-                }
-                Ok(size) => {
-                    if need_parse_first_packet {
-                        need_parse_first_packet = false;
-                        info.update_proto(buf.as_ref());
-                    }
-                    size
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "TcpAdapter #{}({}) read from client error: {}",
-                        conn_id,
-                        dest,
-                        err
-                    );
-                    abort_handle.cancel();
-                    break;
-                }
-            };
-            info.more_upload(read_size);
-            if tx.send(buf.freeze()).await.is_err() {
-                tracing::warn!("TcpAdapter #{}({}) tx send err", conn_id, dest);
-                abort_handle.cancel();
-                break;
-            }
-        }
-        Ok(())
+        let upload = Self::upload(
+            self.in_read,
+            tx,
+            self.first_packet_buffer,
+            need_parse_first_packet,
+            activity.clone(),
+            info.clone(),
+            upload_guard,
+        );
+        let download = Self::download(
+            self.in_write,
+            rx,
+            activity.clone(),
+            info.clone(),
+            download_guard,
+        );
+
+        // A clean close is a TCP half-close: keep forwarding the other direction while it remains
+        // active. An I/O failure terminates immediately so sibling tasks can be cancelled.
+        let label = format!("TcpAdapter #{}({})", info.id, info.conn_info.dst);
+        let result = relay_tcp_bidirectional(&label, upload, download, activity).await;
+
+        self.abort_handle.cancel();
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::OutboundType;
+    use crate::dispatch::{ConnInfo, InboundInfo};
+    use crate::platform::process::NetworkType;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+
+    impl StreamOutboundTrait for DuplexStream {}
+
+    fn test_context(abort_handle: ConnAbortHandle) -> Arc<ConnContext> {
+        let src = "127.0.0.1:12345".parse().unwrap();
+        let dst = "127.0.0.1:443".parse().unwrap();
+        Arc::new(ConnContext::new(
+            1,
+            ConnInfo {
+                src,
+                dst: NetworkAddr::Raw(dst),
+                local_ip: None,
+                inbound: InboundInfo::Tun,
+                resolved_dst: None,
+                connection_type: NetworkType::Tcp,
+                process_info: None,
+            },
+            "DIRECT".to_string(),
+            OutboundType::Direct,
+            None,
+            abort_handle,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(false)),
+        ))
+    }
+
+    #[tokio::test]
+    async fn clean_upload_half_close_keeps_downloading() {
+        let (mut client, adapter_stream) = tokio::io::duplex(1024);
+        let (adapter_connector, outbound_connector) = Connector::new_pair(4);
+        let Connector {
+            tx: outbound_tx,
+            rx: mut outbound_rx,
+        } = outbound_connector;
+        let available = Arc::new(AtomicU8::new(2));
+        let abort_handle = ConnAbortHandle::placeholder();
+        let info = test_context(abort_handle.clone());
+        let adapter = TcpAdapter::new(
+            info.conn_info.src,
+            info.conn_info.dst.clone(),
+            adapter_stream,
+            available.clone(),
+            adapter_connector,
+            abort_handle,
+        );
+        let adapter_task = tokio::spawn(adapter.run(info.clone()));
+
+        client.write_all(b"request").await.unwrap();
+        assert_eq!(
+            outbound_rx.recv().await.unwrap(),
+            Bytes::from_static(b"request")
+        );
+
+        // Closing the upload half must not discard a response that is still in flight.
+        client.shutdown().await.unwrap();
+        outbound_tx
+            .send(Bytes::from_static(b"response"))
+            .await
+            .unwrap();
+        let mut response = [0; 8];
+        client.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"response");
+
+        drop(outbound_tx);
+        tokio::time::timeout(Duration::from_secs(1), adapter_task)
+            .await
+            .expect("adapter did not stop after both directions closed")
+            .expect("adapter task panicked")
+            .expect("adapter returned an error");
+        assert_eq!(available.load(Ordering::Relaxed), 0);
+        assert!(info.done.load(Ordering::Relaxed));
     }
 }

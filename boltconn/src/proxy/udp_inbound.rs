@@ -5,7 +5,7 @@ use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::error::TransportError;
-use crate::proxy::{Dispatcher, NetworkAddr, MappingSessionManager};
+use crate::proxy::{Dispatcher, MappingSessionManager, NetworkAddr};
 use bytes::Bytes;
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, UdpPacket};
 use std::collections::HashMap;
