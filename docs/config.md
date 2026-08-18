@@ -186,8 +186,9 @@ Linux switch. Because Linux policy-routing rules can also inspect fwmarks, custo
 configurations must reserve this value for BoltConn.
 
 On macOS, the switch is installed in the `com.apple/boltconn` PF anchor. Root-owned traffic is
-allowed to bypass it. BoltConn keeps its own PF enable reference and does not replace the system
-ruleset. Windows accepts the setting but implements it as a no-op.
+allowed to bypass it. Apple's `_captiveagent` daemon is also allowed to use the physical interface
+so macOS can detect captive networks. BoltConn keeps its own PF enable reference and does not
+replace the system ruleset. Windows accepts the setting but implements it as a no-op.
 
 Firewall setup is mandatory when the switch is enabled: if no usable backend is available, TUN
 enablement fails and previously applied settings are rolled back. A graceful TUN disable or

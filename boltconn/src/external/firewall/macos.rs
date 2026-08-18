@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 
 const PF_ANCHOR: &str = "com.apple/boltconn";
 const PF_TOKEN_PATH: &str = "/var/run/boltconn-pf.token";
+const CAPTIVE_AGENT_USER: &str = "_captiveagent";
 
 pub struct KillSwitchGuard {
     token: String,
@@ -143,8 +144,14 @@ fn render_pf_rules(tun_name: &str) -> String {
         .copied()
         .collect::<Vec<_>>()
         .join(", ");
+    // macOS binds captive-network probes to the physical Wi-Fi interface. Keep this
+    // exception user-scoped so other desktop applications cannot bypass the TUN.
     format!(
         "table <boltconn_bypass> const {{ {bypass} }}\n\
+         pass out quick on ! {tun_name} inet proto {{ tcp, udp }} \
+             from any to any user = {CAPTIVE_AGENT_USER}\n\
+         pass out quick on ! {tun_name} inet6 proto {{ tcp, udp }} \
+             from any to any user = {CAPTIVE_AGENT_USER}\n\
          block return out quick on ! {tun_name} inet proto {{ tcp, udp }} \
              from any to ! <boltconn_bypass> user != 0\n\
          block return out quick on ! {tun_name} inet proto {{ tcp, udp }} \
@@ -245,13 +252,22 @@ mod tests {
     use super::render_pf_rules;
 
     #[test]
-    fn pf_rules_bypass_lan_and_root_without_accepting_them() {
+    fn pf_rules_bypass_lan_root_and_captive_agent() {
         let rules = render_pf_rules("utun42");
         assert!(rules.contains("10.0.0.0/8"));
         assert!(rules.contains("fe80::/10"));
         assert!(rules.contains("on ! utun42"));
         assert!(rules.contains("to ! <boltconn_bypass> user != 0"));
         assert!(rules.contains("user unknown"));
-        assert!(!rules.contains("pass out"));
+
+        let captive_v4 = "pass out quick on ! utun42 inet proto { tcp, udp } \
+             from any to any user = _captiveagent";
+        let captive_v6 = "pass out quick on ! utun42 inet6 proto { tcp, udp } \
+             from any to any user = _captiveagent";
+        let first_block = rules.find("block return out quick").unwrap();
+        assert!(rules.contains(captive_v4));
+        assert!(rules.contains(captive_v6));
+        assert!(rules.find(captive_v4).unwrap() < first_block);
+        assert!(rules.find(captive_v6).unwrap() < first_block);
     }
 }
