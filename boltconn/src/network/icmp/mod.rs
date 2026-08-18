@@ -30,6 +30,8 @@ impl IcmpProxy {
             e
         })?;
         socket.set_nonblocking(true)?;
+        #[cfg(target_os = "linux")]
+        crate::platform::set_fwmark(socket.as_raw_fd())?;
         #[cfg(not(target_os = "windows"))]
         crate::platform::bind_to_device(socket.as_raw_fd(), outbound_iface)?;
         #[cfg(target_os = "windows")]

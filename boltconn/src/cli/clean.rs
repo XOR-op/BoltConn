@@ -28,6 +28,10 @@ pub(crate) fn clean_route_table() {
     }
 }
 
+pub(crate) fn clean_kill_switch() -> std::io::Result<()> {
+    crate::external::firewall::cleanup_stale_kill_switch()
+}
+
 pub(crate) fn remove_unix_socket<P: AsRef<Path>>(path: P) {
     let _ = std::fs::remove_file(path);
 }

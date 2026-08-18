@@ -75,8 +75,7 @@ impl Controller {
         if status.enabled {
             self.tun_configure.lock().unwrap().enable().is_ok()
         } else {
-            self.tun_configure.lock().unwrap().disable(true);
-            true
+            self.tun_configure.lock().unwrap().disable(true).is_ok()
         }
     }
 

@@ -67,8 +67,17 @@ pub fn ipv6_private_addresses() -> Vec<Ipv6Net> {
 }
 
 pub fn setup_ipv4_routing_table(name: &str) -> io::Result<()> {
+    let mut added = Vec::new();
     for item in ipv4_relay_addresses() {
-        platform::add_route_entry(IpNet::V4(item), name)?;
+        if let Err(error) = platform::add_route_entry(IpNet::V4(item), name) {
+            // Only roll back entries successfully added by this call. This avoids leaving a
+            // partial routing setup while preserving routes that predated BoltConn.
+            for added_item in added.into_iter().rev() {
+                let _ = platform::delete_route_entry(IpNet::V4(added_item));
+            }
+            return Err(error);
+        }
+        added.push(item);
     }
     Ok(())
 }

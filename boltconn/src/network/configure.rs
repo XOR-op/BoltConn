@@ -5,10 +5,10 @@ use ipnet::IpNet;
 use std::io;
 use std::net::Ipv4Addr;
 
+use crate::config::RawFirewallConfig;
 #[cfg(target_os = "linux")]
-use crate::config::RawDockerMasqueradeConfig;
-#[cfg(target_os = "linux")]
-use crate::external::firewall::FirewallGuard;
+use crate::external::firewall::DockerMasqueradeGuard;
+use crate::external::firewall::KillSwitchGuard;
 
 pub struct TunConfigure {
     dns_addr: Ipv4Addr,
@@ -17,10 +17,10 @@ pub struct TunConfigure {
     dns_handle: Option<SystemDnsHandle>,
     routing_table_flag: bool,
     rootless: bool,
+    firewall_config: RawFirewallConfig,
+    kill_switch_guard: Option<KillSwitchGuard>,
     #[cfg(target_os = "linux")]
-    docker_masquerade_config: RawDockerMasqueradeConfig,
-    #[cfg(target_os = "linux")]
-    firewall_guard: Option<FirewallGuard>,
+    docker_masquerade_guard: Option<DockerMasqueradeGuard>,
 }
 
 macro_rules! check_rootless {
@@ -41,7 +41,7 @@ impl TunConfigure {
         device_name: &str,
         outbound_name: &str,
         rootless: bool,
-        #[cfg(target_os = "linux")] docker_masquerade_config: RawDockerMasqueradeConfig,
+        firewall_config: RawFirewallConfig,
     ) -> Self {
         Self {
             dns_addr,
@@ -50,48 +50,71 @@ impl TunConfigure {
             dns_handle: None,
             routing_table_flag: false,
             rootless,
+            firewall_config,
+            kill_switch_guard: None,
             #[cfg(target_os = "linux")]
-            docker_masquerade_config,
-            #[cfg(target_os = "linux")]
-            firewall_guard: None,
+            docker_masquerade_guard: None,
         }
     }
 
     pub fn enable(&mut self) -> io::Result<()> {
         check_rootless!(self, Ok(()));
-        self.enable_dns()?;
+
+        if self.firewall_config.kill_switch && self.kill_switch_guard.is_none() {
+            self.kill_switch_guard = Some(KillSwitchGuard::setup(&self.device_name)?);
+        }
+
+        if let Err(error) = self.enable_dns() {
+            return Err(self.rollback_kill_switch(error));
+        }
         if let Err(e) = self.enable_routing_table() {
             self.disable_dns();
-            return Err(e);
+            return Err(self.rollback_kill_switch(e));
         }
         #[cfg(target_os = "linux")]
         {
-            self.firewall_guard =
-                FirewallGuard::setup(&self.device_name, &self.docker_masquerade_config);
+            if self.docker_masquerade_guard.is_none() {
+                self.docker_masquerade_guard = DockerMasqueradeGuard::setup(
+                    &self.device_name,
+                    &self.firewall_config.docker_masquerade,
+                );
+            }
         }
         tracing::info!("Tun mode has been enabled");
         Ok(())
     }
 
-    pub fn disable(&mut self, show_log: bool) {
+    pub fn disable(&mut self, show_log: bool) -> io::Result<()> {
         if self.rootless {
             if show_log {
                 tracing::warn!(
                     "TUN mode is disabled in rootless mode; no configuration will be applied"
                 );
             }
-            return;
+            return Ok(());
         }
         #[cfg(target_os = "linux")]
         {
-            // Drop firewall rules before removing routes
-            self.firewall_guard.take();
+            self.docker_masquerade_guard.take();
         }
-        self.disable_routing_table();
+
+        let route_result = self.disable_routing_table();
         self.disable_dns();
+        // If route cleanup failed, retain the kill switch. Removing it while a partially
+        // configured routing table remains would turn a cleanup failure into a traffic leak.
+        let kill_switch_result = if route_result.is_ok() {
+            self.disable_kill_switch()
+        } else {
+            Ok(())
+        };
+        let result = combine_results(route_result, kill_switch_result);
         if show_log {
-            tracing::info!("Tun mode has been disabled");
+            match &result {
+                Ok(()) => tracing::info!("Tun mode has been disabled"),
+                Err(error) => tracing::error!(%error, "failed to disable TUN mode"),
+            }
         }
+        result
     }
 
     pub fn get_status(&self) -> bool {
@@ -124,19 +147,60 @@ impl TunConfigure {
         self.dns_handle = None
     }
 
-    fn disable_routing_table(&mut self) {
-        check_rootless!(self, ());
+    fn disable_routing_table(&mut self) -> io::Result<()> {
+        check_rootless!(self, Ok(()));
+        let mut first_error = None;
         if self.routing_table_flag {
             for item in ipv4_relay_addresses() {
-                let _ = platform::delete_route_entry(IpNet::V4(item));
+                if let Err(error) = platform::delete_route_entry(IpNet::V4(item))
+                    && first_error.is_none()
+                {
+                    first_error = Some(error);
+                }
             }
-            self.routing_table_flag = false
+            if first_error.is_none() {
+                self.routing_table_flag = false;
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn disable_kill_switch(&mut self) -> io::Result<()> {
+        let Some(mut guard) = self.kill_switch_guard.take() else {
+            return Ok(());
+        };
+        if let Err(error) = guard.teardown() {
+            self.kill_switch_guard = Some(guard);
+            Err(error)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn rollback_kill_switch(&mut self, original: io::Error) -> io::Error {
+        match self.disable_kill_switch() {
+            Ok(()) => original,
+            Err(rollback) => io::Error::other(format!(
+                "TUN setup failed ({original}); kill-switch rollback failed ({rollback})"
+            )),
         }
     }
 }
 
 impl Drop for TunConfigure {
     fn drop(&mut self) {
-        self.disable(false)
+        if let Err(error) = self.disable(false) {
+            tracing::error!(%error, "failed to clean up TUN configuration");
+        }
+    }
+}
+
+fn combine_results(first: io::Result<()>, second: io::Result<()>) -> io::Result<()> {
+    match (first, second) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(first), Err(second)) => Err(io::Error::other(format!(
+            "route cleanup failed ({first}); kill-switch cleanup failed ({second})"
+        ))),
     }
 }

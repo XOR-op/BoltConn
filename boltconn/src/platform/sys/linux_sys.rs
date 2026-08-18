@@ -14,6 +14,7 @@ use std::process::Command;
 use std::{cmp, io, mem};
 
 use super::super::errno_err;
+use crate::platform::BOLTCONN_FWMARK;
 
 pub unsafe fn open_tun() -> io::Result<(i32, String)> {
     unsafe {
@@ -112,6 +113,24 @@ pub fn bind_to_device(fd: c_int, dst_iface_name: &str) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn set_fwmark(fd: c_int) -> io::Result<()> {
+    let mark = BOLTCONN_FWMARK;
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_MARK,
+            &mark as *const u32 as *const libc::c_void,
+            mem::size_of_val(&mark) as socklen_t,
+        )
+    };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 pub struct SystemDnsHandle {}

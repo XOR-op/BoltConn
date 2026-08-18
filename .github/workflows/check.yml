@@ -21,6 +21,23 @@ on:
 name: check
 
 jobs:
+  platform-check:
+    name: Check ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check BoltConn
+        run: cargo check -p boltconn
+
   check:
     name: Check
     runs-on: ubuntu-latest

@@ -1,6 +1,8 @@
 interface: auto
 inbound:
   http: 9961
+  firewall:
+    kill-switch: true
 dns:
   bootstrap:
     - 1.1.1.1

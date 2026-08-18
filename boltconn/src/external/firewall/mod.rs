@@ -1,6 +1,79 @@
 use crate::config::{FirewallSubnetMode, FirewallSubnetPreset, RawDockerMasqueradeConfig};
 use std::io;
+use std::io::Write;
 use std::process::{Command, Stdio};
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(any(
+    target_os = "windows",
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
+mod windows;
+
+#[cfg(target_os = "linux")]
+pub use linux::{KillSwitchGuard, cleanup_stale_kill_switch};
+#[cfg(target_os = "macos")]
+pub use macos::{KillSwitchGuard, cleanup_stale_kill_switch};
+#[cfg(any(
+    target_os = "windows",
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
+pub use windows::{KillSwitchGuard, cleanup_stale_kill_switch};
+
+pub(super) const KILL_SWITCH_BYPASS_IPV4: &[&str] = &[
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+];
+pub(super) const KILL_SWITCH_BYPASS_IPV6: &[&str] = &["::1/128", "fc00::/7", "fe80::/10"];
+
+pub(super) fn validate_interface_name(name: &str) -> io::Result<()> {
+    // Firewall rule languages require interpolation for interface names. Kernel-created
+    // interface names use this conservative character set, which also prevents rule injection.
+    if name.is_empty()
+        || name.len() > 63
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid firewall interface name: {name:?}"),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn run_command_with_input(cmd: &mut Command, input: &str) -> io::Result<String> {
+    let program = cmd.get_program().to_string_lossy().into_owned();
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other(format!("failed to open {program} stdin")))?
+        .write_all(input.as_bytes());
+    let output = child.wait_with_output()?;
+    write_result?;
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(io::Error::other)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(io::Error::other(format!(
+            "{program} exited with {}: {}",
+            output.status,
+            stderr.trim()
+        )))
+    }
+}
 
 /// Detects whether to use nft or iptables, and inserts NAT POSTROUTING rules
 /// to bypass Docker's MASQUERADE for traffic destined to the TUN device.
@@ -11,7 +84,7 @@ use std::process::{Command, Stdio};
 /// identifying the original source. We insert a higher-priority RETURN rule:
 ///   `-I POSTROUTING 1 -s 172.17.0.0/16 -o <tun> -j RETURN`
 /// so that traffic routed through our TUN device skips the MASQUERADE.
-pub struct FirewallGuard {
+pub struct DockerMasqueradeGuard {
     backend: FirewallBackend,
     rules: Vec<FirewallRule>,
 }
@@ -110,7 +183,7 @@ fn find_docker_subnets() -> Vec<String> {
 
 const DEFAULT_DOCKER_SUBNET: &str = "172.16.0.0/12";
 
-impl FirewallGuard {
+impl DockerMasqueradeGuard {
     /// Insert NAT bypass rules for the given TUN device based on the config.
     /// Returns `None` if disabled, no subnets found, or no firewall backend available.
     pub fn setup(tun_name: &str, config: &RawDockerMasqueradeConfig) -> Option<Self> {
@@ -258,7 +331,7 @@ fn remove_rule(backend: FirewallBackend, rule: &FirewallRule) -> io::Result<()> 
     }
 }
 
-impl Drop for FirewallGuard {
+impl Drop for DockerMasqueradeGuard {
     fn drop(&mut self) {
         for rule in &self.rules {
             if let Err(e) = remove_rule(self.backend, rule) {
@@ -267,5 +340,24 @@ impl Drop for FirewallGuard {
                 tracing::trace!(subnet = rule.subnet, "removed NAT bypass rule");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_interface_name;
+
+    #[test]
+    fn validates_kernel_style_interface_names() {
+        assert!(validate_interface_name("utun12").is_ok());
+        assert!(validate_interface_name("wg-bolt.1").is_ok());
+        assert!(validate_interface_name("eth0:1").is_ok());
+    }
+
+    #[test]
+    fn rejects_interface_name_rule_injection() {
+        assert!(validate_interface_name("").is_err());
+        assert!(validate_interface_name("eth0\nblock all").is_err());
+        assert!(validate_interface_name("eth0\"").is_err());
     }
 }

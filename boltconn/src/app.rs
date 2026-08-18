@@ -199,8 +199,7 @@ impl App {
                     .unwrap_or("placeholder device name for rootless mode"),
                 &outbound_iface,
                 rootless_mode,
-                #[cfg(target_os = "linux")]
-                config.inbound.firewall.docker_masquerade.clone(),
+                config.inbound.firewall.clone(),
             )));
             if will_enable_tun && !rootless_mode {
                 // tokio::time::sleep(Duration::from_secs(5)).await;
@@ -312,7 +311,9 @@ impl App {
                 }
             }
         }
-        tun_configure.lock().unwrap().disable(false);
+        if let Err(error) = tun_configure.lock().unwrap().disable(false) {
+            tracing::error!(%error, "failed to disable TUN configuration");
+        }
     }
 
     async fn reload(&self, call_param: CallParameter<(), bool>) {

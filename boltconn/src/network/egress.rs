@@ -41,6 +41,8 @@ impl Egress {
 
     async fn tcpv4_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v4()?;
+        #[cfg(target_os = "linux")]
+        platform::set_fwmark(socket.as_raw_fd())?;
         #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
         #[cfg(target_os = "windows")]
@@ -55,6 +57,8 @@ impl Egress {
 
     async fn tcpv6_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v6()?;
+        #[cfg(target_os = "linux")]
+        platform::set_fwmark(socket.as_raw_fd())?;
         #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
         #[cfg(target_os = "windows")]
@@ -72,6 +76,8 @@ impl Egress {
             return Err(io_err("not ipv4"));
         };
         let std_udp_sock = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
+        #[cfg(target_os = "linux")]
+        platform::set_fwmark(std_udp_sock.as_raw_fd())?;
         #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(std_udp_sock.as_raw_fd(), self.iface_name.as_str())?;
         std_udp_sock.bind(&SockAddr::from(SocketAddr::new(local_addr.into(), 0)))?;
@@ -85,6 +91,8 @@ impl Egress {
             return Err(io_err("not ipv4"));
         };
         let std_udp_sock = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
+        #[cfg(target_os = "linux")]
+        platform::set_fwmark(std_udp_sock.as_raw_fd())?;
         #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(std_udp_sock.as_raw_fd(), self.iface_name.as_str())?;
         std_udp_sock.bind(&SockAddr::from(SocketAddr::new(local_addr.into(), 0)))?;

@@ -112,11 +112,22 @@ socks5:
     println!("{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}", n, s1, s2, c1, c2, c3);
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RawFirewallConfig {
+    #[serde(default = "default_true")]
+    pub kill_switch: bool,
     #[serde(default)]
     pub docker_masquerade: RawDockerMasqueradeConfig,
+}
+
+impl Default for RawFirewallConfig {
+    fn default() -> Self {
+        Self {
+            kill_switch: true,
+            docker_masquerade: RawDockerMasqueradeConfig::default(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -164,4 +175,10 @@ pub(crate) fn default_inbound_ip_addr() -> IpAddr {
 
 fn default_inbound_mapping() -> HashMap<String, RawInboundServiceEntryConfig> {
     Default::default()
+}
+
+#[test]
+fn firewall_kill_switch_defaults_to_enabled() {
+    let config: RawInboundConfig = serde_yaml::from_str("{}").unwrap();
+    assert!(config.firewall.kill_switch);
 }

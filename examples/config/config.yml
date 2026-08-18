@@ -2,6 +2,8 @@ interface: auto
 inbound:
   http: 7890
   socks5: 7891
+  firewall:
+    kill-switch: true
 
 web-controller:
   api-addr: 18086

@@ -174,10 +174,9 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         // A clean close is a TCP half-close: keep forwarding the other direction while it remains
         // active. An I/O failure terminates immediately so sibling tasks can be cancelled.
         let label = format!("TcpAdapter #{}({})", info.id, info.conn_info.dst);
-        let result = relay_tcp_bidirectional(&label, upload, download, activity).await;
-
+        let _ = relay_tcp_bidirectional(&label, upload, download, activity).await;
         self.abort_handle.cancel();
-        result
+        Ok(())
     }
 }
 

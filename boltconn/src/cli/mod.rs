@@ -374,9 +374,14 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 exit(-1)
             } else {
                 clean::clean_route_table();
+                let firewall_result = clean::clean_kill_switch();
                 clean::remove_unix_socket(unix_default_path);
                 clean::remove_unix_socket(unix_rootless_fallback_path);
                 clean::remove_unix_socket(crate::app::app_uds_addr(true));
+                if let Err(error) = firewall_result {
+                    eprintln!("Failed to clean kill-switch firewall state: {error}");
+                    exit(-1)
+                }
                 exit(0)
             }
         }

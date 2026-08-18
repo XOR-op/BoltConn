@@ -11,6 +11,10 @@ mod sys;
 pub use sys::MACOS_PLACEHOLDER_DNS;
 pub use sys::*;
 
+/// Linux socket/packet mark reserved for BoltConn-initiated egress. It is defined at the
+/// platform boundary so firewall rule generation and socket setup cannot drift apart.
+pub const BOLTCONN_FWMARK: u32 = 0x424f_4c54; // ASCII "BOLT"
+
 pub fn errno_err(msg: &str) -> io::Error {
     io::Error::new(io::Error::last_os_error().kind(), msg)
 }

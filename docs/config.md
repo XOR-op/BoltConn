@@ -97,6 +97,8 @@ inbound:
 inbound:
   enable-tun: true           # Enable TUN device (default: true)
   enable-icmp-proxy: true    # Enable ICMP proxying (default: true)
+  firewall:
+    kill-switch: true        # Block direct application egress (default: true)
 
   # HTTP inbound service
   http:
@@ -153,6 +155,45 @@ inbound:
        bob:
          password: secret456
    ```
+
+### Kill Switch
+
+The kill switch is enabled by default whenever TUN mode is active. Disable it explicitly when
+applications should be allowed to bypass the TUN by binding to another interface:
+
+```yaml
+inbound:
+  firewall:
+    kill-switch: false
+```
+
+The switch blocks locally generated IPv4 and IPv6 TCP/UDP traffic that does not use BoltConn's
+TUN. Loopback and the following LAN destinations always bypass BoltConn's kill-switch rules:
+
+- `127.0.0.0/8`
+- `10.0.0.0/8`
+- `172.16.0.0/12`
+- `192.168.0.0/16`
+- `169.254.0.0/16`
+- `::1/128`
+- `fc00::/7`
+- `fe80::/10`
+
+On Linux, BoltConn marks its own physical-interface sockets with fwmark `0x424f4c54` (`BOLT`).
+The system's iptables and ip6tables interfaces are preferred, whether they use the nftables or
+legacy backend; native nftables is used as a fallback. Unmarked root processes do not bypass the
+Linux switch. Because Linux policy-routing rules can also inspect fwmarks, custom `ip rule`
+configurations must reserve this value for BoltConn.
+
+On macOS, the switch is installed in the `com.apple/boltconn` PF anchor. Root-owned traffic is
+allowed to bypass it. BoltConn keeps its own PF enable reference and does not replace the system
+ruleset. Windows accepts the setting but implements it as a no-op.
+
+Firewall setup is mandatory when the switch is enabled: if no usable backend is available, TUN
+enablement fails and previously applied settings are rolled back. A graceful TUN disable or
+shutdown removes the rules. After an ungraceful termination, run `boltconn clean` as root to
+remove stale routes and BoltConn-owned firewall state. Like other inbound settings, changing
+`kill-switch` requires restarting BoltConn.
 
 ### Web Controller (RESTful API)
 
