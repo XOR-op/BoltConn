@@ -725,6 +725,47 @@ impl ContextManager {
             .map(|record| ConnHandle::new(record, &self.index).abort())
             .unwrap_or(false)
     }
+
+    /// Terminates active connections whose frozen dependency path contains the
+    /// invalidated link generation. The handles are cloned before inspecting
+    /// record state so the index lock is never nested with a record-state lock.
+    pub(crate) fn finish_link_dependents(
+        &self,
+        name: &str,
+        generation: u64,
+        result: ConnResultCode,
+    ) -> u64 {
+        let records: Vec<_> = self
+            .index
+            .inner
+            .read()
+            .unwrap()
+            .active
+            .values()
+            .cloned()
+            .collect();
+        let mut finished = 0;
+        for record in records {
+            let depends_on_link = record
+                .state
+                .lock()
+                .unwrap()
+                .links
+                .iter()
+                .any(|link| link.name == name && link.generation == generation);
+            if !depends_on_link {
+                continue;
+            }
+
+            let handle = ConnHandle::new(record.clone(), &self.index);
+            handle.set_state(ConnState::Closing);
+            if handle.finish(result, Some(ConnStage::Closing), None) {
+                record.abort_handle.cancel();
+                finished += 1;
+            }
+        }
+        finished
+    }
 }
 
 impl ContextIndex {
@@ -909,6 +950,33 @@ mod connection_record_tests {
         assert!(completed.finish(ConnResultCode::Completed, None, None));
         assert!(manager.get_inactive_copy().is_empty());
         assert_eq!(manager.get_active_copy()[0].id(), active.id());
+    }
+
+    #[test]
+    fn link_invalidation_finishes_only_matching_generation_dependencies() {
+        let manager = ContextManager::new(10);
+        let matching = begin_test_connection(&manager, 10_001);
+        let replacement = begin_test_connection(&manager, 10_002);
+        assert!(matching.set_links(vec![LinkRef {
+            name: "shared".to_string(),
+            kind: boltapi::LinkKind::Anytls,
+            generation: 7,
+        }]));
+        assert!(replacement.set_links(vec![LinkRef {
+            name: "shared".to_string(),
+            kind: boltapi::LinkKind::Anytls,
+            generation: 8,
+        }]));
+
+        assert_eq!(
+            manager.finish_link_dependents("shared", 7, ConnResultCode::LinkReconfigured),
+            1
+        );
+        assert_eq!(
+            matching.snapshot().state.termination.unwrap().code,
+            ConnResultCode::LinkReconfigured
+        );
+        assert!(!replacement.done());
     }
 
     #[test]

@@ -14,6 +14,7 @@ mod anytls;
 mod chain;
 mod direct;
 mod http;
+mod link;
 mod shadowsocks;
 mod socks5;
 mod ssh;
@@ -25,6 +26,7 @@ mod wireguard;
 
 pub use self::http::*;
 pub use super::adapter::shadowsocks::*;
+pub(crate) use link::*;
 
 use crate::common::{MAX_PKT_SIZE, StreamOutboundTrait, io_err, mut_buf, read_to_bytes_mut};
 use crate::network::dns::Dns;

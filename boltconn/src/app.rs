@@ -1,4 +1,4 @@
-use crate::adapter::WireguardManager;
+use crate::adapter::{LinkTable, WireguardManager};
 use crate::common::call_chan::CallParameter;
 use crate::config::{
     LinkedState, LoadedConfig, RawDnsConfig, RawInboundConfig, RawInboundServiceConfig,
@@ -112,19 +112,19 @@ impl App {
 
         // dispatch
         let ruleset = load_rulesets(&loaded_config)?;
-        let dispatching = Arc::new(
-            DispatchingBuilder::new(
-                config_path.as_path(),
-                dns.clone(),
-                mmdb.clone(),
-                &loaded_config,
-                &ruleset,
-                msg_bus.clone(),
-                wg_mgr.clone(),
-            )
-            .and_then(|b| b.build(&loaded_config))
-            .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?,
-        );
+        let dispatching_wrapper = DispatchingBuilder::new(
+            config_path.as_path(),
+            dns.clone(),
+            mmdb.clone(),
+            &loaded_config,
+            &ruleset,
+            msg_bus.clone(),
+            wg_mgr.clone(),
+        )
+        .and_then(|builder| builder.build(&loaded_config))
+        .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?;
+        let link_table = Arc::new(LinkTable::new(dispatching_wrapper.links));
+        let dispatching = Arc::new(dispatching_wrapper.dispatching);
         let dispatcher = {
             // tls mitm
             let cert = load_cert_and_key(&cert_path)
@@ -157,6 +157,7 @@ impl App {
                 }),
                 interception_mgr,
                 wg_mgr.clone(),
+                link_table,
                 config
                     .dispatching
                     .as_ref()
@@ -355,7 +356,7 @@ impl App {
             self.outbound_iface.as_str(),
         )
         .await?;
-        let dispatching = {
+        let dispatching_wrapper = {
             let builder = DispatchingBuilder::new(
                 self.config_path.as_path(),
                 self.dns.clone(),
@@ -365,7 +366,7 @@ impl App {
                 self.msg_bus.clone(),
                 self.wg_mgr.clone(),
             )?;
-            Arc::new(builder.build(&loaded_config)?)
+            builder.build(&loaded_config)?
         };
 
         let interception_mgr = Arc::new(
@@ -379,6 +380,12 @@ impl App {
             )
             .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?,
         );
+
+        // Reconcile and terminate invalidated dependencies before making the
+        // replacement routing graph observable to new connections.
+        self.dispatcher
+            .reconcile_link_configs(dispatching_wrapper.links);
+        let dispatching = Arc::new(dispatching_wrapper.dispatching);
 
         // Publish every DNS selection input together. A lookup that started
         // before reload keeps the previous coherent runtime through its Arc.
@@ -465,7 +472,8 @@ pub async fn validate_config(
             Duration::from_secs(180),
         )),
     )
-    .and_then(|b| b.build(&loaded_config))
+    .and_then(|builder| builder.build(&loaded_config))
+    .map(|wrapper| wrapper.dispatching)
     .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?;
     let _interception_mgr = InterceptionManager::new(
         config_path,
@@ -521,6 +529,7 @@ pub async fn validate_config_only(config_path: &Path) -> anyhow::Result<()> {
         )),
     )
     .and_then(|builder| builder.build(&loaded_config))
+    .map(|wrapper| wrapper.dispatching)
     .map_err(|error| anyhow!("Parse routing rules failed: {}", error))?;
     let _interception = InterceptionManager::new(
         config_path,

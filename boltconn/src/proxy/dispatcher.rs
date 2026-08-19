@@ -1,8 +1,8 @@
 use crate::adapter::{
     AddrConnector, AnytlsManager, AnytlsOutboundHandle, ChainOutbound, Connector, DirectOutbound,
-    HttpOutbound, Outbound, OutboundType, SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager,
-    SshOutboundHandle, TcpAdapter, TrojanOutbound, TunUdpAdapter, WireguardHandle,
-    WireguardManager,
+    HttpOutbound, LinkInvalidation, LinkTable, NamedLinkConfig, Outbound, OutboundType, SSOutbound,
+    Socks5Outbound, SocksUdpAdapter, SshManager, SshOutboundHandle, TcpAdapter, TrojanOutbound,
+    TunUdpAdapter, WireguardHandle, WireguardManager,
 };
 use crate::common::StreamOutboundTrait;
 use crate::common::duplex_chan::DuplexChan;
@@ -18,6 +18,7 @@ use arc_swap::ArcSwap;
 use boltapi::{ConnResultCode, ConnStage, ConnState, DestinationResolution, IdentificationSource};
 use bytes::Bytes;
 use rcgen::Certificate;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8};
@@ -121,6 +122,7 @@ pub struct Dispatcher {
     wireguard_mgr: Arc<WireguardManager>,
     ssh_mgr: Arc<SshManager>,
     anytls_mgr: Arc<AnytlsManager>,
+    link_table: Arc<LinkTable>,
     pub(crate) process_info_depth: ProcessInfoDepth,
 }
 
@@ -136,6 +138,7 @@ impl Dispatcher {
         modifier: ModifierClosure,
         intercept_mgr: Arc<InterceptionManager>,
         wireguard_mgr: Arc<WireguardManager>,
+        link_table: Arc<LinkTable>,
         process_info_depth: ProcessInfoDepth,
     ) -> Self {
         let ssh_mgr = SshManager::new(iface_name, dns.clone(), Duration::from_secs(180));
@@ -151,8 +154,30 @@ impl Dispatcher {
             wireguard_mgr,
             ssh_mgr: Arc::new(ssh_mgr),
             anytls_mgr: Arc::new(AnytlsManager::new()),
+            link_table,
             process_info_depth,
         }
+    }
+
+    /// Reconciles link identity before the caller publishes its new routing
+    /// graph, then terminates every connection tied to an invalidated generation.
+    pub(crate) fn reconcile_link_configs(
+        &self,
+        configured: HashMap<String, NamedLinkConfig>,
+    ) -> Vec<LinkInvalidation> {
+        let invalidations = self.link_table.reconcile(configured);
+        for invalidation in &invalidations {
+            self.stat_center.finish_link_dependents(
+                &invalidation.name,
+                invalidation.generation,
+                invalidation.connection_result,
+            );
+        }
+        invalidations
+    }
+
+    pub(crate) fn link_table(&self) -> Arc<LinkTable> {
+        self.link_table.clone()
     }
 
     pub fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {

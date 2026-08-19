@@ -1,4 +1,7 @@
-use crate::adapter::{HttpConfig, ShadowSocksConfig, Socks5Config, WireguardManager};
+use crate::adapter::{
+    ConfiguredLinkRoute, HttpConfig, LinkConfig, NamedLinkConfig, ShadowSocksConfig, Socks5Config,
+    WireguardManager,
+};
 use crate::common::cert::{CertVerify, load_pinned_cert};
 use crate::config::{
     ConfigError, InstrumentConfigError, LoadedConfig, ProviderError, ProxyError, ProxySchema,
@@ -101,6 +104,14 @@ pub struct Dispatching {
     chain_reconnection: HashMap<String, Vec<String>>,
 }
 
+/// A routing build and the immutable reusable-link inputs derived from the same
+/// parsed proxies. Keeping them together prevents reload reconciliation from
+/// comparing one configuration while publishing another.
+pub(crate) struct DispatchingWrapper {
+    pub(crate) dispatching: Dispatching,
+    pub(crate) links: HashMap<String, NamedLinkConfig>,
+}
+
 pub struct DispatchMatch {
     pub proxy_name: String,
     pub proxy: Arc<ProxyImpl>,
@@ -187,6 +198,40 @@ impl Dispatching {
 
     fn get_group(&self, name: &str) -> Option<&ProxyGroup> {
         self.groups.get(name).map(|x| &**x)
+    }
+}
+
+fn parsed_proxy_reaches_link(
+    proxy: &GeneralProxy,
+    link_name: &str,
+    visited: &mut HashSet<String>,
+) -> bool {
+    match proxy {
+        GeneralProxy::Single(proxy) => {
+            let name = proxy.get_name();
+            if name == link_name {
+                return true;
+            }
+            if !visited.insert(format!("proxy:{name}")) {
+                return false;
+            }
+            match proxy.get_impl().as_ref() {
+                ProxyImpl::Chain(hops) => hops
+                    .iter()
+                    .any(|hop| parsed_proxy_reaches_link(hop, link_name, visited)),
+                _ => false,
+            }
+        }
+        GeneralProxy::Group(group) => {
+            let name = group.get_name();
+            if !visited.insert(format!("group:{name}")) {
+                return false;
+            }
+            group
+                .get_members()
+                .iter()
+                .any(|member| parsed_proxy_reaches_link(member, link_name, visited))
+        }
     }
 }
 
@@ -317,9 +362,11 @@ impl DispatchingBuilder {
         }
     }
 
-    pub fn build(self, loaded_config: &LoadedConfig) -> Result<Dispatching, ConfigError> {
+    pub fn build(self, loaded_config: &LoadedConfig) -> Result<DispatchingWrapper, ConfigError> {
         let (rules, fallback, fallback_provenance) =
             self.build_sourced_rules(&loaded_config.config.rules)?;
+
+        let links = self.build_named_link_configs(&loaded_config.config.proxy_chain);
 
         let groups = {
             let mut g = LinkedHashMap::new();
@@ -339,19 +386,70 @@ impl DispatchingBuilder {
         let proxies = self.proxies.clone();
         let wg_mgr = self.wg_mgr.clone();
         let chain_reconnection = self.chain_reconnection.clone();
-        Ok(Dispatching {
-            temporary_list: ArcSwap::new(Arc::new(temporary_list)),
-            templist_builder: self,
-            proxies,
-            groups,
-            snippet: DispatchingSnippet {
-                rules,
-                fallback,
-                fallback_provenance,
+        Ok(DispatchingWrapper {
+            dispatching: Dispatching {
+                temporary_list: ArcSwap::new(Arc::new(temporary_list)),
+                templist_builder: self,
+                proxies,
+                groups,
+                snippet: DispatchingSnippet {
+                    rules,
+                    fallback,
+                    fallback_provenance,
+                },
+                wg_mgr,
+                chain_reconnection,
             },
-            wg_mgr,
-            chain_reconnection,
+            links,
         })
+    }
+
+    fn build_named_link_configs(
+        &self,
+        chains: &LinkedHashMap<String, RawProxyChainCfg>,
+    ) -> HashMap<String, NamedLinkConfig> {
+        self.proxies
+            .iter()
+            .filter_map(|(name, proxy)| {
+                let config = LinkConfig::from_proxy(proxy.get_impl().as_ref())?;
+                let mut routes: Vec<_> = chains
+                    .iter()
+                    .filter(|(chain_name, _)| {
+                        self.proxies.get(*chain_name).is_some_and(|chain| {
+                            parsed_proxy_reaches_link(
+                                &GeneralProxy::Single(chain.clone()),
+                                name,
+                                &mut HashSet::new(),
+                            )
+                        })
+                    })
+                    .map(|(chain_name, chain)| ConfiguredLinkRoute {
+                        chain: chain_name.clone(),
+                        hops: chain.chains.clone(),
+                        interface: chain.interface.clone(),
+                    })
+                    .collect();
+                // A group can be selected directly by a rule, so its interface
+                // is also part of the possible creation route for a link member.
+                routes.extend(
+                    self.groups
+                        .iter()
+                        .filter(|(_, group)| {
+                            parsed_proxy_reaches_link(
+                                &GeneralProxy::Group((*group).clone()),
+                                name,
+                                &mut HashSet::new(),
+                            )
+                        })
+                        .map(|(group_name, group)| ConfiguredLinkRoute {
+                            chain: format!("@group:{group_name}"),
+                            hops: vec![group_name.clone()],
+                            interface: group.get_direct_interface(),
+                        }),
+                );
+                Some((name.clone(), NamedLinkConfig::new(config, routes)))
+            })
+            .collect()
     }
 
     #[allow(clippy::type_complexity)]
