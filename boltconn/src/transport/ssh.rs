@@ -4,9 +4,15 @@ use russh::client::{Handle, Msg, connect_stream};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{ChannelStream, SshId};
 use std::hash::Hash;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU16};
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::task::{Context, Poll};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone)]
 pub enum SshAuthentication {
@@ -63,9 +69,20 @@ impl russh::client::Handler for Client {
 }
 
 pub struct SshTunnel {
-    client: Handle<Client>,
+    client: Arc<Handle<Client>>,
     port_counter: AtomicU16,
     is_active: Arc<AtomicBool>,
+    open_channels: Arc<AtomicU64>,
+    last_channel_open_at_ms: AtomicU64,
+    probe: Mutex<ProbeState>,
+    probe_task: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[derive(Default)]
+struct ProbeState {
+    last_attempt_at_ms: Option<u64>,
+    last_success_at_ms: Option<u64>,
+    last_error: Option<boltapi::LinkReason>,
 }
 
 impl SshTunnel {
@@ -78,16 +95,20 @@ impl SshTunnel {
             ..Default::default()
         });
         Ok(Self {
-            client: connect_ssh_tunnel(config, ru_config, outbound).await?,
+            client: Arc::new(connect_ssh_tunnel(config, ru_config, outbound).await?),
             port_counter: AtomicU16::new(1025),
             is_active: Arc::new(AtomicBool::new(true)),
+            open_channels: Arc::new(AtomicU64::new(0)),
+            last_channel_open_at_ms: AtomicU64::new(0),
+            probe: Mutex::new(ProbeState::default()),
+            probe_task: Mutex::new(None),
         })
     }
 
     pub async fn new_mapped_connection(
         &self,
         dst: NetworkAddr,
-    ) -> Result<ChannelStream<Msg>, TransportError> {
+    ) -> Result<TrackedSshChannel, TransportError> {
         let dst_port = dst.port();
         let channel = match self
             .client
@@ -113,12 +134,171 @@ impl SshTunnel {
                 return Err(e);
             }
         };
-        Ok(channel.into_stream())
+        self.open_channels.fetch_add(1, Ordering::Relaxed);
+        self.last_channel_open_at_ms
+            .store(now_ms(), Ordering::Relaxed);
+        Ok(TrackedSshChannel {
+            stream: channel.into_stream(),
+            open_channels: self.open_channels.clone(),
+        })
     }
 
     pub fn is_active(&self) -> bool {
-        self.is_active.load(std::sync::atomic::Ordering::Relaxed)
+        self.is_active.load(Ordering::Relaxed) && !self.client.is_closed()
     }
+
+    /// Starts one low-frequency request/reply probe. The task uses a weak
+    /// reference so retaining the probe handle cannot keep the tunnel alive.
+    pub fn start_probe(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let Some(tunnel) = weak.upgrade() else {
+                    return;
+                };
+                if !tunnel.is_active() {
+                    return;
+                }
+                tunnel.probe_once().await;
+            }
+        });
+        *self.probe_task.lock().unwrap() = Some(task);
+    }
+
+    async fn probe_once(&self) {
+        let attempted_at_ms = now_ms();
+        self.probe.lock().unwrap().last_attempt_at_ms = Some(attempted_at_ms);
+        let result = tokio::time::timeout(Duration::from_secs(10), self.client.send_ping()).await;
+        let mut probe = self.probe.lock().unwrap();
+        match result {
+            Ok(Ok(())) => {
+                probe.last_success_at_ms = Some(now_ms());
+                probe.last_error = None;
+            }
+            Ok(Err(error)) => {
+                probe.last_error = Some(boltapi::LinkReason {
+                    code: boltapi::LinkReasonCode::ProtocolFailed,
+                    detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
+                });
+                self.is_active.store(false, Ordering::Relaxed);
+            }
+            Err(_) => {
+                probe.last_error = Some(boltapi::LinkReason {
+                    code: boltapi::LinkReasonCode::NoRecentProbe,
+                    detail: Some("SSH probe timed out".to_string()),
+                });
+                self.is_active.store(false, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn link_snapshot(
+        &self,
+    ) -> (
+        boltapi::LinkState,
+        boltapi::LinkHealth,
+        boltapi::LinkEvidence,
+    ) {
+        let task_alive = self.is_active();
+        let probe = self.probe.lock().unwrap();
+        let evidence = boltapi::LinkEvidence::Ssh {
+            task_alive,
+            open_channels: self.open_channels.load(Ordering::Relaxed),
+            last_channel_open_at_ms: match self.last_channel_open_at_ms.load(Ordering::Relaxed) {
+                0 => None,
+                timestamp => Some(timestamp),
+            },
+            probe: (probe.last_attempt_at_ms.is_some()
+                || probe.last_success_at_ms.is_some()
+                || probe.last_error.is_some())
+            .then(|| boltapi::ProbeEvidence {
+                last_attempt_at_ms: probe.last_attempt_at_ms,
+                last_success_at_ms: probe.last_success_at_ms,
+                last_error: probe.last_error.clone(),
+            }),
+        };
+        let health = if !task_alive {
+            boltapi::LinkHealth::Unhealthy
+        } else if probe.last_error.is_some() {
+            boltapi::LinkHealth::Degraded
+        } else {
+            boltapi::LinkHealth::Healthy
+        };
+        let state = if task_alive {
+            if self.open_channels.load(Ordering::Relaxed) == 0 {
+                boltapi::LinkState::Idle
+            } else {
+                boltapi::LinkState::Ready
+            }
+        } else {
+            boltapi::LinkState::Failed
+        };
+        (state, health, evidence)
+    }
+
+    pub async fn close(&self) {
+        self.is_active.store(false, Ordering::Relaxed);
+        if let Some(task) = self.probe_task.lock().unwrap().take() {
+            task.abort();
+        }
+        let _ = self
+            .client
+            .disconnect(russh::Disconnect::ByApplication, "link closed", "")
+            .await;
+    }
+}
+
+pub struct TrackedSshChannel {
+    stream: ChannelStream<Msg>,
+    open_channels: Arc<AtomicU64>,
+}
+
+impl Drop for TrackedSshChannel {
+    fn drop(&mut self) {
+        let _ = self
+            .open_channels
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                Some(count.saturating_sub(1))
+            });
+    }
+}
+
+impl AsyncRead for TrackedSshChannel {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for TrackedSshChannel {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 async fn connect_ssh_tunnel<S>(

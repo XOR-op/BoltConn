@@ -629,6 +629,42 @@ pub(super) async fn get_dst(
     })
 }
 
+/// Resolves a reusable-link server and records caller-level DNS evidence on its
+/// generation. Literal socket addresses require no lookup evidence.
+pub(super) async fn get_link_dst(
+    dns: &Dns,
+    dst: &NetworkAddr,
+    name: &str,
+    generation: &LinkGeneration,
+) -> Result<SocketAddr, TransportError> {
+    match dst {
+        NetworkAddr::Domain {
+            name: domain_name,
+            port,
+        } => {
+            let (result, evidence) = dns
+                .genuine_lookup_with_evidence(
+                    domain_name,
+                    DnsLookupPurpose::LinkServer {
+                        link: name.to_string(),
+                    },
+                )
+                .await;
+            // Store evidence before interpreting the result so NXDOMAIN,
+            // timeout, and transport failures remain visible on the link.
+            generation.record_dns_lookup(evidence);
+            let address = result?;
+            let address = address.ok_or_else(|| {
+                TransportError::Dns(crate::proxy::error::DnsError::ResolveDomain(
+                    domain_name.clone(),
+                ))
+            })?;
+            Ok(SocketAddr::new(address, *port))
+        }
+        NetworkAddr::Socket { address } => Ok(*address),
+    }
+}
+
 pub(super) async fn connect_timeout<F: Future<Output = Result<(), TransportError>>>(
     future: F,
     component_str: &str,

@@ -12,10 +12,11 @@ use crate::proxy::error::TransportError;
 use crate::proxy::{ConnHandle, bounded_error_detail};
 use arc_swap::ArcSwap;
 use boltapi::{
-    ApiError, ApiErrorCode, DnsAnswer, DnsAttemptScope, DnsCacheStatus, DnsErrorCode,
-    DnsLookupDetail, DnsLookupPurpose, DnsLookupRequest, DnsLookupResponse, DnsOutcome,
-    DnsProtocol, DnsRecordType, DnsResolverAttempt, DnsResolverDetail, DnsResolverSummary,
-    DnsResponseKind, DnsScope, DnsSelection, FakeIpMapping, RouteEgress, Snapshot,
+    ApiError, ApiErrorCode, DnsActivity, DnsAnswer, DnsAttemptScope, DnsCacheStatus, DnsErrorCode,
+    DnsErrorCount, DnsLookupDetail, DnsLookupPurpose, DnsLookupRequest, DnsLookupResponse,
+    DnsOutcome, DnsOutcomeCounts, DnsProtocol, DnsRecordType, DnsResolverAttempt,
+    DnsResolverDetail, DnsResolverSummary, DnsResponseKind, DnsScope, DnsSelection, FakeIpMapping,
+    RouteEgress, Snapshot,
 };
 use hickory_proto::op::{Message, MessageType, ResponseCode};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
@@ -25,7 +26,7 @@ use hickory_resolver::net::{DnsError as HickoryDnsError, NetError, runtime::Runt
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const OUTER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -74,6 +75,7 @@ pub struct GenericDns<P: RuntimeProvider> {
     name: String,
     table: DnsTable,
     runtime: ArcSwap<DnsRuntime<P>>,
+    activity: Mutex<DnsActivity>,
 }
 
 pub type Dns = GenericDns<IfaceProvider>;
@@ -92,6 +94,7 @@ impl Dns {
             name: name.to_string(),
             table: DnsTable::new(),
             runtime: ArcSwap::new(Arc::new(runtime)),
+            activity: Mutex::new(empty_dns_activity()),
         }
     }
 
@@ -267,6 +270,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
             name: name.to_string(),
             table: DnsTable::new(),
             runtime: ArcSwap::new(Arc::new(runtime)),
+            activity: Mutex::new(empty_dns_activity()),
         }
     }
 
@@ -341,19 +345,24 @@ impl<P: RuntimeProvider> GenericDns<P> {
             .await
     }
 
-    /// Returns the same structured evidence used by connection and diagnostic
-    /// views. Link generations use this boundary to retain setup/reconnect DNS
-    /// without attributing it to whichever child triggered lazy creation.
+    /// Returns the lookup outcome and evidence independently so link generations
+    /// can retain setup/reconnect failures without attributing them to whichever
+    /// child triggered lazy creation.
     pub async fn genuine_lookup_with_evidence(
         &self,
         domain_name: &str,
         purpose: DnsLookupPurpose,
-    ) -> Result<(Option<IpAddr>, DnsLookupDetail), TransportError> {
+    ) -> (Result<Option<IpAddr>, TransportError>, DnsLookupDetail) {
         let runtime = self.runtime.load_full();
         let execution = self
             .execute_normal_lookup(runtime.as_ref(), domain_name, runtime.preference, purpose)
             .await;
-        execution_result(execution)
+        self.remember_lookup(execution.detail.clone());
+        let detail = execution.detail.clone();
+        (
+            execution_result(execution).map(|(selected, _)| selected),
+            detail,
+        )
     }
 
     pub async fn genuine_lookup_with_for(
@@ -384,6 +393,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
                 purpose,
             )
             .await;
+        self.remember_lookup(execution.detail.clone());
         if let Some(conn) = conn {
             conn.record_dns_lookup(execution.detail.clone());
         }
@@ -441,10 +451,52 @@ impl<P: RuntimeProvider> GenericDns<P> {
             )
             .await
         };
+        self.remember_lookup(execution.detail.clone());
         Ok(DnsLookupResponse {
             observed_at_ms: now_ms(),
             lookup: execution.detail,
         })
+    }
+
+    pub(crate) fn dns_activity(&self) -> DnsActivity {
+        self.activity.lock().unwrap().clone()
+    }
+
+    fn remember_lookup(&self, lookup: DnsLookupDetail) {
+        let mut activity = self.activity.lock().unwrap();
+        activity.lookups = activity.lookups.saturating_add(1);
+        if matches!(lookup.cache, DnsCacheStatus::Hit { .. }) {
+            activity.outcomes.cache_hits = activity.outcomes.cache_hits.saturating_add(1);
+        }
+        match &lookup.result {
+            DnsOutcome::Answered { .. } => {
+                activity.outcomes.answered = activity.outcomes.answered.saturating_add(1);
+            }
+            DnsOutcome::Timeout => {
+                activity.outcomes.timeout = activity.outcomes.timeout.saturating_add(1);
+            }
+            DnsOutcome::Error { code, .. } => {
+                activity.outcomes.error = activity.outcomes.error.saturating_add(1);
+                if let Some(error) = activity
+                    .outcomes
+                    .errors
+                    .iter_mut()
+                    .find(|error| error.code == *code)
+                {
+                    error.count = error.count.saturating_add(1);
+                } else {
+                    activity.outcomes.errors.push(DnsErrorCount {
+                        code: *code,
+                        count: 1,
+                    });
+                    activity
+                        .outcomes
+                        .errors
+                        .sort_by_key(|error| error.code as u8);
+                }
+            }
+        }
+        activity.latest_lookup = Some(lookup);
     }
 
     async fn execute_normal_lookup(
@@ -1239,6 +1291,20 @@ fn preference_accepts(preference: DnsPreference, address: IpAddr) -> bool {
 
 fn elapsed_ms(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn empty_dns_activity() -> DnsActivity {
+    DnsActivity {
+        lookups: 0,
+        outcomes: DnsOutcomeCounts {
+            cache_hits: 0,
+            answered: 0,
+            timeout: 0,
+            error: 0,
+            errors: Vec::new(),
+        },
+        latest_lookup: None,
+    }
 }
 
 #[cfg(test)]

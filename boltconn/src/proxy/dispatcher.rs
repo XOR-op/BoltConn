@@ -1,8 +1,8 @@
 use crate::adapter::{
     AddrConnector, AnytlsManager, AnytlsOutboundHandle, ChainOutbound, Connector, DirectOutbound,
-    HttpOutbound, LinkInvalidation, LinkTable, NamedLinkConfig, Outbound, OutboundType, SSOutbound,
-    Socks5Outbound, SocksUdpAdapter, SshManager, SshOutboundHandle, TcpAdapter, TrojanOutbound,
-    TunUdpAdapter, WireguardHandle, WireguardManager,
+    HttpOutbound, LinkInvalidation, LinkRuntimeConfig, LinkTable, NamedLinkConfig, Outbound,
+    OutboundType, SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager, SshOutboundHandle,
+    TcpAdapter, TrojanOutbound, TunUdpAdapter, WireguardHandle, WireguardManager,
 };
 use crate::common::StreamOutboundTrait;
 use crate::common::duplex_chan::DuplexChan;
@@ -141,7 +141,12 @@ impl Dispatcher {
         link_table: Arc<LinkTable>,
         process_info_depth: ProcessInfoDepth,
     ) -> Self {
-        let ssh_mgr = SshManager::new(iface_name, dns.clone(), Duration::from_secs(180));
+        let ssh_mgr = SshManager::new(
+            iface_name,
+            dns.clone(),
+            Duration::from_secs(10),
+            link_table.clone(),
+        );
         Self {
             iface_name: iface_name.into(),
             dns,
@@ -153,7 +158,7 @@ impl Dispatcher {
             intercept_mgr: ArcSwap::new(intercept_mgr),
             wireguard_mgr,
             ssh_mgr: Arc::new(ssh_mgr),
-            anytls_mgr: Arc::new(AnytlsManager::new()),
+            anytls_mgr: Arc::new(AnytlsManager::new(link_table.clone())),
             link_table,
             process_info_depth,
         }
@@ -161,7 +166,7 @@ impl Dispatcher {
 
     /// Reconciles link identity before the caller publishes its new routing
     /// graph, then terminates every connection tied to an invalidated generation.
-    pub(crate) fn reconcile_link_configs(
+    pub(crate) async fn reconcile_link_configs(
         &self,
         configured: HashMap<String, NamedLinkConfig>,
     ) -> Vec<LinkInvalidation> {
@@ -172,12 +177,31 @@ impl Dispatcher {
                 invalidation.generation,
                 invalidation.connection_result,
             );
+            self.wireguard_mgr
+                .stop_generation(&invalidation.name, invalidation.generation)
+                .await;
+            self.ssh_mgr
+                .stop_generation(&invalidation.name, invalidation.generation)
+                .await;
+            self.anytls_mgr
+                .stop_generation(&invalidation.name, invalidation.generation)
+                .await;
         }
         invalidations
     }
 
     pub(crate) fn link_table(&self) -> Arc<LinkTable> {
         self.link_table.clone()
+    }
+
+    /// Pull protocol-owned evidence into the shared generation records before
+    /// a controller snapshot. This keeps callers independent of manager type.
+    pub(crate) async fn refresh_link_evidence(&self) {
+        tokio::join!(
+            self.wireguard_mgr.refresh_evidence(),
+            self.ssh_mgr.refresh_evidence(),
+            self.anytls_mgr.refresh_evidence(),
+        );
     }
 
     pub fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
@@ -205,8 +229,10 @@ impl Dispatcher {
         self.iface_name.clone()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn build_normal_outbound(
         &self,
+        routing: &Dispatching,
         proxy_name: &str,
         iface_name: &str,
         proxy_config: &ProxyImpl,
@@ -264,35 +290,43 @@ impl Dispatcher {
                 )),
                 OutboundType::Trojan,
             ),
-            ProxyImpl::Anytls(cfg) => (
+            ProxyImpl::Anytls(config) => (
                 Box::new(AnytlsOutboundHandle::new(
                     proxy_name,
                     iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
-                    cfg.clone(),
+                    LinkRuntimeConfig::new(
+                        config.clone(),
+                        routing.link_routes(proxy_name).ok_or(())?.to_vec(),
+                    ),
                     self.anytls_mgr.clone(),
                 )),
                 OutboundType::Anytls,
             ),
-            ProxyImpl::Wireguard(cfg) => (
+            ProxyImpl::Wireguard(config) => (
                 Box::new(WireguardHandle::new(
                     proxy_name,
                     src_addr,
                     dst_addr.clone(),
-                    cfg.clone(),
+                    LinkRuntimeConfig::new(
+                        (**config).clone(),
+                        routing.link_routes(proxy_name).ok_or(())?.to_vec(),
+                    ),
                     self.wireguard_mgr.clone(),
-                    Arc::new(cfg.dns.clone()),
                 )),
                 OutboundType::Wireguard,
             ),
-            ProxyImpl::Ssh(cfg) => (
+            ProxyImpl::Ssh(config) => (
                 Box::new(SshOutboundHandle::new(
                     proxy_name,
                     iface_name,
                     dst_addr.clone(),
                     self.dns.clone(),
-                    cfg.clone(),
+                    LinkRuntimeConfig::new(
+                        config.clone(),
+                        routing.link_routes(proxy_name).ok_or(())?.to_vec(),
+                    ),
                     self.ssh_mgr.clone(),
                 )),
                 OutboundType::Ssh,
@@ -307,6 +341,7 @@ impl Dispatcher {
 
     pub(super) fn create_chain(
         &self,
+        routing: &Dispatching,
         chain_name: &str,
         vec: &[GeneralProxy],
         src_addr: SocketAddr,
@@ -342,6 +377,7 @@ impl Dispatcher {
         for idx in 0..vec.len() {
             let proxy = impls.get(idx).unwrap();
             let (outbounding, _) = self.build_normal_outbound(
+                routing,
                 &proxy.0,
                 iface_name,
                 &proxy.1,
@@ -363,10 +399,34 @@ impl Dispatcher {
         iface_name: &str,
         resolved_dst: Option<&SocketAddr>,
     ) -> Result<(Box<dyn Outbound>, OutboundType), DispatchError> {
+        let routing = self.dispatching.load_full();
+        self.construct_outbound_from(
+            routing.as_ref(),
+            src_addr,
+            dst_addr,
+            proxy_config,
+            proxy_name,
+            iface_name,
+            resolved_dst,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn construct_outbound_from(
+        &self,
+        routing: &Dispatching,
+        src_addr: SocketAddr,
+        dst_addr: &NetworkAddr,
+        proxy_config: &ProxyImpl,
+        proxy_name: &str,
+        iface_name: &str,
+        resolved_dst: Option<&SocketAddr>,
+    ) -> Result<(Box<dyn Outbound>, OutboundType), DispatchError> {
         Ok(match proxy_config {
             ProxyImpl::Chain(vec) => (
                 Box::new(
-                    self.create_chain(proxy_name, vec, src_addr, dst_addr, iface_name)
+                    self.create_chain(routing, proxy_name, vec, src_addr, dst_addr, iface_name)
                         .map_err(|_| DispatchError::BadChain)?,
                 ),
                 OutboundType::Chain,
@@ -376,6 +436,7 @@ impl Dispatcher {
             }
             _ => self
                 .build_normal_outbound(
+                    routing,
                     proxy_name,
                     iface_name,
                     proxy_config,
@@ -465,16 +526,13 @@ impl Dispatcher {
 
         // match outbound proxy
         info.set_state(ConnState::Routing);
+        let routing = self.dispatching.load_full();
         let DispatchMatch {
             proxy_name,
             proxy: proxy_config,
             iface,
             route,
-        } = self
-            .dispatching
-            .load()
-            .matches(&mut conn_info, true, Some(&info))
-            .await;
+        } = routing.matches(&mut conn_info, true, Some(&info)).await;
         info.set_route(route);
         if let Some(address) = conn_info.resolved_dst {
             info.set_resolution(DestinationResolution::Resolved { address });
@@ -490,7 +548,8 @@ impl Dispatcher {
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
         let (outbounding, proxy_type): (Box<dyn Outbound>, OutboundType) = match self
-            .construct_outbound(
+            .construct_outbound_from(
+                routing.as_ref(),
                 src_addr,
                 &dst_addr,
                 &proxy_config,
@@ -657,16 +716,13 @@ impl Dispatcher {
         info: &ConnHandle,
     ) -> Result<(Box<dyn Outbound>, OutboundType, String), DispatchError> {
         info.set_state(ConnState::Routing);
+        let routing = self.dispatching.load_full();
         let DispatchMatch {
             proxy_name,
             proxy: proxy_config,
             iface,
             route,
-        } = self
-            .dispatching
-            .load()
-            .matches(&mut conn_info, true, Some(info))
-            .await;
+        } = routing.matches(&mut conn_info, true, Some(info)).await;
         info.set_route(route);
         if let Some(address) = conn_info.resolved_dst {
             info.set_resolution(DestinationResolution::Resolved { address });
@@ -685,14 +741,22 @@ impl Dispatcher {
             match proxy_config.as_ref() {
                 ProxyImpl::Chain(vec) => (
                     Box::new(
-                        self.create_chain(&proxy_name, vec, src_addr, &dst_addr, iface_name)
-                            .map_err(|_| DispatchError::Reject)?,
+                        self.create_chain(
+                            routing.as_ref(),
+                            &proxy_name,
+                            vec,
+                            src_addr,
+                            &dst_addr,
+                            iface_name,
+                        )
+                        .map_err(|_| DispatchError::Reject)?,
                     ),
                     OutboundType::Chain,
                 ),
                 ProxyImpl::BlackHole => return Err(DispatchError::BlackHole),
                 _ => self
                     .build_normal_outbound(
+                        routing.as_ref(),
                         &proxy_name,
                         iface_name,
                         proxy_config.as_ref(),

@@ -1,6 +1,5 @@
 use crate::common::{MAX_PKT_SIZE, MAX_UDP_PKT_SIZE, io_err, local_async_run};
 use crate::config::DnsPreference;
-use crate::network::dns::Dns;
 use crate::proxy::NetworkAddr;
 use crate::proxy::error::TransportError;
 use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
@@ -100,31 +99,11 @@ struct WireguardTunnelInner {
 
 impl WireguardTunnel {
     pub async fn new(
-        name: &str,
         outbound: AdapterOrSocket,
         config: &WireguardConfig,
-        dns: Arc<Dns>,
+        endpoint: SocketAddr,
         smol_notify: Arc<Notify>,
     ) -> Result<Self, TransportError> {
-        let endpoint = match config.endpoint {
-            NetworkAddr::Socket { address: addr } => addr,
-            NetworkAddr::Domain {
-                name: ref domain_name,
-                port,
-            } => {
-                let resp = dns
-                    .genuine_lookup_for(
-                        domain_name,
-                        boltapi::DnsLookupPurpose::LinkServer {
-                            link: name.to_string(),
-                        },
-                        None,
-                    )
-                    .await?
-                    .ok_or_else(|| io_err("dns not found"))?;
-                SocketAddr::new(resp, port)
-            }
-        };
         let tunnel = Tunn::new(
             config.private_key.clone(),
             config.public_key,

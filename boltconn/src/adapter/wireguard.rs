@@ -1,4 +1,7 @@
-use crate::adapter::{AddrConnector, AddrConnectorWrapper, Connector, Outbound, OutboundType};
+use crate::adapter::{
+    AddrConnector, AddrConnectorWrapper, Connector, InitializationDecision, LinkDnsRuntime,
+    LinkInitializationTable, LinkRuntimeConfig, LinkTable, ManagedRuntime, Outbound, OutboundType,
+};
 
 use crate::adapter;
 use crate::adapter::udp_over_tcp::UdpOverTcpAdapter;
@@ -13,18 +16,28 @@ use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
 use bytes::Bytes;
 use hickory_resolver::Resolver;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+use hickory_resolver::config::ResolverOpts;
 use hickory_resolver::net::runtime::{DnsUdpSocket, TokioTime};
 use std::collections::HashMap;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, ready};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::select;
 use tokio::sync::{Mutex, Notify, RwLock, broadcast};
 use tokio::task::JoinHandle;
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
 
 // Shared Wireguard Tunnel between multiple client connections
 pub struct Endpoint {
@@ -35,6 +48,8 @@ pub struct Endpoint {
     notify: Arc<Notify>,
     is_active: AbortCanary,
     last_active: Arc<Mutex<Instant>>,
+    last_packet_at_ms: Arc<AtomicU64>,
+    connected_endpoint: SocketAddr,
 }
 
 impl Endpoint {
@@ -42,7 +57,7 @@ impl Endpoint {
         name: &str,
         outbound: AdapterOrSocket,
         config: &WireguardConfig,
-        endpoint_resolver: Arc<Dns>,
+        connected_endpoint: SocketAddr,
         timeout: Duration,
     ) -> Result<Arc<Self>, TransportError> {
         let notify = Arc::new(Notify::new());
@@ -53,7 +68,7 @@ impl Endpoint {
         let (mut wg_smol_tx, wg_smol_rx) = flume::bounded(4096);
         let (smol_wg_tx, mut smol_wg_rx) = flume::unbounded();
         let tunnel = Arc::new(
-            WireguardTunnel::new(name, outbound, config, endpoint_resolver, notify.clone()).await?,
+            WireguardTunnel::new(outbound, config, connected_endpoint, notify.clone()).await?,
         );
         let device = VirtualIpDevice::new(config.mtu, wg_smol_rx, smol_wg_tx);
         let smol_stack = {
@@ -98,6 +113,7 @@ impl Endpoint {
         };
 
         let last_active = Arc::new(Mutex::new(Instant::now()));
+        let last_packet_at_ms = Arc::new(AtomicU64::new(0));
         let (indicator, indi_write) = AbortCanary::pair();
 
         // drive wg tunnel
@@ -105,6 +121,7 @@ impl Endpoint {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
             let timer = last_active.clone();
+            let last_packet_at_ms = last_packet_at_ms.clone();
             let name = name.to_string();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
@@ -117,6 +134,7 @@ impl Endpoint {
                         return;
                     }
                     *timer.lock().await = Instant::now();
+                    last_packet_at_ms.store(now_ms(), Ordering::Relaxed);
                 }
             })
         };
@@ -125,6 +143,7 @@ impl Endpoint {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
             let timer = last_active.clone();
+            let last_packet_at_ms = last_packet_at_ms.clone();
             let name = name.to_string();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
@@ -134,7 +153,10 @@ impl Endpoint {
                         .receive_incoming_packet(&mut wg_smol_tx, &mut buf, &mut wg_buf)
                         .await
                     {
-                        Ok(true) => *timer.lock().await = Instant::now(),
+                        Ok(true) => {
+                            *timer.lock().await = Instant::now();
+                            last_packet_at_ms.store(now_ms(), Ordering::Relaxed);
+                        }
                         Ok(false) => {}
                         Err(e) => {
                             let _ = stop_send.send(());
@@ -265,6 +287,8 @@ impl Endpoint {
             notify,
             is_active: indicator,
             last_active,
+            last_packet_at_ms,
+            connected_endpoint,
         }))
     }
 
@@ -273,6 +297,9 @@ impl Endpoint {
     }
 
     pub fn abort_connection(&self) {
+        // Flip liveness synchronously so terminal evidence cannot race the
+        // asynchronous cleanup task that drains the broadcast stop signal.
+        self.is_active.abort();
         let _ = self.stop_sender.send(());
     }
 
@@ -286,76 +313,190 @@ impl Endpoint {
             hand_shake_is_expired: tunn_state.0,
         }
     }
+
+    async fn link_snapshot(
+        &self,
+    ) -> (
+        boltapi::LinkState,
+        boltapi::LinkHealth,
+        boltapi::LinkEvidence,
+    ) {
+        let task_alive = self.is_active.alive();
+        let (expired, handshake_elapsed) = self.wg.stats().await;
+        let observed_at_ms = now_ms();
+        let last_handshake_at_ms = handshake_elapsed.map(|elapsed| {
+            observed_at_ms.saturating_sub(elapsed.as_millis().try_into().unwrap_or(u64::MAX))
+        });
+        let evidence = boltapi::LinkEvidence::Wireguard {
+            task_alive,
+            last_handshake_at_ms,
+            handshake_expires_at_ms: last_handshake_at_ms
+                .map(|handshake| handshake.saturating_add(180_000)),
+            last_packet_at_ms: match self.last_packet_at_ms.load(Ordering::Relaxed) {
+                0 => None,
+                timestamp => Some(timestamp),
+            },
+        };
+        let health = if !task_alive || expired {
+            boltapi::LinkHealth::Unhealthy
+        } else if last_handshake_at_ms.is_none() {
+            boltapi::LinkHealth::Degraded
+        } else {
+            boltapi::LinkHealth::Healthy
+        };
+        let state = if task_alive {
+            boltapi::LinkState::Ready
+        } else {
+            boltapi::LinkState::Failed
+        };
+        (state, health, evidence)
+    }
 }
 
 pub struct WireguardManager {
     iface: String,
-    active_conn: RwLock<HashMap<WireguardConfig, Arc<Endpoint>>>,
-    initializing_conn: Mutex<HashMap<WireguardConfig, Arc<Notify>>>,
+    active_conn: RwLock<HashMap<String, ManagedRuntime<Endpoint>>>,
+    initializing_conn: LinkInitializationTable,
     endpoint_resolver: Arc<Dns>,
     timeout: Duration,
+    link_table: Arc<LinkTable>,
 }
 
 impl WireguardManager {
     pub fn new(iface: &str, dns: Arc<Dns>, timeout: Duration) -> Self {
+        Self::new_with_link_table(
+            iface,
+            dns,
+            timeout,
+            Arc::new(LinkTable::new(HashMap::new())),
+        )
+    }
+
+    pub(crate) fn new_with_link_table(
+        iface: &str,
+        dns: Arc<Dns>,
+        timeout: Duration,
+        link_table: Arc<LinkTable>,
+    ) -> Self {
         Self {
             iface: iface.to_string(),
             active_conn: Default::default(),
             initializing_conn: Default::default(),
             endpoint_resolver: dns,
             timeout,
+            link_table,
         }
     }
 
     pub async fn get_wg_conn(
         &self,
         name: &str,
-        config: &WireguardConfig,
+        requested: &LinkRuntimeConfig<WireguardConfig>,
         adapter: Option<AdapterOrSocket>,
         creating_new_conn: tokio::sync::oneshot::Sender<bool>,
     ) -> Result<Arc<Endpoint>, TransportError> {
-        // optimistic trial to avoid extra config.clone()
-        if let Some(ep) = self.active_conn.read().await.get(config)
-            && ep.is_active.alive()
-        {
-            let _ = creating_new_conn.send(false);
-            return Ok(ep.clone());
-        }
+        let config = &requested.config;
+        let mut lease = self
+            .link_table
+            .acquire(name, requested)
+            .map_err(|_| TransportError::Internal("stale WireGuard link acquisition"))?;
 
-        // either non-existing or conn is dead
-        let mut initing = self.initializing_conn.lock().await;
-        if let Some(notify) = initing.get(config) {
-            // another thread is creating the endpoint
-            let _ = creating_new_conn.send(false);
-            let notify = notify.clone();
-            drop(initing);
-            notify.notified().await;
-            if let Some(ep) = self.active_conn.read().await.get(config)
-                && ep.is_active.alive()
-            {
-                return Ok(ep.clone());
+        let active = self.active_conn.read().await.get(name).cloned();
+        if let Some(active) = active {
+            if active.generation == lease.generation.number() && active.runtime.is_active.alive() {
+                let _ = creating_new_conn.send(false);
+                return Ok(active.runtime);
             }
-            return Err(TransportError::WireGuard(
-                "get_wg_conn: endpoint creation failed",
-            ));
-        }
-        // creating new endpoint
-        let notify = Arc::new(Notify::new());
-        initing.insert(config.clone(), notify.clone());
-        drop(initing);
-        let _ = creating_new_conn.send(true);
-
-        let res = self.create_endpoint(name, config, adapter).await;
-        if let Ok(ref ep) = res {
-            let mut active_conn = self.active_conn.write().await;
-            active_conn.insert(config.clone(), ep.clone());
+            self.remove_and_finalize_dead(name, active).await;
+            // A dead cached runtime terminalizes its generation. Reacquire so
+            // the replacement is tagged with the next generation rather than
+            // doing network setup against an already-terminal record.
+            lease = self
+                .link_table
+                .acquire(name, requested)
+                .map_err(|_| TransportError::Internal("stale WireGuard link acquisition"))?;
         }
 
-        let mut initing = self.initializing_conn.lock().await;
-        initing.remove(config);
-        notify.notify_waiters();
-        drop(initing);
-        res.map_err(|_| TransportError::WireGuard("get_wg_conn: endpoint creation failed"))
+        match self
+            .initializing_conn
+            .begin(name, lease.generation.number())
+            .await
+        {
+            InitializationDecision::Wait(completed) => {
+                let _ = creating_new_conn.send(false);
+                LinkInitializationTable::wait(completed).await;
+                if let Some(active) = self.active_conn.read().await.get(name)
+                    && active.generation == lease.generation.number()
+                    && active.runtime.is_active.alive()
+                {
+                    return Ok(active.runtime.clone());
+                }
+                Err(TransportError::WireGuard(
+                    "get_wg_conn: endpoint creation failed",
+                ))
+            }
+            InitializationDecision::Create => {
+                let _ = creating_new_conn.send(true);
+                let result = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    self.create_endpoint(name, config, adapter, &lease.generation),
+                )
+                .await
+                .unwrap_or_else(|_| Err(TransportError::Timeout("WireGuard initialization")));
+                let endpoint = match result {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        self.initializing_conn
+                            .finish(name, lease.generation.number())
+                            .await;
+                        self.mark_creation_failure(name, lease.generation.number(), &error);
+                        return Err(error);
+                    }
+                };
+
+                if !self
+                    .link_table
+                    .is_current_generation(name, lease.generation.number())
+                {
+                    endpoint.abort_connection();
+                    self.retain_endpoint_snapshot(&lease.generation, &endpoint)
+                        .await;
+                    self.initializing_conn
+                        .finish(name, lease.generation.number())
+                        .await;
+                    return Err(TransportError::Internal(
+                        "WireGuard generation changed during initialization",
+                    ));
+                }
+
+                let managed = ManagedRuntime {
+                    generation: lease.generation.number(),
+                    record: lease.generation.clone(),
+                    runtime: endpoint.clone(),
+                };
+                self.active_conn
+                    .write()
+                    .await
+                    .insert(name.to_string(), managed);
+                // Reload may invalidate the generation between the pre-insert
+                // check and map insertion. A post-insert check closes that race.
+                if !self
+                    .link_table
+                    .is_current_generation(name, lease.generation.number())
+                {
+                    self.stop_generation(name, lease.generation.number()).await;
+                    return Err(TransportError::Internal(
+                        "WireGuard generation changed during initialization",
+                    ));
+                }
+                // Publish the initialized runtime before waking same-generation
+                // waiters so they cannot observe a successful-but-not-inserted gap.
+                self.initializing_conn
+                    .finish(name, lease.generation.number())
+                    .await;
+                Ok(endpoint)
+            }
+        }
     }
 
     async fn create_endpoint(
@@ -363,18 +504,13 @@ impl WireguardManager {
         name: &str,
         config: &WireguardConfig,
         adapter: Option<AdapterOrSocket>,
+        record: &Arc<crate::adapter::LinkGeneration>,
     ) -> Result<Arc<Endpoint>, TransportError> {
+        let server_addr =
+            adapter::get_link_dst(&self.endpoint_resolver, &config.endpoint, name, record).await?;
         let outbound = match adapter {
             Some(a) => a,
             None => {
-                let server_addr = adapter::get_dst(
-                    &self.endpoint_resolver,
-                    &config.endpoint,
-                    boltapi::DnsLookupPurpose::LinkServer {
-                        link: name.to_string(),
-                    },
-                )
-                .await?;
                 if config.over_tcp {
                     let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
                     AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(stream, server_addr)?))
@@ -394,36 +530,133 @@ impl WireguardManager {
                 }
             }
         };
-        Endpoint::new(
-            name,
-            outbound,
-            config,
-            self.endpoint_resolver.clone(),
-            self.timeout,
-        )
-        .await
+        let endpoint = Endpoint::new(name, outbound, config, server_addr, self.timeout).await?;
+        let dns = endpoint.stack.lock().await.get_dns();
+        record.attach_dns_runtime(LinkDnsRuntime::Wireguard(dns));
+        let (_, health, evidence) = endpoint.link_snapshot().await;
+        record.set_live_snapshot(
+            boltapi::LinkState::Ready,
+            health,
+            vec![server_addr],
+            evidence,
+        );
+        Ok(endpoint)
     }
 
     pub async fn stop_master_conn(&self, name: &str) {
-        let mut stopped = false;
-        for ep in self.active_conn.read().await.values() {
-            if ep.name == name {
-                stopped = true;
-                ep.abort_connection();
+        match self.link_table.stop(name) {
+            Ok(invalidation) => {
+                self.stop_generation(name, invalidation.generation).await;
                 tracing::info!("Stop WireGuard master connection #{}", name);
             }
-        }
-        if !stopped {
-            tracing::warn!(
-                "Stop WireGuard master connection #{} failed: no such connection",
-                name
-            );
+            Err(_) => {
+                tracing::warn!(
+                    "Stop WireGuard master connection #{} failed: no such connection",
+                    name
+                );
+            }
         }
     }
 
+    pub(crate) async fn stop_generation(&self, name: &str, generation: u64) {
+        self.initializing_conn.cancel(name, generation).await;
+        let runtime = {
+            let mut active = self.active_conn.write().await;
+            if active
+                .get(name)
+                .is_some_and(|runtime| runtime.generation == generation)
+            {
+                active.remove(name)
+            } else {
+                None
+            }
+        };
+        if let Some(runtime) = runtime {
+            runtime.runtime.abort_connection();
+            self.retain_endpoint_snapshot(&runtime.record, &runtime.runtime)
+                .await;
+        }
+    }
+
+    pub(crate) async fn refresh_evidence(&self) {
+        let runtimes: Vec<_> = self.active_conn.read().await.values().cloned().collect();
+        for runtime in runtimes {
+            let (state, health, evidence) = runtime.runtime.link_snapshot().await;
+            if state == boltapi::LinkState::Failed {
+                let name = runtime.runtime.name.clone();
+                self.remove_and_finalize_dead(&name, runtime).await;
+            } else {
+                runtime.record.set_live_snapshot(
+                    state,
+                    health,
+                    vec![runtime.runtime.connected_endpoint],
+                    evidence,
+                );
+            }
+        }
+    }
+
+    async fn remove_and_finalize_dead(&self, name: &str, runtime: ManagedRuntime<Endpoint>) {
+        {
+            let mut active = self.active_conn.write().await;
+            if active
+                .get(name)
+                .is_some_and(|current| current.generation == runtime.generation)
+            {
+                active.remove(name);
+            }
+        }
+        self.retain_endpoint_snapshot(&runtime.record, &runtime.runtime)
+            .await;
+        self.link_table.mark_terminal(
+            name,
+            runtime.generation,
+            boltapi::LinkState::Failed,
+            boltapi::LinkHealth::Unhealthy,
+            boltapi::LinkReason {
+                code: boltapi::LinkReasonCode::TaskStopped,
+                detail: None,
+            },
+        );
+    }
+
+    async fn retain_endpoint_snapshot(
+        &self,
+        record: &Arc<crate::adapter::LinkGeneration>,
+        endpoint: &Endpoint,
+    ) {
+        let (_, health, evidence) = endpoint.link_snapshot().await;
+        record.retain_final_snapshot(health, vec![endpoint.connected_endpoint], evidence);
+    }
+
+    fn mark_creation_failure(&self, name: &str, generation: u64, error: &TransportError) {
+        let code = match error {
+            TransportError::Dns(_) => boltapi::LinkReasonCode::DnsFailed,
+            TransportError::WireGuard(_) => boltapi::LinkReasonCode::ProtocolFailed,
+            _ => boltapi::LinkReasonCode::ConnectFailed,
+        };
+        self.link_table.mark_terminal(
+            name,
+            generation,
+            boltapi::LinkState::Failed,
+            boltapi::LinkHealth::Unhealthy,
+            boltapi::LinkReason {
+                code,
+                detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
+            },
+        );
+    }
+
     pub async fn debug_internal_state(&self) -> Vec<boltapi::MasterConnectionStatus> {
+        let endpoints: Vec<_> = self
+            .active_conn
+            .read()
+            .await
+            .values()
+            .map(|runtime| runtime.runtime.clone())
+            .collect();
         let mut ret = Vec::new();
-        for ep in self.active_conn.read().await.values() {
+        for ep in endpoints {
             let r = ep.debug_internal_state().await;
             ret.push(r);
         }
@@ -436,9 +669,8 @@ pub struct WireguardHandle {
     name: String,
     src: SocketAddr,
     dst: NetworkAddr,
-    config: Arc<WireguardConfig>,
+    config: LinkRuntimeConfig<WireguardConfig>,
     manager: Arc<WireguardManager>,
-    dns_config: Arc<ResolverConfig>,
 }
 
 impl WireguardHandle {
@@ -446,17 +678,15 @@ impl WireguardHandle {
         name: &str,
         src: SocketAddr,
         dst: NetworkAddr,
-        config: Box<WireguardConfig>,
+        config: LinkRuntimeConfig<WireguardConfig>,
         manager: Arc<WireguardManager>,
-        dns_config: Arc<ResolverConfig>,
     ) -> Self {
         Self {
             name: name.to_string(),
             src,
             dst,
-            config: Arc::from(config),
+            config,
             manager,
-            dns_config,
         }
     }
 
@@ -537,11 +767,9 @@ impl Outbound for WireguardHandle {
         conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let (tx, _) = tokio::sync::oneshot::channel();
-        let connect = adapter::connect_timeout(
-            self.clone()
-                .attach_tcp(inbound, abort_handle, None, tx, conn.clone()),
-            "WireGuard TCP",
-        );
+        let connect = self
+            .clone()
+            .attach_tcp(inbound, abort_handle, None, tx, conn.clone());
         tokio::spawn(async move {
             let result = connect.await;
             if result.is_ok()
@@ -567,15 +795,12 @@ impl Outbound for WireguardHandle {
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(adapter::connect_timeout(
-            self.clone().attach_tcp(
-                inbound,
-                abort_handle,
-                Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-                ret_tx,
-                conn,
-            ),
-            "WireGuard TCP multi-hop",
+        tokio::spawn(self.clone().attach_tcp(
+            inbound,
+            abort_handle,
+            Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
+            ret_tx,
+            conn,
         ));
         ret_rx
             .await
@@ -590,11 +815,9 @@ impl Outbound for WireguardHandle {
         conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let (ret_tx, _) = tokio::sync::oneshot::channel();
-        let connect = adapter::connect_timeout(
-            self.clone()
-                .attach_udp(inbound, abort_handle, None, ret_tx, conn.clone()),
-            "WireGuard UDP",
-        );
+        let connect = self
+            .clone()
+            .attach_udp(inbound, abort_handle, None, ret_tx, conn.clone());
         tokio::spawn(async move {
             let result = connect.await;
             if result.is_ok()
@@ -621,15 +844,12 @@ impl Outbound for WireguardHandle {
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(adapter::connect_timeout(
-            self.clone().attach_udp(
-                inbound,
-                abort_handle,
-                Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-                ret_tx,
-                conn,
-            ),
-            "WireGuard UDP multi-hop",
+        tokio::spawn(self.clone().attach_udp(
+            inbound,
+            abort_handle,
+            Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
+            ret_tx,
+            conn,
         ));
         ret_rx
             .await

@@ -104,10 +104,12 @@ impl App {
         let msg_bus = Arc::new(MessageBus::new());
 
         // initialize wireguard manager
-        let wg_mgr = Arc::new(WireguardManager::new(
+        let link_table = Arc::new(LinkTable::new(HashMap::new()));
+        let wg_mgr = Arc::new(WireguardManager::new_with_link_table(
             &outbound_iface,
             dns.clone(),
             Duration::from_secs(180),
+            link_table.clone(),
         ));
 
         // dispatch
@@ -123,7 +125,7 @@ impl App {
         )
         .and_then(|builder| builder.build(&loaded_config))
         .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?;
-        let link_table = Arc::new(LinkTable::new(dispatching_wrapper.links));
+        let _ = link_table.reconcile(dispatching_wrapper.links);
         let dispatching = Arc::new(dispatching_wrapper.dispatching);
         let dispatcher = {
             // tls mitm
@@ -384,7 +386,8 @@ impl App {
         // Reconcile and terminate invalidated dependencies before making the
         // replacement routing graph observable to new connections.
         self.dispatcher
-            .reconcile_link_configs(dispatching_wrapper.links);
+            .reconcile_link_configs(dispatching_wrapper.links)
+            .await;
         let dispatching = Arc::new(dispatching_wrapper.dispatching);
 
         // Publish every DNS selection input together. A lookup that started

@@ -1,7 +1,8 @@
 use crate::adapter::{
-    AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
+    AddrConnector, Connector, LinkRuntimeConfig, LinkTable, ManagedRuntime, Outbound, OutboundType,
+    established_tcp, established_udp,
 };
-use crate::common::cert::{CertVerify, make_tls_config};
+use crate::common::cert::make_tls_config;
 use crate::common::{StreamOutboundTrait, as_io_err, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
@@ -11,7 +12,6 @@ use crate::transport::UdpSocketAdapter;
 use crate::transport::anytls::{AnytlsClient, AnytlsConfig, AnytlsStream, UDP_OVER_TCP_DOMAIN};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,7 +29,7 @@ pub struct AnytlsOutboundHandle {
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
-    config: AnytlsConfig,
+    config: LinkRuntimeConfig<AnytlsConfig>,
     manager: Arc<AnytlsManager>,
 }
 
@@ -39,7 +39,7 @@ impl AnytlsOutboundHandle {
         iface_name: &str,
         dst: NetworkAddr,
         dns: Arc<Dns>,
-        config: AnytlsConfig,
+        config: LinkRuntimeConfig<AnytlsConfig>,
         manager: Arc<AnytlsManager>,
     ) -> Self {
         Self {
@@ -135,34 +135,52 @@ impl AnytlsOutboundHandle {
         outbound: Option<Box<dyn StreamOutboundTrait>>,
         used_outbound: Arc<AtomicBool>,
     ) -> Result<AnytlsStream, TransportError> {
-        let client = self.manager.get_client(&self.config).await;
-        let config = self.config.clone();
+        let managed = self.manager.get_client(&self.name, &self.config).await?;
+        let config = self.config.config.clone();
         let dns = self.dns.clone();
         let iface_name = self.iface_name.clone();
         let link_name = self.name.clone();
+        let record = managed.record.clone();
+        let generation = managed.generation;
 
-        client
+        let result = managed
+            .runtime
             .open_stream_with(dst, move || async move {
                 used_outbound.store(true, Ordering::Release);
-                let outbound = match outbound {
-                    Some(outbound) => outbound,
+                let (outbound, connected_endpoint) = match outbound {
+                    Some(outbound) => (outbound, None),
                     None => {
-                        let server_addr = lookup(
+                        let server_addr = crate::adapter::get_link_dst(
                             dns.as_ref(),
                             &config.server_addr,
-                            boltapi::DnsLookupPurpose::LinkServer {
-                                link: link_name.clone(),
-                            },
-                            None,
+                            &link_name,
+                            &record,
                         )
                         .await?;
                         let tcp_conn = Egress::new(&iface_name).tcp_stream(server_addr).await?;
-                        Box::new(tcp_conn) as Box<dyn StreamOutboundTrait>
+                        (
+                            Box::new(tcp_conn) as Box<dyn StreamOutboundTrait>,
+                            Some(server_addr),
+                        )
                     }
                 };
-                connect_proxy(&config, outbound).await
+                Ok((connect_proxy(&config, outbound).await?, connected_endpoint))
             })
-            .await
+            .await;
+        match result {
+            Ok(stream) => {
+                self.manager
+                    .refresh_generation(&self.name, generation)
+                    .await;
+                Ok(stream)
+            }
+            Err(error) => {
+                self.manager
+                    .finish_failed_if_unused(&self.name, generation, &error)
+                    .await;
+                Err(error)
+            }
+        }
     }
 }
 
@@ -293,85 +311,214 @@ impl Outbound for AnytlsOutboundHandle {
 }
 
 pub struct AnytlsManager {
-    clients: Mutex<HashMap<AnytlsClientKey, Arc<ManagedAnytlsClient>>>,
-}
-
-impl Default for AnytlsManager {
-    fn default() -> Self {
-        Self::new()
-    }
+    clients: Mutex<HashMap<String, ManagedRuntime<AnytlsClient>>>,
+    link_table: Arc<LinkTable>,
 }
 
 impl AnytlsManager {
-    pub fn new() -> Self {
+    pub fn new(link_table: Arc<LinkTable>) -> Self {
         Self {
             clients: Mutex::new(HashMap::new()),
+            link_table,
         }
     }
 
-    async fn get_client(&self, config: &AnytlsConfig) -> Arc<AnytlsClient> {
-        let key = AnytlsClientKey::from(config);
-        let mut clients = self.clients.lock().await;
-        if let Some(client) = clients.get(&key) {
-            return client.client.clone();
+    async fn get_client(
+        &self,
+        name: &str,
+        requested: &LinkRuntimeConfig<AnytlsConfig>,
+    ) -> Result<ManagedRuntime<AnytlsClient>, TransportError> {
+        let config = &requested.config;
+        let mut lease = self
+            .link_table
+            .acquire(name, requested)
+            .map_err(|_| TransportError::Internal("stale AnyTLS link acquisition"))?;
+
+        let stale = {
+            let mut clients = self.clients.lock().await;
+            match clients.get(name) {
+                Some(client)
+                    if client.generation == lease.generation.number()
+                        && !client.runtime.is_closed() =>
+                {
+                    return Ok(client.clone());
+                }
+                Some(_) => clients.remove(name),
+                None => None,
+            }
+        };
+        if let Some(stale) = stale {
+            let stale_generation = stale.generation;
+            self.close_runtime(stale).await;
+            self.link_table.mark_terminal(
+                name,
+                stale_generation,
+                boltapi::LinkState::Failed,
+                boltapi::LinkHealth::Unhealthy,
+                boltapi::LinkReason {
+                    code: boltapi::LinkReasonCode::TaskStopped,
+                    detail: None,
+                },
+            );
+            // A closed pool represents a completed generation. Reacquire the
+            // newly created generation before installing the replacement pool.
+            lease = self
+                .link_table
+                .acquire(name, requested)
+                .map_err(|_| TransportError::Internal("stale AnyTLS link acquisition"))?;
         }
 
         let client = Arc::new(AnytlsClient::new(config));
-        let managed = Arc::new(ManagedAnytlsClient {
-            client: client.clone(),
-            cleanup_handle: client.spawn_idle_cleanup(),
-        });
-        clients.insert(key, managed);
-        client
+        client.start_idle_cleanup();
+        let managed = ManagedRuntime {
+            generation: lease.generation.number(),
+            record: lease.generation.clone(),
+            runtime: client,
+        };
+        let concurrent = {
+            let mut clients = self.clients.lock().await;
+            if let Some(existing) = clients.get(name)
+                && existing.generation == managed.generation
+                && !existing.runtime.is_closed()
+            {
+                Some(existing.clone())
+            } else {
+                clients.insert(name.to_string(), managed.clone());
+                None
+            }
+        };
+        if let Some(existing) = concurrent {
+            managed.runtime.close().await;
+            return Ok(existing);
+        }
+        if !self
+            .link_table
+            .is_current_generation(name, lease.generation.number())
+        {
+            self.stop_generation(name, lease.generation.number()).await;
+            return Err(TransportError::Internal(
+                "AnyTLS generation changed during client creation",
+            ));
+        }
+        self.refresh_runtime(&managed).await;
+        Ok(managed)
     }
-}
 
-struct ManagedAnytlsClient {
-    client: Arc<AnytlsClient>,
-    cleanup_handle: JoinHandle<()>,
-}
-
-impl Drop for ManagedAnytlsClient {
-    fn drop(&mut self) {
-        self.cleanup_handle.abort();
+    pub(crate) async fn stop_generation(&self, name: &str, generation: u64) {
+        let runtime = {
+            let mut clients = self.clients.lock().await;
+            if clients
+                .get(name)
+                .is_some_and(|runtime| runtime.generation == generation)
+            {
+                clients.remove(name)
+            } else {
+                None
+            }
+        };
+        if let Some(runtime) = runtime {
+            self.close_runtime(runtime).await;
+        }
     }
-}
 
-#[derive(Clone, Eq, PartialEq)]
-struct AnytlsClientKey {
-    server_addr: NetworkAddr,
-    password: String,
-    sni: String,
-    cert_verify: CertVerify,
-    reuse_session: bool,
-}
-
-impl Hash for AnytlsClientKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.server_addr.hash(state);
-        self.password.hash(state);
-        self.sni.hash(state);
-        match &self.cert_verify {
-            CertVerify::Verify => 0u8.hash(state),
-            CertVerify::SkipVerify => 1u8.hash(state),
-            CertVerify::Pinned(cert) => {
-                2u8.hash(state);
-                cert.as_ref().hash(state);
+    pub(crate) async fn refresh_evidence(&self) {
+        let runtimes: Vec<_> = self
+            .clients
+            .lock()
+            .await
+            .iter()
+            .map(|(name, runtime)| (name.clone(), runtime.clone()))
+            .collect();
+        for (name, runtime) in runtimes {
+            let (state, health, endpoints, evidence) = runtime.runtime.link_snapshot().await;
+            if matches!(
+                state,
+                boltapi::LinkState::Closed | boltapi::LinkState::Failed
+            ) {
+                {
+                    let mut clients = self.clients.lock().await;
+                    if clients
+                        .get(&name)
+                        .is_some_and(|current| current.generation == runtime.generation)
+                    {
+                        clients.remove(&name);
+                    }
+                }
+                runtime
+                    .record
+                    .retain_final_snapshot(health, endpoints, evidence);
+                self.link_table.mark_terminal(
+                    &name,
+                    runtime.generation,
+                    boltapi::LinkState::Failed,
+                    health,
+                    boltapi::LinkReason {
+                        code: boltapi::LinkReasonCode::TaskStopped,
+                        detail: None,
+                    },
+                );
+            } else {
+                runtime
+                    .record
+                    .set_live_snapshot(state, health, endpoints, evidence);
             }
         }
-        self.reuse_session.hash(state);
     }
-}
 
-impl From<&AnytlsConfig> for AnytlsClientKey {
-    fn from(value: &AnytlsConfig) -> Self {
-        Self {
-            server_addr: value.server_addr.clone(),
-            password: value.password.clone(),
-            sni: value.sni.clone(),
-            cert_verify: value.cert_verify.clone(),
-            reuse_session: value.reuse_session,
+    async fn refresh_generation(&self, name: &str, generation: u64) {
+        let runtime = self.clients.lock().await.get(name).cloned();
+        if let Some(runtime) = runtime
+            && runtime.generation == generation
+        {
+            self.refresh_runtime(&runtime).await;
         }
+    }
+
+    async fn refresh_runtime(&self, runtime: &ManagedRuntime<AnytlsClient>) {
+        let (state, health, endpoints, evidence) = runtime.runtime.link_snapshot().await;
+        runtime
+            .record
+            .set_live_snapshot(state, health, endpoints, evidence);
+    }
+
+    async fn finish_failed_if_unused(&self, name: &str, generation: u64, error: &TransportError) {
+        let runtime = self.clients.lock().await.get(name).cloned();
+        let Some(runtime) = runtime.filter(|runtime| runtime.generation == generation) else {
+            return;
+        };
+        let (_, _, _, evidence) = runtime.runtime.link_snapshot().await;
+        let unused = matches!(evidence, boltapi::LinkEvidence::Anytls { sessions: 0, .. });
+        if !unused {
+            self.refresh_runtime(&runtime).await;
+            return;
+        }
+
+        self.stop_generation(name, generation).await;
+        let code = match error {
+            TransportError::Dns(_) => boltapi::LinkReasonCode::DnsFailed,
+            TransportError::Handshake(_) | TransportError::Anytls(_) => {
+                boltapi::LinkReasonCode::ProtocolFailed
+            }
+            _ => boltapi::LinkReasonCode::ConnectFailed,
+        };
+        self.link_table.mark_terminal(
+            name,
+            generation,
+            boltapi::LinkState::Failed,
+            boltapi::LinkHealth::Unhealthy,
+            boltapi::LinkReason {
+                code,
+                detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
+            },
+        );
+    }
+
+    async fn close_runtime(&self, runtime: ManagedRuntime<AnytlsClient>) {
+        let (_, health, endpoints, evidence) = runtime.runtime.link_snapshot().await;
+        runtime.runtime.close().await;
+        runtime
+            .record
+            .retain_final_snapshot(health, endpoints, evidence);
     }
 }
 
@@ -567,5 +714,108 @@ where
             })
         }
         _ => Err(TransportError::Anytls("Invalid AnyTLS UDP address type")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::{ConfiguredLinkRoute, LinkConfig, NamedLinkConfig};
+    use crate::common::cert::CertVerify;
+
+    fn configs(name: &str) -> (NamedLinkConfig, LinkRuntimeConfig<AnytlsConfig>) {
+        let protocol = AnytlsConfig::new(
+            NetworkAddr::Domain {
+                name: "anytls.example".to_string(),
+                port: 443,
+            },
+            "secret",
+            "anytls.example",
+            CertVerify::Verify,
+        );
+        let routes = vec![ConfiguredLinkRoute {
+            chain: name.to_string(),
+            hops: vec![name.to_string()],
+            interface: None,
+        }];
+        (
+            NamedLinkConfig::new(LinkConfig::Anytls(protocol.clone()), routes.clone()),
+            LinkRuntimeConfig::new(protocol, routes),
+        )
+    }
+
+    #[tokio::test]
+    async fn pools_are_keyed_by_proxy_name() {
+        let (first_named, first) = configs("first");
+        let (second_named, second) = configs("second");
+        let table = Arc::new(LinkTable::new(HashMap::from([
+            ("first".to_string(), first_named),
+            ("second".to_string(), second_named),
+        ])));
+        let manager = AnytlsManager::new(table);
+
+        let first_pool = manager.get_client("first", &first).await.unwrap();
+        let first_again = manager.get_client("first", &first).await.unwrap();
+        let second_pool = manager.get_client("second", &second).await.unwrap();
+
+        assert_eq!(first_pool.generation, 1);
+        assert!(Arc::ptr_eq(&first_pool.runtime, &first_again.runtime));
+        assert!(!Arc::ptr_eq(&first_pool.runtime, &second_pool.runtime));
+
+        first_pool.runtime.close().await;
+        second_pool.runtime.close().await;
+    }
+
+    #[tokio::test]
+    async fn stop_closes_only_the_addressed_generation_and_recreation_increments() {
+        let (named, config) = configs("link");
+        let table = Arc::new(LinkTable::new(HashMap::from([("link".to_string(), named)])));
+        let manager = AnytlsManager::new(table.clone());
+        let first = manager.get_client("link", &config).await.unwrap();
+
+        let stopped = table.stop("link").unwrap();
+        manager.stop_generation("link", stopped.generation).await;
+        assert!(first.runtime.is_closed());
+
+        let replacement = manager.get_client("link", &config).await.unwrap();
+        assert_eq!(replacement.generation, first.generation + 1);
+        assert!(!replacement.runtime.is_closed());
+
+        // A delayed stop for generation 1 cannot find or close generation 2.
+        manager.stop_generation("link", first.generation).await;
+        assert!(!replacement.runtime.is_closed());
+        let current = manager.clients.lock().await.get("link").cloned().unwrap();
+        assert_eq!(current.generation, replacement.generation);
+        assert!(Arc::ptr_eq(&current.runtime, &replacement.runtime));
+
+        // Avoid leaving the cleanup task alive past the test runtime.
+        replacement.runtime.close().await;
+    }
+
+    #[tokio::test]
+    async fn refresh_removes_dead_pool_and_retains_terminal_evidence() {
+        let (named, config) = configs("link");
+        let table = Arc::new(LinkTable::new(HashMap::from([("link".to_string(), named)])));
+        let manager = AnytlsManager::new(table.clone());
+        let first = manager.get_client("link", &config).await.unwrap();
+        first.runtime.close().await;
+
+        manager.refresh_evidence().await;
+        assert!(manager.clients.lock().await.get("link").is_none());
+        let detail = table.detail("link", u64::MAX).unwrap();
+        assert_eq!(detail.summary.state, boltapi::LinkState::Failed);
+        assert_eq!(detail.summary.health, boltapi::LinkHealth::Unhealthy);
+        assert_eq!(
+            detail.summary.reason.unwrap().code,
+            boltapi::LinkReasonCode::TaskStopped
+        );
+        assert!(matches!(
+            detail.evidence,
+            boltapi::LinkEvidence::Anytls { sessions: 0, .. }
+        ));
+
+        let replacement = manager.get_client("link", &config).await.unwrap();
+        assert_eq!(replacement.generation, first.generation + 1);
+        replacement.runtime.close().await;
     }
 }

@@ -102,6 +102,7 @@ pub struct Dispatching {
 
     wg_mgr: Option<Arc<WireguardManager>>,
     chain_reconnection: HashMap<String, Vec<String>>,
+    links: HashMap<String, NamedLinkConfig>,
 }
 
 /// A routing build and the immutable reusable-link inputs derived from the same
@@ -198,6 +199,10 @@ impl Dispatching {
 
     fn get_group(&self, name: &str) -> Option<&ProxyGroup> {
         self.groups.get(name).map(|x| &**x)
+    }
+
+    pub(crate) fn link_routes(&self, name: &str) -> Option<&[ConfiguredLinkRoute]> {
+        self.links.get(name).map(|link| link.routes.as_slice())
     }
 }
 
@@ -399,6 +404,7 @@ impl DispatchingBuilder {
                 },
                 wg_mgr,
                 chain_reconnection,
+                links: links.clone(),
             },
             links,
         })
@@ -661,6 +667,7 @@ impl DispatchingBuilder {
             },
             wg_mgr: None,
             chain_reconnection: HashMap::new(),
+            links: HashMap::new(),
         })
     }
 

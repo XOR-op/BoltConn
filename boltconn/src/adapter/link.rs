@@ -1,16 +1,19 @@
 use crate::dispatch::ProxyImpl;
+use crate::network::dns::GenericDns;
 use crate::proxy::NetworkAddr;
 use crate::transport::anytls::AnytlsConfig;
+use crate::transport::smol::SmolDnsProvider;
 use crate::transport::ssh::{SshAuthentication, SshConfig};
 use crate::transport::wireguard::WireguardConfig;
 use boltapi::{
-    ApiError, ApiErrorCode, ConnResultCode, DnsActivity, DnsOutcomeCounts, LinkDetail,
-    LinkEvidence, LinkHealth, LinkKind, LinkReason, LinkReasonCode, LinkState, LinkSummary,
-    Snapshot, Traffic,
+    ApiError, ApiErrorCode, ConnResultCode, DnsActivity, DnsCacheStatus, DnsLookupDetail,
+    DnsOutcome, DnsOutcomeCounts, LinkDetail, LinkEvidence, LinkHealth, LinkKind, LinkReason,
+    LinkReasonCode, LinkState, LinkSummary, Snapshot, Traffic,
 };
 use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -199,6 +202,45 @@ impl NamedLinkConfig {
     }
 }
 
+/// The protocol-typed configuration carried by dataplane handles and managers.
+///
+/// `NamedLinkConfig` remains heterogeneous because the shared table reconciles
+/// all link kinds. Once dispatch has selected a concrete proxy kind, this type
+/// prevents a WireGuard/SSH/AnyTLS handle from receiving another kind.
+#[derive(Clone)]
+pub(crate) struct LinkRuntimeConfig<T> {
+    pub(crate) config: T,
+    routes: Vec<ConfiguredLinkRoute>,
+}
+
+impl<T> LinkRuntimeConfig<T> {
+    pub(crate) fn new(config: T, routes: Vec<ConfiguredLinkRoute>) -> Self {
+        Self { config, routes }
+    }
+}
+
+pub(crate) trait LinkProtocolConfig: Clone {
+    fn same_config_as(&self, configured: &LinkConfig) -> bool;
+}
+
+impl LinkProtocolConfig for WireguardConfig {
+    fn same_config_as(&self, configured: &LinkConfig) -> bool {
+        matches!(configured, LinkConfig::Wireguard(config) if same_wireguard(self, config))
+    }
+}
+
+impl LinkProtocolConfig for SshConfig {
+    fn same_config_as(&self, configured: &LinkConfig) -> bool {
+        matches!(configured, LinkConfig::Ssh(config) if same_ssh(self, config))
+    }
+}
+
+impl LinkProtocolConfig for AnytlsConfig {
+    fn same_config_as(&self, configured: &LinkConfig) -> bool {
+        matches!(configured, LinkConfig::Anytls(config) if same_anytls(self, config))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LinkAcquireError {
     NotConfigured,
@@ -209,6 +251,87 @@ pub(crate) enum LinkAcquireError {
 pub(crate) struct LinkLease {
     pub(crate) generation: Arc<LinkGeneration>,
     pub(crate) created: bool,
+}
+
+/// Typed runtime ownership remains in the protocol manager while the shared
+/// generation record remains in `LinkTable`.
+pub(crate) struct ManagedRuntime<T> {
+    pub(crate) generation: u64,
+    pub(crate) record: Arc<LinkGeneration>,
+    pub(crate) runtime: Arc<T>,
+}
+
+impl<T> Clone for ManagedRuntime<T> {
+    fn clone(&self) -> Self {
+        Self {
+            generation: self.generation,
+            record: self.record.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
+}
+
+pub(crate) enum InitializationDecision {
+    Create,
+    Wait(tokio::sync::watch::Receiver<bool>),
+}
+
+struct InitializingGeneration {
+    generation: u64,
+    completed: tokio::sync::watch::Sender<bool>,
+}
+
+/// Per-name initialization coordination shared by the WireGuard and SSH
+/// managers. A replacement generation wakes old waiters without allowing the
+/// old initializer to remove the replacement's entry when it eventually exits.
+#[derive(Default)]
+pub(crate) struct LinkInitializationTable {
+    inner: tokio::sync::Mutex<HashMap<String, InitializingGeneration>>,
+}
+
+impl LinkInitializationTable {
+    pub(crate) async fn begin(&self, name: &str, generation: u64) -> InitializationDecision {
+        let mut inner = self.inner.lock().await;
+        if let Some(initializing) = inner.get(name)
+            && initializing.generation == generation
+        {
+            return InitializationDecision::Wait(initializing.completed.subscribe());
+        }
+
+        if let Some(stale) = inner.remove(name) {
+            let _ = stale.completed.send(true);
+        }
+        let (completed, _) = tokio::sync::watch::channel(false);
+        inner.insert(
+            name.to_string(),
+            InitializingGeneration {
+                generation,
+                completed,
+            },
+        );
+        InitializationDecision::Create
+    }
+
+    pub(crate) async fn finish(&self, name: &str, generation: u64) {
+        let mut inner = self.inner.lock().await;
+        if inner
+            .get(name)
+            .is_some_and(|initializing| initializing.generation == generation)
+            && let Some(initializing) = inner.remove(name)
+        {
+            let _ = initializing.completed.send(true);
+        }
+    }
+
+    pub(crate) async fn cancel(&self, name: &str, generation: u64) {
+        self.finish(name, generation).await;
+    }
+
+    pub(crate) async fn wait(mut completed: tokio::sync::watch::Receiver<bool>) {
+        if !*completed.borrow() {
+            let _ = completed.wait_for(|done| *done).await;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -255,10 +378,24 @@ struct LinkGenerationState {
     health: LinkHealth,
     ended_at_ms: Option<u64>,
     reason: Option<LinkReason>,
-    connected_endpoints: Vec<std::net::SocketAddr>,
+    connected_endpoints: Vec<SocketAddr>,
     chain: Vec<boltapi::RouteHop>,
     evidence: LinkEvidence,
     dns: DnsActivity,
+    dns_runtime: Option<LinkDnsRuntime>,
+}
+
+#[derive(Clone)]
+pub(crate) enum LinkDnsRuntime {
+    Wireguard(Arc<GenericDns<SmolDnsProvider>>),
+}
+
+impl LinkDnsRuntime {
+    fn activity(&self) -> DnsActivity {
+        match self {
+            Self::Wireguard(dns) => dns.dns_activity(),
+        }
+    }
 }
 
 impl LinkGeneration {
@@ -277,6 +414,7 @@ impl LinkGeneration {
                 chain: Vec::new(),
                 evidence: empty_evidence(config.kind()),
                 dns: empty_dns_activity(),
+                dns_runtime: None,
             }),
             completed_upload: AtomicU64::new(0),
             completed_download: AtomicU64::new(0),
@@ -291,6 +429,109 @@ impl LinkGeneration {
 
     pub(crate) fn kind(&self) -> LinkKind {
         self.kind
+    }
+
+    pub(crate) fn set_live_snapshot(
+        &self,
+        state: LinkState,
+        health: LinkHealth,
+        mut connected_endpoints: Vec<SocketAddr>,
+        evidence: LinkEvidence,
+    ) -> bool {
+        if is_terminal(state) || !evidence_matches_kind(&evidence, self.kind) {
+            return false;
+        }
+        connected_endpoints.sort_unstable();
+        connected_endpoints.dedup();
+        let mut current = self.state.lock().unwrap();
+        if is_terminal(current.state) {
+            return false;
+        }
+        current.state = state;
+        current.health = health;
+        current.connected_endpoints = connected_endpoints;
+        current.evidence = evidence;
+        true
+    }
+
+    pub(crate) fn set_live_evidence(
+        &self,
+        state: LinkState,
+        health: LinkHealth,
+        evidence: LinkEvidence,
+    ) -> bool {
+        if is_terminal(state) || !evidence_matches_kind(&evidence, self.kind) {
+            return false;
+        }
+        let mut current = self.state.lock().unwrap();
+        if is_terminal(current.state) {
+            return false;
+        }
+        current.state = state;
+        current.health = health;
+        current.evidence = evidence;
+        true
+    }
+
+    /// Managers call this before dropping a runtime. It intentionally updates a
+    /// terminal record as well, preserving the final observable protocol state.
+    pub(crate) fn retain_final_snapshot(
+        &self,
+        health: LinkHealth,
+        mut connected_endpoints: Vec<SocketAddr>,
+        evidence: LinkEvidence,
+    ) {
+        if !evidence_matches_kind(&evidence, self.kind) {
+            return;
+        }
+        connected_endpoints.sort_unstable();
+        connected_endpoints.dedup();
+        let mut current = self.state.lock().unwrap();
+        // Reload and explicit-stop paths terminalize the record before the
+        // manager closes its runtime. Preserve that authoritative terminal
+        // health while still copying the runtime's last endpoints/evidence.
+        if !is_terminal(current.state) {
+            current.health = health;
+        }
+        current.connected_endpoints = connected_endpoints;
+        current.evidence = evidence;
+        if let Some(runtime) = current.dns_runtime.take() {
+            merge_dns_activity(&mut current.dns, runtime.activity());
+        }
+        if is_terminal(current.state) {
+            self.active_conn_count.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn retain_final_evidence(&self, health: LinkHealth, evidence: LinkEvidence) {
+        if !evidence_matches_kind(&evidence, self.kind) {
+            return;
+        }
+        let mut current = self.state.lock().unwrap();
+        if !is_terminal(current.state) {
+            current.health = health;
+        }
+        current.evidence = evidence;
+        if let Some(runtime) = current.dns_runtime.take() {
+            merge_dns_activity(&mut current.dns, runtime.activity());
+        }
+        if is_terminal(current.state) {
+            self.active_conn_count.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn attach_dns_runtime(&self, runtime: LinkDnsRuntime) -> bool {
+        let mut current = self.state.lock().unwrap();
+        if is_terminal(current.state) {
+            return false;
+        }
+        current.dns_runtime = Some(runtime);
+        true
+    }
+
+    pub(crate) fn record_dns_lookup(&self, lookup: DnsLookupDetail) {
+        let mut current = self.state.lock().unwrap();
+        observe_dns_lookup(&mut current.dns, lookup);
     }
 }
 
@@ -363,10 +604,10 @@ impl LinkTable {
     /// Acquires the latest generation only if the calling dispatcher's complete
     /// config still matches the table. This is the stale-acquisition barrier
     /// used while an old `Dispatching` drains during reload.
-    pub(crate) fn acquire(
+    pub(crate) fn acquire<T: LinkProtocolConfig>(
         &self,
         name: &str,
-        requested: &NamedLinkConfig,
+        requested: &LinkRuntimeConfig<T>,
     ) -> Result<LinkLease, LinkAcquireError> {
         let link = self
             .links
@@ -380,7 +621,9 @@ impl LinkTable {
             .configured
             .as_ref()
             .ok_or(LinkAcquireError::NotConfigured)?;
-        if !configured.same_effective_config(requested) {
+        if configured.routes != requested.routes
+            || !requested.config.same_config_as(&configured.config)
+        {
             return Err(LinkAcquireError::StaleConfig);
         }
         let generation_config = configured.config.clone();
@@ -433,6 +676,19 @@ impl LinkTable {
         })
     }
 
+    pub(crate) fn is_current_generation(&self, name: &str, generation: u64) -> bool {
+        let Some(link) = self.links.read().unwrap().get(name).cloned() else {
+            return false;
+        };
+        let inner = link.inner.lock().unwrap();
+        if inner.configured.is_none() {
+            return false;
+        }
+        inner.latest.as_ref().is_some_and(|latest| {
+            latest.number == generation && !is_terminal(latest.state.lock().unwrap().state)
+        })
+    }
+
     /// First terminal callback for the current generation wins. A delayed
     /// callback carrying an older generation can never close its replacement.
     pub(crate) fn mark_terminal(
@@ -455,6 +711,10 @@ impl LinkTable {
             current.health = health;
             current.ended_at_ms = Some(now_ms());
             current.reason = Some(reason);
+            if let Some(runtime) = current.dns_runtime.take() {
+                merge_dns_activity(&mut current.dns, runtime.activity());
+            }
+            latest.active_conn_count.store(0, Ordering::Relaxed);
             true
         })
     }
@@ -577,6 +837,10 @@ impl Link {
         let latest = inner.latest.as_ref()?;
         let state = latest.state.lock().unwrap().clone();
         let summary = self.summary_from(latest, &state, observed_at_ms);
+        let mut dns = state.dns;
+        if let Some(runtime) = state.dns_runtime {
+            merge_dns_activity(&mut dns, runtime.activity());
+        }
         Some(LinkDetail {
             observed_at_ms,
             summary,
@@ -590,7 +854,7 @@ impl Link {
             connected_endpoints: state.connected_endpoints,
             chain: state.chain,
             evidence: state.evidence,
-            dns: state.dns,
+            dns,
         })
     }
 
@@ -654,6 +918,10 @@ fn invalidate_latest(inner: &LinkInner, reason: LinkReasonCode) -> Option<u64> {
         code: reason,
         detail: None,
     });
+    if let Some(runtime) = state.dns_runtime.take() {
+        merge_dns_activity(&mut state.dns, runtime.activity());
+    }
+    latest.active_conn_count.store(0, Ordering::Relaxed);
     Some(latest.number)
 }
 
@@ -696,6 +964,90 @@ fn empty_dns_activity() -> DnsActivity {
             errors: Vec::new(),
         },
         latest_lookup: None,
+    }
+}
+
+fn evidence_matches_kind(evidence: &LinkEvidence, kind: LinkKind) -> bool {
+    matches!(
+        (evidence, kind),
+        (LinkEvidence::Wireguard { .. }, LinkKind::Wireguard)
+            | (LinkEvidence::Ssh { .. }, LinkKind::Ssh)
+            | (LinkEvidence::Anytls { .. }, LinkKind::Anytls)
+    )
+}
+
+fn observe_dns_lookup(activity: &mut DnsActivity, lookup: DnsLookupDetail) {
+    activity.lookups = activity.lookups.saturating_add(1);
+    if matches!(lookup.cache, DnsCacheStatus::Hit { .. }) {
+        activity.outcomes.cache_hits = activity.outcomes.cache_hits.saturating_add(1);
+    }
+    match &lookup.result {
+        DnsOutcome::Answered { .. } => {
+            activity.outcomes.answered = activity.outcomes.answered.saturating_add(1);
+        }
+        DnsOutcome::Timeout => {
+            activity.outcomes.timeout = activity.outcomes.timeout.saturating_add(1);
+        }
+        DnsOutcome::Error { code, .. } => {
+            activity.outcomes.error = activity.outcomes.error.saturating_add(1);
+            if let Some(error) = activity
+                .outcomes
+                .errors
+                .iter_mut()
+                .find(|error| error.code == *code)
+            {
+                error.count = error.count.saturating_add(1);
+            } else {
+                activity.outcomes.errors.push(boltapi::DnsErrorCount {
+                    code: *code,
+                    count: 1,
+                });
+                activity
+                    .outcomes
+                    .errors
+                    .sort_by_key(|error| error.code as u8);
+            }
+        }
+    }
+    activity.latest_lookup = Some(lookup);
+}
+
+fn merge_dns_activity(activity: &mut DnsActivity, additional: DnsActivity) {
+    activity.lookups = activity.lookups.saturating_add(additional.lookups);
+    activity.outcomes.cache_hits = activity
+        .outcomes
+        .cache_hits
+        .saturating_add(additional.outcomes.cache_hits);
+    activity.outcomes.answered = activity
+        .outcomes
+        .answered
+        .saturating_add(additional.outcomes.answered);
+    activity.outcomes.timeout = activity
+        .outcomes
+        .timeout
+        .saturating_add(additional.outcomes.timeout);
+    activity.outcomes.error = activity
+        .outcomes
+        .error
+        .saturating_add(additional.outcomes.error);
+    for additional_error in additional.outcomes.errors {
+        if let Some(error) = activity
+            .outcomes
+            .errors
+            .iter_mut()
+            .find(|error| error.code == additional_error.code)
+        {
+            error.count = error.count.saturating_add(additional_error.count);
+        } else {
+            activity.outcomes.errors.push(additional_error);
+        }
+    }
+    activity
+        .outcomes
+        .errors
+        .sort_by_key(|error| error.code as u8);
+    if additional.latest_lookup.is_some() {
+        activity.latest_lookup = additional.latest_lookup;
     }
 }
 
@@ -745,6 +1097,16 @@ mod tests {
         HashMap::from([("link".to_string(), config)])
     }
 
+    fn acquire(table: &LinkTable, config: &NamedLinkConfig) -> Result<LinkLease, LinkAcquireError> {
+        let LinkConfig::Anytls(protocol) = &config.config else {
+            panic!("test helper expects AnyTLS")
+        };
+        table.acquire(
+            "link",
+            &LinkRuntimeConfig::new(protocol.clone(), config.routes.clone()),
+        )
+    }
+
     #[test]
     fn configured_but_never_used_is_omitted() {
         let table = LinkTable::new(configs(anytls("secret")));
@@ -756,11 +1118,11 @@ mod tests {
     fn unchanged_config_preserves_generation() {
         let config = anytls("secret");
         let table = LinkTable::new(configs(config.clone()));
-        let first = table.acquire("link", &config).unwrap();
+        let first = acquire(&table, &config).unwrap();
         assert!(first.created);
 
         assert!(table.reconcile(configs(config.clone())).is_empty());
-        let second = table.acquire("link", &config).unwrap();
+        let second = acquire(&table, &config).unwrap();
         assert!(!second.created);
         assert!(Arc::ptr_eq(&first.generation, &second.generation));
     }
@@ -770,13 +1132,13 @@ mod tests {
         let old = anytls("old-secret");
         let new = anytls("new-secret");
         let table = LinkTable::new(configs(old.clone()));
-        let first = table.acquire("link", &old).unwrap();
+        let first = acquire(&table, &old).unwrap();
 
         let invalidations = table.reconcile(configs(new.clone()));
         assert_eq!(invalidations.len(), 1);
         assert_eq!(invalidations[0].reason, LinkReasonCode::ConfigChanged);
         assert_eq!(
-            table.acquire("link", &old).err(),
+            acquire(&table, &old).err(),
             Some(LinkAcquireError::StaleConfig)
         );
         let summary = &table.snapshot(now_ms()).items[0];
@@ -786,7 +1148,7 @@ mod tests {
             Some(LinkReasonCode::ConfigChanged)
         );
 
-        let replacement = table.acquire("link", &new).unwrap();
+        let replacement = acquire(&table, &new).unwrap();
         assert_eq!(
             replacement.generation.number(),
             first.generation.number() + 1
@@ -797,12 +1159,12 @@ mod tests {
     fn removed_and_readded_name_keeps_lineage() {
         let config = anytls("secret");
         let table = LinkTable::new(configs(config.clone()));
-        let first = table.acquire("link", &config).unwrap();
+        let first = acquire(&table, &config).unwrap();
 
         let invalidations = table.reconcile(HashMap::new());
         assert_eq!(invalidations[0].reason, LinkReasonCode::ConfigRemoved);
         assert_eq!(
-            table.acquire("link", &config).err(),
+            acquire(&table, &config).err(),
             Some(LinkAcquireError::NotConfigured)
         );
         let removed = &table.snapshot(now_ms()).items[0];
@@ -812,7 +1174,7 @@ mod tests {
         );
 
         assert!(table.reconcile(configs(config.clone())).is_empty());
-        let replacement = table.acquire("link", &config).unwrap();
+        let replacement = acquire(&table, &config).unwrap();
         assert_eq!(
             replacement.generation.number(),
             first.generation.number() + 1
@@ -827,10 +1189,7 @@ mod tests {
         assert!(table.snapshot(now_ms()).items.is_empty());
 
         assert!(table.reconcile(configs(config.clone())).is_empty());
-        assert_eq!(
-            table.acquire("link", &config).unwrap().generation.number(),
-            1
-        );
+        assert_eq!(acquire(&table, &config).unwrap().generation.number(), 1);
     }
 
     #[test]
@@ -838,9 +1197,9 @@ mod tests {
         let old = anytls("old-secret");
         let new = anytls("new-secret");
         let table = LinkTable::new(configs(old.clone()));
-        let first = table.acquire("link", &old).unwrap();
+        let first = acquire(&table, &old).unwrap();
         table.reconcile(configs(new.clone()));
-        let replacement = table.acquire("link", &new).unwrap();
+        let replacement = acquire(&table, &new).unwrap();
 
         assert!(!table.mark_terminal(
             "link",
@@ -863,7 +1222,7 @@ mod tests {
         let old = anytls("old-secret");
         let new = anytls("new-secret");
         let table = Arc::new(LinkTable::new(configs(old.clone())));
-        let old_generation = table.acquire("link", &old).unwrap().generation.number();
+        let old_generation = acquire(&table, &old).unwrap().generation.number();
         let barrier = Arc::new(Barrier::new(3));
 
         std::thread::scope(|scope| {
@@ -873,7 +1232,7 @@ mod tests {
             scope.spawn(move || {
                 reload_barrier.wait();
                 reload_table.reconcile(configs(reload_config.clone()));
-                reload_table.acquire("link", &reload_config).unwrap();
+                acquire(&reload_table, &reload_config).unwrap();
             });
 
             let stop_table = table.clone();
@@ -982,5 +1341,115 @@ mod tests {
         let mut right = left.clone();
         right.routes[0].interface = Some("en1".to_string());
         assert!(!left.same_effective_config(&right));
+    }
+
+    #[tokio::test]
+    async fn initialization_is_coordinated_per_name_and_generation() {
+        let initializing = LinkInitializationTable::default();
+        assert!(matches!(
+            initializing.begin("link", 1).await,
+            InitializationDecision::Create
+        ));
+        let waiter = match initializing.begin("link", 1).await {
+            InitializationDecision::Wait(waiter) => waiter,
+            InitializationDecision::Create => panic!("same generation initialized twice"),
+        };
+
+        initializing.finish("link", 1).await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            LinkInitializationTable::wait(waiter),
+        )
+        .await
+        .expect("waiter was not released");
+    }
+
+    #[tokio::test]
+    async fn stale_initializer_cannot_finish_replacement_coordination() {
+        let initializing = LinkInitializationTable::default();
+        assert!(matches!(
+            initializing.begin("link", 1).await,
+            InitializationDecision::Create
+        ));
+        let old_waiter = match initializing.begin("link", 1).await {
+            InitializationDecision::Wait(waiter) => waiter,
+            InitializationDecision::Create => panic!("same generation initialized twice"),
+        };
+        assert!(matches!(
+            initializing.begin("link", 2).await,
+            InitializationDecision::Create
+        ));
+
+        // Starting generation 2 wakes generation 1, while a delayed generation
+        // 1 completion must leave generation 2's coordination entry intact.
+        LinkInitializationTable::wait(old_waiter).await;
+        initializing.finish("link", 1).await;
+        let replacement_waiter = match initializing.begin("link", 2).await {
+            InitializationDecision::Wait(waiter) => waiter,
+            InitializationDecision::Create => panic!("stale completion removed replacement"),
+        };
+        initializing.finish("link", 2).await;
+        LinkInitializationTable::wait(replacement_waiter).await;
+    }
+
+    #[test]
+    fn terminal_generation_retains_protocol_endpoint_and_dns_evidence() {
+        let config = anytls("secret");
+        let table = LinkTable::new(configs(config.clone()));
+        let generation = acquire(&table, &config).unwrap().generation;
+        generation.record_dns_lookup(DnsLookupDetail {
+            purpose: boltapi::DnsLookupPurpose::LinkServer {
+                link: "link".to_string(),
+            },
+            name: "link.example".to_string(),
+            selection: boltapi::DnsSelection::Global,
+            cache: DnsCacheStatus::Miss,
+            attempts: Vec::new(),
+            answers: Vec::new(),
+            result: DnsOutcome::Error {
+                code: boltapi::DnsErrorCode::Servfail,
+                detail: Some("upstream failed".to_string()),
+            },
+            duration_ms: 12,
+        });
+        assert!(table.mark_terminal(
+            "link",
+            generation.number(),
+            LinkState::Failed,
+            LinkHealth::Unhealthy,
+            LinkReason {
+                code: LinkReasonCode::ProtocolFailed,
+                detail: Some("session reader stopped".to_string()),
+            },
+        ));
+        let endpoint = "192.0.2.10:443".parse().unwrap();
+        generation.retain_final_snapshot(
+            LinkHealth::Healthy,
+            vec![endpoint],
+            LinkEvidence::Anytls {
+                sessions: 1,
+                active_streams: 0,
+                idle_sessions: 0,
+                peer_versions: vec![1],
+                problematic_session: None,
+            },
+        );
+
+        let detail = table.detail("link", now_ms()).unwrap();
+        assert_eq!(detail.summary.state, LinkState::Failed);
+        // Runtime evidence cannot overwrite the terminal health/reason selected
+        // by the lifecycle owner.
+        assert_eq!(detail.summary.health, LinkHealth::Unhealthy);
+        assert_eq!(detail.connected_endpoints, vec![endpoint]);
+        assert_eq!(detail.dns.lookups, 1);
+        assert_eq!(detail.dns.outcomes.error, 1);
+        assert!(matches!(
+            detail.evidence,
+            LinkEvidence::Anytls {
+                sessions: 1,
+                peer_versions,
+                ..
+            } if peer_versions == vec![1]
+        ));
     }
 }

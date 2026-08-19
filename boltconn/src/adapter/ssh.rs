@@ -1,6 +1,7 @@
 use crate::adapter;
 use crate::adapter::{
-    AddrConnector, Connector, Outbound, OutboundType, empty_handle, established_tcp,
+    AddrConnector, Connector, InitializationDecision, LinkInitializationTable, LinkRuntimeConfig,
+    LinkTable, ManagedRuntime, Outbound, OutboundType, empty_handle, established_tcp,
 };
 use crate::common::{StreamOutboundTrait, io_err};
 use crate::network::dns::Dns;
@@ -21,7 +22,7 @@ pub struct SshOutboundHandle {
     iface_name: String,
     dst: NetworkAddr,
     dns: Arc<Dns>,
-    config: SshConfig,
+    config: LinkRuntimeConfig<SshConfig>,
     manager: Arc<SshManager>,
 }
 
@@ -31,7 +32,7 @@ impl SshOutboundHandle {
         iface_name: &str,
         dst: NetworkAddr,
         dns: Arc<Dns>,
-        config: SshConfig,
+        config: LinkRuntimeConfig<SshConfig>,
         manager: Arc<SshManager>,
     ) -> Self {
         Self {
@@ -52,28 +53,19 @@ impl SshOutboundHandle {
         completion_tx: tokio::sync::oneshot::Sender<bool>,
         conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
-        let master_conn = match tokio::time::timeout(
-            Duration::from_secs(10),
-            self.manager
-                .get_ssh_conn(&self.name, &self.config, outbound, completion_tx),
-        )
-        .await
+        let master_conn = match self
+            .manager
+            .get_ssh_conn(&self.name, &self.config, outbound, completion_tx)
+            .await
         {
-            Ok(Ok(conn)) => conn,
-            Ok(Err(e)) => {
+            Ok(conn) => conn,
+            Err(e) => {
                 tracing::trace!(
                     "Failed to establish SSH proxy connection to {}: {:?}",
-                    self.config.server,
+                    self.config.config.server,
                     e
                 );
                 return Err(e);
-            }
-            Err(_) => {
-                tracing::trace!(
-                    "Failed to establish SSH proxy connection to {}: timeout",
-                    self.config.server
-                );
-                return Err(TransportError::Ssh(russh::Error::ConnectionTimeout));
             }
         };
         let channel = master_conn.new_mapped_connection(self.dst.clone()).await?;
@@ -170,61 +162,239 @@ impl Outbound for SshOutboundHandle {
 
 pub struct SshManager {
     iface: String,
-    // We use an async wrapper to avoid deadlock in DashMap
-    active_conn: tokio::sync::Mutex<HashMap<SshConfig, Arc<SshTunnel>>>,
+    active_conn: tokio::sync::Mutex<HashMap<String, ManagedRuntime<SshTunnel>>>,
+    initializing_conn: LinkInitializationTable,
     server_resolver: Arc<Dns>,
     timeout: Duration,
+    link_table: Arc<LinkTable>,
 }
 
 impl SshManager {
-    pub fn new(iface: &str, dns: Arc<Dns>, timeout: Duration) -> Self {
+    pub fn new(iface: &str, dns: Arc<Dns>, timeout: Duration, link_table: Arc<LinkTable>) -> Self {
         Self {
             iface: iface.to_string(),
             active_conn: Default::default(),
+            initializing_conn: Default::default(),
             server_resolver: dns,
             timeout,
+            link_table,
         }
     }
 
     pub async fn get_ssh_conn(
         &self,
         name: &str,
-        config: &SshConfig,
+        requested: &LinkRuntimeConfig<SshConfig>,
         next_step: Option<Box<dyn StreamOutboundTrait>>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
     ) -> Result<Arc<SshTunnel>, TransportError> {
-        for _ in 0..10 {
-            // get an existing conn, or create
-            let mut guard = self.active_conn.lock().await;
-            if let Some(endpoint) = guard.get(config) {
-                if endpoint.is_active() {
-                    let _ = ret_tx.send(false);
-                    return Ok(endpoint.clone());
-                } else {
-                    guard.remove(config);
-                    continue;
+        let config = &requested.config;
+        let mut lease = self
+            .link_table
+            .acquire(name, requested)
+            .map_err(|_| TransportError::Internal("stale SSH link acquisition"))?;
+
+        let active = self.active_conn.lock().await.get(name).cloned();
+        if let Some(active) = active {
+            if active.generation == lease.generation.number() && active.runtime.is_active() {
+                let _ = ret_tx.send(false);
+                return Ok(active.runtime);
+            }
+            self.remove_and_finalize_dead(name, active).await;
+            // The failed runtime's generation is terminal now; create its
+            // replacement under a fresh generation record.
+            lease = self
+                .link_table
+                .acquire(name, requested)
+                .map_err(|_| TransportError::Internal("stale SSH link acquisition"))?;
+        }
+
+        match self
+            .initializing_conn
+            .begin(name, lease.generation.number())
+            .await
+        {
+            InitializationDecision::Wait(completed) => {
+                let _ = ret_tx.send(false);
+                LinkInitializationTable::wait(completed).await;
+                if let Some(active) = self.active_conn.lock().await.get(name)
+                    && active.generation == lease.generation.number()
+                    && active.runtime.is_active()
+                {
+                    return Ok(active.runtime.clone());
                 }
-            } else {
+                Err(TransportError::Ssh(russh::Error::ConnectionTimeout))
+            }
+            InitializationDecision::Create => {
                 let _ = ret_tx.send(true);
-                let tunnel = Arc::new(match next_step {
-                    Some(next_step) => SshTunnel::new(config, next_step).await?,
-                    None => {
-                        let server_addr = adapter::get_dst(
-                            &self.server_resolver,
-                            &config.server,
-                            boltapi::DnsLookupPurpose::LinkServer {
-                                link: name.to_string(),
-                            },
-                        )
-                        .await?;
-                        let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
-                        SshTunnel::new(config, stream).await?
+                let result = tokio::time::timeout(
+                    self.timeout,
+                    self.create_tunnel(name, config, next_step, &lease.generation),
+                )
+                .await
+                .unwrap_or_else(|_| Err(TransportError::Ssh(russh::Error::ConnectionTimeout)));
+                let tunnel = match result {
+                    Ok(tunnel) => tunnel,
+                    Err(error) => {
+                        self.initializing_conn
+                            .finish(name, lease.generation.number())
+                            .await;
+                        self.mark_creation_failure(name, lease.generation.number(), &error);
+                        return Err(error);
                     }
-                });
-                guard.insert(config.clone(), tunnel.clone());
-                return Ok(tunnel);
+                };
+
+                if !self
+                    .link_table
+                    .is_current_generation(name, lease.generation.number())
+                {
+                    tunnel.close().await;
+                    self.retain_tunnel_snapshot(&lease.generation, &tunnel);
+                    self.initializing_conn
+                        .finish(name, lease.generation.number())
+                        .await;
+                    return Err(TransportError::Internal(
+                        "SSH generation changed during initialization",
+                    ));
+                }
+                self.active_conn.lock().await.insert(
+                    name.to_string(),
+                    ManagedRuntime {
+                        generation: lease.generation.number(),
+                        record: lease.generation.clone(),
+                        runtime: tunnel.clone(),
+                    },
+                );
+                if !self
+                    .link_table
+                    .is_current_generation(name, lease.generation.number())
+                {
+                    self.stop_generation(name, lease.generation.number()).await;
+                    return Err(TransportError::Internal(
+                        "SSH generation changed during initialization",
+                    ));
+                }
+                // Insert first, then release waiters for this generation.
+                self.initializing_conn
+                    .finish(name, lease.generation.number())
+                    .await;
+                Ok(tunnel)
             }
         }
-        Err(TransportError::Ssh(russh::Error::ConnectionTimeout))
+    }
+
+    async fn create_tunnel(
+        &self,
+        name: &str,
+        config: &SshConfig,
+        next_step: Option<Box<dyn StreamOutboundTrait>>,
+        record: &Arc<crate::adapter::LinkGeneration>,
+    ) -> Result<Arc<SshTunnel>, TransportError> {
+        let (tunnel, endpoints) = match next_step {
+            Some(next_step) => (SshTunnel::new(config, next_step).await?, Vec::new()),
+            None => {
+                let server_addr =
+                    adapter::get_link_dst(&self.server_resolver, &config.server, name, record)
+                        .await?;
+                let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
+                (SshTunnel::new(config, stream).await?, vec![server_addr])
+            }
+        };
+        let tunnel = Arc::new(tunnel);
+        tunnel.start_probe();
+        let (state, health, evidence) = tunnel.link_snapshot();
+        record.set_live_snapshot(state, health, endpoints, evidence);
+        Ok(tunnel)
+    }
+
+    pub(crate) async fn stop_generation(&self, name: &str, generation: u64) {
+        self.initializing_conn.cancel(name, generation).await;
+        let runtime = {
+            let mut active = self.active_conn.lock().await;
+            if active
+                .get(name)
+                .is_some_and(|runtime| runtime.generation == generation)
+            {
+                active.remove(name)
+            } else {
+                None
+            }
+        };
+        if let Some(runtime) = runtime {
+            runtime.runtime.close().await;
+            self.retain_tunnel_snapshot(&runtime.record, &runtime.runtime);
+        }
+    }
+
+    pub(crate) async fn refresh_evidence(&self) {
+        let runtimes: Vec<_> = self
+            .active_conn
+            .lock()
+            .await
+            .iter()
+            .map(|(name, runtime)| (name.clone(), runtime.clone()))
+            .collect();
+        for (name, runtime) in runtimes {
+            let (state, health, evidence) = runtime.runtime.link_snapshot();
+            if state == boltapi::LinkState::Failed {
+                self.remove_and_finalize_dead(&name, runtime).await;
+            } else {
+                runtime.record.set_live_evidence(state, health, evidence);
+            }
+        }
+    }
+
+    async fn remove_and_finalize_dead(&self, name: &str, runtime: ManagedRuntime<SshTunnel>) {
+        {
+            let mut active = self.active_conn.lock().await;
+            if active
+                .get(name)
+                .is_some_and(|current| current.generation == runtime.generation)
+            {
+                active.remove(name);
+            }
+        }
+        runtime.runtime.close().await;
+        self.retain_tunnel_snapshot(&runtime.record, &runtime.runtime);
+        self.link_table.mark_terminal(
+            name,
+            runtime.generation,
+            boltapi::LinkState::Failed,
+            boltapi::LinkHealth::Unhealthy,
+            boltapi::LinkReason {
+                code: boltapi::LinkReasonCode::TaskStopped,
+                detail: None,
+            },
+        );
+    }
+
+    fn retain_tunnel_snapshot(
+        &self,
+        record: &Arc<crate::adapter::LinkGeneration>,
+        tunnel: &SshTunnel,
+    ) {
+        let (_, health, evidence) = tunnel.link_snapshot();
+        record.retain_final_evidence(health, evidence);
+    }
+
+    fn mark_creation_failure(&self, name: &str, generation: u64, error: &TransportError) {
+        let code = match error {
+            TransportError::Dns(_) => boltapi::LinkReasonCode::DnsFailed,
+            TransportError::Ssh(russh::Error::NotAuthenticated) => {
+                boltapi::LinkReasonCode::AuthenticationFailed
+            }
+            TransportError::Ssh(_) => boltapi::LinkReasonCode::ProtocolFailed,
+            _ => boltapi::LinkReasonCode::ConnectFailed,
+        };
+        self.link_table.mark_terminal(
+            name,
+            generation,
+            boltapi::LinkState::Failed,
+            boltapi::LinkHealth::Unhealthy,
+            boltapi::LinkReason {
+                code,
+                detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
+            },
+        );
     }
 }
