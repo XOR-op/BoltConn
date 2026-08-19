@@ -116,7 +116,7 @@ pub async fn latency_test(
             RuntimeError::LatencyTest("Create outbound failed")
         })?;
 
-    let proxy_handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
+    let proxy_handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder(), None);
 
     // connect to the url
     let http_handle: JoinHandle<anyhow::Result<Latency>> = tokio::spawn(async move {

@@ -5,7 +5,10 @@ use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::error::TransportError;
-use crate::proxy::{Dispatcher, MappingSessionManager, NetworkAddr, socks_to_network_addr};
+use crate::proxy::{
+    ConnTarget, Dispatcher, MappingSessionManager, NetworkAddr, socks_to_network_addr,
+};
+use boltapi::IdentificationSource;
 use bytes::Bytes;
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, UdpPacket};
 use std::collections::HashMap;
@@ -45,21 +48,32 @@ impl UdpInboundInner {
         payload: Bytes,
         ret_channel: UdpReturnChannel,
     ) -> bool {
-        let dst_addr = match dst {
+        let accepted = dst.clone();
+        let (dst_addr, identification) = match dst {
             NetworkAddr::Socket { address: addr } => match self.dns.fake_ip_to_domain(addr.ip()) {
-                None => NetworkAddr::Socket { address: addr },
-                Some(s) => NetworkAddr::Domain {
-                    name: s,
-                    port: dst.port(),
-                },
+                None => (NetworkAddr::Socket { address: addr }, None),
+                Some(name) => (
+                    NetworkAddr::Domain {
+                        name,
+                        port: addr.port(),
+                    },
+                    Some(IdentificationSource::FakeIpMapping),
+                ),
             },
             NetworkAddr::Domain {
                 name: domain_name,
                 port,
-            } => NetworkAddr::Domain {
-                name: domain_name,
-                port,
-            },
+            } => (
+                NetworkAddr::Domain {
+                    name: domain_name,
+                    port,
+                },
+                None,
+            ),
+        };
+        let target = match identification {
+            Some(source) => ConnTarget::identified(accepted, dst_addr.clone(), source),
+            None => ConnTarget::from(dst_addr.clone()),
         };
 
         match self.mapping.entry(src) {
@@ -116,7 +130,7 @@ impl UdpInboundInner {
                         self.dispatcher
                             .submit_tun_udp_session(
                                 src,
-                                dst_addr,
+                                target,
                                 proc_info,
                                 send_rx,
                                 recv_tx,
@@ -129,7 +143,7 @@ impl UdpInboundInner {
                             .submit_socks_udp_session(
                                 inbound_extra,
                                 src,
-                                dst_addr,
+                                target,
                                 proc_info,
                                 send_rx,
                                 socks_tx,

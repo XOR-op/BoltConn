@@ -6,6 +6,7 @@ use crate::external::MmdbReader;
 use crate::network::dns::Dns;
 use crate::platform::process::NetworkType;
 use crate::proxy::NetworkAddr;
+use boltapi::RuleOrigin;
 use ipnet::IpNet;
 use regex::Regex;
 use std::collections::HashMap;
@@ -306,7 +307,7 @@ impl RuleBuilder<'_> {
         };
 
         let rule = self.parse_sub_rule(first, s)?;
-        Ok(Rule::new(rule, general))
+        Ok(Rule::new(rule, general, s.to_string()))
     }
 
     pub fn parse_incomplete(&mut self, s: &str) -> Result<RuleImpl, RuleError> {
@@ -478,14 +479,32 @@ impl RuleBuilder<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RouteProvenance {
+    pub matched_rule: String,
+    pub origin: RuleOrigin,
+    pub expanded_from: Vec<boltapi::ConfigSourceLocation>,
+}
+
 pub struct Rule<T: Clone> {
     rule: RuleImpl,
     result: T,
+    provenance: RouteProvenance,
 }
 
 impl<T: Clone> Rule<T> {
-    pub(crate) fn new(rule: RuleImpl, result: T) -> Self {
-        Self { rule, result }
+    pub(crate) fn new(rule: RuleImpl, result: T, matched_rule: String) -> Self {
+        Self {
+            rule,
+            result,
+            // Rules without a composed source are temporary/filter rules. The
+            // configuration builder replaces this origin for sourced rules.
+            provenance: RouteProvenance {
+                matched_rule,
+                origin: RuleOrigin::Temporary,
+                expanded_from: Vec::new(),
+            },
+        }
     }
 
     pub fn matches(&self, info: &ConnInfo) -> Option<T> {
@@ -494,6 +513,18 @@ impl<T: Clone> Rule<T> {
 
     pub fn get_impl(&self) -> &RuleImpl {
         &self.rule
+    }
+
+    pub fn set_origin(&mut self, origin: RuleOrigin) {
+        self.provenance.origin = origin;
+    }
+
+    pub fn set_provenance(&mut self, provenance: RouteProvenance) {
+        self.provenance = provenance;
+    }
+
+    pub fn provenance(&self) -> &RouteProvenance {
+        &self.provenance
     }
 }
 
@@ -505,7 +536,7 @@ impl<T: Clone> Debug for Rule<T> {
 
 impl<T: Clone> Display for Rule<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.rule.fmt(f)
+        f.write_str(&self.provenance.matched_rule)
     }
 }
 

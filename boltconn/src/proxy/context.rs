@@ -30,6 +30,38 @@ pub fn socks_to_network_addr(value: TargetAddr) -> NetworkAddr {
     }
 }
 
+/// The destination as accepted at the inbound boundary and after identification.
+#[derive(Clone, Debug)]
+pub struct ConnTarget {
+    pub accepted: NetworkAddr,
+    pub effective: NetworkAddr,
+    pub identification: Option<IdentificationSource>,
+}
+
+impl ConnTarget {
+    pub fn identified(
+        accepted: NetworkAddr,
+        effective: NetworkAddr,
+        source: IdentificationSource,
+    ) -> Self {
+        Self {
+            accepted,
+            effective,
+            identification: Some(source),
+        }
+    }
+}
+
+impl From<NetworkAddr> for ConnTarget {
+    fn from(address: NetworkAddr) -> Self {
+        Self {
+            accepted: address.clone(),
+            effective: address,
+            identification: None,
+        }
+    }
+}
+
 // Abort Handle
 #[derive(Clone, Debug)]
 pub struct ConnAbortHandle(Arc<AbortHandle>);
@@ -162,14 +194,14 @@ pub struct ConnMetadata {
     pub started_at_ms: u64,
     pub start_time: SystemTime,
     pub conn_info: ConnInfo,
-    pub outbound_name: String,
-    pub outbound_type: OutboundType,
 }
 
 #[derive(Clone, Debug)]
 pub struct ConnRecordState {
     pub state: ConnState,
     pub session_protocol: SessionProtocol,
+    pub outbound_name: Option<String>,
+    pub outbound_type: Option<OutboundType>,
     pub established_at_ms: Option<u64>,
     pub ended_at_ms: Option<u64>,
     pub flow: ConnFlow,
@@ -308,6 +340,16 @@ impl ConnHandle {
         true
     }
 
+    pub fn set_outbound(&self, name: String, outbound_type: OutboundType) -> bool {
+        let mut state = self.record.state.lock().unwrap();
+        if is_terminal_state(state.state) {
+            return false;
+        }
+        state.outbound_name = Some(name);
+        state.outbound_type = Some(outbound_type);
+        true
+    }
+
     /// Freezes the concrete reusable-link path before transfer begins. Link
     /// accounting relies on this path remaining stable for the connection.
     pub fn set_links(&self, links: Vec<LinkRef>) -> bool {
@@ -404,6 +446,7 @@ impl ConnHandle {
     }
 
     pub fn abort(&self) -> bool {
+        self.set_state(ConnState::Closing);
         let completed = self.finish(ConnResultCode::UserStopped, Some(ConnStage::Closing), None);
         if completed {
             self.record.abort_handle.cancel();
@@ -422,6 +465,20 @@ fn system_time_ms(time: SystemTime) -> u64 {
 
 fn now_ms() -> u64 {
     system_time_ms(SystemTime::now())
+}
+
+pub(crate) fn bounded_error_detail(detail: &str) -> String {
+    detail
+        .chars()
+        .filter_map(|character| {
+            if character.is_control() {
+                character.is_whitespace().then_some(' ')
+            } else {
+                Some(character)
+            }
+        })
+        .take(256)
+        .collect()
 }
 
 fn is_terminal_state(state: ConnState) -> bool {
@@ -532,8 +589,7 @@ impl ContextManager {
     pub fn begin(
         &self,
         conn_info: ConnInfo,
-        outbound_name: String,
-        outbound_type: OutboundType,
+        accepted_target: NetworkAddr,
         parsed_session_proto: Option<SessionProtocol>,
         abort_handle: ConnAbortHandle,
     ) -> ConnHandle {
@@ -546,7 +602,7 @@ impl ContextManager {
         let flow = ConnFlow {
             inbound: conn_info.inbound.to_string(),
             source: conn_info.src,
-            accepted: conn_info.dst.clone(),
+            accepted: accepted_target,
             identified: None,
             resolution: match (conn_info.resolved_dst, &conn_info.dst) {
                 (Some(address), _) => DestinationResolution::Resolved { address },
@@ -560,12 +616,12 @@ impl ContextManager {
                 started_at_ms: system_time_ms(start_time),
                 start_time,
                 conn_info,
-                outbound_name,
-                outbound_type,
             },
             state: Mutex::new(ConnRecordState {
                 state: ConnState::Accepted,
                 session_protocol,
+                outbound_name: None,
+                outbound_type: None,
                 established_at_ms: None,
                 ended_at_ms: None,
                 flow,
@@ -719,8 +775,7 @@ mod connection_record_tests {
                 connection_type: NetworkType::Tcp,
                 process_info: None,
             },
-            "DIRECT".to_string(),
-            OutboundType::Direct,
+            NetworkAddr::from(SocketAddr::from(([127, 0, 0, 1], 443))),
             None,
             ConnAbortHandle::placeholder(),
         )
@@ -767,6 +822,39 @@ mod connection_record_tests {
             snapshot.state.termination.unwrap().code,
             ConnResultCode::Completed
         );
+    }
+
+    #[test]
+    fn flow_keeps_accepted_and_identified_targets_distinct() {
+        let manager = ContextManager::new(10);
+        let accepted = NetworkAddr::from(SocketAddr::from(([198, 18, 0, 7], 443)));
+        let identified = NetworkAddr::Domain {
+            name: "example.com".to_string(),
+            port: 443,
+        };
+        let handle = manager.begin(
+            ConnInfo {
+                src: SocketAddr::from(([127, 0, 0, 1], 10_001)),
+                dst: identified.clone(),
+                local_ip: None,
+                inbound: InboundInfo::Tun,
+                resolved_dst: None,
+                connection_type: NetworkType::Tcp,
+                process_info: None,
+            },
+            accepted.clone(),
+            None,
+            ConnAbortHandle::placeholder(),
+        );
+        assert!(
+            handle.set_identified_target(identified.clone(), IdentificationSource::FakeIpMapping,)
+        );
+
+        let flow = handle.snapshot().state.flow;
+        assert_eq!(flow.accepted, accepted);
+        let observed = flow.identified.unwrap();
+        assert_eq!(observed.target, identified);
+        assert_eq!(observed.source, IdentificationSource::FakeIpMapping);
     }
 
     #[test]

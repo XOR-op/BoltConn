@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::common::StreamOutboundTrait;
 use crate::common::duplex_chan::DuplexChan;
-use crate::proxy::ConnAbortHandle;
 use crate::proxy::error::TransportError;
+use crate::proxy::{ConnAbortHandle, ConnHandle};
 use crate::transport::UdpSocketAdapter;
 use tokio::task::JoinHandle;
 
@@ -32,6 +32,7 @@ impl ChainOutbound {
         mut inbound_tcp_container: Option<Connector>,
         mut inbound_udp_container: Option<AddrConnector>,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         tokio::spawn(async move {
             let mut not_first_jump = false;
@@ -55,6 +56,7 @@ impl ChainOutbound {
                                 None,
                                 Some(Box::new(AddrConnectorWrapper::from(inner))),
                                 abort_handle.clone(),
+                                None,
                             )
                             .await?;
                     } else {
@@ -67,6 +69,7 @@ impl ChainOutbound {
                                 Some(chan),
                                 None,
                                 abort_handle.clone(),
+                                None,
                             )
                             .await?;
                     }
@@ -85,6 +88,7 @@ impl ChainOutbound {
                                 None,
                                 abort_handle.clone(),
                                 not_first_jump,
+                                None,
                             )
                             .await?;
                     } else {
@@ -97,6 +101,7 @@ impl ChainOutbound {
                                 Some(Box::new(AddrConnectorWrapper::from(inner))),
                                 abort_handle.clone(),
                                 not_first_jump,
+                                None,
                             )
                             .await?;
                     };
@@ -111,10 +116,10 @@ impl ChainOutbound {
             // connect last one
             if use_tcp {
                 let inbound = inbound_tcp_container.unwrap();
-                last_one[0].spawn_tcp(inbound, abort_handle);
+                last_one[0].spawn_tcp(inbound, abort_handle, conn);
             } else {
                 let inbound = inbound_udp_container.unwrap();
-                last_one[0].spawn_udp(inbound, abort_handle, true);
+                last_one[0].spawn_udp(inbound, abort_handle, true, conn);
             }
 
             Ok(())
@@ -136,8 +141,10 @@ impl Outbound for ChainOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
-        self.clone().spawn(true, Some(inbound), None, abort_handle)
+        self.clone()
+            .spawn(true, Some(inbound), None, abort_handle, conn)
     }
 
     async fn spawn_tcp_with_outbound(
@@ -146,6 +153,7 @@ impl Outbound for ChainOutbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with ChainOutbound");
         Err(TransportError::Internal("Invalid outbound"))
@@ -156,8 +164,10 @@ impl Outbound for ChainOutbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
-        self.clone().spawn(false, None, Some(inbound), abort_handle)
+        self.clone()
+            .spawn(false, None, Some(inbound), abort_handle, conn)
     }
 
     async fn spawn_udp_with_outbound(
@@ -167,6 +177,7 @@ impl Outbound for ChainOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp_with_outbound() should not be called with ChainUdpOutbound");
         Err(TransportError::Internal("Invalod outbound"))

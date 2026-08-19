@@ -70,7 +70,11 @@ impl HttpsIntercept {
             if sender.is_none() {
                 *sender = Some({
                     let (inbound, outbound) = Connector::new_pair(10);
-                    let _handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
+                    let _handle = creator.spawn_tcp(
+                        inbound,
+                        ConnAbortHandle::placeholder(),
+                        Some(ctx.conn_info.clone()),
+                    );
                     let outbound = client_tls
                         .connect(server_name, DuplexChan::new(outbound))
                         .await
@@ -98,11 +102,19 @@ impl HttpsIntercept {
     }
 
     pub async fn run(self) -> io::Result<()> {
+        self.conn_info.set_state(boltapi::ConnState::Connecting);
         // tls server
         let mut tls_config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(self.cert, self.priv_key)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+            .map_err(|err| {
+                self.conn_info.finish(
+                    boltapi::ConnResultCode::HandshakeError,
+                    Some(boltapi::ConnStage::Handshaking),
+                    Some(crate::proxy::bounded_error_detail(&err.to_string())),
+                );
+                io::Error::new(io::ErrorKind::InvalidData, err)
+            })?;
         tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         let acceptor = TlsAcceptor::from(Arc::new(tls_config));
@@ -117,7 +129,14 @@ impl HttpsIntercept {
             None
         });
         let server_name = ServerName::try_from(self.server_name.as_str())
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+            .map_err(|err| {
+                self.conn_info.finish(
+                    boltapi::ConnResultCode::HandshakeError,
+                    Some(boltapi::ConnStage::Handshaking),
+                    Some(crate::proxy::bounded_error_detail(&err.to_string())),
+                );
+                io::Error::new(io::ErrorKind::InvalidData, err)
+            })?
             .to_owned();
         let id_gen = IdGenerator::default();
         let sender = Arc::new(Mutex::new(None));
@@ -148,13 +167,27 @@ impl HttpsIntercept {
         });
 
         // start running
-        let inbound = acceptor.accept(self.inbound).await?;
+        self.conn_info.set_state(boltapi::ConnState::Connecting);
+        let inbound = acceptor.accept(self.inbound).await.map_err(|error| {
+            self.conn_info.finish(
+                boltapi::ConnResultCode::HandshakeError,
+                Some(boltapi::ConnStage::Handshaking),
+                Some(crate::proxy::bounded_error_detail(&error.to_string())),
+            );
+            error
+        })?;
+        self.conn_info.set_state(boltapi::ConnState::Active);
         if let Err(http_err) =
             hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
                 .serve_connection(TokioIo::new(inbound), service)
                 .await
         {
             tracing::warn!("https interception failed to serve: {}", http_err);
+            self.conn_info.finish(
+                boltapi::ConnResultCode::TransferError,
+                Some(boltapi::ConnStage::Transferring),
+                Some(crate::proxy::bounded_error_detail(&http_err.to_string())),
+            );
         }
         Ok(())
     }

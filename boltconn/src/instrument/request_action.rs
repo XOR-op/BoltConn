@@ -3,10 +3,11 @@ use std::time::Duration;
 
 use boltapi::instrument::RequestPayload;
 
-use crate::dispatch::{ConnInfo, InboundInfo, ProxyImpl, RuleImpl};
+use crate::dispatch::{ConnInfo, DispatchMatch, InboundInfo, ProxyImpl, RuleImpl};
 use crate::instrument::action::collect_all_parents;
 use crate::instrument::bus::{BusMessage, BusPublisher, MessageBus, SubId};
 use crate::platform::process::NetworkType;
+use boltapi::{RouteDecision as ApiRouteDecision, RouteSelection, RuleOrigin};
 
 #[derive(Clone, Copy, Debug)]
 pub enum RouteDecision {
@@ -65,11 +66,7 @@ impl RequestAction {
         }
     }
 
-    pub async fn execute(
-        &self,
-        info: &ConnInfo,
-        verbose: bool,
-    ) -> Option<(String, Arc<ProxyImpl>, Option<String>)> {
+    pub async fn execute(&self, info: &ConnInfo, verbose: bool) -> Option<DispatchMatch> {
         if !self.rule.matches(info) {
             return None;
         }
@@ -105,7 +102,7 @@ impl RequestAction {
         info: &ConnInfo,
         active_decision: bool,
         verbose: bool,
-    ) -> Option<(String, Arc<ProxyImpl>, Option<String>)> {
+    ) -> Option<DispatchMatch> {
         let (reject_proxy, what) = match decision {
             RouteDecision::Continue => return None,
             RouteDecision::Reject => (Arc::new(ProxyImpl::Reject), "REJECT"),
@@ -131,7 +128,20 @@ impl RequestAction {
                 what,
             );
         }
-        Some((rule_str, reject_proxy, None))
+        Some(DispatchMatch {
+            proxy_name: what.to_string(),
+            proxy: reject_proxy,
+            iface: None,
+            route: ApiRouteDecision {
+                matched_rule: rule_str,
+                origin: RuleOrigin::External,
+                expanded_from: Vec::new(),
+                selected: RouteSelection {
+                    group: None,
+                    selected: what.to_string(),
+                },
+            },
+        })
     }
 }
 

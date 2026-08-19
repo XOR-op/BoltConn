@@ -115,7 +115,7 @@ impl Socks5Inbound {
                     .submit_tcp(
                         InboundInfo::Socks5(inbound_extra),
                         src_addr,
-                        target_addr,
+                        target_addr.into(),
                         Arc::new(AtomicU8::new(2)),
                         socks_stream,
                     )

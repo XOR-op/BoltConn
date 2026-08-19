@@ -45,7 +45,11 @@ impl HttpIntercept {
             return Ok(resp);
         }
         let (inbound, outbound) = Connector::new_pair(10);
-        let _handle = creator.spawn_tcp(inbound, ConnAbortHandle::placeholder());
+        let _handle = creator.spawn_tcp(
+            inbound,
+            ConnAbortHandle::placeholder(),
+            Some(ctx.conn_info.clone()),
+        );
         let (mut sender, connection) = conn::http1::Builder::new()
             .handshake(TokioIo::new(DuplexChan::new(outbound)))
             .await
@@ -63,6 +67,7 @@ impl HttpIntercept {
     }
 
     pub async fn run(self) -> io::Result<()> {
+        self.conn_info.set_state(boltapi::ConnState::Active);
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
             let (parts, body) = req.into_parts();
@@ -83,6 +88,11 @@ impl HttpIntercept {
             .await
         {
             tracing::warn!("Sniff err {}", http_err);
+            self.conn_info.finish(
+                boltapi::ConnResultCode::TransferError,
+                Some(boltapi::ConnStage::Transferring),
+                Some(crate::proxy::bounded_error_detail(&http_err.to_string())),
+            );
         }
         Ok(())
     }

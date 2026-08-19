@@ -117,7 +117,10 @@ impl Controller {
             source: snapshot.start.conn_info.src.to_string(),
             destination: snapshot.start.conn_info.dst.to_string(),
             protocol: snapshot.state.session_protocol.to_string(),
-            proxy: snapshot.start.outbound_name,
+            proxy: snapshot
+                .state
+                .outbound_name
+                .unwrap_or_else(|| "-".to_string()),
             process: snapshot
                 .start
                 .conn_info

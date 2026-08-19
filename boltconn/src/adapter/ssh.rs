@@ -6,7 +6,7 @@ use crate::common::{StreamOutboundTrait, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use crate::transport::ssh::{SshConfig, SshTunnel};
 use async_trait::async_trait;
@@ -50,6 +50,7 @@ impl SshOutboundHandle {
         outbound: Option<Box<dyn StreamOutboundTrait>>,
         abort_handle: ConnAbortHandle,
         completion_tx: tokio::sync::oneshot::Sender<bool>,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
         let master_conn = match tokio::time::timeout(
             Duration::from_secs(10),
@@ -76,7 +77,7 @@ impl SshOutboundHandle {
             }
         };
         let channel = master_conn.new_mapped_connection(self.dst.clone()).await?;
-        established_tcp(self.name, inbound, channel, abort_handle).await;
+        established_tcp(self.name, inbound, channel, abort_handle, conn).await;
         Ok(())
     }
 }
@@ -95,12 +96,15 @@ impl Outbound for SshOutboundHandle {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let (tx, _) = tokio::sync::oneshot::channel();
         let self_clone = self.clone();
         tokio::spawn(async move {
             let abort_handle2 = abort_handle.clone();
-            let r = self_clone.attach_tcp(inbound, None, abort_handle, tx).await;
+            let r = self_clone
+                .attach_tcp(inbound, None, abort_handle, tx, conn)
+                .await;
             if let Err(e) = r {
                 abort_handle2.cancel();
                 return Err(e);
@@ -115,6 +119,7 @@ impl Outbound for SshOutboundHandle {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid SSH proxy tcp spawn");
@@ -125,7 +130,7 @@ impl Outbound for SshOutboundHandle {
         tokio::spawn(async move {
             let abort_handle2 = abort_handle.clone();
             let r = self_clone
-                .attach_tcp(inbound, tcp_outbound, abort_handle, comp_tx)
+                .attach_tcp(inbound, tcp_outbound, abort_handle, comp_tx, conn)
                 .await;
             if let Err(e) = r {
                 abort_handle2.cancel();
@@ -143,6 +148,7 @@ impl Outbound for SshOutboundHandle {
         _inbound: AddrConnector,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        _conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         tracing::error!("spawn_udp() should not be called with SshOutbound");
         empty_handle()
@@ -155,6 +161,7 @@ impl Outbound for SshOutboundHandle {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp() should not be called with SshOutbound");
         Err(TransportError::Internal("Invalid outbound"))

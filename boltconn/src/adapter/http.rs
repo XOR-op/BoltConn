@@ -7,7 +7,7 @@ use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use base64::Engine;
@@ -53,6 +53,7 @@ impl HttpOutbound {
         inbound: Connector,
         mut outbound: S,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -92,12 +93,10 @@ impl HttpOutbound {
             .map_err(|_| TransportError::Http("Parsing failed"))?;
         if let Some(200) = resp_struct.code {
             let tcp_stream = buf_reader.into_inner();
-            established_tcp(self.name, inbound, tcp_stream, abort_handle).await;
+            established_tcp(self.name, inbound, tcp_stream, abort_handle, conn).await;
             Ok(())
         } else {
-            Err(TransportError::Io(io_err(
-                format!("Http Connect Failed: {:?}", resp_struct.code).as_str(),
-            )))
+            Err(TransportError::Http("CONNECT request rejected"))
         }
     }
 }
@@ -116,6 +115,7 @@ impl Outbound for HttpOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -124,7 +124,9 @@ impl Outbound for HttpOutbound {
             let tcp_stream = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self_clone.run_tcp(inbound, tcp_stream, abort_handle).await
+            self_clone
+                .run_tcp(inbound, tcp_stream, abort_handle, conn)
+                .await
         })
     }
 
@@ -134,6 +136,7 @@ impl Outbound for HttpOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid HTTP proxy tcp spawn");
@@ -142,7 +145,7 @@ impl Outbound for HttpOutbound {
         let self_clone = self.clone();
         tokio::spawn(async move {
             self_clone
-                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle, conn)
                 .await
                 .map_err(|e| io_err(e.to_string().as_str()))
         });
@@ -154,6 +157,7 @@ impl Outbound for HttpOutbound {
         _inbound: AddrConnector,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        _conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         tracing::error!("spawn_udp() should not be called with HttpOutbound");
         empty_handle()
@@ -166,6 +170,7 @@ impl Outbound for HttpOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp_with_outbound() should not be called with HttpOutbound");
         Err(TransportError::Internal("Invalid outbound"))

@@ -8,14 +8,14 @@ use crate::config::{
 };
 use crate::dispatch::action::{Action, SubDispatch};
 use crate::dispatch::proxy::ProxyImpl;
-use crate::dispatch::rule::{RuleBuilder, RuleOrAction};
+use crate::dispatch::rule::{RouteProvenance, RuleBuilder, RuleOrAction};
 use crate::dispatch::ruleset::RuleSet;
 use crate::dispatch::temporary::TemporaryList;
 use crate::dispatch::{GeneralProxy, InboundInfo, Proxy, ProxyGroup, RuleSetTable};
 use crate::external::MmdbReader;
 use crate::instrument::action::InstrumentAction;
 use crate::instrument::bus::MessageBus;
-use crate::instrument::request_action::{RequestAction, RouteDecision};
+use crate::instrument::request_action::{RequestAction, RouteDecision as RequestRouteDecision};
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::NetworkAddr;
@@ -25,6 +25,7 @@ use crate::transport::trojan::TrojanConfig;
 use crate::transport::wireguard::WireguardConfig;
 use arc_swap::ArcSwap;
 use base64::Engine;
+use boltapi::{ConfigSourceLocation, RouteDecision, RouteSelection, RuleOrigin};
 use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
 use linked_hash_map::LinkedHashMap;
 use regex::Regex;
@@ -44,6 +45,27 @@ fn network_addr_from_config(server: &RawServerAddr, port: u16) -> NetworkAddr {
             name: name.clone(),
             port,
         },
+    }
+}
+
+fn api_source_location(source: &SourceLocation) -> ConfigSourceLocation {
+    ConfigSourceLocation {
+        path: source.path.display().to_string(),
+        document_path: source.document_path.clone(),
+    }
+}
+
+fn route_provenance(
+    matched_rule: &str,
+    source: Option<&SourceLocation>,
+    expansion: &[SourceLocation],
+) -> RouteProvenance {
+    RouteProvenance {
+        matched_rule: matched_rule.to_string(),
+        origin: source.map_or(RuleOrigin::Temporary, |source| RuleOrigin::Config {
+            location: api_source_location(source),
+        }),
+        expanded_from: expansion.iter().map(api_source_location).collect(),
     }
 }
 
@@ -79,16 +101,29 @@ pub struct Dispatching {
     chain_reconnection: HashMap<String, Vec<String>>,
 }
 
+pub struct DispatchMatch {
+    pub proxy_name: String,
+    pub proxy: Arc<ProxyImpl>,
+    pub iface: Option<String>,
+    pub route: RouteDecision,
+}
+
 impl Dispatching {
     pub async fn matches(
         &self,
         info: &mut ConnInfo,
         verbose: bool,
-    ) -> (String, Arc<ProxyImpl>, Option<String>) {
-        if let Some(r) = self.temporary_list.load().matches(info, verbose).await {
+        conn: Option<&crate::proxy::ConnHandle>,
+    ) -> DispatchMatch {
+        if let Some(r) = self
+            .temporary_list
+            .load()
+            .matches(info, verbose, conn)
+            .await
+        {
             r
         } else {
-            self.snippet.matches(info, verbose).await
+            self.snippet.matches(info, verbose, conn).await
         }
     }
 
@@ -283,7 +318,8 @@ impl DispatchingBuilder {
     }
 
     pub fn build(self, loaded_config: &LoadedConfig) -> Result<Dispatching, ConfigError> {
-        let (rules, fallback) = self.build_sourced_rules(&loaded_config.config.rules)?;
+        let (rules, fallback, fallback_provenance) =
+            self.build_sourced_rules(&loaded_config.config.rules)?;
 
         let groups = {
             let mut g = LinkedHashMap::new();
@@ -308,7 +344,11 @@ impl DispatchingBuilder {
             templist_builder: self,
             proxies,
             groups,
-            snippet: DispatchingSnippet { rules, fallback },
+            snippet: DispatchingSnippet {
+                rules,
+                fallback,
+                fallback_provenance,
+            },
             wg_mgr,
             chain_reconnection,
         })
@@ -317,10 +357,12 @@ impl DispatchingBuilder {
     fn build_rules_loosely(
         &self,
         rules: &[RuleConfigLine],
-    ) -> Result<(Vec<RuleOrAction>, Option<GeneralProxy>), ConfigError> {
+    ) -> Result<(Vec<RuleOrAction>, Option<(GeneralProxy, RouteProvenance)>), ConfigError> {
         self.build_rule_entries(
             rules.len(),
-            rules.iter().map(|rule| (rule, None::<&SourceLocation>)),
+            rules
+                .iter()
+                .map(|rule| (rule, None::<&SourceLocation>, &[][..])),
         )
     }
 
@@ -328,9 +370,15 @@ impl DispatchingBuilder {
         &self,
         rules_len: usize,
         rules: I,
-    ) -> Result<(Vec<RuleOrAction>, Option<GeneralProxy>), ConfigError>
+    ) -> Result<(Vec<RuleOrAction>, Option<(GeneralProxy, RouteProvenance)>), ConfigError>
     where
-        I: IntoIterator<Item = (&'a RuleConfigLine, Option<&'a SourceLocation>)>,
+        I: IntoIterator<
+            Item = (
+                &'a RuleConfigLine,
+                Option<&'a SourceLocation>,
+                &'a [SourceLocation],
+            ),
+        >,
     {
         let mut rule_builder = RuleBuilder::new(
             self.dns.clone(),
@@ -339,21 +387,22 @@ impl DispatchingBuilder {
             &self.groups,
             &self.rulesets,
         );
-        for (idx, (line, source)) in rules.into_iter().enumerate() {
-            let result = (|| -> Result<Option<GeneralProxy>, ConfigError> {
+        for (idx, (line, source, expansion)) in rules.into_iter().enumerate() {
+            let result = (|| -> Result<Option<(GeneralProxy, RouteProvenance)>, ConfigError> {
                 match line {
                     RuleConfigLine::Complex(action) => match action {
                         RuleAction::LocalResolve => rule_builder.append_local_resolve(),
                         RuleAction::SubDispatch(sub) => {
                             let matches = rule_builder.parse_incomplete(sub.matches.as_str())?;
-                            let (sub_rules, sub_fallback) =
-                                self.build_rules(sub.subrules.as_slice())?;
+                            let (sub_rules, sub_fallback, sub_fallback_provenance) =
+                                self.build_rules(sub.subrules.as_slice(), source, expansion)?;
                             rule_builder.append(RuleOrAction::Action(Action::SubDispatch(
                                 SubDispatch::new(
                                     matches,
                                     DispatchingSnippet {
                                         rules: sub_rules,
                                         fallback: sub_fallback,
+                                        fallback_provenance: sub_fallback_provenance,
                                     },
                                 ),
                             )))
@@ -371,14 +420,14 @@ impl DispatchingBuilder {
                         }
                         RuleAction::Request(req) => {
                             let matches = rule_builder.parse_incomplete(req.matches.as_str())?;
-                            let request_route = RouteDecision::from_str(&req.request_route)
+                            let request_route = RequestRouteDecision::from_str(&req.request_route)
                                 .ok_or_else(|| {
                                     InstrumentConfigError::BadRequestRoute(
                                         req.request_route.clone(),
                                     )
                                 })?;
-                            let fallback =
-                                RouteDecision::from_str(&req.fallback).ok_or_else(|| {
+                            let fallback = RequestRouteDecision::from_str(&req.fallback)
+                                .ok_or_else(|| {
                                     InstrumentConfigError::BadRequestRoute(req.fallback.clone())
                                 })?;
                             rule_builder.append(RuleOrAction::Action(Action::Request(
@@ -398,9 +447,11 @@ impl DispatchingBuilder {
                         if idx + 1 == rules_len
                             && let Ok(fallback) = rule_builder.parse_fallback(rule)
                         {
-                            return Ok(Some(fallback));
+                            return Ok(Some((fallback, route_provenance(rule, source, expansion))));
                         }
-                        rule_builder.append_literal(rule)?;
+                        let mut parsed = rule_builder.parse_literal(rule)?;
+                        parsed.set_provenance(route_provenance(rule, source, expansion));
+                        rule_builder.append(RuleOrAction::Rule(parsed));
                     }
                 }
                 Ok(None)
@@ -423,10 +474,15 @@ impl DispatchingBuilder {
     fn build_rules(
         &self,
         rules: &[RuleConfigLine],
-    ) -> Result<(Vec<RuleOrAction>, GeneralProxy), ConfigError> {
-        let (list, fallback) = self.build_rules_loosely(rules)?;
-        if let Some(fallback) = fallback {
-            Ok((list, fallback))
+        source: Option<&SourceLocation>,
+        expansion: &[SourceLocation],
+    ) -> Result<(Vec<RuleOrAction>, GeneralProxy, RouteProvenance), ConfigError> {
+        let (list, fallback) = self.build_rule_entries(
+            rules.len(),
+            rules.iter().map(|rule| (rule, source, expansion)),
+        )?;
+        if let Some((fallback, provenance)) = fallback {
+            Ok((list, fallback, provenance))
         } else {
             Err(RuleError::MissingFallback.into())
         }
@@ -435,13 +491,15 @@ impl DispatchingBuilder {
     fn build_sourced_rules(
         &self,
         rules: &[Sourced<RuleConfigLine>],
-    ) -> Result<(Vec<RuleOrAction>, GeneralProxy), ConfigError> {
+    ) -> Result<(Vec<RuleOrAction>, GeneralProxy, RouteProvenance), ConfigError> {
         let (list, fallback) = self.build_rule_entries(
             rules.len(),
-            rules.iter().map(|rule| (&rule.value, Some(&rule.source))),
+            rules
+                .iter()
+                .map(|rule| (&rule.value, Some(&rule.source), rule.expansion.as_slice())),
         )?;
         fallback
-            .map(|fallback| (list, fallback))
+            .map(|(fallback, provenance)| (list, fallback, provenance))
             .ok_or_else(|| RuleError::MissingFallback.into())
     }
 
@@ -495,6 +553,11 @@ impl DispatchingBuilder {
             snippet: DispatchingSnippet {
                 rules,
                 fallback: GeneralProxy::Single(Arc::new(Proxy::new("REJECT", ProxyImpl::Reject))),
+                fallback_provenance: RouteProvenance {
+                    matched_rule: "Fallback".to_string(),
+                    origin: RuleOrigin::Temporary,
+                    expanded_from: Vec::new(),
+                },
             },
             wg_mgr: None,
             chain_reconnection: HashMap::new(),
@@ -1073,6 +1136,7 @@ impl DispatchingBuilder {
 pub struct DispatchingSnippet {
     rules: Vec<RuleOrAction>,
     fallback: GeneralProxy,
+    fallback_provenance: RouteProvenance,
 }
 
 impl DispatchingSnippet {
@@ -1080,23 +1144,19 @@ impl DispatchingSnippet {
         &self,
         info: &mut ConnInfo,
         verbose: bool,
-    ) -> (String, Arc<ProxyImpl>, Option<String>) {
+        conn: Option<&crate::proxy::ConnHandle>,
+    ) -> DispatchMatch {
         for v in &self.rules {
             match v {
                 RuleOrAction::Rule(v) => {
                     if let Some(proxy) = v.matches(info) {
-                        return Self::proxy_filtering(
-                            &proxy,
-                            info,
-                            v.to_string().as_str(),
-                            verbose,
-                        );
+                        return Self::proxy_filtering(&proxy, info, v.provenance(), verbose);
                     }
                 }
                 RuleOrAction::Action(a) => match a {
-                    Action::LocalResolve(r) => r.resolve_to(info).await,
+                    Action::LocalResolve(r) => r.resolve_to(info, conn).await,
                     Action::SubDispatch(sub) => {
-                        if let Some(r) = sub.matches(info, verbose).await {
+                        if let Some(r) = sub.matches(info, verbose, conn).await {
                             return r;
                         }
                     }
@@ -1109,34 +1169,51 @@ impl DispatchingSnippet {
                 },
             }
         }
-        Self::proxy_filtering(&self.fallback, info, "Fallback", verbose)
+        Self::proxy_filtering(&self.fallback, info, &self.fallback_provenance, verbose)
     }
 
     pub fn proxy_filtering(
         proxy: &GeneralProxy,
         info: &ConnInfo,
-        rule_str: &str,
+        provenance: &RouteProvenance,
         verbose: bool,
-    ) -> (String, Arc<ProxyImpl>, Option<String>) {
+    ) -> DispatchMatch {
         let (proxy_impl, iface) = proxy.get_impl();
         let name = proxy.selected_instance_name();
+        let group = match proxy {
+            GeneralProxy::Single(_) => None,
+            GeneralProxy::Group(group) => Some(group.get_name()),
+        };
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
             if verbose {
                 tracing::info!(
                     "[{}]({},{}) {} => {}: Failed(UDP disabled)",
-                    rule_str,
+                    provenance.matched_rule,
                     stringfy_process(info),
                     info.inbound,
                     info.dst,
                     proxy,
                 );
             }
-            return (name, Arc::new(ProxyImpl::Reject), None);
+            return DispatchMatch {
+                route: RouteDecision {
+                    matched_rule: provenance.matched_rule.clone(),
+                    origin: provenance.origin.clone(),
+                    expanded_from: provenance.expanded_from.clone(),
+                    selected: RouteSelection {
+                        group,
+                        selected: name.clone(),
+                    },
+                },
+                proxy_name: name,
+                proxy: Arc::new(ProxyImpl::Reject),
+                iface: None,
+            };
         }
         if verbose {
             tracing::info!(
                 "[{}]({},{}) {}{} => {}",
-                rule_str,
+                provenance.matched_rule,
                 stringfy_process(info),
                 info.inbound,
                 info.dst,
@@ -1148,7 +1225,20 @@ impl DispatchingSnippet {
                 proxy,
             );
         }
-        (name, proxy_impl, iface)
+        DispatchMatch {
+            route: RouteDecision {
+                matched_rule: provenance.matched_rule.clone(),
+                origin: provenance.origin.clone(),
+                expanded_from: provenance.expanded_from.clone(),
+                selected: RouteSelection {
+                    group,
+                    selected: name.clone(),
+                },
+            },
+            proxy_name: name,
+            proxy: proxy_impl,
+            iface,
+        }
     }
 }
 
@@ -1179,4 +1269,72 @@ fn parse_pubkey(pubkey: &str, name: &str) -> Result<(String, PublicKey), ProxyEr
             )
         })?,
     ))
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+
+    fn test_conn_info() -> ConnInfo {
+        ConnInfo {
+            src: SocketAddr::from(([127, 0, 0, 1], 12_345)),
+            dst: NetworkAddr::Domain {
+                name: "example.com".to_string(),
+                port: 443,
+            },
+            local_ip: None,
+            inbound: InboundInfo::Tun,
+            resolved_dst: None,
+            connection_type: NetworkType::Tcp,
+            process_info: None,
+        }
+    }
+
+    #[test]
+    fn route_provenance_preserves_literal_source_and_expansion() {
+        let source = SourceLocation {
+            path: PathBuf::from("rules/browser.yaml"),
+            document_path: "rules[7]".to_string(),
+        };
+        let expansion = SourceLocation {
+            path: PathBuf::from("config.yaml"),
+            document_path: "rules[2]".to_string(),
+        };
+        let provenance = route_provenance(
+            "DOMAIN-SUFFIX,example.com,US",
+            Some(&source),
+            std::slice::from_ref(&expansion),
+        );
+
+        assert_eq!(provenance.matched_rule, "DOMAIN-SUFFIX,example.com,US");
+        let RuleOrigin::Config { location } = provenance.origin else {
+            panic!("sourced rule did not retain its config origin");
+        };
+        assert_eq!(location.path, "rules/browser.yaml");
+        assert_eq!(location.document_path, "rules[7]");
+        assert_eq!(provenance.expanded_from.len(), 1);
+        assert_eq!(provenance.expanded_from[0].path, "config.yaml");
+    }
+
+    #[test]
+    fn route_selection_keeps_group_and_concrete_proxy() {
+        let direct = Arc::new(Proxy::new("DIRECT", ProxyImpl::Direct));
+        let direct_selection = GeneralProxy::Single(direct.clone());
+        let group = GeneralProxy::Group(Arc::new(ProxyGroup::new(
+            "US",
+            vec![direct_selection.clone()],
+            direct_selection,
+            None,
+        )));
+        let provenance = RouteProvenance {
+            matched_rule: "FALLBACK,US".to_string(),
+            origin: RuleOrigin::Temporary,
+            expanded_from: Vec::new(),
+        };
+
+        let matched =
+            DispatchingSnippet::proxy_filtering(&group, &test_conn_info(), &provenance, false);
+        assert_eq!(matched.route.selected.group.as_deref(), Some("US"));
+        assert_eq!(matched.route.selected.selected, "DIRECT");
+    }
 }

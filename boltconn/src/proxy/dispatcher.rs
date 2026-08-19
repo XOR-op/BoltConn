@@ -6,13 +6,16 @@ use crate::adapter::{
 };
 use crate::common::StreamOutboundTrait;
 use crate::common::duplex_chan::DuplexChan;
-use crate::dispatch::{ConnInfo, Dispatching, GeneralProxy, InboundExtra, InboundInfo, ProxyImpl};
+use crate::dispatch::{
+    ConnInfo, DispatchMatch, Dispatching, GeneralProxy, InboundExtra, InboundInfo, ProxyImpl,
+};
 use crate::intercept::{HttpIntercept, HttpsIntercept, InterceptionManager, ModifierClosure};
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo, ProcessInfoDepth};
 use crate::platform::{get_iface_address, process};
-use crate::proxy::{ConnAbortHandle, ConnHandle, ContextManager, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, ConnTarget, ContextManager, NetworkAddr};
 use arc_swap::ArcSwap;
+use boltapi::{ConnResultCode, ConnStage, ConnState, DestinationResolution, IdentificationSource};
 use bytes::Bytes;
 use rcgen::Certificate;
 use std::net::SocketAddr;
@@ -30,6 +33,80 @@ pub(crate) enum DispatchError {
     BadMitmCert,
     BadChain,
     Error(TransportError),
+}
+
+fn finish_dispatch_error(info: &ConnHandle, error: &DispatchError) {
+    match error {
+        DispatchError::Reject => {
+            info.finish(
+                ConnResultCode::RouteRejected,
+                Some(ConnStage::Routing),
+                None,
+            );
+        }
+        DispatchError::BlackHole => {
+            info.finish(ConnResultCode::Blackholed, Some(ConnStage::Routing), None);
+        }
+        DispatchError::BadMitmCert => {
+            info.finish(
+                ConnResultCode::HandshakeError,
+                Some(ConnStage::Handshaking),
+                None,
+            );
+        }
+        DispatchError::BadChain => {
+            info.finish(
+                ConnResultCode::InternalError,
+                Some(ConnStage::Routing),
+                None,
+            );
+        }
+        DispatchError::Error(error) => {
+            finish_transport_error(info, error, ConnStage::Connecting);
+        }
+    }
+}
+
+fn finish_transport_error(info: &ConnHandle, error: &TransportError, fallback_stage: ConnStage) {
+    let (code, stage) = classify_transport_error(error, fallback_stage);
+    info.finish(code, Some(stage), Some(bounded_detail(&error.to_string())));
+}
+
+fn classify_transport_error(
+    error: &TransportError,
+    fallback_stage: ConnStage,
+) -> (ConnResultCode, ConnStage) {
+    match error {
+        TransportError::Dns(_) => (ConnResultCode::DnsError, ConnStage::Resolving),
+        TransportError::Timeout(_) => (ConnResultCode::ConnectTimeout, ConnStage::Connecting),
+        TransportError::Http(_)
+        | TransportError::Socks5(_)
+        | TransportError::Socks5Extra(_)
+        | TransportError::Trojan(_)
+        | TransportError::Anytls(_)
+        | TransportError::ShadowSocks(_)
+        | TransportError::Ssh(_)
+        | TransportError::Handshake(_) => (ConnResultCode::HandshakeError, ConnStage::Handshaking),
+        TransportError::Io(error)
+            if fallback_stage == ConnStage::Inspecting
+                && error.kind() == std::io::ErrorKind::UnexpectedEof =>
+        {
+            (ConnResultCode::ClientClosed, ConnStage::Inspecting)
+        }
+        TransportError::Io(_) if fallback_stage == ConnStage::Transferring => {
+            (ConnResultCode::TransferError, ConnStage::Transferring)
+        }
+        TransportError::Io(_) | TransportError::WireGuard(_) => {
+            (ConnResultCode::ConnectError, fallback_stage)
+        }
+        TransportError::Internal(_) | TransportError::InternalExtra(_) => {
+            (ConnResultCode::InternalError, fallback_stage)
+        }
+    }
+}
+
+fn bounded_detail(detail: &str) -> String {
+    crate::proxy::bounded_error_detail(detail)
 }
 
 pub struct Dispatcher {
@@ -291,7 +368,7 @@ impl Dispatcher {
         &self,
         inbound: InboundInfo,
         src_addr: SocketAddr,
-        dst_addr: NetworkAddr,
+        target: ConnTarget,
         indicator: Arc<AtomicU8>,
         stream: S,
     ) -> Result<(), DispatchError> {
@@ -300,8 +377,27 @@ impl Dispatcher {
                 process::get_process_info(pid, self.process_info_depth)
             });
 
-        // conn info
         let abort_handle = ConnAbortHandle::new();
+        let dst_addr = target.effective;
+
+        let mut conn_info = ConnInfo {
+            src: src_addr,
+            dst: dst_addr.clone(),
+            local_ip: get_iface_address(self.iface_name.as_str()).ok(),
+            inbound: inbound.clone(),
+            resolved_dst: None,
+            connection_type: NetworkType::Tcp,
+            process_info: process_info.clone(),
+        };
+        let info = self.stat_center.begin(
+            conn_info.clone(),
+            target.accepted,
+            None,
+            abort_handle.clone(),
+        );
+        if let Some(source) = target.identification {
+            info.set_identified_target(dst_addr.clone(), source);
+        }
 
         let (inbound_conn, next_conn) = Connector::new_pair(10);
         let mut inbound_adapter = TcpAdapter::new(
@@ -313,33 +409,58 @@ impl Dispatcher {
             abort_handle.clone(),
         );
 
-        let mut conn_info = ConnInfo {
-            src: src_addr,
-            dst: dst_addr.clone(),
-            local_ip: get_iface_address(self.iface_name.as_str()).ok(),
-            inbound: inbound.clone(),
-            resolved_dst: None,
-            connection_type: NetworkType::Tcp,
-            process_info: process_info.clone(),
-        };
-
         let mut parsed_proto = None;
-        if self.sniff_flag.load(std::sync::atomic::Ordering::Relaxed)
-            && let Some((proto, domain_name)) = inbound_adapter
-                .try_sni_or_host()
-                .await
-                .map_err(DispatchError::Error)?
-        {
-            conn_info.dst = NetworkAddr::Domain {
-                name: domain_name.clone(),
-                port: dst_addr.port(),
-            };
-            parsed_proto = Some(proto);
-        };
+        if self.sniff_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            info.set_state(ConnState::Inspecting);
+            match inbound_adapter.try_sni_or_host().await {
+                Ok(Some((proto, domain_name))) => {
+                    let identified = NetworkAddr::Domain {
+                        name: domain_name,
+                        port: dst_addr.port(),
+                    };
+                    conn_info.dst = identified.clone();
+                    info.set_identified_target(
+                        identified,
+                        match proto {
+                            crate::proxy::SessionProtocol::Http => IdentificationSource::HttpHost,
+                            crate::proxy::SessionProtocol::Tls => IdentificationSource::TlsSni,
+                            _ => unreachable!("sniffer identifies only HTTP or TLS hostnames"),
+                        },
+                    );
+                    info.set_protocol(proto);
+                    parsed_proto = Some(proto);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    finish_transport_error(&info, &error, ConnStage::Inspecting);
+                    return Err(DispatchError::Error(error));
+                }
+            }
+        }
 
         // match outbound proxy
-        let (proxy_name, proxy_config, iface) =
-            self.dispatching.load().matches(&mut conn_info, true).await;
+        info.set_state(ConnState::Routing);
+        let DispatchMatch {
+            proxy_name,
+            proxy: proxy_config,
+            iface,
+            route,
+        } = self
+            .dispatching
+            .load()
+            .matches(&mut conn_info, true, Some(&info))
+            .await;
+        info.set_route(route);
+        if let Some(address) = conn_info.resolved_dst {
+            info.set_resolution(DestinationResolution::Resolved { address });
+        } else if matches!(conn_info.dst, NetworkAddr::Domain { .. })
+            && !matches!(
+                proxy_config.as_ref(),
+                ProxyImpl::Direct | ProxyImpl::Reject | ProxyImpl::BlackHole
+            )
+        {
+            info.set_resolution(DestinationResolution::Delegated);
+        }
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
@@ -355,25 +476,34 @@ impl Dispatcher {
             .await
         {
             Ok(r) => r,
-            Err(DispatchError::Reject) => return Err(DispatchError::Reject),
+            Err(DispatchError::Reject) => {
+                info.finish(
+                    ConnResultCode::RouteRejected,
+                    Some(ConnStage::Routing),
+                    None,
+                );
+                return Err(DispatchError::Reject);
+            }
             Err(DispatchError::BlackHole) => {
+                info.finish(ConnResultCode::Blackholed, Some(ConnStage::Routing), None);
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(30)).await;
                     drop(inbound_adapter);
                 });
                 return Err(DispatchError::BlackHole);
             }
-            Err(e) => return Err(e),
+            Err(error) => {
+                finish_dispatch_error(&info, &error);
+                return Err(error);
+            }
         };
 
         let mut handles = Vec::new();
-        let info = self.stat_center.begin(
-            conn_info.clone(),
-            proxy_name,
-            proxy_type,
-            parsed_proto,
-            abort_handle.clone(),
-        );
+        info.set_outbound(proxy_name, proxy_type);
+        if let Some(proto) = parsed_proto {
+            info.set_protocol(proto);
+        }
+        info.set_state(ConnState::Connecting);
         handles.push({
             let info = info.clone();
             (
@@ -432,7 +562,7 @@ impl Dispatcher {
                                 DuplexChan::new(next_conn),
                                 modifier,
                                 outbounding,
-                                info,
+                                info.clone(),
                                 parrot_fingerprint,
                             ) {
                                 Ok(v) => v,
@@ -440,6 +570,11 @@ impl Dispatcher {
                                     tracing::error!(
                                         "[Dispatcher] sign certificate failed: {}",
                                         err
+                                    );
+                                    info.finish(
+                                        ConnResultCode::HandshakeError,
+                                        Some(ConnStage::Handshaking),
+                                        Some(bounded_detail(&err.to_string())),
                                     );
                                     return Err(DispatchError::BadMitmCert);
                                 }
@@ -460,11 +595,27 @@ impl Dispatcher {
             }
         }
         let abort_handle2 = abort_handle.clone();
+        let outbound_info = info.clone();
         handles.push((
             outbounding.outbound_type().to_string(),
             tokio::spawn(async move {
-                if let Err(err) = outbounding.spawn_tcp(next_conn, abort_handle2).await {
-                    tracing::error!("[Dispatcher] create failed: {}", err)
+                let result = outbounding
+                    .spawn_tcp(next_conn, abort_handle2, Some(outbound_info.clone()))
+                    .await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::error!("[Dispatcher] create failed: {}", error);
+                        finish_transport_error(&outbound_info, &error, ConnStage::Connecting);
+                    }
+                    Err(error) => {
+                        tracing::error!("[Dispatcher] outbound task failed: {}", error);
+                        outbound_info.finish(
+                            ConnResultCode::InternalError,
+                            Some(ConnStage::Connecting),
+                            Some(bounded_detail(&error.to_string())),
+                        );
+                    }
                 }
             }),
         ));
@@ -478,9 +629,30 @@ impl Dispatcher {
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         mut conn_info: ConnInfo,
-    ) -> Result<(Box<dyn Outbound>, ConnHandle, ConnAbortHandle), DispatchError> {
-        let (proxy_name, proxy_config, iface) =
-            self.dispatching.load().matches(&mut conn_info, true).await;
+        info: &ConnHandle,
+    ) -> Result<(Box<dyn Outbound>, OutboundType, String), DispatchError> {
+        info.set_state(ConnState::Routing);
+        let DispatchMatch {
+            proxy_name,
+            proxy: proxy_config,
+            iface,
+            route,
+        } = self
+            .dispatching
+            .load()
+            .matches(&mut conn_info, true, Some(info))
+            .await;
+        info.set_route(route);
+        if let Some(address) = conn_info.resolved_dst {
+            info.set_resolution(DestinationResolution::Resolved { address });
+        } else if matches!(conn_info.dst, NetworkAddr::Domain { .. })
+            && !matches!(
+                proxy_config.as_ref(),
+                ProxyImpl::Direct | ProxyImpl::Reject | ProxyImpl::BlackHole
+            )
+        {
+            info.set_resolution(DestinationResolution::Delegated);
+        }
         let iface_name = iface
             .as_ref()
             .map_or(self.iface_name.as_str(), |s| s.as_str());
@@ -505,16 +677,7 @@ impl Dispatcher {
                     )
                     .map_err(|_| DispatchError::Reject)?,
             };
-        // conn info
-        let abort_handle = ConnAbortHandle::new();
-        let info = self.stat_center.begin(
-            conn_info,
-            proxy_name,
-            proxy_type,
-            None,
-            abort_handle.clone(),
-        );
-        Ok((outbounding, info, abort_handle))
+        Ok((outbounding, proxy_type, proxy_name))
     }
 
     pub async fn allow_tun_udp(
@@ -535,9 +698,9 @@ impl Dispatcher {
         !matches!(
             self.dispatching
                 .load()
-                .matches(&mut conn_info, false)
+                .matches(&mut conn_info, false, None)
                 .await
-                .1
+                .proxy
                 .as_ref(),
             ProxyImpl::Reject
         )
@@ -548,12 +711,13 @@ impl Dispatcher {
         &self,
         inbound: InboundInfo,
         src_addr: SocketAddr,
-        dst_addr: NetworkAddr,
+        target: ConnTarget,
         proc_info: Option<ProcessInfo>,
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: UdpReturnChannel,
         indicator: Arc<AtomicBool>,
     ) -> Result<(), DispatchError> {
+        let dst_addr = target.effective;
         let conn_info = ConnInfo {
             src: src_addr,
             dst: dst_addr.clone(),
@@ -563,10 +727,21 @@ impl Dispatcher {
             connection_type: NetworkType::Udp,
             process_info: proc_info,
         };
-        let (outbounding, info, abort_handle) =
-            match self.route_udp(src_addr, dst_addr, conn_info).await {
+        let abort_handle = ConnAbortHandle::new();
+        let info = self.stat_center.begin(
+            conn_info.clone(),
+            target.accepted,
+            None,
+            abort_handle.clone(),
+        );
+        if let Some(source) = target.identification {
+            info.set_identified_target(dst_addr.clone(), source);
+        }
+        let (outbounding, proxy_type, proxy_name) =
+            match self.route_udp(src_addr, dst_addr, conn_info, &info).await {
                 Ok(r) => r,
                 Err(DispatchError::BlackHole) => {
+                    info.finish(ConnResultCode::Blackholed, Some(ConnStage::Routing), None);
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_secs(30)).await;
                         drop(send_rx);
@@ -574,8 +749,21 @@ impl Dispatcher {
                     });
                     return Err(DispatchError::BlackHole);
                 }
-                Err(e) => return Err(e),
+                Err(DispatchError::Reject) => {
+                    info.finish(
+                        ConnResultCode::RouteRejected,
+                        Some(ConnStage::Routing),
+                        None,
+                    );
+                    return Err(DispatchError::Reject);
+                }
+                Err(error) => {
+                    finish_dispatch_error(&info, &error);
+                    return Err(error);
+                }
             };
+        info.set_outbound(proxy_name, proxy_type);
+        info.set_state(ConnState::Connecting);
 
         let mut handles = Vec::new();
 
@@ -611,14 +799,32 @@ impl Dispatcher {
             })
         }));
         let abort_handle2 = abort_handle.clone();
+        let outbound_info = info.clone();
         handles.push((
             outbounding.outbound_type().to_string(),
             tokio::spawn(async move {
-                if let Err(err) = outbounding
-                    .spawn_udp(adapter_next, abort_handle2, false)
-                    .await
-                {
-                    tracing::error!("[Dispatcher] create failed: {}", err)
+                let result = outbounding
+                    .spawn_udp(
+                        adapter_next,
+                        abort_handle2,
+                        false,
+                        Some(outbound_info.clone()),
+                    )
+                    .await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::error!("[Dispatcher] create failed: {}", error);
+                        finish_transport_error(&outbound_info, &error, ConnStage::Connecting);
+                    }
+                    Err(error) => {
+                        tracing::error!("[Dispatcher] outbound task failed: {}", error);
+                        outbound_info.finish(
+                            ConnResultCode::InternalError,
+                            Some(ConnStage::Connecting),
+                            Some(bounded_detail(&error.to_string())),
+                        );
+                    }
                 }
             }),
         ));
@@ -629,7 +835,7 @@ impl Dispatcher {
     pub async fn submit_tun_udp_session(
         &self,
         src_addr: SocketAddr,
-        dst_addr: NetworkAddr,
+        target: ConnTarget,
         proc_info: Option<ProcessInfo>,
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
@@ -638,7 +844,7 @@ impl Dispatcher {
         self.submit_any_udp_session(
             InboundInfo::Tun,
             src_addr,
-            dst_addr,
+            target,
             proc_info,
             send_rx,
             UdpReturnChannel::Tun(recv_tx),
@@ -652,7 +858,7 @@ impl Dispatcher {
         &self,
         inbound_extra: InboundExtra,
         src_addr: SocketAddr,
-        dst_addr: NetworkAddr,
+        target: ConnTarget,
         process_info: Option<ProcessInfo>,
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: Arc<UdpSocket>,
@@ -661,7 +867,7 @@ impl Dispatcher {
         self.submit_any_udp_session(
             InboundInfo::Socks5(inbound_extra),
             src_addr,
-            dst_addr,
+            target,
             process_info,
             send_rx,
             UdpReturnChannel::Socks(recv_tx),
@@ -674,4 +880,94 @@ impl Dispatcher {
 enum UdpReturnChannel {
     Tun(mpsc::Sender<(Bytes, SocketAddr)>),
     Socks(Arc<UdpSocket>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_handle() -> (ContextManager, ConnHandle) {
+        let manager = ContextManager::new(10);
+        let destination = NetworkAddr::from(SocketAddr::from(([203, 0, 113, 1], 443)));
+        let handle = manager.begin(
+            ConnInfo {
+                src: SocketAddr::from(([127, 0, 0, 1], 12_345)),
+                dst: destination.clone(),
+                local_ip: None,
+                inbound: InboundInfo::Tun,
+                resolved_dst: None,
+                connection_type: NetworkType::Tcp,
+                process_info: None,
+            },
+            destination,
+            None,
+            ConnAbortHandle::placeholder(),
+        );
+        (manager, handle)
+    }
+
+    #[test]
+    fn inspection_failure_is_retained_before_routing() {
+        let (manager, handle) = test_handle();
+        handle.set_state(ConnState::Inspecting);
+        finish_transport_error(
+            &handle,
+            &TransportError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "client closed during inspection",
+            )),
+            ConnStage::Inspecting,
+        );
+
+        assert!(manager.get_active_copy().is_empty());
+        let snapshot = manager.get_inactive_copy()[0].snapshot();
+        assert_eq!(snapshot.state.state, ConnState::Closed);
+        let termination = snapshot.state.termination.unwrap();
+        assert_eq!(termination.code, ConnResultCode::ClientClosed);
+        assert_eq!(termination.stage, Some(ConnStage::Inspecting));
+    }
+
+    #[test]
+    fn transport_errors_have_stable_result_and_stage_classification() {
+        let cases = [
+            (
+                TransportError::Dns(crate::proxy::error::DnsError::ResolveDomain(
+                    "example.com".to_string(),
+                )),
+                ConnResultCode::DnsError,
+                ConnStage::Resolving,
+            ),
+            (
+                TransportError::Timeout("connect"),
+                ConnResultCode::ConnectTimeout,
+                ConnStage::Connecting,
+            ),
+            (
+                TransportError::Trojan("authentication failed"),
+                ConnResultCode::HandshakeError,
+                ConnStage::Handshaking,
+            ),
+            (
+                TransportError::Io(std::io::Error::other("relay failed")),
+                ConnResultCode::TransferError,
+                ConnStage::Transferring,
+            ),
+        ];
+
+        for (error, expected_code, expected_stage) in cases {
+            assert_eq!(
+                classify_transport_error(&error, expected_stage),
+                (expected_code, expected_stage)
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_details_are_sanitized_and_bounded() {
+        let detail = format!("\u{0}\n{}", "x".repeat(300));
+        let bounded = bounded_detail(&detail);
+        assert_eq!(bounded.chars().count(), 256);
+        assert!(bounded.chars().all(|character| !character.is_control()));
+        assert!(bounded.starts_with(' '));
+    }
 }

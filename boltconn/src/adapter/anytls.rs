@@ -6,7 +6,7 @@ use crate::common::{StreamOutboundTrait, as_io_err, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use crate::transport::anytls::{AnytlsClient, AnytlsConfig, AnytlsStream, UDP_OVER_TCP_DOMAIN};
 use async_trait::async_trait;
@@ -58,6 +58,7 @@ impl AnytlsOutboundHandle {
         outbound: Option<Box<dyn StreamOutboundTrait>>,
         abort_handle: ConnAbortHandle,
         completion_tx: Option<tokio::sync::oneshot::Sender<bool>>,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
         let used_outbound = Arc::new(AtomicBool::new(false));
         let stream_res = self
@@ -66,8 +67,11 @@ impl AnytlsOutboundHandle {
         send_completion(completion_tx, used_outbound.load(Ordering::Acquire));
 
         let mut stream = stream_res?;
-        stream.wait_synack(Duration::from_secs(3)).await?;
-        established_tcp(self.name, inbound, stream, abort_handle).await;
+        stream
+            .wait_synack(Duration::from_secs(3))
+            .await
+            .map_err(|error| TransportError::Handshake(error.to_string()))?;
+        established_tcp(self.name, inbound, stream, abort_handle, conn).await;
         Ok(())
     }
 
@@ -78,6 +82,7 @@ impl AnytlsOutboundHandle {
         abort_handle: ConnAbortHandle,
         completion_tx: Option<tokio::sync::oneshot::Sender<bool>>,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
         let (first_data, first_addr) = inbound.rx.recv().await.ok_or_else(|| io_err("No resp"))?;
         let target_addr = if tunnel_only {
@@ -96,7 +101,10 @@ impl AnytlsOutboundHandle {
         send_completion(completion_tx, used_outbound.load(Ordering::Acquire));
 
         let mut stream = stream_res?;
-        stream.wait_synack(Duration::from_secs(3)).await?;
+        stream
+            .wait_synack(Duration::from_secs(3))
+            .await
+            .map_err(|error| TransportError::Handshake(error.to_string()))?;
 
         let mode = if tunnel_only {
             UotMode::Connect(target_addr.clone())
@@ -115,6 +123,7 @@ impl AnytlsOutboundHandle {
             },
             if tunnel_only { Some(self.dst) } else { None },
             abort_handle,
+            conn,
         )
         .await;
         Ok(())
@@ -162,12 +171,13 @@ impl Outbound for AnytlsOutboundHandle {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let abort_handle2 = abort_handle.clone();
             let res = self_clone
-                .attach_tcp(inbound, None, abort_handle, None)
+                .attach_tcp(inbound, None, abort_handle, None, conn)
                 .await;
             if let Err(err) = res {
                 abort_handle2.cancel();
@@ -183,6 +193,7 @@ impl Outbound for AnytlsOutboundHandle {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid AnyTLS tcp outbound ancestor");
@@ -193,7 +204,13 @@ impl Outbound for AnytlsOutboundHandle {
         tokio::spawn(async move {
             let abort_handle2 = abort_handle.clone();
             let res = self_clone
-                .attach_tcp(inbound, tcp_outbound, abort_handle, Some(completion_tx))
+                .attach_tcp(
+                    inbound,
+                    tcp_outbound,
+                    abort_handle,
+                    Some(completion_tx),
+                    conn,
+                )
                 .await;
             if let Err(err) = res {
                 abort_handle2.cancel();
@@ -211,12 +228,13 @@ impl Outbound for AnytlsOutboundHandle {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
             let abort_handle2 = abort_handle.clone();
             let res = self_clone
-                .attach_udp(inbound, None, abort_handle, None, tunnel_only)
+                .attach_udp(inbound, None, abort_handle, None, tunnel_only, conn)
                 .await;
             if let Err(err) = res {
                 abort_handle2.cancel();
@@ -233,6 +251,7 @@ impl Outbound for AnytlsOutboundHandle {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid AnyTLS udp outbound ancestor");
@@ -249,6 +268,7 @@ impl Outbound for AnytlsOutboundHandle {
                     abort_handle,
                     Some(completion_tx),
                     tunnel_only,
+                    conn,
                 )
                 .await;
             if let Err(err) = res {
@@ -354,7 +374,10 @@ async fn connect_proxy(
         .map_err(as_io_err)?
         .to_owned();
     let tls_conn = TlsConnector::from(make_tls_config(&config.cert_verify));
-    let stream = tls_conn.connect(server_name, outbound).await?;
+    let stream = tls_conn
+        .connect(server_name, outbound)
+        .await
+        .map_err(|error| TransportError::Handshake(error.to_string()))?;
     Ok(stream)
 }
 

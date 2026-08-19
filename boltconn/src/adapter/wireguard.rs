@@ -6,7 +6,7 @@ use crate::common::{AbortCanary, MAX_PKT_SIZE, StreamOutboundTrait, local_async_
 use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
 use crate::proxy::error::{DnsError, TransportError};
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
@@ -518,12 +518,22 @@ impl Outbound for WireguardHandle {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let (tx, _) = tokio::sync::oneshot::channel();
-        tokio::spawn(adapter::connect_timeout(
+        let connect = adapter::connect_timeout(
             self.clone().attach_tcp(inbound, abort_handle, None, tx),
             "WireGuard TCP",
-        ))
+        );
+        tokio::spawn(async move {
+            let result = connect.await;
+            if result.is_ok()
+                && let Some(conn) = conn
+            {
+                conn.set_state(boltapi::ConnState::Active);
+            }
+            result
+        })
     }
 
     async fn spawn_tcp_with_outbound(
@@ -532,6 +542,7 @@ impl Outbound for WireguardHandle {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
@@ -558,12 +569,22 @@ impl Outbound for WireguardHandle {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let (ret_tx, _) = tokio::sync::oneshot::channel();
-        tokio::spawn(adapter::connect_timeout(
+        let connect = adapter::connect_timeout(
             self.clone().attach_udp(inbound, abort_handle, None, ret_tx),
             "WireGuard UDP",
-        ))
+        );
+        tokio::spawn(async move {
+            let result = connect.await;
+            if result.is_ok()
+                && let Some(conn) = conn
+            {
+                conn.set_state(boltapi::ConnState::Active);
+            }
+            result
+        })
     }
 
     async fn spawn_udp_with_outbound(
@@ -573,6 +594,7 @@ impl Outbound for WireguardHandle {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");

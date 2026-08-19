@@ -183,6 +183,7 @@ pub trait Outbound: Send + Sync {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>>;
 
     /// Return whether outbound is used
@@ -192,6 +193,7 @@ pub trait Outbound: Send + Sync {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError>;
 
     /// Run with tokio::spawn.
@@ -200,6 +202,7 @@ pub trait Outbound: Send + Sync {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>>;
 
     /// Return whether outbound is used
@@ -210,6 +213,7 @@ pub trait Outbound: Send + Sync {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError>;
 }
 
@@ -347,7 +351,7 @@ async fn relay_tcp_bidirectional<U, D>(
     upload: U,
     download: D,
     activity: TcpRelayActivity,
-) -> io::Result<()>
+) -> TcpRelayOutcome
 where
     U: Future<Output = io::Result<()>>,
     D: Future<Output = io::Result<()>>,
@@ -356,25 +360,42 @@ where
     // An error stops both directions immediately. EOF is a TCP half-close, so the peer direction
     // may continue while it makes progress and stops after a bounded period of inactivity.
     tokio::select! {
-        result = &mut upload => match result {
-            Ok(()) => drain_tcp_peer(
-                label,
-                "upload",
-                &mut download,
-                &activity,
-            ).await,
-            Err(error) => Err(error),
+        result = &mut upload => TcpRelayOutcome {
+            first: TcpRelayDirection::Upload,
+            result: match result {
+                Ok(()) => drain_tcp_peer(
+                    label,
+                    "upload",
+                    &mut download,
+                    &activity,
+                ).await,
+                Err(error) => Err(error),
+            },
         },
-        result = &mut download => match result {
-            Ok(()) => drain_tcp_peer(
-                label,
-                "download",
-                &mut upload,
-                &activity,
-            ).await,
-            Err(error) => Err(error),
+        result = &mut download => TcpRelayOutcome {
+            first: TcpRelayDirection::Download,
+            result: match result {
+                Ok(()) => drain_tcp_peer(
+                    label,
+                    "download",
+                    &mut upload,
+                    &activity,
+                ).await,
+                Err(error) => Err(error),
+            },
         },
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TcpRelayDirection {
+    Upload,
+    Download,
+}
+
+struct TcpRelayOutcome {
+    first: TcpRelayDirection,
+    result: io::Result<()>,
 }
 
 #[tracing::instrument(skip_all)]
@@ -383,17 +404,20 @@ async fn established_tcp<T>(
     inbound: Connector,
     outbound: T,
     abort_handle: ConnAbortHandle,
+    conn: Option<ConnHandle>,
 ) where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
+    if let Some(conn) = &conn {
+        conn.set_state(boltapi::ConnState::Active);
+    }
     let (out_read, out_write) = tokio::io::split(outbound);
     let Connector { tx, rx } = inbound;
     let activity = TcpRelayActivity::new();
     let upload = relay_channel_to_writer(rx, out_write, true, activity.clone(), |_| {});
     let download = relay_reader_to_channel(out_read, tx, true, activity.clone(), |_| {});
-    if let Err(error) =
-        relay_tcp_bidirectional(&format!("[{name}]"), upload, download, activity).await
-    {
+    let outcome = relay_tcp_bidirectional(&format!("[{name}]"), upload, download, activity).await;
+    if let Err(error) = outcome.result {
         tracing::debug!("[{}] TCP relay failed: {}", name, error);
     }
     abort_handle.cancel();
@@ -406,7 +430,11 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     outbound: S,
     tunnel_addr: Option<NetworkAddr>,
     abort_handle: ConnAbortHandle,
+    conn: Option<ConnHandle>,
 ) {
+    if let Some(conn) = &conn {
+        conn.set_state(boltapi::ConnState::Active);
+    }
     // establish udp
     let outbound = Arc::new(outbound);
     let outbound2 = outbound.clone();
@@ -487,15 +515,11 @@ impl UdpSocketAdapter for AddrConnectorWrapper {
 
 struct TcpIndicatorGuard {
     pub indicator: Arc<AtomicU8>,
-    pub info: ConnHandle,
 }
 
 impl Drop for TcpIndicatorGuard {
     fn drop(&mut self) {
         self.indicator.fetch_sub(1, Ordering::Relaxed);
-        if self.indicator.load(Ordering::Relaxed) == 0 {
-            self.info.mark_fin();
-        }
     }
 }
 
@@ -617,6 +641,7 @@ mod tests {
             established_connector,
             outbound,
             ConnAbortHandle::placeholder(),
+            None,
         ));
 
         peer_tx.send(Bytes::from_static(b"request")).await.unwrap();

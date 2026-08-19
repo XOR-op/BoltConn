@@ -2,7 +2,8 @@ use crate::Dns;
 use crate::dispatch::InboundInfo;
 use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::manager::MappingSessionManager;
-use crate::proxy::{Dispatcher, NetworkAddr};
+use crate::proxy::{ConnTarget, Dispatcher, NetworkAddr};
+use boltapi::IdentificationSource;
 use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -53,12 +54,17 @@ impl TunTcpInbound {
                 .session_mgr
                 .lookup_tcp_session(self.nat_addr.is_ipv6(), addr.port())
             {
-                let dst_addr = match self.dns.fake_ip_to_domain(dst_addr.ip()) {
-                    None => NetworkAddr::Socket { address: dst_addr },
-                    Some(s) => NetworkAddr::Domain {
-                        name: s,
-                        port: dst_addr.port(),
-                    },
+                let accepted = NetworkAddr::Socket { address: dst_addr };
+                let target = match self.dns.fake_ip_to_domain(dst_addr.ip()) {
+                    None => accepted.into(),
+                    Some(name) => ConnTarget::identified(
+                        accepted,
+                        NetworkAddr::Domain {
+                            name,
+                            port: dst_addr.port(),
+                        },
+                        IdentificationSource::FakeIpMapping,
+                    ),
                 };
                 let dispatcher = self.dispatcher.clone();
                 tokio::spawn(async move {
@@ -66,7 +72,7 @@ impl TunTcpInbound {
                         .submit_tcp(
                             InboundInfo::Tun,
                             src_addr,
-                            dst_addr,
+                            target,
                             indicator.clone(),
                             socket,
                         )

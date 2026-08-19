@@ -4,8 +4,8 @@ use crate::adapter::{
 use crate::common::StreamOutboundTrait;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
-use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::error::{DnsError, TransportError};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use std::net::SocketAddr;
@@ -40,15 +40,36 @@ impl DirectOutbound {
         self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
         let dst_addr = if let Some(dst) = self.resolved_dst {
             dst
         } else {
-            lookup(self.dns.as_ref(), &self.dst).await?
+            if let Some(conn) = &conn {
+                conn.set_state(boltapi::ConnState::Resolving);
+                conn.set_resolution(boltapi::DestinationResolution::InProgress);
+            }
+            match lookup(self.dns.as_ref(), &self.dst).await {
+                Ok(address) => {
+                    if let Some(conn) = &conn {
+                        conn.set_resolution(boltapi::DestinationResolution::Resolved { address });
+                        conn.set_state(boltapi::ConnState::Connecting);
+                    }
+                    address
+                }
+                Err(_) => {
+                    if let Some(conn) = &conn {
+                        conn.set_resolution(boltapi::DestinationResolution::Failed);
+                    }
+                    return Err(TransportError::Dns(DnsError::ResolveDomain(
+                        self.dst.to_string(),
+                    )));
+                }
+            }
         };
         let outbound = Egress::new(&self.iface_name).tcp_stream(dst_addr).await?;
 
-        established_tcp(self.id(), inbound, outbound, abort_handle).await;
+        established_tcp(self.id(), inbound, outbound, abort_handle, conn).await;
         Ok(())
     }
 
@@ -56,6 +77,7 @@ impl DirectOutbound {
         self,
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
         let outbound = Arc::new(Egress::new(&self.iface_name).udpv4_socket().await?);
         established_udp(
@@ -64,6 +86,7 @@ impl DirectOutbound {
             DirectUdpAdapter(outbound, self.dns.clone()),
             None,
             abort_handle,
+            conn,
         )
         .await;
         Ok(())
@@ -84,8 +107,9 @@ impl Outbound for DirectOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
-        tokio::spawn(self.clone().run_tcp(inbound, abort_handle))
+        tokio::spawn(self.clone().run_tcp(inbound, abort_handle, conn))
     }
 
     async fn spawn_tcp_with_outbound(
@@ -94,6 +118,7 @@ impl Outbound for DirectOutbound {
         _tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         tracing::error!("spawn_tcp_with_outbound() should not be called with DirectOutbound");
         Err(TransportError::Internal("Invalid outbound"))
@@ -104,8 +129,9 @@ impl Outbound for DirectOutbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
-        tokio::spawn(self.clone().run_udp(inbound, abort_handle))
+        tokio::spawn(self.clone().run_udp(inbound, abort_handle, conn))
     }
 
     async fn spawn_udp_with_outbound(
@@ -115,6 +141,7 @@ impl Outbound for DirectOutbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp_with_outbound() should not be called with DirectOutbound");
         Err(TransportError::Internal("Invalid outbound"))

@@ -100,7 +100,7 @@ impl HttpInbound {
         if req_struct.method == Some("CONNECT")
             // HTTP/1.1
             && req_struct.version == Some(1)
-        && let Some(Ok(dest)) = req_struct.path.map(|p| p.parse())
+        && let Some(Ok(dest)) = req_struct.path.map(|p| p.parse::<NetworkAddr>())
         {
             let inbound_extra = if !mgr.has_auth() {
                 Some(mgr.default_extra())
@@ -129,7 +129,7 @@ impl HttpInbound {
                 .submit_tcp(
                     InboundInfo::Http(inbound_extra.unwrap()),
                     addr,
-                    dest,
+                    dest.into(),
                     Arc::new(AtomicU8::new(2)),
                     socket,
                 )
@@ -241,7 +241,7 @@ impl LegacyProxy {
                     .submit_tcp(
                         InboundInfo::Http(inbound_extra),
                         self.src,
-                        dest,
+                        dest.into(),
                         Arc::new(AtomicU8::new(2)),
                         DuplexChan::new(right),
                     )

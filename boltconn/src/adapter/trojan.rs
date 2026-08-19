@@ -7,7 +7,7 @@ use crate::common::{StreamOutboundTrait, as_io_err, io_err};
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use crate::transport::trojan::{
     TrojanAddr, TrojanCmd, TrojanConfig, TrojanReqInner, TrojanRequest, TrojanUdpSocket,
@@ -56,6 +56,7 @@ impl TrojanOutbound {
         mut inbound: Connector,
         outbound: S,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
@@ -66,11 +67,11 @@ impl TrojanOutbound {
             let mut stream = self.with_websocket(stream, uri.as_str()).await?;
             self.first_packet(first_packet, TrojanCmd::Connect, &mut stream)
                 .await?;
-            established_tcp(self.name, inbound, stream, abort_handle).await;
+            established_tcp(self.name, inbound, stream, abort_handle, conn).await;
         } else {
             self.first_packet(first_packet, TrojanCmd::Connect, &mut stream)
                 .await?;
-            established_tcp(self.name, inbound, stream, abort_handle).await;
+            established_tcp(self.name, inbound, stream, abort_handle, conn).await;
         }
         Ok(())
     }
@@ -81,6 +82,7 @@ impl TrojanOutbound {
         outbound: S,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
@@ -102,6 +104,7 @@ impl TrojanOutbound {
                 adapter,
                 if tunnel_only { Some(self.dst) } else { None },
                 abort_handle,
+                conn,
             )
             .await;
         } else {
@@ -117,6 +120,7 @@ impl TrojanOutbound {
                 adapter,
                 if tunnel_only { Some(self.dst) } else { None },
                 abort_handle,
+                conn,
             )
             .await;
         }
@@ -142,7 +146,7 @@ impl TrojanOutbound {
         Ok(())
     }
 
-    async fn connect_proxy<S>(&self, outbound: S) -> io::Result<TlsStream<S>>
+    async fn connect_proxy<S>(&self, outbound: S) -> Result<TlsStream<S>, TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -150,7 +154,10 @@ impl TrojanOutbound {
             .map_err(as_io_err)?
             .to_owned();
         let tls_conn = TlsConnector::from(make_tls_config(self.config.skip_cert_verify));
-        let stream = tls_conn.connect(server_name, outbound).await?;
+        let stream = tls_conn
+            .connect(server_name, outbound)
+            .await
+            .map_err(|error| TransportError::Handshake(error.to_string()))?;
         Ok(stream)
     }
 
@@ -189,6 +196,7 @@ impl Outbound for TrojanOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -197,7 +205,9 @@ impl Outbound for TrojanOutbound {
             let tcp_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self_clone.run_tcp(inbound, tcp_conn, abort_handle).await
+            self_clone
+                .run_tcp(inbound, tcp_conn, abort_handle, conn)
+                .await
         })
     }
 
@@ -207,6 +217,7 @@ impl Outbound for TrojanOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
@@ -215,7 +226,7 @@ impl Outbound for TrojanOutbound {
         let self_clone = self.clone();
         tokio::spawn(async move {
             self_clone
-                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle, conn)
                 .await
         });
         Ok(true)
@@ -226,6 +237,7 @@ impl Outbound for TrojanOutbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -235,7 +247,7 @@ impl Outbound for TrojanOutbound {
                 .tcp_stream(server_addr)
                 .await?;
             self_clone
-                .run_udp(inbound, tcp_conn, abort_handle, tunnel_only)
+                .run_udp(inbound, tcp_conn, abort_handle, tunnel_only, conn)
                 .await
         })
     }
@@ -247,6 +259,7 @@ impl Outbound for TrojanOutbound {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Trojan UDP outbound ancestor");
@@ -256,7 +269,7 @@ impl Outbound for TrojanOutbound {
         let self_clone = self.clone();
         tokio::spawn(async move {
             self_clone
-                .run_udp(inbound, tcp_outbound, abort_handle, tunnel_only)
+                .run_udp(inbound, tcp_outbound, abort_handle, tunnel_only, conn)
                 .await
         });
         Ok(true)

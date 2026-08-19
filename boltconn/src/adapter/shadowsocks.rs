@@ -6,7 +6,7 @@ use crate::common::StreamOutboundTrait;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::{AdapterOrSocket, UdpSocketAdapter};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
@@ -97,6 +97,7 @@ impl SSOutbound {
         outbound: S,
         server_addr: SocketAddr,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -104,7 +105,7 @@ impl SSOutbound {
         let (target_addr, context, resolved_config) = self.create_internal(server_addr).await?;
         let ss_stream =
             ProxyClientStream::from_stream(context, outbound, &resolved_config, target_addr);
-        established_tcp(self.name, inbound, ss_stream, abort_handle).await;
+        established_tcp(self.name, inbound, ss_stream, abort_handle, conn).await;
         Ok(())
     }
 
@@ -115,6 +116,7 @@ impl SSOutbound {
         server_addr: SocketAddr,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
         let (_, context, resolved_config) = self.create_internal(server_addr).await?;
         let proxy_socket = ShadowsocksUdpAdapter::new(context, &resolved_config, adapter_or_socket);
@@ -124,6 +126,7 @@ impl SSOutbound {
             proxy_socket,
             if tunnel_only { Some(self.dst) } else { None },
             abort_handle,
+            conn,
         )
         .await;
         Ok(())
@@ -144,6 +147,7 @@ impl Outbound for SSOutbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -152,7 +156,7 @@ impl Outbound for SSOutbound {
                 .tcp_stream(server_addr)
                 .await?;
             self_clone
-                .run_tcp(inbound, tcp_conn, server_addr, abort_handle)
+                .run_tcp(inbound, tcp_conn, server_addr, abort_handle, conn)
                 .await
         })
     }
@@ -163,6 +167,7 @@ impl Outbound for SSOutbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Shadowsocks tcp spawn");
@@ -172,7 +177,13 @@ impl Outbound for SSOutbound {
         tokio::spawn(async move {
             let server_addr = self_clone.get_server_addr().await?;
             self_clone
-                .run_tcp(inbound, tcp_outbound.unwrap(), server_addr, abort_handle)
+                .run_tcp(
+                    inbound,
+                    tcp_outbound.unwrap(),
+                    server_addr,
+                    abort_handle,
+                    conn,
+                )
                 .await
         });
         Ok(true)
@@ -183,6 +194,7 @@ impl Outbound for SSOutbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -204,6 +216,7 @@ impl Outbound for SSOutbound {
                     server_addr,
                     abort_handle,
                     tunnel_only,
+                    conn,
                 )
                 .await
         })
@@ -216,6 +229,7 @@ impl Outbound for SSOutbound {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Shadowsocks UDP outbound ancestor");
@@ -232,6 +246,7 @@ impl Outbound for SSOutbound {
                     server_addr,
                     abort_handle,
                     tunnel_only,
+                    conn,
                 )
                 .await
         });

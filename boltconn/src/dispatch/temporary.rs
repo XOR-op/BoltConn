@@ -1,7 +1,6 @@
 use crate::dispatch::action::Action;
 use crate::dispatch::rule::RuleOrAction;
-use crate::dispatch::{ConnInfo, DispatchingSnippet, ProxyImpl};
-use std::sync::Arc;
+use crate::dispatch::{ConnInfo, DispatchMatch, DispatchingSnippet};
 
 pub struct TemporaryList {
     list: Vec<RuleOrAction>,
@@ -20,7 +19,8 @@ impl TemporaryList {
         &self,
         info: &mut ConnInfo,
         verbose: bool,
-    ) -> Option<(String, Arc<ProxyImpl>, Option<String>)> {
+        conn: Option<&crate::proxy::ConnHandle>,
+    ) -> Option<DispatchMatch> {
         for v in &self.list {
             match v {
                 RuleOrAction::Rule(v) => {
@@ -28,15 +28,15 @@ impl TemporaryList {
                         return Some(DispatchingSnippet::proxy_filtering(
                             &proxy,
                             info,
-                            format!("TEMP@{}", v).as_str(),
+                            v.provenance(),
                             verbose,
                         ));
                     }
                 }
                 RuleOrAction::Action(a) => match a {
-                    Action::LocalResolve(r) => r.resolve_to(info).await,
+                    Action::LocalResolve(r) => r.resolve_to(info, conn).await,
                     Action::SubDispatch(sub) => {
-                        if let Some(r) = sub.matches(info, verbose).await {
+                        if let Some(r) = sub.matches(info, verbose, conn).await {
                             return Some(r);
                         }
                     }

@@ -7,13 +7,14 @@ use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, NetworkAddr, network_addr_to_socks, socks_to_network_addr};
+use crate::proxy::{
+    ConnAbortHandle, ConnHandle, NetworkAddr, network_addr_to_socks, socks_to_network_addr,
+};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use fast_socks5::client::Socks5Stream;
 use fast_socks5::util::target_addr::TargetAddr;
 use fast_socks5::{AuthenticationMethod, Socks5Command};
-use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -65,7 +66,7 @@ impl Socks5Outbound {
         }
     }
 
-    async fn connect_proxy<S>(&self, outbound: S) -> io::Result<Socks5Stream<S>>
+    async fn connect_proxy<S>(&self, outbound: S) -> Result<Socks5Stream<S>, TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -73,7 +74,7 @@ impl Socks5Outbound {
         conn_cfg.set_connect_timeout(8);
         Socks5Stream::use_stream(outbound, Some(self.config.get_auth()), conn_cfg)
             .await
-            .map_err(as_io_err)
+            .map_err(|error| TransportError::Handshake(error.to_string()))
     }
 
     async fn run_tcp<S>(
@@ -81,6 +82,7 @@ impl Socks5Outbound {
         inbound: Connector,
         outbound: S,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -91,7 +93,7 @@ impl Socks5Outbound {
             .request(Socks5Command::TCPConnect, target)
             .await
             .map_err(as_io_err)?;
-        established_tcp(self.name, inbound, socks_stream, abort_handle).await;
+        established_tcp(self.name, inbound, socks_stream, abort_handle, conn).await;
         Ok(())
     }
 
@@ -101,6 +103,7 @@ impl Socks5Outbound {
         outbound: S,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -132,6 +135,7 @@ impl Socks5Outbound {
             Socks5UdpAdapter(out_sock),
             if tunnel_only { Some(self.dst) } else { None },
             abort_handle,
+            conn,
         )
         .await;
         Ok(())
@@ -152,6 +156,7 @@ impl Outbound for Socks5Outbound {
         &self,
         inbound: Connector,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -160,7 +165,9 @@ impl Outbound for Socks5Outbound {
             let socks_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
-            self_clone.run_tcp(inbound, socks_conn, abort_handle).await
+            self_clone
+                .run_tcp(inbound, socks_conn, abort_handle, conn)
+                .await
         })
     }
 
@@ -170,6 +177,7 @@ impl Outbound for Socks5Outbound {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_none() || udp_outbound.is_some() {
             tracing::error!("Invalid Socks5 tcp spawn");
@@ -178,7 +186,7 @@ impl Outbound for Socks5Outbound {
         let self_clone = self.clone();
         tokio::spawn(async move {
             self_clone
-                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle)
+                .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle, conn)
                 .await
         });
         Ok(true)
@@ -189,6 +197,7 @@ impl Outbound for Socks5Outbound {
         inbound: AddrConnector,
         abort_handle: ConnAbortHandle,
         tunnel_only: bool,
+        conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -198,7 +207,7 @@ impl Outbound for Socks5Outbound {
                 .tcp_stream(server_addr)
                 .await?;
             self_clone
-                .run_udp(inbound, socks_conn, abort_handle, tunnel_only)
+                .run_udp(inbound, socks_conn, abort_handle, tunnel_only, conn)
                 .await
         })
     }
@@ -210,6 +219,7 @@ impl Outbound for Socks5Outbound {
         _udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         _abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
+        _conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         tracing::error!("Socks5 does not support UDP chain");
         Err(TransportError::Internal("Invalid outbound"))

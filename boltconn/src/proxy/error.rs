@@ -48,6 +48,8 @@ pub enum TransportError {
     Ssh(#[from] russh::Error),
     #[error("Timeout: {0}")]
     Timeout(&'static str),
+    #[error("Handshake error: {0}")]
+    Handshake(String),
 }
 
 #[derive(Error, Debug)]

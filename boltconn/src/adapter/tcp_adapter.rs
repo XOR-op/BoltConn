@@ -1,6 +1,6 @@
 use crate::adapter::{
-    Connector, TcpIndicatorGuard, TcpRelayActivity, TcpStatus, relay_channel_to_writer,
-    relay_reader_to_channel, relay_tcp_bidirectional,
+    Connector, TcpIndicatorGuard, TcpRelayActivity, TcpRelayDirection, TcpStatus,
+    relay_channel_to_writer, relay_reader_to_channel, relay_tcp_bidirectional,
 };
 use crate::common::{
     MAX_PKT_SIZE, StreamOutboundTrait, parse_http_host, parse_tls_sni, read_to_bytes_mut,
@@ -150,29 +150,45 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         // connection status even when one branch completes before the other is first polled.
         let upload_guard = TcpIndicatorGuard {
             indicator: self.stat.available.clone(),
-            info: info.clone(),
         };
         let download_guard = TcpIndicatorGuard {
             indicator: self.stat.available.clone(),
-            info: info.clone(),
         };
 
-        let upload = Self::upload(
-            self.in_read,
-            tx,
-            self.first_packet_buffer,
-            need_parse_first_packet,
-            activity.clone(),
-            info.clone(),
-            upload_guard,
-        );
-        let download = Self::download(
-            self.in_write,
-            rx,
-            activity.clone(),
-            info.clone(),
-            download_guard,
-        );
+        let upload_info = info.clone();
+        let upload_activity = activity.clone();
+        let upload = async move {
+            let result = Self::upload(
+                self.in_read,
+                tx,
+                self.first_packet_buffer,
+                need_parse_first_packet,
+                upload_activity,
+                upload_info.clone(),
+                upload_guard,
+            )
+            .await;
+            if upload_info.snapshot().state.established_at_ms.is_some() {
+                upload_info.set_state(boltapi::ConnState::Closing);
+            }
+            result
+        };
+        let download_info = info.clone();
+        let download_activity = activity.clone();
+        let download = async move {
+            let result = Self::download(
+                self.in_write,
+                rx,
+                download_activity,
+                download_info.clone(),
+                download_guard,
+            )
+            .await;
+            if download_info.snapshot().state.established_at_ms.is_some() {
+                download_info.set_state(boltapi::ConnState::Closing);
+            }
+            result
+        };
 
         // A clean close is a TCP half-close: keep forwarding the other direction while it remains
         // active. An I/O failure terminates immediately so sibling tasks can be cancelled.
@@ -181,16 +197,46 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
             info.id(),
             info.metadata().conn_info.dst
         );
-        let _ = relay_tcp_bidirectional(&label, upload, download, activity).await;
+        let outcome = relay_tcp_bidirectional(&label, upload, download, activity).await;
+        let reached_active = info.snapshot().state.established_at_ms.is_some();
+        if reached_active {
+            match &outcome.result {
+                Ok(()) => {
+                    info.finish(
+                        match outcome.first {
+                            TcpRelayDirection::Upload => boltapi::ConnResultCode::ClientClosed,
+                            TcpRelayDirection::Download => boltapi::ConnResultCode::RemoteClosed,
+                        },
+                        Some(boltapi::ConnStage::Closing),
+                        None,
+                    );
+                }
+                Err(error) => {
+                    info.finish(
+                        boltapi::ConnResultCode::TransferError,
+                        Some(boltapi::ConnStage::Transferring),
+                        Some(crate::proxy::bounded_error_detail(&error.to_string())),
+                    );
+                }
+            }
+        } else if outcome.first == TcpRelayDirection::Upload && outcome.result.is_ok() {
+            // A client can cleanly close while the outbound is still connecting.
+            // Retain that cause rather than letting cancellation look like an
+            // internal outbound-task failure.
+            info.finish(
+                boltapi::ConnResultCode::ClientClosed,
+                Some(boltapi::ConnStage::Connecting),
+                None,
+            );
+        }
         self.abort_handle.cancel();
-        Ok(())
+        outcome.result
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::OutboundType;
     use crate::dispatch::{ConnInfo, InboundInfo};
     use crate::platform::process::NetworkType;
     use crate::proxy::ContextManager;
@@ -213,8 +259,7 @@ mod tests {
                 connection_type: NetworkType::Tcp,
                 process_info: None,
             },
-            "DIRECT".to_string(),
-            OutboundType::Direct,
+            NetworkAddr::Socket { address: dst },
             None,
             abort_handle,
         )
@@ -231,6 +276,7 @@ mod tests {
         let available = Arc::new(AtomicU8::new(2));
         let abort_handle = ConnAbortHandle::placeholder();
         let info = test_context(abort_handle.clone());
+        info.set_state(boltapi::ConnState::Active);
         let adapter = TcpAdapter::new(
             info.metadata().conn_info.src,
             info.metadata().conn_info.dst.clone(),
@@ -249,6 +295,13 @@ mod tests {
 
         // Closing the upload half must not discard a response that is still in flight.
         client.shutdown().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while info.state() != boltapi::ConnState::Closing {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("adapter did not enter closing after the upload half-close");
         outbound_tx
             .send(Bytes::from_static(b"response"))
             .await
