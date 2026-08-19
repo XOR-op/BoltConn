@@ -967,6 +967,63 @@ mod connection_record_tests {
             ConnResultCode::UserStopped
         );
     }
+
+    fn test_dns_lookup(name: &str) -> DnsLookupDetail {
+        DnsLookupDetail {
+            purpose: boltapi::DnsLookupPurpose::Destination,
+            name: name.to_string(),
+            selection: boltapi::DnsSelection::Hosts,
+            cache: boltapi::DnsCacheStatus::NotApplicable,
+            attempts: Vec::new(),
+            answers: Vec::new(),
+            result: boltapi::DnsOutcome::Answered {
+                response: boltapi::DnsResponseKind::NoData,
+            },
+            duration_ms: 0,
+        }
+    }
+
+    #[test]
+    fn udp_dns_evidence_keeps_latest_five_and_preserves_total() {
+        let manager = ContextManager::new(10);
+        let target = NetworkAddr::from(SocketAddr::from(([127, 0, 0, 1], 443)));
+        let udp = manager.begin(
+            ConnInfo {
+                src: SocketAddr::from(([127, 0, 0, 1], 10_001)),
+                dst: target.clone(),
+                local_ip: None,
+                inbound: InboundInfo::Tun,
+                resolved_dst: None,
+                connection_type: NetworkType::Udp,
+                process_info: None,
+            },
+            target,
+            None,
+            ConnAbortHandle::placeholder(),
+        );
+        for index in 0..7 {
+            assert!(udp.record_dns_lookup(test_dns_lookup(&format!("name-{index}"))));
+        }
+
+        let activity = udp.snapshot().state.dns;
+        assert_eq!(activity.total_lookups, 7);
+        assert_eq!(activity.lookups.len(), 5);
+        assert_eq!(activity.lookups[0].name, "name-2");
+        assert_eq!(activity.lookups[4].name, "name-6");
+    }
+
+    #[test]
+    fn tcp_dns_evidence_retains_every_lookup() {
+        let manager = ContextManager::new(10);
+        let tcp = begin_test_connection(&manager, 10_001);
+        for index in 0..7 {
+            assert!(tcp.record_dns_lookup(test_dns_lookup(&format!("name-{index}"))));
+        }
+
+        let activity = tcp.snapshot().state.dns;
+        assert_eq!(activity.total_lookups, 7);
+        assert_eq!(activity.lookups.len(), 7);
+    }
 }
 
 #[derive(Clone, Debug)]

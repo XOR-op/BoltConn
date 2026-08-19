@@ -168,13 +168,12 @@ impl HttpsIntercept {
 
         // start running
         self.conn_info.set_state(boltapi::ConnState::Connecting);
-        let inbound = acceptor.accept(self.inbound).await.map_err(|error| {
+        let inbound = acceptor.accept(self.inbound).await.inspect_err(|error| {
             self.conn_info.finish(
                 boltapi::ConnResultCode::HandshakeError,
                 Some(boltapi::ConnStage::Handshaking),
                 Some(crate::proxy::bounded_error_detail(&error.to_string())),
             );
-            error
         })?;
         self.conn_info.set_state(boltapi::ConnState::Active);
         if let Err(http_err) =

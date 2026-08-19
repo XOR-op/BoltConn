@@ -33,6 +33,7 @@ use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 #[allow(unused_imports)]
 pub use anytls::*;
+use boltapi::DnsLookupPurpose;
 pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
@@ -576,14 +577,22 @@ impl Drop for UdpDropGuard {
     }
 }
 
-async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
+async fn lookup(
+    dns: &Dns,
+    addr: &NetworkAddr,
+    purpose: DnsLookupPurpose,
+    conn: Option<&ConnHandle>,
+) -> io::Result<SocketAddr> {
     Ok(match addr {
         NetworkAddr::Socket { address: addr } => *addr,
         NetworkAddr::Domain {
             name: domain_name,
             port,
         } => {
-            let resp = match dns.genuine_lookup(domain_name.as_str()).await {
+            let resp = match dns
+                .genuine_lookup_for(domain_name.as_str(), purpose, conn)
+                .await
+            {
                 Ok(Some(resp)) => resp,
                 _ => return Err(io_err("dns not found")),
             };
@@ -592,7 +601,11 @@ async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
     })
 }
 
-pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAddr> {
+pub(super) async fn get_dst(
+    dns: &Dns,
+    dst: &NetworkAddr,
+    purpose: DnsLookupPurpose,
+) -> io::Result<SocketAddr> {
     Ok(match dst {
         NetworkAddr::Domain {
             name: domain_name,
@@ -600,7 +613,10 @@ pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAd
         } => {
             // translate fake ip
             SocketAddr::new(
-                match dns.genuine_lookup(domain_name.as_str()).await {
+                match dns
+                    .genuine_lookup_for(domain_name.as_str(), purpose, None)
+                    .await
+                {
                     Ok(Some(resp)) => resp,
                     _ => return Err(io_err("dns not found")),
                 },

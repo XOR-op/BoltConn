@@ -200,8 +200,15 @@ impl Outbound for TrojanOutbound {
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr =
-                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let server_addr = lookup(
+                self_clone.dns.as_ref(),
+                &self_clone.config.server_addr,
+                boltapi::DnsLookupPurpose::ProxyServer {
+                    proxy: self_clone.name.clone(),
+                },
+                conn.as_ref(),
+            )
+            .await?;
             let tcp_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
@@ -241,8 +248,15 @@ impl Outbound for TrojanOutbound {
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr =
-                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let server_addr = lookup(
+                self_clone.dns.as_ref(),
+                &self_clone.config.server_addr,
+                boltapi::DnsLookupPurpose::ProxyServer {
+                    proxy: self_clone.name.clone(),
+                },
+                conn.as_ref(),
+            )
+            .await?;
             let tcp_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;

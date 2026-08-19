@@ -56,7 +56,7 @@ impl SSOutbound {
         }
     }
 
-    async fn get_server_addr(&self) -> io::Result<SocketAddr> {
+    async fn get_server_addr(&self, conn: Option<&ConnHandle>) -> io::Result<SocketAddr> {
         Ok(match &self.config.server_addr {
             ServerAddr::SocketAddr(addr) => *addr,
             ServerAddr::DomainName(addr, port) => {
@@ -66,6 +66,10 @@ impl SSOutbound {
                         name: addr.clone(),
                         port: *port,
                     },
+                    boltapi::DnsLookupPurpose::ProxyServer {
+                        proxy: self.name.clone(),
+                    },
+                    conn,
                 )
                 .await?
             }
@@ -151,7 +155,7 @@ impl Outbound for SSOutbound {
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = self_clone.get_server_addr().await?;
+            let server_addr = self_clone.get_server_addr(conn.as_ref()).await?;
             let tcp_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
@@ -175,7 +179,7 @@ impl Outbound for SSOutbound {
         }
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = self_clone.get_server_addr().await?;
+            let server_addr = self_clone.get_server_addr(conn.as_ref()).await?;
             self_clone
                 .run_tcp(
                     inbound,
@@ -198,7 +202,7 @@ impl Outbound for SSOutbound {
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = self_clone.get_server_addr().await?;
+            let server_addr = self_clone.get_server_addr(conn.as_ref()).await?;
             let out_sock = {
                 let socket = match server_addr {
                     SocketAddr::V4(_) => Egress::new(&self_clone.iface_name).udpv4_socket().await?,
@@ -238,7 +242,7 @@ impl Outbound for SSOutbound {
         let udp_outbound = udp_outbound.unwrap();
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr = self_clone.get_server_addr().await?;
+            let server_addr = self_clone.get_server_addr(conn.as_ref()).await?;
             self_clone
                 .run_udp(
                     AdapterOrSocket::Adapter(Arc::from(udp_outbound)),

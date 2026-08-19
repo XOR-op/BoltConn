@@ -40,7 +40,11 @@ impl LocalResolve {
             conn.set_state(boltapi::ConnState::Resolving);
             conn.set_resolution(boltapi::DestinationResolution::InProgress);
         }
-        match self.dns.genuine_lookup(domain_name).await {
+        match self
+            .dns
+            .genuine_lookup_for(domain_name, boltapi::DnsLookupPurpose::Destination, conn)
+            .await
+        {
             Ok(Some(addr)) => {
                 let address = SocketAddr::new(addr, *port);
                 info.resolved_dst = Some(address);

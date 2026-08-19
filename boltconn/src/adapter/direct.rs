@@ -49,7 +49,14 @@ impl DirectOutbound {
                 conn.set_state(boltapi::ConnState::Resolving);
                 conn.set_resolution(boltapi::DestinationResolution::InProgress);
             }
-            match lookup(self.dns.as_ref(), &self.dst).await {
+            match lookup(
+                self.dns.as_ref(),
+                &self.dst,
+                boltapi::DnsLookupPurpose::Destination,
+                conn.as_ref(),
+            )
+            .await
+            {
                 Ok(address) => {
                     if let Some(conn) = &conn {
                         conn.set_resolution(boltapi::DestinationResolution::Resolved { address });
@@ -83,7 +90,7 @@ impl DirectOutbound {
         established_udp(
             self.id(),
             inbound,
-            DirectUdpAdapter(outbound, self.dns.clone()),
+            DirectUdpAdapter(outbound, self.dns.clone(), conn.clone()),
             None,
             abort_handle,
             conn,
@@ -149,7 +156,7 @@ impl Outbound for DirectOutbound {
 }
 
 #[derive(Clone)]
-struct DirectUdpAdapter(Arc<UdpSocket>, Arc<Dns>);
+struct DirectUdpAdapter(Arc<UdpSocket>, Arc<Dns>, Option<ConnHandle>);
 
 #[async_trait]
 impl UdpSocketAdapter for DirectUdpAdapter {
@@ -160,7 +167,15 @@ impl UdpSocketAdapter for DirectUdpAdapter {
                 name: domain_name,
                 port,
             } => {
-                let Ok(Some(ip)) = self.1.genuine_lookup(domain_name.as_str()).await else {
+                let Ok(Some(ip)) = self
+                    .1
+                    .genuine_lookup_for(
+                        domain_name.as_str(),
+                        boltapi::DnsLookupPurpose::Destination,
+                        self.2.as_ref(),
+                    )
+                    .await
+                else {
                     // drop
                     return Ok(());
                 };

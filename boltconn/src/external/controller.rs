@@ -439,7 +439,15 @@ impl Controller {
     }
 
     pub async fn real_lookup(&self, domain_name: String) -> Option<String> {
-        match self.dns.genuine_lookup(domain_name.as_str()).await {
+        match self
+            .dns
+            .genuine_lookup_for(
+                domain_name.as_str(),
+                boltapi::DnsLookupPurpose::Diagnostic,
+                None,
+            )
+            .await
+        {
             Ok(Some(ip)) => Some(ip.to_string()),
             _ => None,
         }

@@ -139,6 +139,7 @@ impl AnytlsOutboundHandle {
         let config = self.config.clone();
         let dns = self.dns.clone();
         let iface_name = self.iface_name.clone();
+        let link_name = self.name.clone();
 
         client
             .open_stream_with(dst, move || async move {
@@ -146,7 +147,15 @@ impl AnytlsOutboundHandle {
                 let outbound = match outbound {
                     Some(outbound) => outbound,
                     None => {
-                        let server_addr = lookup(dns.as_ref(), &config.server_addr).await?;
+                        let server_addr = lookup(
+                            dns.as_ref(),
+                            &config.server_addr,
+                            boltapi::DnsLookupPurpose::LinkServer {
+                                link: link_name.clone(),
+                            },
+                            None,
+                        )
+                        .await?;
                         let tcp_conn = Egress::new(&iface_name).tcp_stream(server_addr).await?;
                         Box::new(tcp_conn) as Box<dyn StreamOutboundTrait>
                     }

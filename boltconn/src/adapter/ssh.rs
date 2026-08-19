@@ -55,7 +55,7 @@ impl SshOutboundHandle {
         let master_conn = match tokio::time::timeout(
             Duration::from_secs(10),
             self.manager
-                .get_ssh_conn(&self.config, outbound, completion_tx),
+                .get_ssh_conn(&self.name, &self.config, outbound, completion_tx),
         )
         .await
         {
@@ -188,6 +188,7 @@ impl SshManager {
 
     pub async fn get_ssh_conn(
         &self,
+        name: &str,
         config: &SshConfig,
         next_step: Option<Box<dyn StreamOutboundTrait>>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
@@ -208,8 +209,14 @@ impl SshManager {
                 let tunnel = Arc::new(match next_step {
                     Some(next_step) => SshTunnel::new(config, next_step).await?,
                     None => {
-                        let server_addr =
-                            adapter::get_dst(&self.server_resolver, &config.server).await?;
+                        let server_addr = adapter::get_dst(
+                            &self.server_resolver,
+                            &config.server,
+                            boltapi::DnsLookupPurpose::LinkServer {
+                                link: name.to_string(),
+                            },
+                        )
+                        .await?;
                         let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
                         SshTunnel::new(config, stream).await?
                     }

@@ -100,6 +100,7 @@ struct WireguardTunnelInner {
 
 impl WireguardTunnel {
     pub async fn new(
+        name: &str,
         outbound: AdapterOrSocket,
         config: &WireguardConfig,
         dns: Arc<Dns>,
@@ -112,7 +113,13 @@ impl WireguardTunnel {
                 port,
             } => {
                 let resp = dns
-                    .genuine_lookup(domain_name)
+                    .genuine_lookup_for(
+                        domain_name,
+                        boltapi::DnsLookupPurpose::LinkServer {
+                            link: name.to_string(),
+                        },
+                        None,
+                    )
                     .await?
                     .ok_or_else(|| io_err("dns not found"))?;
                 SocketAddr::new(resp, port)

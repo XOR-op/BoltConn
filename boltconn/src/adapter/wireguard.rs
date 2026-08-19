@@ -53,7 +53,7 @@ impl Endpoint {
         let (mut wg_smol_tx, wg_smol_rx) = flume::bounded(4096);
         let (smol_wg_tx, mut smol_wg_rx) = flume::unbounded();
         let tunnel = Arc::new(
-            WireguardTunnel::new(outbound, config, endpoint_resolver, notify.clone()).await?,
+            WireguardTunnel::new(name, outbound, config, endpoint_resolver, notify.clone()).await?,
         );
         let device = VirtualIpDevice::new(config.mtu, wg_smol_rx, smol_wg_tx);
         let smol_stack = {
@@ -81,10 +81,11 @@ impl Endpoint {
                     .build()
                     .expect("rustls miscompiled")
                 };
-                let dns = Arc::new(GenericDns::new_with_resolver(
+                let dns = Arc::new(GenericDns::new_with_resolver_config(
                     name,
                     resolver,
                     config.dns_preference,
+                    &config.dns.name_servers,
                 ));
                 Mutex::new(SmolStack::new(
                     name,
@@ -366,8 +367,14 @@ impl WireguardManager {
         let outbound = match adapter {
             Some(a) => a,
             None => {
-                let server_addr =
-                    adapter::get_dst(&self.endpoint_resolver, &config.endpoint).await?;
+                let server_addr = adapter::get_dst(
+                    &self.endpoint_resolver,
+                    &config.endpoint,
+                    boltapi::DnsLookupPurpose::LinkServer {
+                        link: name.to_string(),
+                    },
+                )
+                .await?;
                 if config.over_tcp {
                     let stream = Egress::new(&self.iface).tcp_stream(server_addr).await?;
                     AdapterOrSocket::Adapter(Arc::new(UdpOverTcpAdapter::new(stream, server_addr)?))
@@ -459,6 +466,7 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
         let endpoint = self.get_endpoint(adapter, ret_tx).await?;
         let notify = endpoint.clone_notify();
@@ -469,7 +477,14 @@ impl WireguardHandle {
                 name: domain_name,
                 port,
             } => SocketAddr::new(
-                match smol_dns.genuine_lookup(domain_name.as_str()).await {
+                match smol_dns
+                    .genuine_lookup_for(
+                        domain_name.as_str(),
+                        boltapi::DnsLookupPurpose::Destination,
+                        conn.as_ref(),
+                    )
+                    .await
+                {
                     Ok(Some(addr)) => addr,
                     _ => return Err(TransportError::Dns(DnsError::ResolveDomain(domain_name))),
                 },
@@ -496,11 +511,12 @@ impl WireguardHandle {
         abort_handle: ConnAbortHandle,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
+        conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
         let endpoint = self.get_endpoint(adapter, ret_tx).await?;
         let notify = endpoint.clone_notify();
         let mut x = endpoint.stack.lock().await;
-        Ok(x.open_udp(self.src, inbound, abort_handle, notify)?)
+        Ok(x.open_udp_tracked(self.src, inbound, abort_handle, notify, conn)?)
     }
 }
 
@@ -522,7 +538,8 @@ impl Outbound for WireguardHandle {
     ) -> JoinHandle<Result<(), TransportError>> {
         let (tx, _) = tokio::sync::oneshot::channel();
         let connect = adapter::connect_timeout(
-            self.clone().attach_tcp(inbound, abort_handle, None, tx),
+            self.clone()
+                .attach_tcp(inbound, abort_handle, None, tx, conn.clone()),
             "WireGuard TCP",
         );
         tokio::spawn(async move {
@@ -542,7 +559,7 @@ impl Outbound for WireguardHandle {
         tcp_outbound: Option<Box<dyn StreamOutboundTrait>>,
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
-        _conn: Option<ConnHandle>,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
@@ -556,6 +573,7 @@ impl Outbound for WireguardHandle {
                 abort_handle,
                 Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
                 ret_tx,
+                conn,
             ),
             "WireGuard TCP multi-hop",
         ));
@@ -573,7 +591,8 @@ impl Outbound for WireguardHandle {
     ) -> JoinHandle<Result<(), TransportError>> {
         let (ret_tx, _) = tokio::sync::oneshot::channel();
         let connect = adapter::connect_timeout(
-            self.clone().attach_udp(inbound, abort_handle, None, ret_tx),
+            self.clone()
+                .attach_udp(inbound, abort_handle, None, ret_tx, conn.clone()),
             "WireGuard UDP",
         );
         tokio::spawn(async move {
@@ -594,7 +613,7 @@ impl Outbound for WireguardHandle {
         udp_outbound: Option<Box<dyn UdpSocketAdapter>>,
         abort_handle: ConnAbortHandle,
         _tunnel_only: bool,
-        _conn: Option<ConnHandle>,
+        conn: Option<ConnHandle>,
     ) -> Result<bool, TransportError> {
         if tcp_outbound.is_some() || udp_outbound.is_none() {
             tracing::error!("Invalid Wireguard UDP outbound ancestor");
@@ -608,6 +627,7 @@ impl Outbound for WireguardHandle {
                 abort_handle,
                 Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
                 ret_tx,
+                conn,
             ),
             "WireGuard UDP multi-hop",
         ));

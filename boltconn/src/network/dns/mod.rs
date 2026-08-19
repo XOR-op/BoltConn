@@ -5,6 +5,7 @@ mod dns_table;
 mod hijack_ctrl;
 mod hosts;
 mod ns_policy;
+mod observability;
 mod provider;
 
 use crate::config::DnsConfigError;
@@ -197,6 +198,10 @@ impl DhcpDnsRecord {
     pub fn get_resolver(&self) -> Arc<Resolver<IfaceProvider>> {
         self.resolver.clone()
     }
+
+    fn current_server(&self) -> std::net::SocketAddr {
+        std::net::SocketAddr::new(self.ns_addr, 53)
+    }
 }
 
 enum AuxiliaryResolver<T> {
@@ -212,5 +217,12 @@ impl<T> AuxiliaryResolver<T> {
     pub fn new_dhcp(iface: &str) -> Self {
         let record = DhcpDnsRecord::new(iface);
         Self::Dhcp(Mutex::new(record))
+    }
+
+    fn current_dhcp_endpoint(&self) -> Option<std::net::SocketAddr> {
+        match self {
+            Self::Resolver(_) => None,
+            Self::Dhcp(record) => Some(record.lock().unwrap().current_server()),
+        }
     }
 }

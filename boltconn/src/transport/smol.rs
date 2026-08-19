@@ -4,7 +4,7 @@ use crate::common::duplex_chan::DuplexChan;
 use crate::common::{MAX_PKT_SIZE, mut_buf};
 use crate::config::DnsPreference;
 use crate::network::dns::GenericDns;
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::InterfaceAddress;
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
@@ -275,6 +275,7 @@ impl UdpConnTask {
         dns: Arc<GenericDns<SmolDnsProvider>>,
         notify: Arc<Notify>,
         socket_version: IPVersion,
+        conn: Option<ConnHandle>,
     ) -> Self {
         let AddrConnector {
             tx: back_tx,
@@ -302,12 +303,14 @@ impl UdpConnTask {
                         name: domain_name,
                         port,
                     } => match dns
-                        .genuine_lookup_with(
+                        .genuine_lookup_with_for(
                             domain_name.as_str(),
                             match socket_version {
                                 IPVersion::V4 => DnsPreference::Ipv4Only,
                                 IPVersion::V6 => DnsPreference::Ipv6Only,
                             },
+                            boltapi::DnsLookupPurpose::Destination,
+                            conn.as_ref(),
                         )
                         .await
                     {
@@ -541,7 +544,18 @@ impl SmolStack {
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
     ) -> io::Result<()> {
-        self.open_udp_extended(local_addr, connector, abort_handle, notify, 256)
+        self.open_udp_extended_inner(local_addr, connector, abort_handle, notify, 256, None)
+    }
+
+    pub fn open_udp_tracked(
+        &mut self,
+        local_addr: SocketAddr,
+        connector: AddrConnector,
+        abort_handle: ConnAbortHandle,
+        notify: Arc<Notify>,
+        conn: Option<ConnHandle>,
+    ) -> io::Result<()> {
+        self.open_udp_extended_inner(local_addr, connector, abort_handle, notify, 256, conn)
     }
 
     pub fn open_udp_extended(
@@ -551,6 +565,25 @@ impl SmolStack {
         abort_handle: ConnAbortHandle,
         notify: Arc<Notify>,
         buffer_packet_cnt: usize,
+    ) -> io::Result<()> {
+        self.open_udp_extended_inner(
+            local_addr,
+            connector,
+            abort_handle,
+            notify,
+            buffer_packet_cnt,
+            None,
+        )
+    }
+
+    fn open_udp_extended_inner(
+        &mut self,
+        local_addr: SocketAddr,
+        connector: AddrConnector,
+        abort_handle: ConnAbortHandle,
+        notify: Arc<Notify>,
+        buffer_packet_cnt: usize,
+        conn: Option<ConnHandle>,
     ) -> io::Result<()> {
         // todo: IPv6 support when local_addr is a V4 address
         let choose_a_local_port = local_addr.port() == 0;
@@ -584,6 +617,7 @@ impl SmolStack {
                         self.dns.clone(),
                         notify,
                         IPVersion::from_addr(&local_addr.ip()),
+                        conn,
                     ));
                     Ok(())
                 }

@@ -115,7 +115,15 @@ impl Socks5Outbound {
                 port,
             } => TargetAddr::Domain(domain_name.clone(), *port),
         };
-        let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
+        let server_addr = lookup(
+            self.dns.as_ref(),
+            &self.config.server_addr,
+            boltapi::DnsLookupPurpose::ProxyServer {
+                proxy: self.name.clone(),
+            },
+            conn.as_ref(),
+        )
+        .await?;
         let mut socks_stream = self.connect_proxy(outbound).await?;
         let out_sock = Arc::new(match server_addr {
             SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
@@ -160,8 +168,15 @@ impl Outbound for Socks5Outbound {
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr =
-                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let server_addr = lookup(
+                self_clone.dns.as_ref(),
+                &self_clone.config.server_addr,
+                boltapi::DnsLookupPurpose::ProxyServer {
+                    proxy: self_clone.name.clone(),
+                },
+                conn.as_ref(),
+            )
+            .await?;
             let socks_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;
@@ -201,8 +216,15 @@ impl Outbound for Socks5Outbound {
     ) -> JoinHandle<Result<(), TransportError>> {
         let self_clone = self.clone();
         tokio::spawn(async move {
-            let server_addr =
-                lookup(self_clone.dns.as_ref(), &self_clone.config.server_addr).await?;
+            let server_addr = lookup(
+                self_clone.dns.as_ref(),
+                &self_clone.config.server_addr,
+                boltapi::DnsLookupPurpose::ProxyServer {
+                    proxy: self_clone.name.clone(),
+                },
+                conn.as_ref(),
+            )
+            .await?;
             let socks_conn = Egress::new(&self_clone.iface_name)
                 .tcp_stream(server_addr)
                 .await?;

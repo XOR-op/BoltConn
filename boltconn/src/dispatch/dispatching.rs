@@ -354,6 +354,7 @@ impl DispatchingBuilder {
         })
     }
 
+    #[allow(clippy::type_complexity)]
     fn build_rules_loosely(
         &self,
         rules: &[RuleConfigLine],
@@ -366,6 +367,7 @@ impl DispatchingBuilder {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     fn build_rule_entries<'a, I>(
         &self,
         rules_len: usize,
