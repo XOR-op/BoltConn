@@ -37,6 +37,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+fn network_addr_from_config(server: &RawServerAddr, port: u16) -> NetworkAddr {
+    match server {
+        RawServerAddr::IpAddr(ip) => NetworkAddr::from(SocketAddr::new(*ip, port)),
+        RawServerAddr::DomainName(name) => NetworkAddr::Domain {
+            name: name.clone(),
+            port,
+        },
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ConnInfo {
     pub src: SocketAddr,
@@ -50,7 +60,7 @@ pub struct ConnInfo {
 
 impl ConnInfo {
     pub fn dst_addr(&self) -> Option<&SocketAddr> {
-        if let NetworkAddr::Raw(s) = &self.dst {
+        if let NetworkAddr::Socket { address: s } = &self.dst {
             Some(s)
         } else {
             self.resolved_dst.as_ref()
@@ -504,7 +514,7 @@ impl DispatchingBuilder {
                 RawProxyLocalCfg::Http { server, port, auth } => Arc::new(Proxy::new(
                     name.clone(),
                     ProxyImpl::Http(HttpConfig {
-                        server_addr: NetworkAddr::from(server, *port),
+                        server_addr: network_addr_from_config(server, *port),
                         auth: auth.clone(),
                     }),
                 )),
@@ -516,7 +526,7 @@ impl DispatchingBuilder {
                 } => Arc::new(Proxy::new(
                     name.clone(),
                     ProxyImpl::Socks5(Socks5Config {
-                        server_addr: NetworkAddr::from(server, *port),
+                        server_addr: network_addr_from_config(server, *port),
                         auth: auth.clone(),
                         udp: *udp,
                     }),
@@ -566,9 +576,9 @@ impl DispatchingBuilder {
                     udp,
                 } => {
                     let addr = match server {
-                        RawServerAddr::IpAddr(ip) => NetworkAddr::Raw(SocketAddr::new(*ip, *port)),
-                        RawServerAddr::DomainName(dn) => NetworkAddr::DomainName {
-                            domain_name: dn.clone(),
+                        RawServerAddr::IpAddr(ip) => NetworkAddr::from(SocketAddr::new(*ip, *port)),
+                        RawServerAddr::DomainName(dn) => NetworkAddr::Domain {
+                            name: dn.clone(),
                             port: *port,
                         },
                     };
@@ -594,9 +604,9 @@ impl DispatchingBuilder {
                     udp,
                 } => {
                     let addr = match server {
-                        RawServerAddr::IpAddr(ip) => NetworkAddr::Raw(SocketAddr::new(*ip, *port)),
-                        RawServerAddr::DomainName(dn) => NetworkAddr::DomainName {
-                            domain_name: dn.clone(),
+                        RawServerAddr::IpAddr(ip) => NetworkAddr::from(SocketAddr::new(*ip, *port)),
+                        RawServerAddr::DomainName(dn) => NetworkAddr::Domain {
+                            name: dn.clone(),
                             port: *port,
                         },
                     };
@@ -642,7 +652,7 @@ impl DispatchingBuilder {
                         .into());
                     }
                     let endpoint = match endpoint {
-                        RawServerSockAddr::Ip(addr) => NetworkAddr::Raw(*addr),
+                        RawServerSockAddr::Ip(addr) => NetworkAddr::from(*addr),
                         RawServerSockAddr::Domain(a) => {
                             let parts = a.split(':').collect::<Vec<&str>>();
                             let Some(port_str) = parts.get(1) else {
@@ -656,8 +666,8 @@ impl DispatchingBuilder {
                                 ProxyError::ProxyFieldError(name.clone(), "Invalid port")
                             })?;
                             #[allow(clippy::get_first)]
-                            NetworkAddr::DomainName {
-                                domain_name: parts.get(0).unwrap().to_string(),
+                            NetworkAddr::Domain {
+                                name: parts.get(0).unwrap().to_string(),
                                 port,
                             }
                         }
@@ -789,7 +799,7 @@ impl DispatchingBuilder {
                     Arc::new(Proxy::new(
                         name.clone(),
                         ProxyImpl::Ssh(SshConfig {
-                            server: NetworkAddr::from(server, *port),
+                            server: network_addr_from_config(server, *port),
                             user: user.clone(),
                             auth,
                             host_pubkey,

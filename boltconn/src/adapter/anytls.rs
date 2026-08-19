@@ -85,8 +85,8 @@ impl AnytlsOutboundHandle {
         } else {
             first_addr
         };
-        let udp_target = NetworkAddr::DomainName {
-            domain_name: UDP_OVER_TCP_DOMAIN.to_string(),
+        let udp_target = NetworkAddr::Domain {
+            name: UDP_OVER_TCP_DOMAIN.to_string(),
             port: 0,
         };
         let used_outbound = Arc::new(AtomicBool::new(false));
@@ -467,17 +467,24 @@ where
 
 fn encode_uot_addr(addr: &NetworkAddr, data: &mut Vec<u8>) -> Result<(), TransportError> {
     match addr {
-        NetworkAddr::Raw(SocketAddr::V4(v4)) => {
+        NetworkAddr::Socket {
+            address: SocketAddr::V4(v4),
+        } => {
             data.push(0);
             data.extend(v4.ip().octets());
             data.extend(v4.port().to_be_bytes());
         }
-        NetworkAddr::Raw(SocketAddr::V6(v6)) => {
+        NetworkAddr::Socket {
+            address: SocketAddr::V6(v6),
+        } => {
             data.push(1);
             data.extend(v6.ip().octets());
             data.extend(v6.port().to_be_bytes());
         }
-        NetworkAddr::DomainName { domain_name, port } => {
+        NetworkAddr::Domain {
+            name: domain_name,
+            port,
+        } => {
             let len = u8::try_from(domain_name.len())
                 .map_err(|_| TransportError::Anytls("AnyTLS UDP domain name too long"))?;
             data.push(2);
@@ -499,7 +506,7 @@ where
         0 => {
             let mut buf = [0u8; 6];
             reader.read_exact(&mut buf).await?;
-            Ok(NetworkAddr::Raw(SocketAddr::new(
+            Ok(NetworkAddr::from(SocketAddr::new(
                 Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]).into(),
                 u16::from_be_bytes([buf[4], buf[5]]),
             )))
@@ -509,7 +516,7 @@ where
             reader.read_exact(&mut buf).await?;
             let mut ip = [0u8; 16];
             ip.copy_from_slice(&buf[..16]);
-            Ok(NetworkAddr::Raw(SocketAddr::new(
+            Ok(NetworkAddr::from(SocketAddr::new(
                 Ipv6Addr::from(ip).into(),
                 u16::from_be_bytes([buf[16], buf[17]]),
             )))
@@ -521,8 +528,8 @@ where
             reader.read_exact(&mut domain).await?;
             let mut port = [0u8; 2];
             reader.read_exact(&mut port).await?;
-            Ok(NetworkAddr::DomainName {
-                domain_name: String::from_utf8(domain)
+            Ok(NetworkAddr::Domain {
+                name: String::from_utf8(domain)
                     .map_err(|_| TransportError::Anytls("AnyTLS UDP domain is not UTF-8"))?,
                 port: u16::from_be_bytes(port),
             })

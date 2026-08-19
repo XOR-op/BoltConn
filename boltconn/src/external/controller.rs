@@ -6,8 +6,8 @@ use crate::network::configure::TunConfigure;
 use crate::network::dns::Dns;
 use crate::platform::process::ParentProcess;
 use crate::proxy::{
-    ConnContext, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData,
-    MappingSessionManager, latency_test,
+    ConnHandle, ContextManager, Dispatcher, HttpCapturer, HttpInterceptData, MappingSessionManager,
+    latency_test,
 };
 use boltapi::{
     ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
@@ -96,42 +96,38 @@ impl Controller {
         let mut list = self.stat_center.get_active_copy();
         list.extend(self.stat_center.get_inactive_copy());
         // sort and remove duplicated
-        list.sort_by_key(|x| x.id);
-        list.dedup_by_key(|x| x.id);
+        list.sort_by_key(ConnHandle::id);
+        list.dedup_by_key(|x| x.id());
 
         list.into_iter()
-            .map(|info| Self::get_connection_schema(info.as_ref()))
+            .map(|info| Self::get_connection_schema(&info))
             .collect()
     }
 
     pub fn get_active_conns(&self) -> Vec<ConnectionSchema> {
         let list = self.stat_center.get_active_copy();
-        list.iter()
-            .map(|info| Self::get_connection_schema(info.as_ref()))
-            .collect()
+        list.iter().map(Self::get_connection_schema).collect()
     }
 
-    fn get_connection_schema(info: &ConnContext) -> ConnectionSchema {
+    fn get_connection_schema(info: &ConnHandle) -> ConnectionSchema {
+        let snapshot = info.snapshot();
         ConnectionSchema {
-            conn_id: info.id,
-            inbound: info.conn_info.inbound.to_string(),
-            source: info.conn_info.src.to_string(),
-            destination: info.conn_info.dst.to_string(),
-            protocol: info.session_proto.write().unwrap().to_string(),
-            proxy: info.outbound_name.clone(),
-            process: info
+            conn_id: snapshot.start.id,
+            inbound: snapshot.start.conn_info.inbound.to_string(),
+            source: snapshot.start.conn_info.src.to_string(),
+            destination: snapshot.start.conn_info.dst.to_string(),
+            protocol: snapshot.state.session_protocol.to_string(),
+            proxy: snapshot.start.outbound_name,
+            process: snapshot
+                .start
                 .conn_info
                 .process_info
                 .as_ref()
                 .map(Self::to_process_schema),
-            upload: info.upload_traffic.load(Ordering::Relaxed),
-            download: info.download_traffic.load(Ordering::Relaxed),
-            start_time: info
-                .start_time
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            active: !info.done.load(Ordering::Relaxed),
+            upload: snapshot.upload_bytes,
+            download: snapshot.download_bytes,
+            start_time: snapshot.start.started_at_ms / 1_000,
+            active: !info.done(),
         }
     }
 
@@ -183,12 +179,7 @@ impl Controller {
     }
 
     pub async fn stop_conn(&self, id: u64) -> bool {
-        if let Some(ele) = self.stat_center.get_nth(id).await {
-            ele.abort();
-            true
-        } else {
-            false
-        }
+        self.stat_center.stop(id)
     }
 
     pub fn get_sessions(&self) -> Vec<SessionSchema> {

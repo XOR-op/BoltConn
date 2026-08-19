@@ -6,9 +6,7 @@ use crate::common::{
     MAX_PKT_SIZE, StreamOutboundTrait, parse_http_host, parse_tls_sni, read_to_bytes_mut,
 };
 use crate::proxy::error::TransportError;
-use crate::proxy::{
-    ConnAbortHandle, ConnContext, NetworkAddr, SessionProtocol, check_tcp_protocol,
-};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr, SessionProtocol, check_tcp_protocol};
 use bytes::{Bytes, BytesMut};
 use std::io;
 use std::net::SocketAddr;
@@ -65,7 +63,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
             let proto = check_tcp_protocol(buf.as_ref());
             let result = match &proto {
                 SessionProtocol::Http => parse_http_host(buf.as_ref()),
-                SessionProtocol::Tls(_) => parse_tls_sni(buf.as_ref()),
+                SessionProtocol::Tls => parse_tls_sni(buf.as_ref()),
                 _ => None,
             }
             .map(|h| (proto, h));
@@ -80,7 +78,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         first_packet_buffer: Option<BytesMut>,
         mut need_parse_first_packet: bool,
         activity: TcpRelayActivity,
-        info: Arc<ConnContext>,
+        info: ConnHandle,
         _indicator_guard: TcpIndicatorGuard,
     ) -> io::Result<()> {
         if let Some(first_packet) = first_packet_buffer {
@@ -107,7 +105,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         in_write: WriteHalf<S>,
         rx: mpsc::Receiver<Bytes>,
         activity: TcpRelayActivity,
-        info: Arc<ConnContext>,
+        info: ConnHandle,
         _indicator_guard: TcpIndicatorGuard,
     ) -> io::Result<()> {
         let callback_info = info.clone();
@@ -118,27 +116,32 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         .map_err(|error| Self::io_error(&info, "forward outbound data to client", error))
     }
 
-    fn channel_closed_error(info: &ConnContext, operation: &'static str) -> io::Error {
+    fn channel_closed_error(info: &ConnHandle, operation: &'static str) -> io::Error {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
             format!(
                 "TcpAdapter #{}({}) failed to {}: channel closed",
-                info.id, info.conn_info.dst, operation
+                info.id(),
+                info.metadata().conn_info.dst,
+                operation
             ),
         )
     }
 
-    fn io_error(info: &ConnContext, operation: &'static str, error: io::Error) -> io::Error {
+    fn io_error(info: &ConnHandle, operation: &'static str, error: io::Error) -> io::Error {
         io::Error::new(
             error.kind(),
             format!(
                 "TcpAdapter #{}({}) failed to {}: {}",
-                info.id, info.conn_info.dst, operation, error
+                info.id(),
+                info.metadata().conn_info.dst,
+                operation,
+                error
             ),
         )
     }
 
-    pub async fn run(self, info: Arc<ConnContext>) -> io::Result<()> {
+    pub async fn run(self, info: ConnHandle) -> io::Result<()> {
         let need_parse_first_packet = self.first_packet_buffer.is_none();
         let Connector { tx, rx } = self.connector;
         let activity = TcpRelayActivity::new();
@@ -173,7 +176,11 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
 
         // A clean close is a TCP half-close: keep forwarding the other direction while it remains
         // active. An I/O failure terminates immediately so sibling tasks can be cancelled.
-        let label = format!("TcpAdapter #{}({})", info.id, info.conn_info.dst);
+        let label = format!(
+            "TcpAdapter #{}({})",
+            info.id(),
+            info.metadata().conn_info.dst
+        );
         let _ = relay_tcp_bidirectional(&label, upload, download, activity).await;
         self.abort_handle.cancel();
         Ok(())
@@ -186,20 +193,20 @@ mod tests {
     use crate::adapter::OutboundType;
     use crate::dispatch::{ConnInfo, InboundInfo};
     use crate::platform::process::NetworkType;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use crate::proxy::ContextManager;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
     impl StreamOutboundTrait for DuplexStream {}
 
-    fn test_context(abort_handle: ConnAbortHandle) -> Arc<ConnContext> {
+    fn test_context(abort_handle: ConnAbortHandle) -> ConnHandle {
         let src = "127.0.0.1:12345".parse().unwrap();
         let dst = "127.0.0.1:443".parse().unwrap();
-        Arc::new(ConnContext::new(
-            1,
+        ContextManager::new(10).begin(
             ConnInfo {
                 src,
-                dst: NetworkAddr::Raw(dst),
+                dst: NetworkAddr::Socket { address: dst },
                 local_ip: None,
                 inbound: InboundInfo::Tun,
                 resolved_dst: None,
@@ -210,10 +217,7 @@ mod tests {
             OutboundType::Direct,
             None,
             abort_handle,
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(AtomicBool::new(false)),
-        ))
+        )
     }
 
     #[tokio::test]
@@ -228,8 +232,8 @@ mod tests {
         let abort_handle = ConnAbortHandle::placeholder();
         let info = test_context(abort_handle.clone());
         let adapter = TcpAdapter::new(
-            info.conn_info.src,
-            info.conn_info.dst.clone(),
+            info.metadata().conn_info.src,
+            info.metadata().conn_info.dst.clone(),
             adapter_stream,
             available.clone(),
             adapter_connector,
@@ -260,6 +264,6 @@ mod tests {
             .expect("adapter task panicked")
             .expect("adapter returned an error");
         assert_eq!(available.load(Ordering::Relaxed), 0);
-        assert!(info.done.load(Ordering::Relaxed));
+        assert!(info.done());
     }
 }

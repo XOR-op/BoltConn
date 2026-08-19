@@ -1,137 +1,32 @@
 use crate::adapter::OutboundType;
 use crate::common::evictable_vec::EvictableVec;
-use crate::config::RawServerAddr;
 use crate::dispatch::ConnInfo;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use arc_swap::ArcSwap;
-use boltapi::CapturedBodySchema;
+use boltapi::{
+    CapturedBodySchema, ConnDnsActivity, ConnFlow, ConnResultCode, ConnStage, ConnState,
+    ConnTermination, DestinationResolution, DnsLookupDetail, IdentificationSource,
+    IdentifiedTarget, LinkRef, RouteDecision,
+};
+pub use boltapi::{NetworkAddr, SessionProtocol};
 use fast_socks5::util::target_addr::TargetAddr;
-use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionProtocol {
-    Tcp,
-    Udp,
-    Http,
-    Tls(TlsVersion),
-    Quic(u8),
-}
 
-impl Display for SessionProtocol {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SessionProtocol::Tcp => f.write_str("tcp"),
-            SessionProtocol::Udp => f.write_str("udp"),
-            SessionProtocol::Http => f.write_str("http"),
-            SessionProtocol::Tls(_) => f.write_str("tls"),
-            SessionProtocol::Quic(_) => f.write_str("quic"),
-        }
+pub fn network_addr_to_socks(value: NetworkAddr) -> TargetAddr {
+    match value {
+        NetworkAddr::Socket { address } => TargetAddr::Ip(address),
+        NetworkAddr::Domain { name, port } => TargetAddr::Domain(name, port),
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TlsVersion {
-    Ssl30,
-    Tls,
-}
-
-/// Domain name with port or pure socket address.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum NetworkAddr {
-    Raw(SocketAddr),
-    DomainName { domain_name: String, port: u16 },
-}
-
-impl Display for NetworkAddr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NetworkAddr::Raw(addr) => f.write_str(format!("{}", addr).as_str()),
-            NetworkAddr::DomainName { domain_name, port } => {
-                f.write_str(format!("{}:{}", domain_name, port).as_str())
-            }
-        }
-    }
-}
-
-impl From<NetworkAddr> for TargetAddr {
-    fn from(value: NetworkAddr) -> Self {
-        match value {
-            NetworkAddr::Raw(s) => TargetAddr::Ip(s),
-            NetworkAddr::DomainName { domain_name, port } => TargetAddr::Domain(domain_name, port),
-        }
-    }
-}
-
-impl From<TargetAddr> for NetworkAddr {
-    fn from(value: TargetAddr) -> Self {
-        match value {
-            TargetAddr::Ip(s) => NetworkAddr::Raw(s),
-            TargetAddr::Domain(domain_name, port) => NetworkAddr::DomainName { domain_name, port },
-        }
-    }
-}
-
-impl NetworkAddr {
-    pub fn port(&self) -> u16 {
-        match self {
-            NetworkAddr::Raw(ad) => ad.port(),
-            NetworkAddr::DomainName {
-                domain_name: _,
-                port,
-            } => *port,
-        }
-    }
-
-    pub fn definitely_not_equal(&self, rhs: &NetworkAddr) -> bool {
-        match &self {
-            NetworkAddr::Raw(s1) => match rhs {
-                NetworkAddr::Raw(s2) => s1 != s2,
-                NetworkAddr::DomainName {
-                    domain_name: _,
-                    port,
-                } => s1.port() != *port,
-            },
-            NetworkAddr::DomainName { domain_name, port } => match rhs {
-                NetworkAddr::Raw(s) => s.port() != *port,
-                NetworkAddr::DomainName {
-                    domain_name: d2,
-                    port: p2,
-                } => domain_name != d2 || *port != *p2,
-            },
-        }
-    }
-
-    pub fn from(addr: &RawServerAddr, port: u16) -> Self {
-        match addr {
-            RawServerAddr::IpAddr(ip) => Self::Raw(SocketAddr::new(*ip, port)),
-            RawServerAddr::DomainName(dn) => Self::DomainName {
-                domain_name: dn.clone(),
-                port,
-            },
-        }
-    }
-}
-
-impl FromStr for NetworkAddr {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (left, right) = s.split_once(':').ok_or(())?;
-        let port = right.parse::<u16>().map_err(|_| ())?;
-        if let Ok(addr) = left.parse::<IpAddr>() {
-            Ok(NetworkAddr::Raw(SocketAddr::new(addr, port)))
-        } else {
-            Ok(NetworkAddr::DomainName {
-                domain_name: left.to_string(),
-                port,
-            })
-        }
+pub fn socks_to_network_addr(value: TargetAddr) -> NetworkAddr {
+    match value {
+        TargetAddr::Ip(address) => NetworkAddr::Socket { address },
+        TargetAddr::Domain(name, port) => NetworkAddr::Domain { name, port },
     }
 }
 
@@ -260,92 +155,300 @@ impl ConnAbortHandle {
     }
 }
 
-// Info about one connection
-#[derive(Debug)]
-pub struct ConnContext {
+/// Immutable metadata captured when a connection enters the dataplane.
+#[derive(Clone, Debug)]
+pub struct ConnMetadata {
     pub id: u64,
+    pub started_at_ms: u64,
     pub start_time: SystemTime,
     pub conn_info: ConnInfo,
     pub outbound_name: String,
     pub outbound_type: OutboundType,
+}
 
-    // Will change
-    pub session_proto: RwLock<SessionProtocol>,
-    pub upload_traffic: AtomicU64,
-    pub download_traffic: AtomicU64,
-    pub done: AtomicBool,
+#[derive(Clone, Debug)]
+pub struct ConnRecordState {
+    pub state: ConnState,
+    pub session_protocol: SessionProtocol,
+    pub established_at_ms: Option<u64>,
+    pub ended_at_ms: Option<u64>,
+    pub flow: ConnFlow,
+    pub route: Option<RouteDecision>,
+    pub dns: ConnDnsActivity,
+    pub links: Vec<LinkRef>,
+    pub termination: Option<ConnTermination>,
+}
+
+/// A consistent view of one connection record at a point in time.
+#[derive(Clone, Debug)]
+pub struct ConnRecordSnapshot {
+    pub start: ConnMetadata,
+    pub state: ConnRecordState,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+    pub last_active_ms: u64,
+}
+
+#[derive(Debug)]
+struct ConnRecord {
+    metadata: ConnMetadata,
+    state: Mutex<ConnRecordState>,
+    upload_bytes: AtomicU64,
+    download_bytes: AtomicU64,
+    last_active_ms: AtomicU64,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
     abort_handle: ConnAbortHandle,
-    notify_handle: Arc<AtomicBool>,
 }
 
-impl ConnContext {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        // static info
-        id: u64,
-        conn_info: ConnInfo,
-        outbound_name: String,
-        outbound_type: OutboundType,
-        parsed_session_proto: Option<SessionProtocol>,
-        // runtime handle
-        abort_handle: ConnAbortHandle,
-        global_upload: Arc<AtomicU64>,
-        global_download: Arc<AtomicU64>,
-        notify_handle: Arc<AtomicBool>,
-    ) -> Self {
-        let s_proto = parsed_session_proto.unwrap_or(match conn_info.connection_type {
-            NetworkType::Tcp => SessionProtocol::Tcp,
-            NetworkType::Udp => SessionProtocol::Udp,
-        });
+/// The only mutable connection capability handed to dataplane callers.
+///
+/// Record state remains private so all terminal transitions go through `finish`
+/// and can atomically update both the record and the manager's active index.
+#[derive(Clone, Debug)]
+pub struct ConnHandle {
+    record: Arc<ConnRecord>,
+    index: std::sync::Weak<ContextIndex>,
+}
+
+impl ConnHandle {
+    fn new(record: Arc<ConnRecord>, index: &Arc<ContextIndex>) -> Self {
         Self {
-            id,
-            start_time: SystemTime::now(),
-            conn_info,
-            session_proto: std::sync::RwLock::new(s_proto),
-            outbound_name,
-            outbound_type,
-            upload_traffic: AtomicU64::new(0),
-            download_traffic: AtomicU64::new(0),
-            done: AtomicBool::new(false),
-            global_upload,
-            global_download,
-            abort_handle,
-            notify_handle,
+            record,
+            index: Arc::downgrade(index),
         }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.record.metadata.id
+    }
+
+    pub fn metadata(&self) -> &ConnMetadata {
+        &self.record.metadata
+    }
+
+    pub fn snapshot(&self) -> ConnRecordSnapshot {
+        ConnRecordSnapshot {
+            start: self.record.metadata.clone(),
+            state: self.record.state.lock().unwrap().clone(),
+            upload_bytes: self.record.upload_bytes.load(Ordering::Relaxed),
+            download_bytes: self.record.download_bytes.load(Ordering::Relaxed),
+            last_active_ms: self.record.last_active_ms.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn state(&self) -> ConnState {
+        self.record.state.lock().unwrap().state
+    }
+
+    /// Moves a live record to another non-terminal lifecycle state.
+    ///
+    /// Returning `false` means the record has already completed, or the caller
+    /// attempted to bypass `finish` with a terminal target state.
+    pub fn set_state(&self, state: ConnState) -> bool {
+        if is_terminal_state(state) {
+            return false;
+        }
+        let mut current = self.record.state.lock().unwrap();
+        if is_terminal_state(current.state) {
+            return false;
+        }
+        current.state = state;
+        if state == ConnState::Active && current.established_at_ms.is_none() {
+            current.established_at_ms = Some(now_ms());
+        }
+        true
     }
 
     pub fn update_proto(&self, packet: &[u8]) {
-        let mut lock = self.session_proto.write().unwrap();
-        if *lock == SessionProtocol::Tcp {
-            *lock = check_tcp_protocol(packet);
-        } else if *lock == SessionProtocol::Udp {
-            *lock = check_udp_protocol(packet)
+        let mut state = self.record.state.lock().unwrap();
+        if is_terminal_state(state.state) {
+            return;
+        }
+        if state.session_protocol == SessionProtocol::Tcp {
+            state.session_protocol = check_tcp_protocol(packet);
+        } else if state.session_protocol == SessionProtocol::Udp {
+            state.session_protocol = check_udp_protocol(packet);
         }
     }
 
+    pub fn set_protocol(&self, protocol: SessionProtocol) -> bool {
+        let mut state = self.record.state.lock().unwrap();
+        if is_terminal_state(state.state) {
+            return false;
+        }
+        state.session_protocol = protocol;
+        true
+    }
+
+    pub fn set_identified_target(&self, target: NetworkAddr, source: IdentificationSource) -> bool {
+        let mut state = self.record.state.lock().unwrap();
+        if is_terminal_state(state.state) {
+            return false;
+        }
+        state.flow.identified = Some(IdentifiedTarget { target, source });
+        true
+    }
+
+    pub fn set_resolution(&self, resolution: DestinationResolution) -> bool {
+        let mut state = self.record.state.lock().unwrap();
+        if is_terminal_state(state.state) {
+            return false;
+        }
+        state.flow.resolution = resolution;
+        true
+    }
+
+    pub fn set_route(&self, route: RouteDecision) -> bool {
+        let mut state = self.record.state.lock().unwrap();
+        if is_terminal_state(state.state) {
+            return false;
+        }
+        state.route = Some(route);
+        true
+    }
+
+    /// Freezes the concrete reusable-link path before transfer begins. Link
+    /// accounting relies on this path remaining stable for the connection.
+    pub fn set_links(&self, links: Vec<LinkRef>) -> bool {
+        let mut state = self.record.state.lock().unwrap();
+        if matches!(
+            state.state,
+            ConnState::Active
+                | ConnState::Closing
+                | ConnState::Closed
+                | ConnState::Failed
+                | ConnState::Rejected
+        ) {
+            return false;
+        }
+        state.links = links;
+        true
+    }
+
+    pub fn record_dns_lookup(&self, lookup: DnsLookupDetail) -> bool {
+        let mut state = self.record.state.lock().unwrap();
+        if is_terminal_state(state.state) {
+            return false;
+        }
+        state.dns.total_lookups = state.dns.total_lookups.saturating_add(1);
+        if self.record.metadata.conn_info.connection_type == NetworkType::Udp
+            && state.dns.lookups.len() == 5
+        {
+            // Long-lived UDP sessions retain a bounded tail; TCP lookups are
+            // naturally bounded by connection setup and remain complete.
+            state.dns.lookups.remove(0);
+        }
+        state.dns.lookups.push(lookup);
+        true
+    }
+
     pub fn more_upload(&self, size: usize) {
-        self.upload_traffic
-            .fetch_add(size as u64, Ordering::Relaxed);
-        self.global_upload.fetch_add(size as u64, Ordering::Relaxed);
+        let size = size as u64;
+        self.record.upload_bytes.fetch_add(size, Ordering::Relaxed);
+        self.record.global_upload.fetch_add(size, Ordering::Relaxed);
+        self.record
+            .last_active_ms
+            .store(now_ms(), Ordering::Relaxed);
     }
 
     pub fn more_download(&self, size: usize) {
-        self.download_traffic
-            .fetch_add(size as u64, Ordering::Relaxed);
-        self.global_download
-            .fetch_add(size as u64, Ordering::Relaxed);
+        let size = size as u64;
+        self.record
+            .download_bytes
+            .fetch_add(size, Ordering::Relaxed);
+        self.record
+            .global_download
+            .fetch_add(size, Ordering::Relaxed);
+        self.record
+            .last_active_ms
+            .store(now_ms(), Ordering::Relaxed);
+    }
+
+    /// Completes a record exactly once and immediately transfers index ownership
+    /// from the active map to completion-ordered history.
+    pub fn finish(
+        &self,
+        code: ConnResultCode,
+        stage: Option<ConnStage>,
+        detail: Option<String>,
+    ) -> bool {
+        {
+            let mut state = self.record.state.lock().unwrap();
+            if is_terminal_state(state.state) {
+                return false;
+            }
+            state.state = terminal_state_for(code);
+            state.ended_at_ms = Some(now_ms());
+            state.termination = Some(ConnTermination {
+                code,
+                stage,
+                detail,
+            });
+        }
+
+        // Never hold the record-state lock while taking the manager index lock.
+        // Snapshotting uses the opposite phases, so this rule avoids lock cycles.
+        if let Some(index) = self.index.upgrade() {
+            index.finish(self.record.clone());
+        }
+        true
     }
 
     pub fn mark_fin(&self) {
-        self.done.store(true, Ordering::Relaxed);
-        self.notify_handle.store(true, Ordering::Relaxed);
+        self.finish(ConnResultCode::Completed, None, None);
     }
 
-    pub fn abort(&self) {
-        self.abort_handle.cancel();
-        self.mark_fin();
+    pub fn done(&self) -> bool {
+        is_terminal_state(self.state())
+    }
+
+    pub fn abort(&self) -> bool {
+        let completed = self.finish(ConnResultCode::UserStopped, Some(ConnStage::Closing), None);
+        if completed {
+            self.record.abort_handle.cancel();
+        }
+        completed
+    }
+}
+
+fn system_time_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn now_ms() -> u64 {
+    system_time_ms(SystemTime::now())
+}
+
+fn is_terminal_state(state: ConnState) -> bool {
+    matches!(
+        state,
+        ConnState::Closed | ConnState::Failed | ConnState::Rejected
+    )
+}
+
+fn terminal_state_for(code: ConnResultCode) -> ConnState {
+    match code {
+        ConnResultCode::RouteRejected | ConnResultCode::Blackholed => ConnState::Rejected,
+        ConnResultCode::Completed
+        | ConnResultCode::ClientClosed
+        | ConnResultCode::RemoteClosed
+        | ConnResultCode::UserStopped
+        | ConnResultCode::LinkStopped
+        | ConnResultCode::LinkReconfigured
+        | ConnResultCode::LinkRemoved
+        | ConnResultCode::LinkLost => ConnState::Closed,
+        ConnResultCode::DnsTimeout
+        | ConnResultCode::DnsError
+        | ConnResultCode::ConnectTimeout
+        | ConnResultCode::ConnectError
+        | ConnResultCode::HandshakeError
+        | ConnResultCode::TransferError
+        | ConnResultCode::InternalError => ConnState::Failed,
     }
 }
 
@@ -354,8 +457,7 @@ pub fn check_tcp_protocol(packet: &[u8]) -> SessionProtocol {
     // TLS handshake
     if packet.len() > 5 && packet[0] == 22 && packet[1] == 3 {
         return match packet[2] {
-            1..=4 => SessionProtocol::Tls(TlsVersion::Tls),
-            0 => SessionProtocol::Tls(TlsVersion::Ssl30),
+            0..=4 => SessionProtocol::Tls,
             _ => SessionProtocol::Tcp, // unknown
         };
     }
@@ -385,45 +487,110 @@ pub fn check_udp_protocol(packet: &[u8]) -> SessionProtocol {
             && (packet[4] == 1 || packet[4] == 2))
     {
         // conservative idetification
-        SessionProtocol::Quic(packet[4])
+        SessionProtocol::Quic
     } else {
         SessionProtocol::Udp
     }
 }
 
 pub struct ContextManager {
-    inner: RwLock<ContextManagerInner>,
+    index: Arc<ContextIndex>,
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
-    notify_handle: Arc<AtomicBool>,
     unique_id_cnt: AtomicU64,
 }
 
-struct ContextManagerInner {
-    active_ctx: HashMap<u64, Arc<ConnContext>>,
-    inactive_ctx: EvictableVec<Arc<ConnContext>>,
-    log_limit: u32,
-    grace_threshold: usize,
+#[derive(Debug)]
+struct ContextIndex {
+    inner: RwLock<ContextIndexInner>,
+}
+
+#[derive(Debug)]
+struct ContextIndexInner {
+    active: HashMap<u64, Arc<ConnRecord>>,
+    terminal: VecDeque<Arc<ConnRecord>>,
+    history_limit: u32,
 }
 
 impl ContextManager {
     pub fn new(log_limit: u32) -> Self {
         Self {
-            inner: RwLock::new(ContextManagerInner {
-                active_ctx: Default::default(),
-                inactive_ctx: EvictableVec::new(),
-                log_limit,
-                grace_threshold: 5,
+            index: Arc::new(ContextIndex {
+                inner: RwLock::new(ContextIndexInner {
+                    active: HashMap::new(),
+                    terminal: VecDeque::new(),
+                    history_limit: log_limit,
+                }),
             }),
             global_upload: Arc::new(Default::default()),
             global_download: Arc::new(Default::default()),
-            notify_handle: Arc::new(AtomicBool::new(false)),
             unique_id_cnt: Default::default(),
         }
     }
 
-    pub fn alloc_unique_id(&self) -> u64 {
-        self.unique_id_cnt.fetch_add(1, Ordering::Relaxed)
+    /// Registers a connection before any fallible inspection or routing work.
+    pub fn begin(
+        &self,
+        conn_info: ConnInfo,
+        outbound_name: String,
+        outbound_type: OutboundType,
+        parsed_session_proto: Option<SessionProtocol>,
+        abort_handle: ConnAbortHandle,
+    ) -> ConnHandle {
+        let id = self.unique_id_cnt.fetch_add(1, Ordering::Relaxed);
+        let start_time = SystemTime::now();
+        let session_protocol = parsed_session_proto.unwrap_or(match conn_info.connection_type {
+            NetworkType::Tcp => SessionProtocol::Tcp,
+            NetworkType::Udp => SessionProtocol::Udp,
+        });
+        let flow = ConnFlow {
+            inbound: conn_info.inbound.to_string(),
+            source: conn_info.src,
+            accepted: conn_info.dst.clone(),
+            identified: None,
+            resolution: match (conn_info.resolved_dst, &conn_info.dst) {
+                (Some(address), _) => DestinationResolution::Resolved { address },
+                (None, NetworkAddr::Socket { .. }) => DestinationResolution::NotRequired,
+                (None, NetworkAddr::Domain { .. }) => DestinationResolution::NotStarted,
+            },
+        };
+        let record = Arc::new(ConnRecord {
+            metadata: ConnMetadata {
+                id,
+                started_at_ms: system_time_ms(start_time),
+                start_time,
+                conn_info,
+                outbound_name,
+                outbound_type,
+            },
+            state: Mutex::new(ConnRecordState {
+                state: ConnState::Accepted,
+                session_protocol,
+                established_at_ms: None,
+                ended_at_ms: None,
+                flow,
+                route: None,
+                dns: ConnDnsActivity {
+                    total_lookups: 0,
+                    lookups: Vec::new(),
+                },
+                links: Vec::new(),
+                termination: None,
+            }),
+            upload_bytes: AtomicU64::new(0),
+            download_bytes: AtomicU64::new(0),
+            last_active_ms: AtomicU64::new(system_time_ms(start_time)),
+            global_upload: self.global_upload.clone(),
+            global_download: self.global_download.clone(),
+            abort_handle,
+        });
+        self.index
+            .inner
+            .write()
+            .unwrap()
+            .active
+            .insert(id, record.clone());
+        ConnHandle::new(record, &self.index)
     }
 
     pub fn get_upload(&self) -> Arc<AtomicU64> {
@@ -434,61 +601,283 @@ impl ContextManager {
         self.global_download.clone()
     }
 
-    pub fn get_notify_handle(&self) -> Arc<AtomicBool> {
-        self.notify_handle.clone()
-    }
-
     pub fn get_conn_log_limit(&self) -> u32 {
-        self.inner.read().unwrap().log_limit
+        self.index.inner.read().unwrap().history_limit
     }
 
     pub fn set_conn_log_limit(&self, limit: u32) {
-        self.inner.write().unwrap().log_limit = limit;
+        let mut inner = self.index.inner.write().unwrap();
+        inner.history_limit = limit;
+        inner.evict_terminal_history();
     }
 
-    pub fn push(&self, info: Arc<ConnContext>) {
-        let mut inner = self.inner.write().unwrap();
-        inner.active_ctx.insert(info.id, info);
-        let process_active = self.notify_handle.swap(false, Ordering::Relaxed);
-        inner.evict(process_active);
-    }
-
-    pub fn get_active_copy(&self) -> Vec<Arc<ConnContext>> {
-        self.inner
+    /// Clones record handles while holding the index lock. Callers can then
+    /// snapshot cold record state without blocking new begin/finish operations.
+    pub fn get_active_copy(&self) -> Vec<ConnHandle> {
+        let mut records: Vec<_> = self
+            .index
+            .inner
             .read()
             .unwrap()
-            .active_ctx
+            .active
             .values()
             .cloned()
+            .collect();
+        records.sort_unstable_by_key(|record| record.metadata.id);
+        records
+            .into_iter()
+            .map(|record| ConnHandle::new(record, &self.index))
             .collect()
     }
 
-    pub fn get_inactive_copy(&self) -> Vec<Arc<ConnContext>> {
-        self.inner.read().unwrap().inactive_ctx.as_vec()
+    pub fn get_inactive_copy(&self) -> Vec<ConnHandle> {
+        self.index
+            .inner
+            .read()
+            .unwrap()
+            .terminal
+            .iter()
+            .cloned()
+            .map(|record| ConnHandle::new(record, &self.index))
+            .collect()
     }
 
-    pub async fn get_nth(&self, idx: u64) -> Option<Arc<ConnContext>> {
-        self.inner.read().unwrap().active_ctx.get(&idx).cloned()
+    pub async fn get_nth(&self, id: u64) -> Option<ConnHandle> {
+        self.get(id)
+    }
+
+    pub fn get(&self, id: u64) -> Option<ConnHandle> {
+        let inner = self.index.inner.read().unwrap();
+        inner
+            .active
+            .get(&id)
+            .or_else(|| {
+                inner
+                    .terminal
+                    .iter()
+                    .find(|record| record.metadata.id == id)
+            })
+            .cloned()
+            .map(|record| ConnHandle::new(record, &self.index))
+    }
+
+    /// Stops only live records. A completion racing this call wins according to
+    /// the same first-terminal-result rule as every other terminal path.
+    pub fn stop(&self, id: u64) -> bool {
+        let record = self.index.inner.read().unwrap().active.get(&id).cloned();
+        record
+            .map(|record| ConnHandle::new(record, &self.index).abort())
+            .unwrap_or(false)
     }
 }
 
-impl ContextManagerInner {
-    fn evict(&mut self, process_active: bool) {
-        let log_limit = self.log_limit as usize;
-        if process_active {
-            let mut to_remove = vec![];
-            for (id, ctx) in self.active_ctx.iter() {
-                if ctx.done.load(Ordering::Relaxed) {
-                    to_remove.push(*id);
-                    self.inactive_ctx.push(ctx.clone());
-                }
-            }
-            self.active_ctx.retain(|k, _| !to_remove.contains(k));
+impl ContextIndex {
+    fn finish(&self, record: Arc<ConnRecord>) {
+        let mut inner = self.inner.write().unwrap();
+        let id = record.metadata.id;
+        let owns_active_entry = inner
+            .active
+            .get(&id)
+            .is_some_and(|active| Arc::ptr_eq(active, &record));
+        if !owns_active_entry {
+            return;
         }
-        if self.inactive_ctx.real_len() > log_limit + self.grace_threshold {
-            self.inactive_ctx
-                .evict_until(|_c, left| -> bool { left > log_limit }, |_| {});
+        inner.active.remove(&id);
+        if inner.history_limit != 0 {
+            // Records are appended only after their terminal state is committed,
+            // making deque order completion order rather than start order.
+            inner.terminal.push_back(record);
+            inner.evict_terminal_history();
         }
+    }
+}
+
+impl ContextIndexInner {
+    fn evict_terminal_history(&mut self) {
+        let limit = self.history_limit as usize;
+        while self.terminal.len() > limit {
+            self.terminal.pop_front();
+        }
+    }
+}
+
+#[cfg(test)]
+mod connection_record_tests {
+    use super::*;
+    use crate::dispatch::InboundInfo;
+    use std::net::SocketAddr;
+    use std::sync::Barrier;
+
+    fn begin_test_connection(manager: &ContextManager, port: u16) -> ConnHandle {
+        manager.begin(
+            ConnInfo {
+                src: SocketAddr::from(([127, 0, 0, 1], port)),
+                dst: NetworkAddr::from(SocketAddr::from(([127, 0, 0, 1], 443))),
+                local_ip: None,
+                inbound: InboundInfo::Tun,
+                resolved_dst: None,
+                connection_type: NetworkType::Tcp,
+                process_info: None,
+            },
+            "DIRECT".to_string(),
+            OutboundType::Direct,
+            None,
+            ConnAbortHandle::placeholder(),
+        )
+    }
+
+    #[test]
+    fn ids_are_monotonic_and_active_snapshots_are_stable() {
+        let manager = ContextManager::new(10);
+        let first = begin_test_connection(&manager, 10_001);
+        let second = begin_test_connection(&manager, 10_002);
+        let third = begin_test_connection(&manager, 10_003);
+
+        assert_eq!((first.id(), second.id(), third.id()), (0, 1, 2));
+        assert_eq!(
+            manager
+                .get_active_copy()
+                .iter()
+                .map(ConnHandle::id)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn transitions_cannot_bypass_or_leave_a_terminal_state() {
+        let manager = ContextManager::new(10);
+        let handle = begin_test_connection(&manager, 10_001);
+
+        assert!(handle.set_state(ConnState::Inspecting));
+        assert!(handle.set_state(ConnState::Active));
+        assert!(!handle.set_state(ConnState::Closed));
+        assert_eq!(handle.state(), ConnState::Active);
+        assert!(handle.finish(ConnResultCode::Completed, None, None));
+        assert!(!handle.set_state(ConnState::Closing));
+        assert!(!handle.finish(
+            ConnResultCode::TransferError,
+            Some(ConnStage::Transferring),
+            None,
+        ));
+
+        let snapshot = handle.snapshot();
+        assert_eq!(snapshot.state.state, ConnState::Closed);
+        assert_eq!(
+            snapshot.state.termination.unwrap().code,
+            ConnResultCode::Completed
+        );
+    }
+
+    #[test]
+    fn finish_moves_records_immediately_in_completion_order() {
+        let manager = ContextManager::new(10);
+        let first = begin_test_connection(&manager, 10_001);
+        let second = begin_test_connection(&manager, 10_002);
+
+        assert!(second.finish(ConnResultCode::Completed, None, None));
+        assert!(first.finish(ConnResultCode::Completed, None, None));
+        assert!(manager.get_active_copy().is_empty());
+        assert_eq!(
+            manager
+                .get_inactive_copy()
+                .iter()
+                .map(ConnHandle::id)
+                .collect::<Vec<_>>(),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn history_limit_changes_evict_oldest_records_immediately() {
+        let manager = ContextManager::new(3);
+        for port in 10_001..=10_003 {
+            assert!(begin_test_connection(&manager, port).finish(
+                ConnResultCode::Completed,
+                None,
+                None,
+            ));
+        }
+
+        manager.set_conn_log_limit(2);
+        assert_eq!(
+            manager
+                .get_inactive_copy()
+                .iter()
+                .map(ConnHandle::id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        manager.set_conn_log_limit(0);
+        assert!(manager.get_inactive_copy().is_empty());
+    }
+
+    #[test]
+    fn zero_history_never_removes_active_records() {
+        let manager = ContextManager::new(0);
+        let completed = begin_test_connection(&manager, 10_001);
+        let active = begin_test_connection(&manager, 10_002);
+
+        assert!(completed.finish(ConnResultCode::Completed, None, None));
+        assert!(manager.get_inactive_copy().is_empty());
+        assert_eq!(manager.get_active_copy()[0].id(), active.id());
+    }
+
+    #[test]
+    fn concurrent_completion_has_exactly_one_winner() {
+        let manager = ContextManager::new(10);
+        let handle = begin_test_connection(&manager, 10_001);
+        let barrier = Arc::new(Barrier::new(3));
+
+        let wins = std::thread::scope(|scope| {
+            let first_handle = handle.clone();
+            let first_barrier = barrier.clone();
+            let first = scope.spawn(move || {
+                first_barrier.wait();
+                first_handle.finish(ConnResultCode::Completed, None, None)
+            });
+            let second_handle = handle.clone();
+            let second_barrier = barrier.clone();
+            let second = scope.spawn(move || {
+                second_barrier.wait();
+                second_handle.finish(
+                    ConnResultCode::TransferError,
+                    Some(ConnStage::Transferring),
+                    None,
+                )
+            });
+            barrier.wait();
+            usize::from(first.join().unwrap()) + usize::from(second.join().unwrap())
+        });
+
+        assert_eq!(wins, 1);
+        assert!(manager.get_active_copy().is_empty());
+        assert_eq!(manager.get_inactive_copy().len(), 1);
+        assert!(matches!(
+            handle.snapshot().state.termination.unwrap().code,
+            ConnResultCode::Completed | ConnResultCode::TransferError
+        ));
+    }
+
+    #[test]
+    fn stop_only_succeeds_for_a_live_record() {
+        let manager = ContextManager::new(10);
+        let handle = begin_test_connection(&manager, 10_001);
+
+        assert!(manager.stop(handle.id()));
+        assert!(!manager.stop(handle.id()));
+        assert!(!manager.stop(u64::MAX));
+        assert_eq!(
+            manager
+                .get(handle.id())
+                .unwrap()
+                .snapshot()
+                .state
+                .termination
+                .unwrap()
+                .code,
+            ConnResultCode::UserStopped
+        );
     }
 }
 

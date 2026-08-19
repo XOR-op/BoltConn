@@ -5,7 +5,7 @@ use crate::common::utils::IdGenerator;
 use crate::intercept::modifier::Modifier;
 use crate::intercept::{HyperBody, ModifierContext, sign_site_cert};
 use crate::proxy::error::InterceptError;
-use crate::proxy::{ConnAbortHandle, ConnContext};
+use crate::proxy::{ConnAbortHandle, ConnHandle};
 use hyper::client::conn::http2;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -25,7 +25,7 @@ pub struct HttpsIntercept {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Arc<dyn Outbound>,
-    conn_info: Arc<ConnContext>,
+    conn_info: ConnHandle,
     parrot_fingerprint: bool,
 }
 
@@ -36,7 +36,7 @@ impl HttpsIntercept {
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn Outbound>,
-        conn_info: Arc<ConnContext>,
+        conn_info: ConnHandle,
         parrot_fingerprint: bool,
     ) -> Result<Self, InterceptError> {
         let (cert, priv_key) = sign_site_cert(server_name.as_str(), ca_cert)?;

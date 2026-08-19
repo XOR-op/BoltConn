@@ -54,9 +54,9 @@ impl TunTcpInbound {
                 .lookup_tcp_session(self.nat_addr.is_ipv6(), addr.port())
             {
                 let dst_addr = match self.dns.fake_ip_to_domain(dst_addr.ip()) {
-                    None => NetworkAddr::Raw(dst_addr),
-                    Some(s) => NetworkAddr::DomainName {
-                        domain_name: s,
+                    None => NetworkAddr::Socket { address: dst_addr },
+                    Some(s) => NetworkAddr::Domain {
+                        name: s,
                         port: dst_addr.port(),
                     },
                 };

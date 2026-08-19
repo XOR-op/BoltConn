@@ -464,8 +464,11 @@ impl WireguardHandle {
         let notify = endpoint.clone_notify();
         let smol_dns = endpoint.stack.lock().await.get_dns();
         let dst = match self.dst {
-            NetworkAddr::Raw(s) => s,
-            NetworkAddr::DomainName { domain_name, port } => SocketAddr::new(
+            NetworkAddr::Socket { address: s } => s,
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => SocketAddr::new(
                 match smol_dns.genuine_lookup(domain_name.as_str()).await {
                     Ok(Some(addr)) => addr,
                     _ => return Err(TransportError::Dns(DnsError::ResolveDomain(domain_name))),
@@ -621,11 +624,8 @@ impl DnsUdpSocket for AddrConnectorWrapper {
                     len
                 };
                 let addr = match addr {
-                    NetworkAddr::Raw(s) => s,
-                    NetworkAddr::DomainName {
-                        domain_name: _,
-                        port,
-                    } => {
+                    NetworkAddr::Socket { address: s } => s,
+                    NetworkAddr::Domain { name: _, port } => {
                         tracing::warn!("AddrConnector: should be unreachable");
                         SocketAddr::new(IpAddr::from([0, 0, 0, 0]), port)
                     }
@@ -642,10 +642,10 @@ impl DnsUdpSocket for AddrConnectorWrapper {
         target: SocketAddr,
     ) -> Poll<io::Result<usize>> {
         let len = buf.len();
-        match self
-            .tx
-            .try_send((Bytes::copy_from_slice(buf), NetworkAddr::Raw(target)))
-        {
+        match self.tx.try_send((
+            Bytes::copy_from_slice(buf),
+            NetworkAddr::Socket { address: target },
+        )) {
             Ok(_) => Poll::Ready(Ok(len)),
             Err(_) => Poll::Pending,
         }

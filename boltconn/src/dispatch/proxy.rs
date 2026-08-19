@@ -108,10 +108,11 @@ impl ProxyImpl {
             ProxyImpl::Http(c) => Some(c.server_addr.clone()),
             ProxyImpl::Socks5(c) => Some(c.server_addr.clone()),
             ProxyImpl::Shadowsocks(c) => Some(match c.server_addr.clone() {
-                ServerAddr::SocketAddr(s) => NetworkAddr::Raw(s),
-                ServerAddr::DomainName(domain_name, port) => {
-                    NetworkAddr::DomainName { domain_name, port }
-                }
+                ServerAddr::SocketAddr(s) => NetworkAddr::Socket { address: s },
+                ServerAddr::DomainName(domain_name, port) => NetworkAddr::Domain {
+                    name: domain_name,
+                    port,
+                },
             }),
             ProxyImpl::Trojan(c) => Some(c.server_addr.clone()),
             ProxyImpl::Anytls(c) => Some(c.server_addr.clone()),

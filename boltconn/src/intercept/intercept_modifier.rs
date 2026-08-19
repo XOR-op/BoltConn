@@ -184,7 +184,7 @@ impl Modifier for InterceptModifier {
             parts.version,
             &parts.headers,
             &parts.uri,
-            ctx.conn_info.conn_info.dst.port(),
+            ctx.conn_info.metadata().conn_info.dst.port(),
         );
 
         let mut whole_data = if self.result.capture_request || self.result.contains_script {
@@ -236,11 +236,13 @@ impl Modifier for InterceptModifier {
                                         body: CapturedBody::FullCapture(resp_body.clone()),
                                         time: SystemTime::now(),
                                     };
-                                    let host = match &ctx.conn_info.conn_info.dst {
-                                        NetworkAddr::Raw(addr) => addr.ip().to_string(),
-                                        NetworkAddr::DomainName { domain_name, .. } => {
-                                            domain_name.clone()
+                                    let host = match &ctx.conn_info.metadata().conn_info.dst {
+                                        NetworkAddr::Socket { address: addr } => {
+                                            addr.ip().to_string()
                                         }
+                                        NetworkAddr::Domain {
+                                            name: domain_name, ..
+                                        } => domain_name.clone(),
                                     };
                                     // store copy
                                     let mut req_copy = DumpedRequest::from_parts(
@@ -318,7 +320,7 @@ impl Modifier for InterceptModifier {
             req.version,
             &req.headers,
             &req.uri,
-            ctx.conn_info.conn_info.dst.port(),
+            ctx.conn_info.metadata().conn_info.dst.port(),
         );
 
         for payload in &self.result.payloads {
@@ -348,9 +350,11 @@ impl Modifier for InterceptModifier {
             }
         }
 
-        let host = match &ctx.conn_info.conn_info.dst {
-            NetworkAddr::Raw(addr) => addr.ip().to_string(),
-            NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
+        let host = match &ctx.conn_info.metadata().conn_info.dst {
+            NetworkAddr::Socket { address: addr } => addr.ip().to_string(),
+            NetworkAddr::Domain {
+                name: domain_name, ..
+            } => domain_name.clone(),
         };
         self.contents.push(
             (

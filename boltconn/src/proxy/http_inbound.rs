@@ -195,8 +195,8 @@ impl LegacyProxy {
             Some(auth) => {
                 let host = auth.host();
                 let port = auth.port_u16().unwrap_or(80);
-                NetworkAddr::DomainName {
-                    domain_name: host.to_string(),
+                NetworkAddr::Domain {
+                    name: host.to_string(),
                     port,
                 }
             }

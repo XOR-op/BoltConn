@@ -11,7 +11,7 @@ use crate::intercept::{HttpIntercept, HttpsIntercept, InterceptionManager, Modif
 use crate::network::dns::Dns;
 use crate::platform::process::{NetworkType, ProcessInfo, ProcessInfoDepth};
 use crate::platform::{get_iface_address, process};
-use crate::proxy::{ConnAbortHandle, ConnContext, ContextManager, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, ContextManager, NetworkAddr};
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use rcgen::Certificate;
@@ -330,8 +330,8 @@ impl Dispatcher {
                 .await
                 .map_err(DispatchError::Error)?
         {
-            conn_info.dst = NetworkAddr::DomainName {
-                domain_name: domain_name.clone(),
+            conn_info.dst = NetworkAddr::Domain {
+                name: domain_name.clone(),
                 port: dst_addr.port(),
             };
             parsed_proto = Some(proto);
@@ -367,17 +367,13 @@ impl Dispatcher {
         };
 
         let mut handles = Vec::new();
-        let info = Arc::new(ConnContext::new(
-            self.stat_center.alloc_unique_id(),
+        let info = self.stat_center.begin(
             conn_info.clone(),
             proxy_name,
             proxy_type,
             parsed_proto,
             abort_handle.clone(),
-            self.stat_center.get_upload(),
-            self.stat_center.get_download(),
-            self.stat_center.get_notify_handle(),
-        ));
+        );
         handles.push({
             let info = info.clone();
             (
@@ -391,7 +387,10 @@ impl Dispatcher {
         });
 
         // mitm for 80/443
-        if let NetworkAddr::DomainName { domain_name, port } = conn_info.dst.clone()
+        if let NetworkAddr::Domain {
+            name: domain_name,
+            port,
+        } = conn_info.dst.clone()
             && (port == 80 || port == 443)
         {
             let result = self.intercept_mgr.load().matches(conn_info).await;
@@ -417,7 +416,6 @@ impl Dispatcher {
                             })
                         };
                         abort_handle.fulfill(handles);
-                        self.stat_center.push(info);
                         return Ok(());
                     }
                     443 => {
@@ -453,7 +451,6 @@ impl Dispatcher {
                             })
                         };
                         abort_handle.fulfill(handles);
-                        self.stat_center.push(info);
                         return Ok(());
                     }
                     _ => {
@@ -472,7 +469,6 @@ impl Dispatcher {
             }),
         ));
         abort_handle.fulfill(handles);
-        self.stat_center.push(info);
         Ok(())
     }
 
@@ -482,7 +478,7 @@ impl Dispatcher {
         src_addr: SocketAddr,
         dst_addr: NetworkAddr,
         mut conn_info: ConnInfo,
-    ) -> Result<(Box<dyn Outbound>, Arc<ConnContext>, ConnAbortHandle), DispatchError> {
+    ) -> Result<(Box<dyn Outbound>, ConnHandle, ConnAbortHandle), DispatchError> {
         let (proxy_name, proxy_config, iface) =
             self.dispatching.load().matches(&mut conn_info, true).await;
         let iface_name = iface
@@ -511,17 +507,13 @@ impl Dispatcher {
             };
         // conn info
         let abort_handle = ConnAbortHandle::new();
-        let info = Arc::new(ConnContext::new(
-            self.stat_center.alloc_unique_id(),
+        let info = self.stat_center.begin(
             conn_info,
             proxy_name,
             proxy_type,
             None,
             abort_handle.clone(),
-            self.stat_center.get_upload(),
-            self.stat_center.get_download(),
-            self.stat_center.get_notify_handle(),
-        ));
+        );
         Ok((outbounding, info, abort_handle))
     }
 
@@ -631,7 +623,6 @@ impl Dispatcher {
             }),
         ));
         abort_handle.fulfill(handles);
-        self.stat_center.push(info.clone());
         Ok(())
     }
 

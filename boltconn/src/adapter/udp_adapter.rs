@@ -2,7 +2,7 @@
 
 use crate::adapter::{AddrConnector, DuplexCloseGuard};
 use crate::network::dns::Dns;
-use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use bytes::Bytes;
 use io::Result;
 use std::io;
@@ -17,7 +17,7 @@ use tokio::time::timeout;
 const UDP_ALIVE_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct TunUdpAdapter {
-    info: Arc<ConnContext>,
+    info: ConnHandle,
     send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
     recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
     next: AddrConnector,
@@ -29,7 +29,7 @@ impl TunUdpAdapter {
     const BUF_SIZE: usize = 65536;
 
     pub fn new(
-        info: Arc<ConnContext>,
+        info: ConnHandle,
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: mpsc::Sender<(Bytes, SocketAddr)>,
         next: AddrConnector,
@@ -90,10 +90,11 @@ impl TunUdpAdapter {
         while let Some((data, addr)) = rx.recv().await {
             self.info.more_download(data.len());
             let src_addr = match addr {
-                NetworkAddr::Raw(s) => s,
-                NetworkAddr::DomainName { domain_name, port } => {
-                    SocketAddr::new(self.dns.domain_to_fake_ip(domain_name.as_str()), port)
-                }
+                NetworkAddr::Socket { address: s } => s,
+                NetworkAddr::Domain {
+                    name: domain_name,
+                    port,
+                } => SocketAddr::new(self.dns.domain_to_fake_ip(domain_name.as_str()), port),
             };
             if let Err(err) = self.recv_tx.send((data, src_addr)).await {
                 tracing::warn!("TunUdpAdapter write to inbound failed: {}", err);
@@ -108,7 +109,7 @@ impl TunUdpAdapter {
 }
 
 pub struct SocksUdpAdapter {
-    info: Arc<ConnContext>,
+    info: ConnHandle,
     send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
     recv_tx: Arc<UdpSocket>,
     src: SocketAddr,
@@ -118,7 +119,7 @@ pub struct SocksUdpAdapter {
 
 impl SocksUdpAdapter {
     pub fn new(
-        info: Arc<ConnContext>,
+        info: ConnHandle,
         send_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
         recv_tx: Arc<UdpSocket>,
         src: SocketAddr,
@@ -181,10 +182,11 @@ impl SocksUdpAdapter {
             self.info.more_download(buf.len());
             // encapsule
             let Ok(data) = (match src {
-                NetworkAddr::Raw(s) => fast_socks5::new_udp_header(s),
-                NetworkAddr::DomainName { domain_name, port } => {
-                    fast_socks5::new_udp_header((domain_name.as_str(), port))
-                }
+                NetworkAddr::Socket { address: s } => fast_socks5::new_udp_header(s),
+                NetworkAddr::Domain {
+                    name: domain_name,
+                    port,
+                } => fast_socks5::new_udp_header((domain_name.as_str(), port)),
             }) else {
                 continue;
             };

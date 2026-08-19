@@ -29,7 +29,7 @@ pub use super::adapter::shadowsocks::*;
 use crate::common::{MAX_PKT_SIZE, StreamOutboundTrait, io_err, mut_buf, read_to_bytes_mut};
 use crate::network::dns::Dns;
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, ConnContext, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 #[allow(unused_imports)]
 pub use anytls::*;
@@ -487,7 +487,7 @@ impl UdpSocketAdapter for AddrConnectorWrapper {
 
 struct TcpIndicatorGuard {
     pub indicator: Arc<AtomicU8>,
-    pub info: Arc<ConnContext>,
+    pub info: ConnHandle,
 }
 
 impl Drop for TcpIndicatorGuard {
@@ -554,8 +554,11 @@ impl Drop for UdpDropGuard {
 
 async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
     Ok(match addr {
-        NetworkAddr::Raw(addr) => *addr,
-        NetworkAddr::DomainName { domain_name, port } => {
+        NetworkAddr::Socket { address: addr } => *addr,
+        NetworkAddr::Domain {
+            name: domain_name,
+            port,
+        } => {
             let resp = match dns.genuine_lookup(domain_name.as_str()).await {
                 Ok(Some(resp)) => resp,
                 _ => return Err(io_err("dns not found")),
@@ -567,7 +570,10 @@ async fn lookup(dns: &Dns, addr: &NetworkAddr) -> io::Result<SocketAddr> {
 
 pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAddr> {
     Ok(match dst {
-        NetworkAddr::DomainName { domain_name, port } => {
+        NetworkAddr::Domain {
+            name: domain_name,
+            port,
+        } => {
             // translate fake ip
             SocketAddr::new(
                 match dns.genuine_lookup(domain_name.as_str()).await {
@@ -577,7 +583,7 @@ pub(super) async fn get_dst(dns: &Dns, dst: &NetworkAddr) -> io::Result<SocketAd
                 *port,
             )
         }
-        NetworkAddr::Raw(s) => *s,
+        NetworkAddr::Socket { address: s } => *s,
     })
 }
 

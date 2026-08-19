@@ -2,7 +2,7 @@ use crate::intercept::{HyperBody, InterceptionResult};
 use crate::platform::process::ProcessInfo;
 use crate::proxy::error::InterceptError;
 use crate::proxy::{
-    CapturedBody, ConnContext, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr,
+    CapturedBody, ConnHandle, DumpedRequest, DumpedResponse, HttpCapturer, NetworkAddr,
 };
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -16,7 +16,7 @@ pub type ModifierClosure =
 
 pub struct ModifierContext {
     pub tag: u64,
-    pub conn_info: Arc<ConnContext>,
+    pub conn_info: ConnHandle,
 }
 
 #[async_trait]
@@ -104,9 +104,11 @@ impl Modifier for Recorder {
             .remove(&ctx.tag)
             .ok_or_else(|| InterceptError::NoCorrespondingId(ctx.tag))?
             .1;
-        let host = match &ctx.conn_info.conn_info.dst {
-            NetworkAddr::Raw(addr) => addr.ip().to_string(),
-            NetworkAddr::DomainName { domain_name, .. } => domain_name.clone(),
+        let host = match &ctx.conn_info.metadata().conn_info.dst {
+            NetworkAddr::Socket { address: addr } => addr.ip().to_string(),
+            NetworkAddr::Domain {
+                name: domain_name, ..
+            } => domain_name.clone(),
         };
         self.contents
             .push((req, resp_copy), host, self.client.clone());

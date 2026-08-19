@@ -62,8 +62,8 @@ impl SSOutbound {
             ServerAddr::DomainName(addr, port) => {
                 lookup(
                     self.dns.as_ref(),
-                    &NetworkAddr::DomainName {
-                        domain_name: addr.clone(),
+                    &NetworkAddr::Domain {
+                        name: addr.clone(),
                         port: *port,
                     },
                 )
@@ -77,10 +77,11 @@ impl SSOutbound {
         server_addr: SocketAddr,
     ) -> Result<(relay::Address, SharedContext, ServerConfig), TransportError> {
         let target_addr = match &self.dst {
-            NetworkAddr::Raw(s) => shadowsocks::relay::Address::from(*s),
-            NetworkAddr::DomainName { domain_name, port } => {
-                shadowsocks::relay::Address::from((domain_name.clone(), *port))
-            }
+            NetworkAddr::Socket { address: s } => shadowsocks::relay::Address::from(*s),
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => shadowsocks::relay::Address::from((domain_name.clone(), *port)),
         };
         // ss configs
         let context = shadowsocks::context::Context::new_shared(ServerType::Local);
@@ -268,10 +269,11 @@ impl ShadowsocksUdpAdapter {
 impl UdpSocketAdapter for ShadowsocksUdpAdapter {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> Result<(), TransportError> {
         let ss_addr = match addr.clone() {
-            NetworkAddr::Raw(s) => Address::SocketAddress(s),
-            NetworkAddr::DomainName { domain_name, port } => {
-                Address::DomainNameAddress(domain_name, port)
-            }
+            NetworkAddr::Socket { address: s } => Address::SocketAddress(s),
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => Address::DomainNameAddress(domain_name, port),
         };
         let mut send_buf = BytesMut::new();
         encrypt_client_payload(
@@ -310,10 +312,11 @@ impl UdpSocketAdapter for ShadowsocksUdpAdapter {
         Ok((
             decrypted_size,
             match addr {
-                Address::SocketAddress(s) => NetworkAddr::Raw(s),
-                Address::DomainNameAddress(domain_name, port) => {
-                    NetworkAddr::DomainName { domain_name, port }
-                }
+                Address::SocketAddress(s) => NetworkAddr::Socket { address: s },
+                Address::DomainNameAddress(domain_name, port) => NetworkAddr::Domain {
+                    name: domain_name,
+                    port,
+                },
             },
         ))
     }

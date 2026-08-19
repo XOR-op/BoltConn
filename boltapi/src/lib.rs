@@ -1,8 +1,10 @@
 pub mod instrument;
 pub mod multiplex;
+mod observability;
 pub mod rpc;
 mod schema;
 
+pub use observability::*;
 pub use schema::*;
 
 pub(crate) mod base64ext {

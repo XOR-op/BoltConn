@@ -284,7 +284,7 @@ impl UdpConnTask {
         tokio::spawn(async move {
             while let Some((buf, dst)) = back_rx.recv().await {
                 if let Some(dst) = match dst {
-                    NetworkAddr::Raw(s) => {
+                    NetworkAddr::Socket { address: s } => {
                         if (s.is_ipv4() && socket_version == IPVersion::V4)
                             || (s.is_ipv6() && socket_version == IPVersion::V6)
                         {
@@ -298,7 +298,10 @@ impl UdpConnTask {
                             None
                         }
                     }
-                    NetworkAddr::DomainName { domain_name, port } => match dns
+                    NetworkAddr::Domain {
+                        name: domain_name,
+                        port,
+                    } => match dns
                         .genuine_lookup_with(
                             domain_name.as_str(),
                             match socket_version {
@@ -375,7 +378,7 @@ impl UdpConnTask {
                 unsafe { buf.advance_mut(size) };
                 self.last_active = Instant::now();
                 let src_addr =
-                    NetworkAddr::Raw(SocketAddr::new(ep.endpoint.addr.into(), ep.endpoint.port));
+                    NetworkAddr::from(SocketAddr::new(ep.endpoint.addr.into(), ep.endpoint.port));
                 // must not fail because there is only 1 sender
                 assert!(self.back_tx.capacity() > 0); // otherwise DashMap would deadlock
                 let _ = self.back_tx.send((buf.freeze(), src_addr)).await;

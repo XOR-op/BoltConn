@@ -40,11 +40,14 @@ pub(crate) enum TrojanAddr {
 impl From<NetworkAddr> for TrojanAddr {
     fn from(addr: NetworkAddr) -> Self {
         match addr {
-            NetworkAddr::Raw(addr) => match addr {
+            NetworkAddr::Socket { address: addr } => match addr {
                 SocketAddr::V4(v4) => Self::Ipv4(v4),
                 SocketAddr::V6(v6) => Self::Ipv6(v6),
             },
-            NetworkAddr::DomainName { domain_name, port } => Self::Domain((domain_name, port)),
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => Self::Domain((domain_name, port)),
         }
     }
 }
@@ -52,11 +55,12 @@ impl From<NetworkAddr> for TrojanAddr {
 impl From<TrojanAddr> for NetworkAddr {
     fn from(t: TrojanAddr) -> Self {
         match t {
-            TrojanAddr::Ipv4(v4) => NetworkAddr::Raw(SocketAddr::from(v4)),
-            TrojanAddr::Domain((domain_name, port)) => {
-                NetworkAddr::DomainName { domain_name, port }
-            }
-            TrojanAddr::Ipv6(v6) => NetworkAddr::Raw(SocketAddr::from(v6)),
+            TrojanAddr::Ipv4(v4) => NetworkAddr::from(SocketAddr::from(v4)),
+            TrojanAddr::Domain((domain_name, port)) => NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            },
+            TrojanAddr::Ipv6(v6) => NetworkAddr::from(SocketAddr::from(v6)),
         }
     }
 }
@@ -207,7 +211,7 @@ where
         if reader.read(&mut header_buf[..1]).await? == 0 {
             // The UDP relay uses a zero length as its clean EOF signal and ignores
             // the accompanying address.
-            let eof_addr = NetworkAddr::Raw(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0));
+            let eof_addr = NetworkAddr::from(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0));
             return Ok((0, eof_addr));
         }
         // read source address
@@ -219,7 +223,7 @@ where
                 ip.copy_from_slice(&header_buf[..IP_LEN]);
                 let mut port = [0u8; 2];
                 port.copy_from_slice(&header_buf[IP_LEN..IP_LEN + 2]);
-                NetworkAddr::Raw(SocketAddr::new(
+                NetworkAddr::from(SocketAddr::new(
                     Ipv4Addr::from(ip).into(),
                     u16::from_be_bytes(port),
                 ))
@@ -232,8 +236,8 @@ where
                 reader.read_exact(&mut header_buf[..2]).await?;
                 let mut port = [0u8; 2];
                 port.copy_from_slice(&header_buf[..2]);
-                NetworkAddr::DomainName {
-                    domain_name,
+                NetworkAddr::Domain {
+                    name: domain_name,
                     port: u16::from_be_bytes(port),
                 }
             }
@@ -244,7 +248,7 @@ where
                 ip.copy_from_slice(&header_buf[..IP_LEN]);
                 let mut port = [0u8; 2];
                 port.copy_from_slice(&header_buf[IP_LEN..IP_LEN + 2]);
-                NetworkAddr::Raw(SocketAddr::new(
+                NetworkAddr::from(SocketAddr::new(
                     Ipv6Addr::from(ip).into(),
                     u16::from_be_bytes(port),
                 ))

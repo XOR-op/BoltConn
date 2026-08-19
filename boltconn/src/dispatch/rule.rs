@@ -103,14 +103,20 @@ impl RuleImpl {
     pub fn matches(&self, info: &ConnInfo) -> bool {
         match &self {
             RuleImpl::Domain(d) => {
-                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
+                if let NetworkAddr::Domain {
+                    name: domain_name, ..
+                } = &info.dst
+                {
                     d == domain_name
                 } else {
                     false
                 }
             }
             RuleImpl::DomainSuffix(d) => {
-                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
+                if let NetworkAddr::Domain {
+                    name: domain_name, ..
+                } = &info.dst
+                {
                     if domain_name.len() == d.len() {
                         domain_name == d
                     } else {
@@ -123,21 +129,30 @@ impl RuleImpl {
                 }
             }
             RuleImpl::DomainKeyword(kw) => {
-                if let NetworkAddr::DomainName { domain_name, .. } = &info.dst {
+                if let NetworkAddr::Domain {
+                    name: domain_name, ..
+                } = &info.dst
+                {
                     domain_name.contains(kw)
                 } else {
                     false
                 }
             }
             RuleImpl::DstAddrType(addr_type) => match addr_type {
-                DstAddrType::Domain => matches!(info.dst, NetworkAddr::DomainName { .. }),
-                DstAddrType::Ip => matches!(info.dst, NetworkAddr::Raw(_)),
-                DstAddrType::Ipv4 => {
-                    matches!(info.dst, NetworkAddr::Raw(std::net::SocketAddr::V4(_)))
-                }
-                DstAddrType::Ipv6 => {
-                    matches!(info.dst, NetworkAddr::Raw(std::net::SocketAddr::V6(_)))
-                }
+                DstAddrType::Domain => matches!(info.dst, NetworkAddr::Domain { .. }),
+                DstAddrType::Ip => matches!(info.dst, NetworkAddr::Socket { address: _ }),
+                DstAddrType::Ipv4 => matches!(
+                    info.dst,
+                    NetworkAddr::Socket {
+                        address: std::net::SocketAddr::V4(_)
+                    }
+                ),
+                DstAddrType::Ipv6 => matches!(
+                    info.dst,
+                    NetworkAddr::Socket {
+                        address: std::net::SocketAddr::V6(_)
+                    }
+                ),
             },
             RuleImpl::LocalIpCidr(net) => info.local_ip.as_ref().is_some_and(|s| net.contains(s)),
             RuleImpl::SrcIpCidr(net) => net.contains(&info.src.ip()),
@@ -529,8 +544,8 @@ mod tests {
     fn mock_conn_info(process_info: Option<ProcessInfo>) -> ConnInfo {
         ConnInfo {
             src: "127.0.0.1:12345".parse().unwrap(),
-            dst: NetworkAddr::DomainName {
-                domain_name: "example.com".to_string(),
+            dst: NetworkAddr::Domain {
+                name: "example.com".to_string(),
                 port: 443,
             },
             local_ip: None,
@@ -585,13 +600,16 @@ mod tests {
 
     #[test]
     fn test_dst_addr_type_rule_matches_expected_variants() {
-        let domain_info = mock_conn_info_with_dst(NetworkAddr::DomainName {
-            domain_name: "example.com".to_string(),
+        let domain_info = mock_conn_info_with_dst(NetworkAddr::Domain {
+            name: "example.com".to_string(),
             port: 443,
         });
-        let ip4_info = mock_conn_info_with_dst(NetworkAddr::Raw("1.2.3.4:443".parse().unwrap()));
-        let ip6_info =
-            mock_conn_info_with_dst(NetworkAddr::Raw("[2001:db8::1]:443".parse().unwrap()));
+        let ip4_info = mock_conn_info_with_dst(NetworkAddr::from(
+            "1.2.3.4:443".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let ip6_info = mock_conn_info_with_dst(NetworkAddr::from(
+            "[2001:db8::1]:443".parse::<std::net::SocketAddr>().unwrap(),
+        ));
 
         assert!(RuleImpl::DstAddrType(DstAddrType::Domain).matches(&domain_info));
         assert!(!RuleImpl::DstAddrType(DstAddrType::Ip).matches(&domain_info));
@@ -611,8 +629,8 @@ mod tests {
 
     #[test]
     fn test_dst_addr_type_uses_original_dst_not_resolved_dst() {
-        let mut info = mock_conn_info_with_dst(NetworkAddr::DomainName {
-            domain_name: "example.com".to_string(),
+        let mut info = mock_conn_info_with_dst(NetworkAddr::Domain {
+            name: "example.com".to_string(),
             port: 443,
         });
         info.resolved_dst = Some("1.2.3.4:443".parse().unwrap());

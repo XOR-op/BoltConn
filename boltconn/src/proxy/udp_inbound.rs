@@ -5,7 +5,7 @@ use crate::platform::process;
 use crate::platform::process::{NetworkType, ProcessInfo};
 use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::error::TransportError;
-use crate::proxy::{Dispatcher, MappingSessionManager, NetworkAddr};
+use crate::proxy::{Dispatcher, MappingSessionManager, NetworkAddr, socks_to_network_addr};
 use bytes::Bytes;
 use smoltcp::wire::{Ipv4Packet, Ipv6Packet, UdpPacket};
 use std::collections::HashMap;
@@ -46,16 +46,20 @@ impl UdpInboundInner {
         ret_channel: UdpReturnChannel,
     ) -> bool {
         let dst_addr = match dst {
-            NetworkAddr::Raw(addr) => match self.dns.fake_ip_to_domain(addr.ip()) {
-                None => NetworkAddr::Raw(addr),
-                Some(s) => NetworkAddr::DomainName {
-                    domain_name: s,
+            NetworkAddr::Socket { address: addr } => match self.dns.fake_ip_to_domain(addr.ip()) {
+                None => NetworkAddr::Socket { address: addr },
+                Some(s) => NetworkAddr::Domain {
+                    name: s,
                     port: dst.port(),
                 },
             },
-            NetworkAddr::DomainName { domain_name, port } => {
-                NetworkAddr::DomainName { domain_name, port }
-            }
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            },
         };
 
         match self.mapping.entry(src) {
@@ -240,7 +244,7 @@ impl TunUdpInbound {
                     .inner
                     .send_payload(
                         src,
-                        NetworkAddr::Raw(dst),
+                        NetworkAddr::Socket { address: dst },
                         payload.clone(),
                         UdpReturnChannel::Tun(self.tun_tx.clone()),
                     )
@@ -249,7 +253,7 @@ impl TunUdpInbound {
                     self.inner
                         .send_payload(
                             src,
-                            NetworkAddr::Raw(dst),
+                            NetworkAddr::Socket { address: dst },
                             payload.clone(),
                             UdpReturnChannel::Tun(self.tun_tx.clone()),
                         )
@@ -307,7 +311,7 @@ impl SocksUdpInbound {
                 continue;
             }
             let payload = Bytes::copy_from_slice(payload);
-            let dst_addr: NetworkAddr = dst_addr.into();
+            let dst_addr = socks_to_network_addr(dst_addr);
 
             if !self
                 .inner

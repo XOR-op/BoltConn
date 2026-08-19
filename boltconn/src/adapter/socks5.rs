@@ -7,7 +7,7 @@ use crate::config::AuthData;
 use crate::network::dns::Dns;
 use crate::network::egress::Egress;
 use crate::proxy::error::TransportError;
-use crate::proxy::{ConnAbortHandle, NetworkAddr};
+use crate::proxy::{ConnAbortHandle, NetworkAddr, network_addr_to_socks, socks_to_network_addr};
 use crate::transport::UdpSocketAdapter;
 use async_trait::async_trait;
 use fast_socks5::client::Socks5Stream;
@@ -86,7 +86,7 @@ impl Socks5Outbound {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let mut socks_stream = self.connect_proxy(outbound).await?;
-        let target = self.dst.into();
+        let target = network_addr_to_socks(self.dst);
         let _bound_addr = socks_stream
             .request(Socks5Command::TCPConnect, target)
             .await
@@ -106,10 +106,11 @@ impl Socks5Outbound {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let target = match &self.dst {
-            NetworkAddr::Raw(addr) => TargetAddr::Ip(*addr),
-            NetworkAddr::DomainName { domain_name, port } => {
-                TargetAddr::Domain(domain_name.clone(), *port)
-            }
+            NetworkAddr::Socket { address: addr } => TargetAddr::Ip(*addr),
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => TargetAddr::Domain(domain_name.clone(), *port),
         };
         let server_addr = lookup(self.dns.as_ref(), &self.config.server_addr).await?;
         let mut socks_stream = self.connect_proxy(outbound).await?;
@@ -222,10 +223,11 @@ struct Socks5UdpAdapter(Arc<UdpSocket>);
 impl UdpSocketAdapter for Socks5UdpAdapter {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> Result<(), TransportError> {
         let mut buf = match addr {
-            NetworkAddr::Raw(s) => fast_socks5::new_udp_header(s)?,
-            NetworkAddr::DomainName { domain_name, port } => {
-                fast_socks5::new_udp_header((domain_name.as_str(), port))?
-            }
+            NetworkAddr::Socket { address: s } => fast_socks5::new_udp_header(s)?,
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => fast_socks5::new_udp_header((domain_name.as_str(), port))?,
         };
         buf.extend_from_slice(data);
         self.0.send(buf.as_slice()).await?;
@@ -240,6 +242,6 @@ impl UdpSocketAdapter for Socks5UdpAdapter {
             return Err(TransportError::Socks5Extra("UDP fragment not supported"));
         }
         data[..raw_data.len()].copy_from_slice(raw_data);
-        Ok((raw_data.len(), target_addr.into()))
+        Ok((raw_data.len(), socks_to_network_addr(target_addr)))
     }
 }

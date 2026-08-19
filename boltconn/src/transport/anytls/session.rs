@@ -450,7 +450,7 @@ mod tests {
     }
 
     fn dst() -> NetworkAddr {
-        NetworkAddr::Raw("1.1.1.1:80".parse::<SocketAddr>().unwrap())
+        NetworkAddr::from("1.1.1.1:80".parse::<SocketAddr>().unwrap())
     }
 
     #[tokio::test]

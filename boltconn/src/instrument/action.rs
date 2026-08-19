@@ -52,8 +52,8 @@ impl FormattingObject {
                 std::net::Ipv4Addr::new(127, 0, 0, 1),
                 8080,
             )),
-            dst: crate::proxy::NetworkAddr::DomainName {
-                domain_name: "example.com".to_string(),
+            dst: crate::proxy::NetworkAddr::Domain {
+                name: "example.com".to_string(),
                 port: 443,
             },
             local_ip: None,
@@ -320,8 +320,8 @@ time: {time.hms_ms}";
             std::net::Ipv4Addr::new(192, 168, 0, 1),
             8080,
         )),
-        dst: crate::proxy::NetworkAddr::DomainName {
-            domain_name: "example.com".to_string(),
+        dst: crate::proxy::NetworkAddr::Domain {
+            name: "example.com".to_string(),
             port: 443,
         },
         local_ip: None,
@@ -365,8 +365,8 @@ fn mock_conn_info(process_info: Option<ProcessInfo>) -> ConnInfo {
             std::net::Ipv4Addr::new(192, 168, 0, 1),
             8080,
         )),
-        dst: crate::proxy::NetworkAddr::DomainName {
-            domain_name: "example.com".to_string(),
+        dst: crate::proxy::NetworkAddr::Domain {
+            name: "example.com".to_string(),
             port: 443,
         },
         local_ip: None,

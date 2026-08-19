@@ -233,7 +233,9 @@ pub(super) fn parse_settings(data: &[u8]) -> HashMap<String, String> {
 pub fn encode_socks_addr(addr: &NetworkAddr) -> Result<Vec<u8>, TransportError> {
     let mut data = Vec::new();
     match addr {
-        NetworkAddr::Raw(socket_addr) => match socket_addr {
+        NetworkAddr::Socket {
+            address: socket_addr,
+        } => match socket_addr {
             std::net::SocketAddr::V4(v4) => {
                 data.reserve(1 + 4 + 2);
                 data.push(0x01);
@@ -247,7 +249,10 @@ pub fn encode_socks_addr(addr: &NetworkAddr) -> Result<Vec<u8>, TransportError> 
                 data.extend(v6.port().to_be_bytes());
             }
         },
-        NetworkAddr::DomainName { domain_name, port } => {
+        NetworkAddr::Domain {
+            name: domain_name,
+            port,
+        } => {
             let domain_len = u8::try_from(domain_name.len())
                 .map_err(|_| TransportError::Internal("AnyTLS domain name too long"))?;
             data.reserve(1 + 1 + domain_name.len() + 2);
@@ -274,7 +279,7 @@ mod tests {
 
     #[test]
     fn encodes_socks_addr() {
-        let addr = NetworkAddr::Raw(SocketAddr::V4(SocketAddrV4::new(
+        let addr = NetworkAddr::from(SocketAddr::V4(SocketAddrV4::new(
             Ipv4Addr::new(127, 0, 0, 1),
             443,
         )));
@@ -283,8 +288,8 @@ mod tests {
             vec![0x01, 127, 0, 0, 1, 0x01, 0xbb]
         );
 
-        let addr = NetworkAddr::DomainName {
-            domain_name: "example.com".to_string(),
+        let addr = NetworkAddr::Domain {
+            name: "example.com".to_string(),
             port: 80,
         };
         assert_eq!(

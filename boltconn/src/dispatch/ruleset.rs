@@ -48,13 +48,16 @@ impl RuleSet {
     pub fn matches(&self, info: &ConnInfo) -> bool {
         // do NOT perform DNS lookup
         let port = match &info.dst {
-            NetworkAddr::Raw(addr) => {
+            NetworkAddr::Socket { address: addr } => {
                 if self.ip.longest_match(addr.ip()).is_some() {
                     return true;
                 }
                 addr.port()
             }
-            NetworkAddr::DomainName { domain_name, port } => {
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => {
                 if self.domain.matches(domain_name)
                     || self.domain_keyword.is_match(domain_name.as_str())
                     || info
@@ -453,8 +456,8 @@ fn test_rule_provider() {
     // println!("kw:{}, domain:{}", ruleset.domain_keyword.pattern_count(), ruleset.domain.len());
     let info1 = ConnInfo {
         src: "127.0.0.1:12345".parse().unwrap(),
-        dst: NetworkAddr::DomainName {
-            domain_name: "kb.apple.com".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "kb.apple.com".to_string(),
             port: 1234,
         },
         local_ip: Some("192.168.1.2".parse().unwrap()),
@@ -466,8 +469,8 @@ fn test_rule_provider() {
     assert!(ruleset.matches(&info1));
     let info2 = ConnInfo {
         src: "127.0.0.1:12345".parse().unwrap(),
-        dst: NetworkAddr::DomainName {
-            domain_name: "apple.com".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "apple.com".to_string(),
             port: 1234,
         },
         local_ip: Some("192.168.1.2".parse().unwrap()),
@@ -479,8 +482,8 @@ fn test_rule_provider() {
     assert!(ruleset.matches(&info2));
     let info3 = ConnInfo {
         src: "127.0.0.1:12345".parse().unwrap(),
-        dst: NetworkAddr::DomainName {
-            domain_name: "icloud.com.akadns.net.com".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "icloud.com.akadns.net.com".to_string(),
             port: 1234,
         },
         local_ip: Some("192.168.1.2".parse().unwrap()),
@@ -492,8 +495,8 @@ fn test_rule_provider() {
     assert!(ruleset.matches(&info3));
     let info4 = ConnInfo {
         src: "127.0.0.1:12345".parse().unwrap(),
-        dst: NetworkAddr::DomainName {
-            domain_name: "apple.io".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "apple.io".to_string(),
             port: 1234,
         },
         local_ip: Some("192.168.1.2".parse().unwrap()),
@@ -534,8 +537,8 @@ fn test_ruleset_classical_process_tag_exact_match() {
 
     let matching = ConnInfo {
         src: "127.0.0.1:12345".parse().unwrap(),
-        dst: NetworkAddr::DomainName {
-            domain_name: "example.com".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "example.com".to_string(),
             port: 443,
         },
         local_ip: None,
@@ -591,8 +594,8 @@ fn test_ruleset_domain_provider_exact_entry_matches_exact_only() {
 
     let exact = ConnInfo {
         src: "127.0.0.1:12345".parse().unwrap(),
-        dst: NetworkAddr::DomainName {
-            domain_name: "example.com".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "example.com".to_string(),
             port: 443,
         },
         local_ip: None,
@@ -604,8 +607,8 @@ fn test_ruleset_domain_provider_exact_entry_matches_exact_only() {
     assert!(ruleset.matches(&exact));
 
     let subdomain = ConnInfo {
-        dst: NetworkAddr::DomainName {
-            domain_name: "www.example.com".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "www.example.com".to_string(),
             port: 443,
         },
         ..exact.clone()
@@ -630,8 +633,8 @@ fn test_ruleset_domain_provider_suffix_entry_matches_domain_and_subdomains() {
 
     let root = ConnInfo {
         src: "127.0.0.1:12345".parse().unwrap(),
-        dst: NetworkAddr::DomainName {
-            domain_name: "example.com".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "example.com".to_string(),
             port: 443,
         },
         local_ip: None,
@@ -643,8 +646,8 @@ fn test_ruleset_domain_provider_suffix_entry_matches_domain_and_subdomains() {
     assert!(ruleset.matches(&root));
 
     let subdomain = ConnInfo {
-        dst: NetworkAddr::DomainName {
-            domain_name: "www.example.com".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "www.example.com".to_string(),
             port: 443,
         },
         ..root.clone()
@@ -652,8 +655,8 @@ fn test_ruleset_domain_provider_suffix_entry_matches_domain_and_subdomains() {
     assert!(ruleset.matches(&subdomain));
 
     let non_match = ConnInfo {
-        dst: NetworkAddr::DomainName {
-            domain_name: "example.com.test".to_string(),
+        dst: NetworkAddr::Domain {
+            name: "example.com.test".to_string(),
             port: 443,
         },
         ..root

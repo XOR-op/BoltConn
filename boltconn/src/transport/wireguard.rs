@@ -106,9 +106,9 @@ impl WireguardTunnel {
         smol_notify: Arc<Notify>,
     ) -> Result<Self, TransportError> {
         let endpoint = match config.endpoint {
-            NetworkAddr::Raw(addr) => addr,
-            NetworkAddr::DomainName {
-                ref domain_name,
+            NetworkAddr::Socket { address: addr } => addr,
+            NetworkAddr::Domain {
+                name: ref domain_name,
                 port,
             } => {
                 let resp = dns
@@ -383,7 +383,7 @@ impl WireguardTunnelInner {
         }
         match &self.outbound {
             AdapterOrChannel::Adapter(a) => {
-                a.send_to(data, NetworkAddr::Raw(self.endpoint)).await?;
+                a.send_to(data, NetworkAddr::from(self.endpoint)).await?;
                 Ok(data.len())
             }
             AdapterOrChannel::Channel(c, _) => {

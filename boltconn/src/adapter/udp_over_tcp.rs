@@ -47,6 +47,6 @@ impl UdpSocketAdapter for UdpOverTcpAdapter {
             return Err(TransportError::Internal("UDP-over-TCP buffer too small"));
         }
         socket.read_exact(&mut data[0..len]).await?;
-        Ok((len, NetworkAddr::Raw(self.address)))
+        Ok((len, NetworkAddr::from(self.address)))
     }
 }

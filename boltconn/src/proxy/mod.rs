@@ -36,12 +36,13 @@ use url::Host;
 
 fn get_random_local_addr(dst: &NetworkAddr, port: u16) -> SocketAddr {
     match dst {
-        NetworkAddr::Raw(SocketAddr::V4(_)) | NetworkAddr::DomainName { .. } => {
-            SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), port)
+        NetworkAddr::Socket {
+            address: SocketAddr::V4(_),
         }
-        NetworkAddr::Raw(SocketAddr::V6(_)) => {
-            SocketAddr::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(), port)
-        }
+        | NetworkAddr::Domain { .. } => SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), port),
+        NetworkAddr::Socket {
+            address: SocketAddr::V6(_),
+        } => SocketAddr::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(), port),
     }
 }
 
@@ -73,17 +74,17 @@ pub async fn latency_test(
         .host()
         .ok_or(RuntimeError::LatencyTest("No host in test url"))?
     {
-        Host::Domain(domain) => NetworkAddr::DomainName {
-            domain_name: domain.to_string(),
+        Host::Domain(domain) => NetworkAddr::Domain {
+            name: domain.to_string(),
             port,
         },
-        Host::Ipv4(ip) => NetworkAddr::Raw(SocketAddr::new(ip.into(), port)),
-        Host::Ipv6(ip) => NetworkAddr::Raw(SocketAddr::new(ip.into(), port)),
+        Host::Ipv4(ip) => NetworkAddr::from(SocketAddr::new(ip.into(), port)),
+        Host::Ipv6(ip) => NetworkAddr::from(SocketAddr::new(ip.into(), port)),
     };
     let server_name = match &dst_addr {
-        NetworkAddr::Raw(s) => ServerName::IpAddress(s.ip().into()),
-        NetworkAddr::DomainName {
-            domain_name,
+        NetworkAddr::Socket { address: s } => ServerName::IpAddress(s.ip().into()),
+        NetworkAddr::Domain {
+            name: domain_name,
             port: _,
         } => ServerName::try_from(domain_name.as_str())
             .map_err(|_| RuntimeError::LatencyTest("Failed to resolve test host"))?,

@@ -128,8 +128,11 @@ struct DirectUdpAdapter(Arc<UdpSocket>, Arc<Dns>);
 impl UdpSocketAdapter for DirectUdpAdapter {
     async fn send_to(&self, data: &[u8], addr: NetworkAddr) -> Result<(), TransportError> {
         let addr = match addr {
-            NetworkAddr::Raw(s) => s,
-            NetworkAddr::DomainName { domain_name, port } => {
+            NetworkAddr::Socket { address: s } => s,
+            NetworkAddr::Domain {
+                name: domain_name,
+                port,
+            } => {
                 let Ok(Some(ip)) = self.1.genuine_lookup(domain_name.as_str()).await else {
                     // drop
                     return Ok(());
@@ -143,6 +146,6 @@ impl UdpSocketAdapter for DirectUdpAdapter {
 
     async fn recv_from(&self, data: &mut [u8]) -> Result<(usize, NetworkAddr), TransportError> {
         let (len, addr) = self.0.recv_from(data).await?;
-        Ok((len, NetworkAddr::Raw(addr)))
+        Ok((len, NetworkAddr::Socket { address: addr }))
     }
 }

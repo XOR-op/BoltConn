@@ -4,7 +4,7 @@ use crate::common::utils::IdGenerator;
 use crate::intercept::modifier::Modifier;
 use crate::intercept::{HyperBody, ModifierContext};
 use crate::proxy::error::InterceptError;
-use crate::proxy::{ConnAbortHandle, ConnContext};
+use crate::proxy::{ConnAbortHandle, ConnHandle};
 use hyper::client::conn;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -16,7 +16,7 @@ pub struct HttpIntercept {
     inbound: DuplexChan,
     modifier: Arc<dyn Modifier>,
     creator: Arc<dyn Outbound>,
-    conn_info: Arc<ConnContext>,
+    conn_info: ConnHandle,
 }
 
 impl HttpIntercept {
@@ -24,7 +24,7 @@ impl HttpIntercept {
         inbound: DuplexChan,
         modifier: Arc<dyn Modifier>,
         creator: Box<dyn Outbound>,
-        conn_info: Arc<ConnContext>,
+        conn_info: ConnHandle,
     ) -> Self {
         Self {
             inbound,

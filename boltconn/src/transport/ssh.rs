@@ -93,8 +93,10 @@ impl SshTunnel {
             .client
             .channel_open_direct_tcpip(
                 match dst {
-                    NetworkAddr::Raw(ip) => ip.ip().to_string(),
-                    NetworkAddr::DomainName { domain_name, .. } => domain_name,
+                    NetworkAddr::Socket { address: ip } => ip.ip().to_string(),
+                    NetworkAddr::Domain {
+                        name: domain_name, ..
+                    } => domain_name,
                 },
                 dst_port as u32,
                 "127.0.0.1",

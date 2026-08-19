@@ -88,13 +88,16 @@ impl Socks5Inbound {
             .await
             .map_err(|_| TransportError::Socks5Extra("Read connect address failed"))?
         {
-            TargetAddr::Ip(sa) => NetworkAddr::Raw(sa),
+            TargetAddr::Ip(sa) => NetworkAddr::Socket { address: sa },
             TargetAddr::Domain(domain_name, port) => {
                 // Many clients will say they send domain name even if they actually send IP address.
                 // We ignore their flags and parse it manually anyway.
                 match IpAddr::from_str(&domain_name) {
-                    Ok(ip) => NetworkAddr::Raw(SocketAddr::new(ip, port)),
-                    Err(_) => NetworkAddr::DomainName { domain_name, port },
+                    Ok(ip) => NetworkAddr::from(SocketAddr::new(ip, port)),
+                    Err(_) => NetworkAddr::Domain {
+                        name: domain_name,
+                        port,
+                    },
                 }
             }
         };
