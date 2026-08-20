@@ -1,4 +1,5 @@
 use crate::common::StreamOutboundTrait;
+use crate::common::cbor::CborCodec;
 use crate::external::Controller;
 use crate::proxy::error::SystemError;
 use boltapi::multiplex::rpc_multiplex_twoway;
@@ -21,7 +22,6 @@ use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio::net::UnixListener;
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
-use tokio_serde::formats::Cbor;
 
 pub struct UnixListenerGuard {
     path: String,
@@ -110,7 +110,7 @@ impl UdsController {
         loop {
             let conn = listener.accept().await?;
             let framed = codec_builder.new_framed(conn);
-            let transport = tarpc::serde_transport::new(framed, Cbor::default());
+            let transport = tarpc::serde_transport::new(framed, CborCodec::default());
             let (server_t, client_t, in_task, out_task) = rpc_multiplex_twoway(transport);
             tokio::spawn(in_task);
             tokio::spawn(out_task);
