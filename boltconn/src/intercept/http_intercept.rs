@@ -67,7 +67,6 @@ impl HttpIntercept {
     }
 
     pub async fn run(self) -> io::Result<()> {
-        self.conn_info.set_state(boltapi::ConnState::Active);
         let id_gen = IdGenerator::default();
         let service = service_fn(|req| {
             let (parts, body) = req.into_parts();

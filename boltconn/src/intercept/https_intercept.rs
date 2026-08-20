@@ -175,7 +175,6 @@ impl HttpsIntercept {
                 Some(crate::proxy::bounded_error_detail(&error.to_string())),
             );
         })?;
-        self.conn_info.set_state(boltapi::ConnState::Active);
         if let Err(http_err) =
             hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
                 .serve_connection(TokioIo::new(inbound), service)

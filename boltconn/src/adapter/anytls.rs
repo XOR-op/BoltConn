@@ -62,7 +62,12 @@ impl AnytlsOutboundHandle {
     ) -> Result<(), TransportError> {
         let used_outbound = Arc::new(AtomicBool::new(false));
         let stream_res = self
-            .open_stream_with_outbound(self.dst.clone(), outbound, used_outbound.clone())
+            .open_stream_with_outbound(
+                self.dst.clone(),
+                outbound,
+                used_outbound.clone(),
+                conn.as_ref(),
+            )
             .await;
         send_completion(completion_tx, used_outbound.load(Ordering::Acquire));
 
@@ -96,7 +101,7 @@ impl AnytlsOutboundHandle {
         };
         let used_outbound = Arc::new(AtomicBool::new(false));
         let stream_res = self
-            .open_stream_with_outbound(udp_target, outbound, used_outbound.clone())
+            .open_stream_with_outbound(udp_target, outbound, used_outbound.clone(), conn.as_ref())
             .await;
         send_completion(completion_tx, used_outbound.load(Ordering::Acquire));
 
@@ -134,6 +139,7 @@ impl AnytlsOutboundHandle {
         dst: NetworkAddr,
         outbound: Option<Box<dyn StreamOutboundTrait>>,
         used_outbound: Arc<AtomicBool>,
+        conn: Option<&ConnHandle>,
     ) -> Result<AnytlsStream, TransportError> {
         let managed = self.manager.get_client(&self.name, &self.config).await?;
         let config = self.config.config.clone();
@@ -169,6 +175,14 @@ impl AnytlsOutboundHandle {
             .await;
         match result {
             Ok(stream) => {
+                let record = self.manager.publish_creation_route(
+                    &self.name,
+                    generation,
+                    &self.config.creation_route,
+                )?;
+                if let Some(conn) = conn {
+                    conn.consider_link_path(record.dependency_path());
+                }
                 self.manager
                     .refresh_generation(&self.name, generation)
                     .await;
@@ -359,6 +373,7 @@ impl AnytlsManager {
                     code: boltapi::LinkReasonCode::TaskStopped,
                     detail: None,
                 },
+                boltapi::ConnResultCode::LinkLost,
             );
             // A closed pool represents a completed generation. Reacquire the
             // newly created generation before installing the replacement pool.
@@ -456,6 +471,7 @@ impl AnytlsManager {
                         code: boltapi::LinkReasonCode::TaskStopped,
                         detail: None,
                     },
+                    boltapi::ConnResultCode::LinkLost,
                 );
             } else {
                 runtime
@@ -472,6 +488,30 @@ impl AnytlsManager {
         {
             self.refresh_runtime(&runtime).await;
         }
+    }
+
+    fn publish_creation_route(
+        &self,
+        name: &str,
+        generation: u64,
+        route: &[crate::adapter::LinkRouteSpec],
+    ) -> Result<Arc<crate::adapter::LinkGeneration>, TransportError> {
+        self.link_table
+            .publish_creation_route(name, generation, route)
+            .map_err(|_| {
+                self.link_table.mark_terminal(
+                    name,
+                    generation,
+                    boltapi::LinkState::Failed,
+                    boltapi::LinkHealth::Unhealthy,
+                    boltapi::LinkReason {
+                        code: boltapi::LinkReasonCode::DependencyFailed,
+                        detail: Some("could not resolve AnyTLS creation route".to_string()),
+                    },
+                    boltapi::ConnResultCode::LinkLost,
+                );
+                TransportError::Internal("AnyTLS link creation route is unavailable")
+            })
     }
 
     async fn refresh_runtime(&self, runtime: &ManagedRuntime<AnytlsClient>) {
@@ -510,6 +550,7 @@ impl AnytlsManager {
                 code,
                 detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
             },
+            boltapi::ConnResultCode::LinkLost,
         );
     }
 
@@ -740,7 +781,7 @@ mod tests {
         }];
         (
             NamedLinkConfig::new(LinkConfig::Anytls(protocol.clone()), routes.clone()),
-            LinkRuntimeConfig::new(protocol, routes),
+            LinkRuntimeConfig::new(protocol, routes, Vec::new()),
         )
     }
 

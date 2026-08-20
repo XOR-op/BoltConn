@@ -53,7 +53,7 @@ impl SshOutboundHandle {
         completion_tx: tokio::sync::oneshot::Sender<bool>,
         conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
-        let master_conn = match self
+        let managed = match self
             .manager
             .get_ssh_conn(&self.name, &self.config, outbound, completion_tx)
             .await
@@ -68,7 +68,13 @@ impl SshOutboundHandle {
                 return Err(e);
             }
         };
-        let channel = master_conn.new_mapped_connection(self.dst.clone()).await?;
+        if let Some(conn) = &conn {
+            conn.consider_link_path(managed.record.dependency_path());
+        }
+        let channel = managed
+            .runtime
+            .new_mapped_connection(self.dst.clone())
+            .await?;
         established_tcp(self.name, inbound, channel, abort_handle, conn).await;
         Ok(())
     }
@@ -187,7 +193,7 @@ impl SshManager {
         requested: &LinkRuntimeConfig<SshConfig>,
         next_step: Option<Box<dyn StreamOutboundTrait>>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> Result<Arc<SshTunnel>, TransportError> {
+    ) -> Result<ManagedRuntime<SshTunnel>, TransportError> {
         let config = &requested.config;
         let mut lease = self
             .link_table
@@ -198,7 +204,7 @@ impl SshManager {
         if let Some(active) = active {
             if active.generation == lease.generation.number() && active.runtime.is_active() {
                 let _ = ret_tx.send(false);
-                return Ok(active.runtime);
+                return Ok(active);
             }
             self.remove_and_finalize_dead(name, active).await;
             // The failed runtime's generation is terminal now; create its
@@ -221,7 +227,7 @@ impl SshManager {
                     && active.generation == lease.generation.number()
                     && active.runtime.is_active()
                 {
-                    return Ok(active.runtime.clone());
+                    return Ok(active.clone());
                 }
                 Err(TransportError::Ssh(russh::Error::ConnectionTimeout))
             }
@@ -257,14 +263,44 @@ impl SshManager {
                         "SSH generation changed during initialization",
                     ));
                 }
-                self.active_conn.lock().await.insert(
-                    name.to_string(),
-                    ManagedRuntime {
-                        generation: lease.generation.number(),
-                        record: lease.generation.clone(),
-                        runtime: tunnel.clone(),
-                    },
-                );
+                let managed = ManagedRuntime {
+                    generation: lease.generation.number(),
+                    record: lease.generation.clone(),
+                    runtime: tunnel.clone(),
+                };
+                if self
+                    .link_table
+                    .publish_creation_route(
+                        name,
+                        lease.generation.number(),
+                        &requested.creation_route,
+                    )
+                    .is_err()
+                {
+                    tunnel.close().await;
+                    self.retain_tunnel_snapshot(&lease.generation, &tunnel);
+                    self.initializing_conn
+                        .finish(name, lease.generation.number())
+                        .await;
+                    self.link_table.mark_terminal(
+                        name,
+                        lease.generation.number(),
+                        boltapi::LinkState::Failed,
+                        boltapi::LinkHealth::Unhealthy,
+                        boltapi::LinkReason {
+                            code: boltapi::LinkReasonCode::DependencyFailed,
+                            detail: Some("could not resolve SSH creation route".to_string()),
+                        },
+                        boltapi::ConnResultCode::LinkLost,
+                    );
+                    return Err(TransportError::Internal(
+                        "SSH link creation route is unavailable",
+                    ));
+                }
+                self.active_conn
+                    .lock()
+                    .await
+                    .insert(name.to_string(), managed.clone());
                 if !self
                     .link_table
                     .is_current_generation(name, lease.generation.number())
@@ -278,7 +314,7 @@ impl SshManager {
                 self.initializing_conn
                     .finish(name, lease.generation.number())
                     .await;
-                Ok(tunnel)
+                Ok(managed)
             }
         }
     }
@@ -365,6 +401,7 @@ impl SshManager {
                 code: boltapi::LinkReasonCode::TaskStopped,
                 detail: None,
             },
+            boltapi::ConnResultCode::LinkLost,
         );
     }
 
@@ -395,6 +432,7 @@ impl SshManager {
                 code,
                 detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
             },
+            boltapi::ConnResultCode::LinkLost,
         );
     }
 }

@@ -1,8 +1,9 @@
 use crate::adapter::{
     AddrConnector, AnytlsManager, AnytlsOutboundHandle, ChainOutbound, Connector, DirectOutbound,
-    HttpOutbound, LinkInvalidation, LinkRuntimeConfig, LinkTable, NamedLinkConfig, Outbound,
-    OutboundType, SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager, SshOutboundHandle,
-    TcpAdapter, TrojanOutbound, TunUdpAdapter, WireguardHandle, WireguardManager,
+    HttpOutbound, LinkInvalidation, LinkRouteSpec, LinkRuntimeConfig, LinkTable, NamedLinkConfig,
+    Outbound, OutboundType, SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager,
+    SshOutboundHandle, TcpAdapter, TrojanOutbound, TunUdpAdapter, WireguardHandle,
+    WireguardManager,
 };
 use crate::common::StreamOutboundTrait;
 use crate::common::duplex_chan::DuplexChan;
@@ -15,7 +16,9 @@ use crate::platform::process::{NetworkType, ProcessInfo, ProcessInfoDepth};
 use crate::platform::{get_iface_address, process};
 use crate::proxy::{ConnAbortHandle, ConnHandle, ConnTarget, ContextManager, NetworkAddr};
 use arc_swap::ArcSwap;
-use boltapi::{ConnResultCode, ConnStage, ConnState, DestinationResolution, IdentificationSource};
+use boltapi::{
+    ConnResultCode, ConnStage, ConnState, DestinationResolution, IdentificationSource, LinkKind,
+};
 use bytes::Bytes;
 use rcgen::Certificate;
 use std::collections::HashMap;
@@ -110,6 +113,25 @@ fn bounded_detail(detail: &str) -> String {
     crate::proxy::bounded_error_detail(detail)
 }
 
+fn link_route_spec(
+    group: Option<String>,
+    proxy: String,
+    implementation: &ProxyImpl,
+) -> LinkRouteSpec {
+    let link_kind = match implementation {
+        ProxyImpl::Wireguard(_) => Some(LinkKind::Wireguard),
+        ProxyImpl::Ssh(_) => Some(LinkKind::Ssh),
+        ProxyImpl::Anytls(_) => Some(LinkKind::Anytls),
+        _ => None,
+    };
+    LinkRouteSpec {
+        group,
+        proxy,
+        proxy_type: implementation.simple_description(),
+        link_kind,
+    }
+}
+
 pub struct Dispatcher {
     iface_name: String,
     dns: Arc<Dns>,
@@ -172,11 +194,6 @@ impl Dispatcher {
     ) -> Vec<LinkInvalidation> {
         let invalidations = self.link_table.reconcile(configured);
         for invalidation in &invalidations {
-            self.stat_center.finish_link_dependents(
-                &invalidation.name,
-                invalidation.generation,
-                invalidation.connection_result,
-            );
             self.wireguard_mgr
                 .stop_generation(&invalidation.name, invalidation.generation)
                 .await;
@@ -233,6 +250,7 @@ impl Dispatcher {
     pub(super) fn build_normal_outbound(
         &self,
         routing: &Dispatching,
+        creation_route: &[LinkRouteSpec],
         proxy_name: &str,
         iface_name: &str,
         proxy_config: &ProxyImpl,
@@ -299,6 +317,7 @@ impl Dispatcher {
                     LinkRuntimeConfig::new(
                         config.clone(),
                         routing.link_routes(proxy_name).ok_or(())?.to_vec(),
+                        creation_route.to_vec(),
                     ),
                     self.anytls_mgr.clone(),
                 )),
@@ -312,6 +331,7 @@ impl Dispatcher {
                     LinkRuntimeConfig::new(
                         (**config).clone(),
                         routing.link_routes(proxy_name).ok_or(())?.to_vec(),
+                        creation_route.to_vec(),
                     ),
                     self.wireguard_mgr.clone(),
                 )),
@@ -326,6 +346,7 @@ impl Dispatcher {
                     LinkRuntimeConfig::new(
                         config.clone(),
                         routing.link_routes(proxy_name).ok_or(())?.to_vec(),
+                        creation_route.to_vec(),
                     ),
                     self.ssh_mgr.clone(),
                 )),
@@ -351,11 +372,18 @@ impl Dispatcher {
         let impls: Vec<_> = vec
             .iter()
             .map(|n| match n {
-                GeneralProxy::Single(p) => (p.get_name(), p.get_impl()),
+                GeneralProxy::Single(p) => (None, p.get_name(), p.get_impl()),
                 GeneralProxy::Group(g) => {
                     let proxy = g.get_proxy();
-                    (proxy.get_name(), proxy.get_impl())
+                    (Some(g.get_name()), proxy.get_name(), proxy.get_impl())
                 }
+            })
+            .collect();
+        let concrete_route: Vec<_> = impls
+            .iter()
+            .rev()
+            .map(|(group, name, implementation)| {
+                link_route_spec(group.clone(), name.clone(), implementation)
             })
             .collect();
         let mut res = vec![];
@@ -365,7 +393,7 @@ impl Dispatcher {
         // if A->B->C, then vec is [C, B, A]
         dst_addrs.push(dst_addr.clone());
         for idx in 1..vec.len() {
-            let proxy_impl = impls.get(idx - 1).unwrap().1.as_ref();
+            let proxy_impl = impls.get(idx - 1).unwrap().2.as_ref();
             if let Some(dst) = proxy_impl.server_addr() {
                 dst_addrs.push(dst);
             } else {
@@ -376,11 +404,13 @@ impl Dispatcher {
 
         for idx in 0..vec.len() {
             let proxy = impls.get(idx).unwrap();
+            let prefix_len = concrete_route.len() - idx;
             let (outbounding, _) = self.build_normal_outbound(
                 routing,
-                &proxy.0,
-                iface_name,
+                &concrete_route[..prefix_len],
                 &proxy.1,
+                iface_name,
+                &proxy.2,
                 src_addr,
                 dst_addrs.get(idx).unwrap(),
                 None,
@@ -408,6 +438,7 @@ impl Dispatcher {
             proxy_name,
             iface_name,
             resolved_dst,
+            None,
         )
         .await
     }
@@ -422,6 +453,7 @@ impl Dispatcher {
         proxy_name: &str,
         iface_name: &str,
         resolved_dst: Option<&SocketAddr>,
+        selected_group: Option<&str>,
     ) -> Result<(Box<dyn Outbound>, OutboundType), DispatchError> {
         Ok(match proxy_config {
             ProxyImpl::Chain(vec) => (
@@ -437,6 +469,11 @@ impl Dispatcher {
             _ => self
                 .build_normal_outbound(
                     routing,
+                    &[link_route_spec(
+                        selected_group.map(str::to_string),
+                        proxy_name.to_string(),
+                        proxy_config,
+                    )],
                     proxy_name,
                     iface_name,
                     proxy_config,
@@ -533,6 +570,7 @@ impl Dispatcher {
             iface,
             route,
         } = routing.matches(&mut conn_info, true, Some(&info)).await;
+        let selected_group = route.selected.group.clone();
         info.set_route(route);
         if let Some(address) = conn_info.resolved_dst {
             info.set_resolution(DestinationResolution::Resolved { address });
@@ -556,6 +594,7 @@ impl Dispatcher {
                 &proxy_name,
                 iface_name,
                 conn_info.resolved_dst.as_ref(),
+                selected_group.as_deref(),
             )
             .await
         {
@@ -723,6 +762,7 @@ impl Dispatcher {
             iface,
             route,
         } = routing.matches(&mut conn_info, true, Some(info)).await;
+        let selected_group = route.selected.group.clone();
         info.set_route(route);
         if let Some(address) = conn_info.resolved_dst {
             info.set_resolution(DestinationResolution::Resolved { address });
@@ -757,6 +797,11 @@ impl Dispatcher {
                 _ => self
                     .build_normal_outbound(
                         routing.as_ref(),
+                        &[link_route_spec(
+                            selected_group,
+                            proxy_name.clone(),
+                            proxy_config.as_ref(),
+                        )],
                         &proxy_name,
                         iface_name,
                         proxy_config.as_ref(),

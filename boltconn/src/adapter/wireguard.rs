@@ -394,7 +394,7 @@ impl WireguardManager {
         requested: &LinkRuntimeConfig<WireguardConfig>,
         adapter: Option<AdapterOrSocket>,
         creating_new_conn: tokio::sync::oneshot::Sender<bool>,
-    ) -> Result<Arc<Endpoint>, TransportError> {
+    ) -> Result<ManagedRuntime<Endpoint>, TransportError> {
         let config = &requested.config;
         let mut lease = self
             .link_table
@@ -405,7 +405,7 @@ impl WireguardManager {
         if let Some(active) = active {
             if active.generation == lease.generation.number() && active.runtime.is_active.alive() {
                 let _ = creating_new_conn.send(false);
-                return Ok(active.runtime);
+                return Ok(active);
             }
             self.remove_and_finalize_dead(name, active).await;
             // A dead cached runtime terminalizes its generation. Reacquire so
@@ -429,7 +429,7 @@ impl WireguardManager {
                     && active.generation == lease.generation.number()
                     && active.runtime.is_active.alive()
                 {
-                    return Ok(active.runtime.clone());
+                    return Ok(active.clone());
                 }
                 Err(TransportError::WireGuard(
                     "get_wg_conn: endpoint creation failed",
@@ -474,10 +474,40 @@ impl WireguardManager {
                     record: lease.generation.clone(),
                     runtime: endpoint.clone(),
                 };
+                if self
+                    .link_table
+                    .publish_creation_route(
+                        name,
+                        lease.generation.number(),
+                        &requested.creation_route,
+                    )
+                    .is_err()
+                {
+                    endpoint.abort_connection();
+                    self.retain_endpoint_snapshot(&lease.generation, &endpoint)
+                        .await;
+                    self.initializing_conn
+                        .finish(name, lease.generation.number())
+                        .await;
+                    self.link_table.mark_terminal(
+                        name,
+                        lease.generation.number(),
+                        boltapi::LinkState::Failed,
+                        boltapi::LinkHealth::Unhealthy,
+                        boltapi::LinkReason {
+                            code: boltapi::LinkReasonCode::DependencyFailed,
+                            detail: Some("could not resolve WireGuard creation route".to_string()),
+                        },
+                        boltapi::ConnResultCode::LinkLost,
+                    );
+                    return Err(TransportError::Internal(
+                        "WireGuard link creation route is unavailable",
+                    ));
+                }
                 self.active_conn
                     .write()
                     .await
-                    .insert(name.to_string(), managed);
+                    .insert(name.to_string(), managed.clone());
                 // Reload may invalidate the generation between the pre-insert
                 // check and map insertion. A post-insert check closes that race.
                 if !self
@@ -494,7 +524,7 @@ impl WireguardManager {
                 self.initializing_conn
                     .finish(name, lease.generation.number())
                     .await;
-                Ok(endpoint)
+                Ok(managed)
             }
         }
     }
@@ -617,6 +647,7 @@ impl WireguardManager {
                 code: boltapi::LinkReasonCode::TaskStopped,
                 detail: None,
             },
+            boltapi::ConnResultCode::LinkLost,
         );
     }
 
@@ -644,6 +675,7 @@ impl WireguardManager {
                 code,
                 detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
             },
+            boltapi::ConnResultCode::LinkLost,
         );
     }
 
@@ -698,7 +730,11 @@ impl WireguardHandle {
         ret_tx: tokio::sync::oneshot::Sender<bool>,
         conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
-        let endpoint = self.get_endpoint(adapter, ret_tx).await?;
+        let managed = self.get_endpoint(adapter, ret_tx).await?;
+        if let Some(conn) = &conn {
+            conn.consider_link_path(managed.record.dependency_path());
+        }
+        let endpoint = managed.runtime;
         let notify = endpoint.clone_notify();
         let smol_dns = endpoint.stack.lock().await.get_dns();
         let dst = match self.dst {
@@ -721,15 +757,24 @@ impl WireguardHandle {
                 port,
             ),
         };
-        let mut x = endpoint.stack.lock().await;
-        Ok(x.open_tcp(self.src, dst, inbound, abort_handle, notify)?)
+        let mut stack = endpoint.stack.lock().await;
+        let result = stack
+            .open_tcp(self.src, dst, inbound, abort_handle, notify)
+            .map_err(TransportError::from);
+        drop(stack);
+        if result.is_ok()
+            && let Some(conn) = conn
+        {
+            conn.activate_from(&self.name);
+        }
+        result
     }
 
     async fn get_endpoint(
         &self,
         adapter: Option<AdapterOrSocket>,
         ret_tx: tokio::sync::oneshot::Sender<bool>,
-    ) -> Result<Arc<Endpoint>, TransportError> {
+    ) -> Result<ManagedRuntime<Endpoint>, TransportError> {
         self.manager
             .get_wg_conn(&self.name, &self.config, adapter, ret_tx)
             .await
@@ -743,10 +788,23 @@ impl WireguardHandle {
         ret_tx: tokio::sync::oneshot::Sender<bool>,
         conn: Option<ConnHandle>,
     ) -> Result<(), TransportError> {
-        let endpoint = self.get_endpoint(adapter, ret_tx).await?;
+        let managed = self.get_endpoint(adapter, ret_tx).await?;
+        if let Some(conn) = &conn {
+            conn.consider_link_path(managed.record.dependency_path());
+        }
+        let endpoint = managed.runtime;
         let notify = endpoint.clone_notify();
-        let mut x = endpoint.stack.lock().await;
-        Ok(x.open_udp_tracked(self.src, inbound, abort_handle, notify, conn)?)
+        let mut stack = endpoint.stack.lock().await;
+        let result = stack
+            .open_udp_tracked(self.src, inbound, abort_handle, notify, conn.clone())
+            .map_err(TransportError::from);
+        drop(stack);
+        if result.is_ok()
+            && let Some(conn) = conn
+        {
+            conn.activate_from(&self.name);
+        }
+        result
     }
 }
 
@@ -769,16 +827,8 @@ impl Outbound for WireguardHandle {
         let (tx, _) = tokio::sync::oneshot::channel();
         let connect = self
             .clone()
-            .attach_tcp(inbound, abort_handle, None, tx, conn.clone());
-        tokio::spawn(async move {
-            let result = connect.await;
-            if result.is_ok()
-                && let Some(conn) = conn
-            {
-                conn.set_state(boltapi::ConnState::Active);
-            }
-            result
-        })
+            .attach_tcp(inbound, abort_handle, None, tx, conn);
+        tokio::spawn(connect)
     }
 
     async fn spawn_tcp_with_outbound(
@@ -817,16 +867,8 @@ impl Outbound for WireguardHandle {
         let (ret_tx, _) = tokio::sync::oneshot::channel();
         let connect = self
             .clone()
-            .attach_udp(inbound, abort_handle, None, ret_tx, conn.clone());
-        tokio::spawn(async move {
-            let result = connect.await;
-            if result.is_ok()
-                && let Some(conn) = conn
-            {
-                conn.set_state(boltapi::ConnState::Active);
-            }
-            result
-        })
+            .attach_udp(inbound, abort_handle, None, ret_tx, conn);
+        tokio::spawn(connect)
     }
 
     async fn spawn_udp_with_outbound(

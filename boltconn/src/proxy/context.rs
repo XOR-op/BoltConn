@@ -1,4 +1,4 @@
-use crate::adapter::OutboundType;
+use crate::adapter::{LinkGeneration, OutboundType};
 use crate::common::evictable_vec::EvictableVec;
 use crate::dispatch::ConnInfo;
 use crate::platform::process::{NetworkType, ProcessInfo};
@@ -231,6 +231,8 @@ struct ConnRecord {
     global_upload: Arc<AtomicU64>,
     global_download: Arc<AtomicU64>,
     abort_handle: ConnAbortHandle,
+    link_dependencies: Mutex<Vec<Arc<LinkGeneration>>>,
+    activation_owner: Mutex<Option<String>>,
 }
 
 /// The only mutable connection capability handed to dataplane callers.
@@ -281,14 +283,80 @@ impl ConnHandle {
         if is_terminal_state(state) {
             return false;
         }
+        if state == ConnState::Active {
+            return self.activate();
+        }
         let mut current = self.record.state.lock().unwrap();
         if is_terminal_state(current.state) {
             return false;
         }
         current.state = state;
-        if state == ConnState::Active && current.established_at_ms.is_none() {
-            current.established_at_ms = Some(now_ms());
+        true
+    }
+
+    /// Restricts activation to the destination-facing hop of a chain. Upstream
+    /// shared hops may still publish dependency candidates without marking the
+    /// child connection active before the whole chain is usable.
+    pub(crate) fn set_activation_owner(&self, owner: String) -> bool {
+        let state = self.record.state.lock().unwrap();
+        if matches!(
+            state.state,
+            ConnState::Active
+                | ConnState::Closing
+                | ConnState::Closed
+                | ConnState::Failed
+                | ConnState::Rejected
+        ) {
+            return false;
         }
+        *self.record.activation_owner.lock().unwrap() = Some(owner);
+        true
+    }
+
+    pub(crate) fn activate_from(&self, owner: &str) -> bool {
+        if self
+            .record
+            .activation_owner
+            .lock()
+            .unwrap()
+            .as_deref()
+            .is_some_and(|expected| expected != owner)
+        {
+            return false;
+        }
+        self.activate()
+    }
+
+    fn activate(&self) -> bool {
+        let dependencies = self.record.link_dependencies.lock().unwrap().clone();
+        let mut registered = Vec::new();
+        for dependency in &dependencies {
+            if dependency.register_connection(self.clone()) {
+                registered.push(dependency.clone());
+            } else {
+                for registered in registered {
+                    registered.complete_connection(self.id(), None);
+                }
+                self.finish(
+                    ConnResultCode::LinkLost,
+                    Some(ConnStage::Connecting),
+                    Some("link generation ended before activation".to_string()),
+                );
+                self.record.abort_handle.cancel();
+                return false;
+            }
+        }
+
+        let mut state = self.record.state.lock().unwrap();
+        if is_terminal_state(state.state) {
+            drop(state);
+            for registered in registered {
+                registered.complete_connection(self.id(), None);
+            }
+            return false;
+        }
+        state.state = ConnState::Active;
+        state.established_at_ms.get_or_insert_with(now_ms);
         true
     }
 
@@ -350,9 +418,9 @@ impl ConnHandle {
         true
     }
 
-    /// Freezes the concrete reusable-link path before transfer begins. Link
-    /// accounting relies on this path remaining stable for the connection.
-    pub fn set_links(&self, links: Vec<LinkRef>) -> bool {
+    /// Keeps the most complete route reported during chain construction. Once
+    /// active, the path is frozen and registered with every generation in it.
+    pub(crate) fn consider_link_path(&self, links: Vec<Arc<LinkGeneration>>) -> bool {
         let mut state = self.record.state.lock().unwrap();
         if matches!(
             state.state,
@@ -364,7 +432,12 @@ impl ConnHandle {
         ) {
             return false;
         }
-        state.links = links;
+        let mut current = self.record.link_dependencies.lock().unwrap();
+        if links.len() <= current.len() {
+            return false;
+        }
+        state.links = links.iter().map(|link| link.link_ref()).collect();
+        *current = links;
         true
     }
 
@@ -415,7 +488,7 @@ impl ConnHandle {
         stage: Option<ConnStage>,
         detail: Option<String>,
     ) -> bool {
-        {
+        let was_active = {
             let mut state = self.record.state.lock().unwrap();
             if is_terminal_state(state.state) {
                 return false;
@@ -427,6 +500,18 @@ impl ConnHandle {
                 stage,
                 detail,
             });
+            state.established_at_ms.is_some()
+        };
+
+        let traffic = was_active.then(|| {
+            (
+                self.record.upload_bytes.load(Ordering::Relaxed),
+                self.record.download_bytes.load(Ordering::Relaxed),
+                self.record.last_active_ms.load(Ordering::Relaxed),
+            )
+        });
+        for dependency in self.record.link_dependencies.lock().unwrap().iter() {
+            dependency.complete_connection(self.id(), traffic);
         }
 
         // Never hold the record-state lock while taking the manager index lock.
@@ -452,6 +537,12 @@ impl ConnHandle {
             self.record.abort_handle.cancel();
         }
         completed
+    }
+
+    pub(crate) fn finish_for_link(&self, result: ConnResultCode) -> bool {
+        self.set_state(ConnState::Closing);
+        self.record.abort_handle.cancel();
+        self.finish(result, Some(ConnStage::Closing), None)
     }
 }
 
@@ -639,6 +730,8 @@ impl ContextManager {
             global_upload: self.global_upload.clone(),
             global_download: self.global_download.clone(),
             abort_handle,
+            link_dependencies: Mutex::new(Vec::new()),
+            activation_owner: Mutex::new(None),
         });
         self.index
             .inner
@@ -726,15 +819,9 @@ impl ContextManager {
             .unwrap_or(false)
     }
 
-    /// Terminates active connections whose frozen dependency path contains the
-    /// invalidated link generation. The handles are cloned before inspecting
-    /// record state so the index lock is never nested with a record-state lock.
-    pub(crate) fn finish_link_dependents(
-        &self,
-        name: &str,
-        generation: u64,
-        result: ConnResultCode,
-    ) -> u64 {
+    /// Returns only currently active connections whose frozen dependency path
+    /// contains the named link. Terminal history is intentionally excluded.
+    pub(crate) fn get_active_for_link(&self, name: &str) -> Vec<ConnHandle> {
         let records: Vec<_> = self
             .index
             .inner
@@ -744,27 +831,16 @@ impl ContextManager {
             .values()
             .cloned()
             .collect();
-        let mut finished = 0;
-        for record in records {
-            let depends_on_link = record
-                .state
-                .lock()
-                .unwrap()
-                .links
-                .iter()
-                .any(|link| link.name == name && link.generation == generation);
-            if !depends_on_link {
-                continue;
-            }
-
-            let handle = ConnHandle::new(record.clone(), &self.index);
-            handle.set_state(ConnState::Closing);
-            if handle.finish(result, Some(ConnStage::Closing), None) {
-                record.abort_handle.cancel();
-                finished += 1;
-            }
-        }
-        finished
+        let mut matching: Vec<_> = records
+            .into_iter()
+            .filter(|record| {
+                let state = record.state.lock().unwrap();
+                state.state == ConnState::Active && state.links.iter().any(|link| link.name == name)
+            })
+            .map(|record| ConnHandle::new(record, &self.index))
+            .collect();
+        matching.sort_unstable_by_key(ConnHandle::id);
+        matching
     }
 }
 
@@ -950,33 +1026,6 @@ mod connection_record_tests {
         assert!(completed.finish(ConnResultCode::Completed, None, None));
         assert!(manager.get_inactive_copy().is_empty());
         assert_eq!(manager.get_active_copy()[0].id(), active.id());
-    }
-
-    #[test]
-    fn link_invalidation_finishes_only_matching_generation_dependencies() {
-        let manager = ContextManager::new(10);
-        let matching = begin_test_connection(&manager, 10_001);
-        let replacement = begin_test_connection(&manager, 10_002);
-        assert!(matching.set_links(vec![LinkRef {
-            name: "shared".to_string(),
-            kind: boltapi::LinkKind::Anytls,
-            generation: 7,
-        }]));
-        assert!(replacement.set_links(vec![LinkRef {
-            name: "shared".to_string(),
-            kind: boltapi::LinkKind::Anytls,
-            generation: 8,
-        }]));
-
-        assert_eq!(
-            manager.finish_link_dependents("shared", 7, ConnResultCode::LinkReconfigured),
-            1
-        );
-        assert_eq!(
-            matching.snapshot().state.termination.unwrap().code,
-            ConnResultCode::LinkReconfigured
-        );
-        assert!(!replacement.done());
     }
 
     #[test]

@@ -412,7 +412,7 @@ async fn established_tcp<T>(
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
     if let Some(conn) = &conn {
-        conn.set_state(boltapi::ConnState::Active);
+        conn.activate_from(&name);
     }
     let (out_read, out_write) = tokio::io::split(outbound);
     let Connector { tx, rx } = inbound;
@@ -436,7 +436,7 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     conn: Option<ConnHandle>,
 ) {
     if let Some(conn) = &conn {
-        conn.set_state(boltapi::ConnState::Active);
+        conn.activate_from(&name);
     }
     // establish udp
     let outbound = Arc::new(outbound);

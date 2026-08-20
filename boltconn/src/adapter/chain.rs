@@ -35,15 +35,24 @@ impl ChainOutbound {
         conn: Option<ConnHandle>,
     ) -> JoinHandle<Result<(), TransportError>> {
         tokio::spawn(async move {
+            if let (Some(first), Some(conn)) = (self.chains.first(), &conn) {
+                conn.set_activation_owner(first.id());
+            }
             let mut not_first_jump = false;
             let mut need_next_jump = true;
             let (first_part, last_one) = self.chains.split_at(self.chains.len() - 1);
 
             // connect proxies
-            for tunnel in first_part {
+            for (index, tunnel) in first_part.iter().enumerate() {
                 if !need_next_jump {
                     return Ok(());
                 }
+                // The first hop owns the final activation transition. Shared
+                // hops also receive the handle so they can contribute their
+                // concrete generation path while the connection is pre-active.
+                let tracked_conn = (index == 0 || is_shared_link(tunnel.outbound_type()))
+                    .then(|| conn.clone())
+                    .flatten();
                 if use_tcp {
                     let inbound = inbound_tcp_container.take().unwrap();
                     if tunnel.outbound_type().tcp_transfer_type() == TcpTransferType::TcpOverUdp {
@@ -56,7 +65,7 @@ impl ChainOutbound {
                                 None,
                                 Some(Box::new(AddrConnectorWrapper::from(inner))),
                                 abort_handle.clone(),
-                                None,
+                                tracked_conn,
                             )
                             .await?;
                     } else {
@@ -69,7 +78,7 @@ impl ChainOutbound {
                                 Some(chan),
                                 None,
                                 abort_handle.clone(),
-                                None,
+                                tracked_conn,
                             )
                             .await?;
                     }
@@ -88,7 +97,7 @@ impl ChainOutbound {
                                 None,
                                 abort_handle.clone(),
                                 not_first_jump,
-                                None,
+                                tracked_conn,
                             )
                             .await?;
                     } else {
@@ -101,7 +110,7 @@ impl ChainOutbound {
                                 Some(Box::new(AddrConnectorWrapper::from(inner))),
                                 abort_handle.clone(),
                                 not_first_jump,
-                                None,
+                                tracked_conn,
                             )
                             .await?;
                     };
@@ -114,17 +123,28 @@ impl ChainOutbound {
             }
 
             // connect last one
+            let last_index = self.chains.len() - 1;
+            let last_conn = (last_index == 0 || is_shared_link(last_one[0].outbound_type()))
+                .then_some(conn)
+                .flatten();
             if use_tcp {
                 let inbound = inbound_tcp_container.unwrap();
-                last_one[0].spawn_tcp(inbound, abort_handle, conn);
+                last_one[0].spawn_tcp(inbound, abort_handle, last_conn);
             } else {
                 let inbound = inbound_udp_container.unwrap();
-                last_one[0].spawn_udp(inbound, abort_handle, true, conn);
+                last_one[0].spawn_udp(inbound, abort_handle, true, last_conn);
             }
 
             Ok(())
         })
     }
+}
+
+fn is_shared_link(outbound_type: OutboundType) -> bool {
+    matches!(
+        outbound_type,
+        OutboundType::Wireguard | OutboundType::Ssh | OutboundType::Anytls
+    )
 }
 
 #[async_trait]

@@ -1,6 +1,6 @@
 use crate::dispatch::ProxyImpl;
 use crate::network::dns::GenericDns;
-use crate::proxy::NetworkAddr;
+use crate::proxy::{ConnHandle, NetworkAddr};
 use crate::transport::anytls::AnytlsConfig;
 use crate::transport::smol::SmolDnsProvider;
 use crate::transport::ssh::{SshAuthentication, SshConfig};
@@ -13,6 +13,7 @@ use boltapi::{
 use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -211,12 +212,34 @@ impl NamedLinkConfig {
 pub(crate) struct LinkRuntimeConfig<T> {
     pub(crate) config: T,
     routes: Vec<ConfiguredLinkRoute>,
+    // This route belongs to one concrete dispatch selection, so it is runtime
+    // evidence rather than part of the name-wide reconciliation identity.
+    pub(crate) creation_route: Vec<LinkRouteSpec>,
 }
 
 impl<T> LinkRuntimeConfig<T> {
-    pub(crate) fn new(config: T, routes: Vec<ConfiguredLinkRoute>) -> Self {
-        Self { config, routes }
+    pub(crate) fn new(
+        config: T,
+        routes: Vec<ConfiguredLinkRoute>,
+        creation_route: Vec<LinkRouteSpec>,
+    ) -> Self {
+        Self {
+            config,
+            routes,
+            creation_route,
+        }
     }
+}
+
+/// One selected hop in traffic/configuration order. Link generations are
+/// resolved only after lazy runtime creation, when their generation numbers are
+/// known.
+#[derive(Clone, Debug)]
+pub(crate) struct LinkRouteSpec {
+    pub(crate) group: Option<String>,
+    pub(crate) proxy: String,
+    pub(crate) proxy_type: String,
+    pub(crate) link_kind: Option<LinkKind>,
 }
 
 pub(crate) trait LinkProtocolConfig: Clone {
@@ -246,6 +269,13 @@ pub(crate) enum LinkAcquireError {
     NotConfigured,
     StaleConfig,
     Closing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkRouteError {
+    StaleGeneration,
+    InvalidRoute,
+    DependencyUnavailable,
 }
 
 pub(crate) struct LinkLease {
@@ -361,6 +391,7 @@ struct LinkInner {
 }
 
 pub(crate) struct LinkGeneration {
+    name: String,
     number: u64,
     kind: LinkKind,
     server: NetworkAddr,
@@ -368,8 +399,19 @@ pub(crate) struct LinkGeneration {
     state: Mutex<LinkGenerationState>,
     completed_upload: AtomicU64,
     completed_download: AtomicU64,
-    active_conn_count: AtomicU64,
     last_active_ms: AtomicU64,
+    active_connections: Mutex<HashMap<u64, ConnHandle>>,
+}
+
+impl Debug for LinkGeneration {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LinkGeneration")
+            .field("name", &self.name)
+            .field("number", &self.number)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -380,6 +422,7 @@ struct LinkGenerationState {
     reason: Option<LinkReason>,
     connected_endpoints: Vec<SocketAddr>,
     chain: Vec<boltapi::RouteHop>,
+    upstream_dependencies: Vec<Arc<LinkGeneration>>,
     evidence: LinkEvidence,
     dns: DnsActivity,
     dns_runtime: Option<LinkDnsRuntime>,
@@ -399,8 +442,9 @@ impl LinkDnsRuntime {
 }
 
 impl LinkGeneration {
-    fn new(number: u64, config: &LinkConfig) -> Self {
+    fn new(name: &str, number: u64, config: &LinkConfig) -> Self {
         Self {
+            name: name.to_string(),
             number,
             kind: config.kind(),
             server: config.server(),
@@ -412,14 +456,15 @@ impl LinkGeneration {
                 reason: None,
                 connected_endpoints: Vec::new(),
                 chain: Vec::new(),
+                upstream_dependencies: Vec::new(),
                 evidence: empty_evidence(config.kind()),
                 dns: empty_dns_activity(),
                 dns_runtime: None,
             }),
             completed_upload: AtomicU64::new(0),
             completed_download: AtomicU64::new(0),
-            active_conn_count: AtomicU64::new(0),
             last_active_ms: AtomicU64::new(0),
+            active_connections: Mutex::new(HashMap::new()),
         }
     }
 
@@ -429,6 +474,14 @@ impl LinkGeneration {
 
     pub(crate) fn kind(&self) -> LinkKind {
         self.kind
+    }
+
+    pub(crate) fn link_ref(&self) -> boltapi::LinkRef {
+        boltapi::LinkRef {
+            name: self.name.clone(),
+            kind: self.kind,
+            generation: self.number,
+        }
     }
 
     pub(crate) fn set_live_snapshot(
@@ -498,9 +551,6 @@ impl LinkGeneration {
         if let Some(runtime) = current.dns_runtime.take() {
             merge_dns_activity(&mut current.dns, runtime.activity());
         }
-        if is_terminal(current.state) {
-            self.active_conn_count.store(0, Ordering::Relaxed);
-        }
     }
 
     pub(crate) fn retain_final_evidence(&self, health: LinkHealth, evidence: LinkEvidence) {
@@ -514,9 +564,6 @@ impl LinkGeneration {
         current.evidence = evidence;
         if let Some(runtime) = current.dns_runtime.take() {
             merge_dns_activity(&mut current.dns, runtime.activity());
-        }
-        if is_terminal(current.state) {
-            self.active_conn_count.store(0, Ordering::Relaxed);
         }
     }
 
@@ -532,6 +579,99 @@ impl LinkGeneration {
     pub(crate) fn record_dns_lookup(&self, lookup: DnsLookupDetail) {
         let mut current = self.state.lock().unwrap();
         observe_dns_lookup(&mut current.dns, lookup);
+    }
+
+    fn set_creation_route(
+        &self,
+        chain: Vec<boltapi::RouteHop>,
+        upstream_dependencies: Vec<Arc<LinkGeneration>>,
+    ) -> bool {
+        let mut current = self.state.lock().unwrap();
+        if is_terminal(current.state) || !current.chain.is_empty() {
+            return false;
+        }
+        current.chain = chain;
+        current.upstream_dependencies = upstream_dependencies;
+        true
+    }
+
+    fn creation_route(&self) -> Option<(Vec<boltapi::RouteHop>, Vec<Arc<LinkGeneration>>)> {
+        let current = self.state.lock().unwrap();
+        (!current.chain.is_empty())
+            .then(|| (current.chain.clone(), current.upstream_dependencies.clone()))
+    }
+
+    pub(crate) fn dependency_path(self: &Arc<Self>) -> Vec<Arc<LinkGeneration>> {
+        let mut dependencies = self.state.lock().unwrap().upstream_dependencies.clone();
+        dependencies.push(self.clone());
+        dependencies
+    }
+
+    pub(crate) fn register_connection(&self, connection: ConnHandle) -> bool {
+        // Hold lifecycle state until insertion so terminalization cannot miss a
+        // connection that has observed this generation as live.
+        let state = self.state.lock().unwrap();
+        if is_terminal(state.state) {
+            return false;
+        }
+        self.active_connections
+            .lock()
+            .unwrap()
+            .insert(connection.id(), connection);
+        true
+    }
+
+    pub(crate) fn complete_connection(&self, id: u64, traffic: Option<(u64, u64, u64)>) -> bool {
+        let mut active = self.active_connections.lock().unwrap();
+        if active.remove(&id).is_none() {
+            return false;
+        }
+        if let Some((upload, download, last_active_ms)) = traffic {
+            self.completed_upload.fetch_add(upload, Ordering::Relaxed);
+            self.completed_download
+                .fetch_add(download, Ordering::Relaxed);
+            self.last_active_ms
+                .fetch_max(last_active_ms, Ordering::Relaxed);
+        }
+        true
+    }
+
+    fn terminate_dependents(&self, result: ConnResultCode) {
+        let connections: Vec<_> = self
+            .active_connections
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+        for connection in connections {
+            connection.finish_for_link(result);
+        }
+    }
+
+    fn folded_activity(&self) -> (u64, u64, u64, u64) {
+        // Capture the completed base and live membership under the same lock.
+        // A concurrent completion is therefore represented by exactly one side.
+        let (mut upload, mut download, mut last_active_ms, connections) = {
+            let active = self.active_connections.lock().unwrap();
+            (
+                self.completed_upload.load(Ordering::Relaxed),
+                self.completed_download.load(Ordering::Relaxed),
+                self.last_active_ms.load(Ordering::Relaxed),
+                active.values().cloned().collect::<Vec<_>>(),
+            )
+        };
+        let mut active_count = 0u64;
+        for connection in connections {
+            let snapshot = connection.snapshot();
+            if snapshot.state.state == boltapi::ConnState::Active {
+                active_count = active_count.saturating_add(1);
+            }
+            upload = upload.saturating_add(snapshot.upload_bytes);
+            download = download.saturating_add(snapshot.download_bytes);
+            last_active_ms = last_active_ms.max(snapshot.last_active_ms);
+        }
+        (upload, download, last_active_ms, active_count)
     }
 }
 
@@ -583,7 +723,7 @@ impl LinkTable {
             // creation uses the newest immutable configuration object.
             inner.configured = next;
             if let Some((reason, connection_result)) = change
-                && let Some(generation) = invalidate_latest(&inner, reason)
+                && let Some(generation) = invalidate_latest(&inner, reason, connection_result)
             {
                 invalidations.push(LinkInvalidation {
                     name: name.clone(),
@@ -644,6 +784,7 @@ impl LinkTable {
         retire_latest(&link, &mut inner);
         inner.last_generation = inner.last_generation.saturating_add(1);
         let generation = Arc::new(LinkGeneration::new(
+            name,
             inner.last_generation,
             &generation_config,
         ));
@@ -689,6 +830,86 @@ impl LinkTable {
         })
     }
 
+    /// Freezes a generation's concrete route after its runtime is usable. For a
+    /// dependent link, reuse the nearest upstream link's already-frozen route,
+    /// then append only the ordinary tail and this generation.
+    pub(crate) fn publish_creation_route(
+        &self,
+        name: &str,
+        generation: u64,
+        specs: &[LinkRouteSpec],
+    ) -> Result<Arc<LinkGeneration>, LinkRouteError> {
+        let current = self
+            .latest_generation(name, generation)
+            .ok_or(LinkRouteError::StaleGeneration)?;
+        if current.creation_route().is_some() {
+            return Ok(current);
+        }
+        let Some(last) = specs.last() else {
+            return Err(LinkRouteError::InvalidRoute);
+        };
+        if last.proxy != name || last.link_kind != Some(current.kind) {
+            return Err(LinkRouteError::InvalidRoute);
+        }
+
+        let upstream = specs[..specs.len() - 1]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, spec)| spec.link_kind.map(|_| (index, spec)));
+        let (mut chain, mut dependencies, start) = if let Some((index, spec)) = upstream {
+            let upstream = self
+                .latest_live_generation(&spec.proxy)
+                .ok_or(LinkRouteError::DependencyUnavailable)?;
+            if upstream.kind != spec.link_kind.unwrap() {
+                return Err(LinkRouteError::DependencyUnavailable);
+            }
+            let (chain, mut dependencies) = upstream
+                .creation_route()
+                .ok_or(LinkRouteError::DependencyUnavailable)?;
+            dependencies.push(upstream);
+            (chain, dependencies, index + 1)
+        } else {
+            (Vec::new(), Vec::new(), 0)
+        };
+
+        for spec in &specs[start..] {
+            let link = match spec.link_kind {
+                None => None,
+                Some(kind) if spec.proxy == name && kind == current.kind => {
+                    Some(current.link_ref())
+                }
+                Some(_) => return Err(LinkRouteError::DependencyUnavailable),
+            };
+            chain.push(boltapi::RouteHop {
+                group: spec.group.clone(),
+                proxy: spec.proxy.clone(),
+                proxy_type: spec.proxy_type.clone(),
+                link,
+            });
+        }
+        current.set_creation_route(chain, std::mem::take(&mut dependencies));
+        Ok(current)
+    }
+
+    fn latest_generation(&self, name: &str, generation: u64) -> Option<Arc<LinkGeneration>> {
+        let link = self.links.read().unwrap().get(name).cloned()?;
+        let inner = link.inner.lock().unwrap();
+        inner
+            .latest
+            .as_ref()
+            .filter(|latest| latest.number == generation)
+            .cloned()
+    }
+
+    fn latest_live_generation(&self, name: &str) -> Option<Arc<LinkGeneration>> {
+        let link = self.links.read().unwrap().get(name).cloned()?;
+        let inner = link.inner.lock().unwrap();
+        inner.latest.as_ref().and_then(|latest| {
+            (!is_terminal(latest.state.lock().unwrap().state)).then(|| latest.clone())
+        })
+    }
+
     /// First terminal callback for the current generation wins. A delayed
     /// callback carrying an older generation can never close its replacement.
     pub(crate) fn mark_terminal(
@@ -698,11 +919,13 @@ impl LinkTable {
         state: LinkState,
         health: LinkHealth,
         reason: LinkReason,
+        connection_result: ConnResultCode,
     ) -> bool {
         if !is_terminal(state) {
             return false;
         }
-        self.with_latest(name, generation, |latest| {
+        let mut terminalized = None;
+        let changed = self.with_latest(name, generation, |latest| {
             let mut current = latest.state.lock().unwrap();
             if is_terminal(current.state) {
                 return false;
@@ -714,9 +937,13 @@ impl LinkTable {
             if let Some(runtime) = current.dns_runtime.take() {
                 merge_dns_activity(&mut current.dns, runtime.activity());
             }
-            latest.active_conn_count.store(0, Ordering::Relaxed);
+            terminalized = Some(latest.clone());
             true
-        })
+        });
+        if let Some(latest) = terminalized {
+            latest.terminate_dependents(connection_result);
+        }
+        changed
     }
 
     pub(crate) fn stop(&self, name: &str) -> Result<LinkInvalidation, ApiError> {
@@ -753,6 +980,7 @@ impl LinkTable {
                 code: LinkReasonCode::UserStopped,
                 detail: None,
             },
+            ConnResultCode::LinkStopped,
         );
         if !stopped {
             return Err(link_error(
@@ -864,27 +1092,34 @@ impl Link {
         state: &LinkGenerationState,
         _observed_at_ms: u64,
     ) -> LinkSummary {
-        let upload = latest.completed_upload.load(Ordering::Relaxed);
-        let download = latest.completed_download.load(Ordering::Relaxed);
-        let last_active = latest
-            .last_active_ms
-            .load(Ordering::Relaxed)
-            .max(self.last_active_ms.load(Ordering::Relaxed));
+        let (upload, download, generation_last_active, folded_active_count) =
+            latest.folded_activity();
+        let last_active = generation_last_active.max(self.last_active_ms.load(Ordering::Relaxed));
         LinkSummary {
             name: self.name.clone(),
             kind: latest.kind,
             state: state.state,
             health: state.health,
             generation: latest.number,
-            active_conn_count: latest.active_conn_count.load(Ordering::Relaxed),
+            active_conn_count: if is_terminal(state.state) {
+                0
+            } else {
+                folded_active_count
+            },
             last_active_at_ms: (last_active != 0).then_some(last_active),
             traffic: Traffic {
                 upload_bytes: upload,
                 download_bytes: download,
             },
             total_traffic: Traffic {
-                upload_bytes: self.completed_upload.load(Ordering::Relaxed) + upload,
-                download_bytes: self.completed_download.load(Ordering::Relaxed) + download,
+                upload_bytes: self
+                    .completed_upload
+                    .load(Ordering::Relaxed)
+                    .saturating_add(upload),
+                download_bytes: self
+                    .completed_download
+                    .load(Ordering::Relaxed)
+                    .saturating_add(download),
             },
             reason: state.reason.clone(),
         }
@@ -893,24 +1128,25 @@ impl Link {
 
 fn retire_latest(link: &Link, inner: &mut LinkInner) {
     if let Some(previous) = inner.latest.take() {
-        link.completed_upload.fetch_add(
-            previous.completed_upload.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-        link.completed_download.fetch_add(
-            previous.completed_download.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-        link.last_active_ms.fetch_max(
-            previous.last_active_ms.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
+        let (upload, download, last_active_ms, _) = previous.folded_activity();
+        link.completed_upload.fetch_add(upload, Ordering::Relaxed);
+        link.completed_download
+            .fetch_add(download, Ordering::Relaxed);
+        link.last_active_ms
+            .fetch_max(last_active_ms, Ordering::Relaxed);
     }
 }
 
-fn invalidate_latest(inner: &LinkInner, reason: LinkReasonCode) -> Option<u64> {
+fn invalidate_latest(
+    inner: &LinkInner,
+    reason: LinkReasonCode,
+    connection_result: ConnResultCode,
+) -> Option<u64> {
     let latest = inner.latest.as_ref()?;
     let mut state = latest.state.lock().unwrap();
+    if is_terminal(state.state) {
+        return None;
+    }
     state.state = LinkState::Closed;
     state.health = LinkHealth::Unknown;
     state.ended_at_ms.get_or_insert_with(now_ms);
@@ -921,7 +1157,8 @@ fn invalidate_latest(inner: &LinkInner, reason: LinkReasonCode) -> Option<u64> {
     if let Some(runtime) = state.dns_runtime.take() {
         merge_dns_activity(&mut state.dns, runtime.activity());
     }
-    latest.active_conn_count.store(0, Ordering::Relaxed);
+    drop(state);
+    latest.terminate_dependents(connection_result);
     Some(latest.number)
 }
 
@@ -1072,22 +1309,30 @@ mod tests {
     use super::*;
     use crate::common::cert::CertVerify;
     use crate::config::DnsPreference;
+    use crate::dispatch::{ConnInfo, InboundInfo};
+    use crate::platform::process::NetworkType;
+    use crate::proxy::{ConnAbortHandle, ContextManager};
+    use boltapi::ConnState;
     use std::sync::Barrier;
 
     fn anytls(password: &str) -> NamedLinkConfig {
+        named_anytls("link", password)
+    }
+
+    fn named_anytls(name: &str, password: &str) -> NamedLinkConfig {
         NamedLinkConfig::new(
             LinkConfig::Anytls(AnytlsConfig::new(
                 NetworkAddr::Domain {
-                    name: "link.example".to_string(),
+                    name: format!("{name}.example"),
                     port: 443,
                 },
                 password,
-                "link.example",
+                format!("{name}.example"),
                 CertVerify::Verify,
             )),
             vec![ConfiguredLinkRoute {
                 chain: "route".to_string(),
-                hops: vec!["ordinary".to_string(), "link".to_string()],
+                hops: vec!["ordinary".to_string(), name.to_string()],
                 interface: None,
             }],
         )
@@ -1098,12 +1343,77 @@ mod tests {
     }
 
     fn acquire(table: &LinkTable, config: &NamedLinkConfig) -> Result<LinkLease, LinkAcquireError> {
+        acquire_named(table, "link", config, Vec::new())
+    }
+
+    fn acquire_named(
+        table: &LinkTable,
+        name: &str,
+        config: &NamedLinkConfig,
+        creation_route: Vec<LinkRouteSpec>,
+    ) -> Result<LinkLease, LinkAcquireError> {
         let LinkConfig::Anytls(protocol) = &config.config else {
             panic!("test helper expects AnyTLS")
         };
         table.acquire(
-            "link",
-            &LinkRuntimeConfig::new(protocol.clone(), config.routes.clone()),
+            name,
+            &LinkRuntimeConfig::new(protocol.clone(), config.routes.clone(), creation_route),
+        )
+    }
+
+    fn ordinary(group: Option<&str>, name: &str, proxy_type: &str) -> LinkRouteSpec {
+        LinkRouteSpec {
+            group: group.map(str::to_string),
+            proxy: name.to_string(),
+            proxy_type: proxy_type.to_string(),
+            link_kind: None,
+        }
+    }
+
+    fn shared(name: &str) -> LinkRouteSpec {
+        LinkRouteSpec {
+            group: None,
+            proxy: name.to_string(),
+            proxy_type: "anytls".to_string(),
+            link_kind: Some(LinkKind::Anytls),
+        }
+    }
+
+    fn acquire_ready(
+        table: &LinkTable,
+        name: &str,
+        config: &NamedLinkConfig,
+        route: Vec<LinkRouteSpec>,
+    ) -> Arc<LinkGeneration> {
+        let generation = acquire_named(table, name, config, route.clone())
+            .unwrap()
+            .generation;
+        table
+            .publish_creation_route(name, generation.number(), &route)
+            .unwrap();
+        assert!(generation.set_live_evidence(
+            LinkState::Ready,
+            LinkHealth::Healthy,
+            empty_evidence(LinkKind::Anytls),
+        ));
+        generation
+    }
+
+    fn begin_connection(manager: &ContextManager, port: u16) -> ConnHandle {
+        let destination = NetworkAddr::from(SocketAddr::from(([192, 0, 2, 10], 443)));
+        manager.begin(
+            ConnInfo {
+                src: SocketAddr::from(([127, 0, 0, 1], port)),
+                dst: destination.clone(),
+                local_ip: None,
+                inbound: InboundInfo::Tun,
+                resolved_dst: None,
+                connection_type: NetworkType::Tcp,
+                process_info: None,
+            },
+            destination,
+            None,
+            ConnAbortHandle::placeholder(),
         )
     }
 
@@ -1210,6 +1520,7 @@ mod tests {
                 code: LinkReasonCode::TaskStopped,
                 detail: None,
             },
+            ConnResultCode::LinkLost,
         ));
         let summary = &table.snapshot(now_ms()).items[0];
         assert_eq!(summary.generation, replacement.generation.number());
@@ -1421,6 +1732,7 @@ mod tests {
                 code: LinkReasonCode::ProtocolFailed,
                 detail: Some("session reader stopped".to_string()),
             },
+            ConnResultCode::LinkLost,
         ));
         let endpoint = "192.0.2.10:443".parse().unwrap();
         generation.retain_final_snapshot(
@@ -1451,5 +1763,299 @@ mod tests {
                 ..
             } if peer_versions == vec![1]
         ));
+    }
+
+    #[test]
+    fn dependent_generation_reuses_upstream_route_and_freezes_connection_links() {
+        let upstream_config = named_anytls("upstream", "upstream-secret");
+        let child_config = named_anytls("child", "child-secret");
+        let table = LinkTable::new(HashMap::from([
+            ("upstream".to_string(), upstream_config.clone()),
+            ("child".to_string(), child_config.clone()),
+        ]));
+
+        let upstream_route = vec![
+            ordinary(Some("entry-group"), "entry", "socks5"),
+            shared("upstream"),
+        ];
+        let upstream = acquire_ready(&table, "upstream", &upstream_config, upstream_route.clone());
+        let child_route = vec![
+            upstream_route[0].clone(),
+            upstream_route[1].clone(),
+            ordinary(None, "middle", "http"),
+            shared("child"),
+        ];
+        let child = acquire_ready(&table, "child", &child_config, child_route);
+
+        let detail = table.detail("child", now_ms()).unwrap();
+        assert_eq!(
+            detail
+                .chain
+                .iter()
+                .map(|hop| (
+                    hop.group.as_deref(),
+                    hop.proxy.as_str(),
+                    hop.proxy_type.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some("entry-group"), "entry", "socks5"),
+                (None, "upstream", "anytls"),
+                (None, "middle", "http"),
+                (None, "child", "anytls"),
+            ]
+        );
+        let route_links: Vec<_> = detail
+            .chain
+            .iter()
+            .filter_map(|hop| hop.link.as_ref())
+            .map(|link| (link.name.as_str(), link.generation))
+            .collect();
+        assert_eq!(
+            route_links,
+            vec![("upstream", upstream.number()), ("child", child.number())]
+        );
+
+        let manager = ContextManager::new(10);
+        let connection = begin_connection(&manager, 10_001);
+        assert!(connection.consider_link_path(child.dependency_path()));
+        assert_eq!(
+            connection
+                .snapshot()
+                .state
+                .links
+                .iter()
+                .map(|link| (link.name.as_str(), link.generation))
+                .collect::<Vec<_>>(),
+            vec![("upstream", upstream.number()), ("child", child.number())]
+        );
+        connection.more_upload(5);
+        assert!(connection.set_state(ConnState::Active));
+        for summary in table.snapshot(now_ms()).items {
+            assert_eq!(summary.active_conn_count, 1);
+            assert_eq!(summary.traffic.upload_bytes, 5);
+        }
+        assert!(connection.finish(ConnResultCode::Completed, None, None));
+        for summary in table.snapshot(now_ms()).items {
+            assert_eq!(summary.active_conn_count, 0);
+            assert_eq!(summary.traffic.upload_bytes, 5);
+        }
+    }
+
+    #[test]
+    fn active_traffic_is_folded_then_committed_once_and_survives_recreation() {
+        let config = anytls("secret");
+        let route = vec![ordinary(None, "entry", "direct"), shared("link")];
+        let table = LinkTable::new(configs(config.clone()));
+        let generation = acquire_ready(&table, "link", &config, route.clone());
+        let manager = ContextManager::new(10);
+        let connection = begin_connection(&manager, 10_001);
+        assert!(connection.consider_link_path(generation.dependency_path()));
+
+        connection.more_upload(11);
+        connection.more_download(17);
+        let preactive = table.snapshot(now_ms()).items.remove(0);
+        assert_eq!(preactive.active_conn_count, 0);
+        assert_eq!(
+            (
+                preactive.traffic.upload_bytes,
+                preactive.traffic.download_bytes
+            ),
+            (0, 0)
+        );
+
+        assert!(connection.set_state(ConnState::Active));
+        let active = table.snapshot(now_ms()).items.remove(0);
+        assert_eq!(active.active_conn_count, 1);
+        assert_eq!(
+            (active.traffic.upload_bytes, active.traffic.download_bytes),
+            (11, 17)
+        );
+
+        assert!(connection.finish(ConnResultCode::Completed, None, None));
+        let completed = table.snapshot(now_ms()).items.remove(0);
+        assert_eq!(completed.active_conn_count, 0);
+        assert_eq!(
+            (
+                completed.traffic.upload_bytes,
+                completed.traffic.download_bytes
+            ),
+            (11, 17)
+        );
+        assert!(!connection.finish(ConnResultCode::TransferError, None, None));
+        let after_duplicate = table.snapshot(now_ms()).items.remove(0);
+        assert_eq!(
+            (
+                after_duplicate.traffic.upload_bytes,
+                after_duplicate.traffic.download_bytes,
+            ),
+            (11, 17)
+        );
+
+        table.stop("link").unwrap();
+        let replacement = acquire_ready(&table, "link", &config, route);
+        assert_eq!(replacement.number(), generation.number() + 1);
+        let replacement_summary = table.snapshot(now_ms()).items.remove(0);
+        assert_eq!(
+            (
+                replacement_summary.traffic.upload_bytes,
+                replacement_summary.traffic.download_bytes,
+            ),
+            (0, 0)
+        );
+        assert_eq!(
+            (
+                replacement_summary.total_traffic.upload_bytes,
+                replacement_summary.total_traffic.download_bytes,
+            ),
+            (11, 17)
+        );
+    }
+
+    #[test]
+    fn failed_before_active_does_not_contribute_link_traffic() {
+        let config = anytls("secret");
+        let route = vec![shared("link")];
+        let table = LinkTable::new(configs(config.clone()));
+        let generation = acquire_ready(&table, "link", &config, route);
+        let manager = ContextManager::new(10);
+        let connection = begin_connection(&manager, 10_001);
+        assert!(connection.consider_link_path(generation.dependency_path()));
+        connection.more_upload(23);
+        connection.more_download(29);
+        assert!(connection.finish(
+            ConnResultCode::ConnectError,
+            Some(boltapi::ConnStage::Connecting),
+            None,
+        ));
+
+        let summary = table.snapshot(now_ms()).items.remove(0);
+        assert_eq!(summary.active_conn_count, 0);
+        assert_eq!(
+            (summary.traffic.upload_bytes, summary.traffic.download_bytes),
+            (0, 0)
+        );
+        assert_eq!(
+            (
+                summary.total_traffic.upload_bytes,
+                summary.total_traffic.download_bytes,
+            ),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn active_link_filter_uses_frozen_owned_dependencies() {
+        let config = anytls("secret");
+        let route = vec![shared("link")];
+        let table = LinkTable::new(configs(config.clone()));
+        let generation = acquire_ready(&table, "link", &config, route);
+        let manager = ContextManager::new(10);
+        let matching = begin_connection(&manager, 10_001);
+        let unrelated = begin_connection(&manager, 10_002);
+        let preactive = begin_connection(&manager, 10_003);
+
+        assert!(matching.consider_link_path(generation.dependency_path()));
+        assert!(matching.set_state(ConnState::Active));
+        assert!(unrelated.set_state(ConnState::Active));
+        assert!(preactive.consider_link_path(generation.dependency_path()));
+        assert_eq!(
+            manager
+                .get_active_for_link("link")
+                .iter()
+                .map(ConnHandle::id)
+                .collect::<Vec<_>>(),
+            vec![matching.id()]
+        );
+
+        assert!(matching.finish(ConnResultCode::Completed, None, None));
+        assert!(manager.get_active_for_link("link").is_empty());
+    }
+
+    #[derive(Clone, Copy)]
+    enum StopCause {
+        User,
+        Reconfigure,
+        Remove,
+        Lost,
+    }
+
+    #[test]
+    fn each_link_stop_cause_terminates_only_its_active_dependents() {
+        let cases = [
+            (
+                StopCause::User,
+                ConnResultCode::LinkStopped,
+                LinkReasonCode::UserStopped,
+            ),
+            (
+                StopCause::Reconfigure,
+                ConnResultCode::LinkReconfigured,
+                LinkReasonCode::ConfigChanged,
+            ),
+            (
+                StopCause::Remove,
+                ConnResultCode::LinkRemoved,
+                LinkReasonCode::ConfigRemoved,
+            ),
+            (
+                StopCause::Lost,
+                ConnResultCode::LinkLost,
+                LinkReasonCode::TaskStopped,
+            ),
+        ];
+
+        for (index, (cause, expected_result, expected_reason)) in cases.into_iter().enumerate() {
+            let config = anytls("secret");
+            let table = LinkTable::new(configs(config.clone()));
+            let generation = acquire_ready(&table, "link", &config, vec![shared("link")]);
+            let manager = ContextManager::new(10);
+            let dependent = begin_connection(&manager, 11_000 + index as u16);
+            let unrelated = begin_connection(&manager, 12_000 + index as u16);
+            assert!(dependent.consider_link_path(generation.dependency_path()));
+            assert!(dependent.set_state(ConnState::Active));
+            assert!(unrelated.set_state(ConnState::Active));
+
+            match cause {
+                StopCause::User => {
+                    table.stop("link").unwrap();
+                }
+                StopCause::Reconfigure => {
+                    table.reconcile(configs(anytls("changed-secret")));
+                }
+                StopCause::Remove => {
+                    table.reconcile(HashMap::new());
+                }
+                StopCause::Lost => {
+                    assert!(table.mark_terminal(
+                        "link",
+                        generation.number(),
+                        LinkState::Failed,
+                        LinkHealth::Unhealthy,
+                        LinkReason {
+                            code: LinkReasonCode::TaskStopped,
+                            detail: None,
+                        },
+                        ConnResultCode::LinkLost,
+                    ));
+                }
+            }
+
+            assert_eq!(
+                dependent.snapshot().state.termination.unwrap().code,
+                expected_result
+            );
+            assert!(!unrelated.done());
+            assert_eq!(
+                table
+                    .detail("link", now_ms())
+                    .unwrap()
+                    .summary
+                    .reason
+                    .unwrap()
+                    .code,
+                expected_reason
+            );
+        }
     }
 }
