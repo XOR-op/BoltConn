@@ -1,14 +1,26 @@
+use crate::cli::request::api_error;
 use anyhow::{Result, anyhow};
 use boltapi::{
-    ConnStopResult, ConnSummary, DnsLookupResponse, FakeIpMapping, GetGroupRespSchema,
-    GetInterceptDataResp, HttpInterceptSchema, LinkSummary, Snapshot, TunStatusSchema,
+    ApiError, ConnDetail, ConnListRequest, ConnStopResult, ConnSummary, DnsLookupRequest,
+    DnsLookupResponse, DnsResolverDetail, DnsResolverSummary, FakeIpMapping, GetGroupRespSchema,
+    GetInterceptDataResp, HttpInterceptSchema, LinkDetail, LinkSummary, Snapshot, TunStatusSchema,
 };
+use serde::de::DeserializeOwned;
+use std::net::IpAddr;
 
 pub struct WebConnector {
-    pub url: String,
+    url: String,
+    client: reqwest::Client,
 }
 
 impl WebConnector {
+    pub fn new(url: String) -> Self {
+        Self {
+            url,
+            client: reqwest::Client::new(),
+        }
+    }
+
     pub async fn get_group_list(&self) -> Result<Vec<GetGroupRespSchema>> {
         let data = reqwest::get(self.route("/proxies")).await?.text().await?;
         let result: Vec<GetGroupRespSchema> = serde_json::from_str(data.as_str())?;
@@ -36,24 +48,132 @@ impl WebConnector {
         Ok(result.as_str() == "true")
     }
 
-    pub async fn get_connections(&self) -> Result<Snapshot<ConnSummary>> {
-        let data = reqwest::get(self.route("/conn"))
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-        let result: Snapshot<ConnSummary> = serde_json::from_str(data.as_str())?;
-        Ok(result)
+    pub async fn list_conn(&self, request: ConnListRequest) -> Result<Snapshot<ConnSummary>> {
+        let mut url = self.resource_url(&["conn"])?;
+        if let Some(link) = request.link {
+            url.query_pairs_mut().append_pair("link", &link);
+        }
+        Self::decode_json(self.client().get(url).send().await?).await
     }
 
-    pub async fn stop_connections(&self, nth: Option<usize>) -> Result<ConnStopResult> {
-        let path = nth.map_or_else(|| "/conn/all".to_string(), |id| format!("/conn/{id}"));
-        let response = reqwest::Client::new()
-            .delete(self.route(&path))
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(response.json().await?)
+    pub async fn show_conn(&self, id: u64) -> Result<ConnDetail> {
+        Self::decode_json(
+            self.client()
+                .get(self.resource_url(&["conn", &id.to_string()])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn stop_conn(&self, id: u64) -> Result<ConnStopResult> {
+        Self::decode_json(
+            self.client()
+                .delete(self.resource_url(&["conn", &id.to_string()])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn stop_all_conn(&self) -> Result<ConnStopResult> {
+        Self::decode_json(
+            self.client()
+                .delete(self.resource_url(&["conn", "all"])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn get_conn_history_limit(&self) -> Result<u32> {
+        Self::decode_json(
+            self.client()
+                .get(self.resource_url(&["conn", "history-limit"])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn set_conn_history_limit(&self, limit: u32) -> Result<u32> {
+        Self::decode_json(
+            self.client()
+                .put(self.resource_url(&["conn", "history-limit"])?)
+                .json(&limit)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn list_link(&self) -> Result<Snapshot<LinkSummary>> {
+        Self::decode_json(
+            self.client()
+                .get(self.resource_url(&["link"])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn show_link(&self, name: &str) -> Result<LinkDetail> {
+        Self::decode_json(
+            self.client()
+                .get(self.resource_url(&["link", name])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn stop_link(&self, name: &str) -> Result<()> {
+        Self::decode_empty(
+            self.client()
+                .delete(self.resource_url(&["link", name])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn list_dns(&self) -> Result<Snapshot<DnsResolverSummary>> {
+        Self::decode_json(
+            self.client()
+                .get(self.resource_url(&["dns"])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn show_dns(&self, id: &str) -> Result<DnsResolverDetail> {
+        Self::decode_json(
+            self.client()
+                .get(self.resource_url(&["dns", id])?)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn lookup_dns(&self, request: DnsLookupRequest) -> Result<DnsLookupResponse> {
+        let mut url = self.resource_url(&["dns", "lookup"])?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("domain", &request.domain);
+            if let Some(resolver_id) = request.resolver_id {
+                query.append_pair("resolver", &resolver_id);
+            }
+        }
+        Self::decode_json(self.client().get(url).send().await?).await
+    }
+
+    pub async fn get_dns_mapping(&self, fake_ip: IpAddr) -> Result<FakeIpMapping> {
+        let mut url = self.resource_url(&["dns", "mapping"])?;
+        url.query_pairs_mut()
+            .append_pair("fake-ip", &fake_ip.to_string());
+        Self::decode_json(self.client().get(url).send().await?).await
     }
 
     pub async fn get_tun(&self) -> Result<TunStatusSchema> {
@@ -96,67 +216,6 @@ impl WebConnector {
         Ok(result)
     }
 
-    pub async fn get_master_conn_stat(&self) -> Result<Vec<LinkSummary>> {
-        let data = reqwest::get(self.route("/link"))
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-        let result: Snapshot<LinkSummary> = serde_json::from_str(data.as_str())?;
-        Ok(result.items)
-    }
-
-    pub async fn stop_master_conn(&self, id: String) -> Result<()> {
-        reqwest::Client::new()
-            .delete(self.route_segment("/link", &id)?)
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
-    }
-
-    pub async fn real_lookup(&self, domain: String) -> Result<String> {
-        let mut url = reqwest::Url::parse(&self.route("/dns/lookup"))?;
-        url.query_pairs_mut().append_pair("domain", &domain);
-        let response: DnsLookupResponse =
-            reqwest::get(url).await?.error_for_status()?.json().await?;
-        response
-            .lookup
-            .answers
-            .iter()
-            .find(|answer| answer.selected)
-            .or_else(|| response.lookup.answers.first())
-            .map(|answer| answer.address.to_string())
-            .ok_or_else(|| anyhow!("DNS lookup returned no address"))
-    }
-
-    pub async fn fake_ip_to_real(&self, fake_ip: String) -> Result<String> {
-        let mut url = reqwest::Url::parse(&self.route("/dns/mapping"))?;
-        url.query_pairs_mut().append_pair("fake-ip", &fake_ip);
-        let mapping: FakeIpMapping = reqwest::get(url).await?.error_for_status()?.json().await?;
-        Ok(mapping.domain)
-    }
-
-    pub async fn set_conn_log_limit(&self, limit: u32) -> Result<()> {
-        reqwest::Client::new()
-            .put(self.route("/conn/history-limit"))
-            .json(&limit)
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
-    }
-
-    pub async fn get_conn_log_limit(&self) -> Result<u32> {
-        let data = reqwest::get(self.route("/conn/history-limit"))
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-        let result: u32 = serde_json::from_str(data.as_str())?;
-        Ok(result)
-    }
-
     pub async fn reload_config(&self) -> Result<bool> {
         let res = reqwest::Client::new()
             .post(self.route("/reload"))
@@ -170,11 +229,120 @@ impl WebConnector {
         format!("{}{}", self.url, s)
     }
 
-    fn route_segment(&self, base: &str, segment: &str) -> Result<reqwest::Url> {
-        let mut url = reqwest::Url::parse(&self.route(base))?;
+    fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
+    fn resource_url(&self, segments: &[&str]) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&self.url)?;
+        url.set_query(None);
+        url.set_fragment(None);
         url.path_segments_mut()
             .map_err(|_| anyhow!("controller URL cannot contain path segments"))?
-            .push(segment);
+            .pop_if_empty()
+            .extend(segments.iter().copied());
         Ok(url)
+    }
+
+    async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+        let status = response.status();
+        let body = response.bytes().await?;
+        if status.is_success() {
+            return Ok(serde_json::from_slice(&body)?);
+        }
+        Err(Self::response_error(status, &body))
+    }
+
+    async fn decode_empty(response: reqwest::Response) -> Result<()> {
+        let status = response.status();
+        let body = response.bytes().await?;
+        if status.is_success() {
+            if body.is_empty() {
+                return Ok(());
+            }
+            return Err(anyhow!("controller returned a non-empty unit response"));
+        }
+        Err(Self::response_error(status, &body))
+    }
+
+    fn response_error(status: reqwest::StatusCode, body: &[u8]) -> anyhow::Error {
+        serde_json::from_slice::<ApiError>(body)
+            .map_or_else(|_| anyhow!("controller returned HTTP {status}"), api_error)
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+    use crate::cli::request::ControlApiError;
+    use boltapi::ApiErrorCode;
+
+    fn connector() -> WebConnector {
+        WebConnector::new("http://127.0.0.1:8080/api/".to_string())
+    }
+
+    #[test]
+    fn resource_paths_and_queries_encode_user_values() {
+        let connector = connector();
+        let url = connector
+            .resource_url(&["link", "wg us/primary?#"])
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://127.0.0.1:8080/api/link/wg%20us%2Fprimary%3F%23"
+        );
+
+        let mut lookup = connector.resource_url(&["dns", "lookup"]).unwrap();
+        lookup
+            .query_pairs_mut()
+            .append_pair("domain", "a+b.example")
+            .append_pair("resolver", "abc/123");
+        assert_eq!(lookup.path(), "/api/dns/lookup");
+        assert_eq!(
+            lookup.query().unwrap(),
+            "domain=a%2Bb.example&resolver=abc%2F123"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_success_response_preserves_stable_api_error() {
+        let response: reqwest::Response = http::Response::builder()
+            .status(http::StatusCode::CONFLICT)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(reqwest::Body::from(
+                serde_json::to_vec(&ApiError {
+                    code: ApiErrorCode::ResolverIdAmbiguous,
+                    message: "resolver prefix is ambiguous".to_string(),
+                })
+                .unwrap(),
+            ))
+            .unwrap()
+            .into();
+        let error = WebConnector::decode_json::<serde_json::Value>(response)
+            .await
+            .unwrap_err();
+        let api_error = error.downcast_ref::<ControlApiError>().unwrap();
+        assert_eq!(api_error.code, ApiErrorCode::ResolverIdAmbiguous);
+        assert_eq!(
+            error.to_string(),
+            "resolver_id_ambiguous: resolver prefix is ambiguous"
+        );
+    }
+
+    #[tokio::test]
+    async fn unit_response_requires_the_contractual_empty_body() {
+        let empty: reqwest::Response = http::Response::builder()
+            .status(http::StatusCode::OK)
+            .body(reqwest::Body::default())
+            .unwrap()
+            .into();
+        WebConnector::decode_empty(empty).await.unwrap();
+
+        let nonempty: reqwest::Response = http::Response::builder()
+            .status(http::StatusCode::OK)
+            .body(reqwest::Body::from("null"))
+            .unwrap()
+            .into();
+        assert!(WebConnector::decode_empty(nonempty).await.is_err());
     }
 }

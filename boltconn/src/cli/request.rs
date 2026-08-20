@@ -1,8 +1,11 @@
 use crate::cli::request_uds::UdsConnector;
 use crate::cli::request_web::WebConnector;
+use crate::cli::{conn, dns, format, link};
 use anyhow::{Result, anyhow};
-use boltapi::{CapturedBodySchema, ConnOrigin};
+use boltapi::{ApiError, ApiErrorCode, CapturedBodySchema, ConnListRequest, DnsLookupRequest};
 use colored::Colorize;
+use std::fmt::{Display, Formatter};
+use std::net::IpAddr;
 use tabular::{Row, Table};
 
 enum Inner {
@@ -14,13 +17,45 @@ pub struct Requester {
     inner: Inner,
 }
 
+#[derive(Debug)]
+pub(super) struct ControlApiError {
+    pub(super) code: ApiErrorCode,
+    message: String,
+}
+
+impl From<ApiError> for ControlApiError {
+    fn from(error: ApiError) -> Self {
+        Self {
+            code: error.code,
+            message: error.message,
+        }
+    }
+}
+
+impl Display for ControlApiError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}: {}",
+            format::enum_name(&self.code),
+            self.message
+        )
+    }
+}
+
+impl std::error::Error for ControlApiError {}
+
+pub(super) fn api_error(error: ApiError) -> anyhow::Error {
+    ControlApiError::from(error).into()
+}
+
 impl Requester {
     pub fn new_web(url: String) -> Result<Self> {
         if let Err(err) = reqwest::Url::parse(url.as_str()) {
             return Err(anyhow!("{}", err));
         }
         Ok(Self {
-            inner: Inner::Web(WebConnector { url }),
+            inner: Inner::Web(WebConnector::new(url)),
         })
     }
 
@@ -87,40 +122,46 @@ impl Requester {
         }
     }
 
-    pub async fn get_connections(&self) -> Result<()> {
-        let result = match &self.inner {
-            Inner::Web(c) => c.get_connections().await,
-            Inner::Uds(c) => c.get_connections().await,
+    pub async fn conn_list(&self, link_name: Option<String>) -> Result<()> {
+        let request = ConnListRequest { link: link_name };
+        let snapshot = match &self.inner {
+            Inner::Web(connector) => connector.list_conn(request).await,
+            Inner::Uds(connector) => connector.list_conn(request).await,
         }?;
-        for conn in result.items {
-            let origin = match conn.origin {
-                ConnOrigin::Process { name, .. } => format!("<{name}>"),
-                ConnOrigin::Network { source_ip } => format!("<{source_ip}>"),
-            };
-            println!(
-                "#{}: {} ({},{}) {}\t [up:{},down:{},time:{}] [{}]",
-                conn.id,
-                conn.target.to_string().cyan(),
-                conn.protocol,
-                conn.via
-                    .as_ref()
-                    .map_or("-", |selection| selection.selected.as_str())
-                    .italic(),
-                origin,
-                pretty_size(conn.traffic.upload_bytes),
-                pretty_size(conn.traffic.download_bytes),
-                pretty_time(conn.duration_ms / 1_000),
-                format!("{:?}", conn.state).to_lowercase(),
-            );
-        }
+        print!("{}", conn::render_list(snapshot));
         Ok(())
     }
-    pub async fn stop_connections(&self, nth: Option<usize>) -> Result<()> {
+
+    pub async fn conn_show(&self, id: u64) -> Result<()> {
+        let (detail, resolvers) = match &self.inner {
+            Inner::Web(connector) => (
+                connector.show_conn(id).await?,
+                connector.list_dns().await?.items,
+            ),
+            Inner::Uds(connector) => (
+                connector.show_conn(id).await?,
+                connector.list_dns().await?.items,
+            ),
+        };
+        print!("{}", conn::render_detail(detail, &resolvers));
+        Ok(())
+    }
+
+    pub async fn conn_stop(&self, id: u64) -> Result<()> {
         let result = match &self.inner {
-            Inner::Web(c) => c.stop_connections(nth).await,
-            Inner::Uds(c) => c.stop_connections(nth).await,
+            Inner::Web(connector) => connector.stop_conn(id).await,
+            Inner::Uds(connector) => connector.stop_conn(id).await,
         }?;
-        println!("Stopped {} connection(s)", result.stopped_connections);
+        println!("Stopped {} connection.", result.stopped_connections);
+        Ok(())
+    }
+
+    pub async fn conn_stop_all(&self) -> Result<()> {
+        let result = match &self.inner {
+            Inner::Web(connector) => connector.stop_all_conn().await,
+            Inner::Uds(connector) => connector.stop_all_conn().await,
+        }?;
+        println!("Stopped {} connections.", result.stopped_connections);
         Ok(())
     }
 
@@ -163,7 +204,7 @@ impl Requester {
                     .with_cell(ele.uri)
                     .with_cell(ele.method)
                     .with_cell(format!("{}", ele.status))
-                    .with_cell(ele.size.map_or("N/A".to_string(), pretty_size))
+                    .with_cell(ele.size.map_or("N/A".to_string(), format::bytes))
                     .with_cell(ele.duration),
             );
         }
@@ -256,42 +297,100 @@ impl Requester {
         }
     }
 
-    pub async fn get_conn_log_limit(&self) -> Result<()> {
+    pub async fn conn_limit_get(&self) -> Result<()> {
         let limit = match &self.inner {
-            Inner::Web(c) => c.get_conn_log_limit().await,
-            Inner::Uds(c) => c.get_conn_log_limit().await,
+            Inner::Web(connector) => connector.get_conn_history_limit().await,
+            Inner::Uds(connector) => connector.get_conn_history_limit().await,
         }?;
-        println!("{}", limit);
+        println!("{limit}");
         Ok(())
     }
 
-    pub async fn set_conn_log_limit(&self, limit: u32) -> Result<()> {
+    pub async fn conn_limit_set(&self, limit: u32) -> Result<()> {
+        let effective = match &self.inner {
+            Inner::Web(connector) => connector.set_conn_history_limit(limit).await,
+            Inner::Uds(connector) => connector.set_conn_history_limit(limit).await,
+        }?;
+        println!("History limit set to {effective}.");
+        Ok(())
+    }
+
+    pub async fn link_list(&self) -> Result<()> {
+        let snapshot = match &self.inner {
+            Inner::Web(connector) => connector.list_link().await,
+            Inner::Uds(connector) => connector.list_link().await,
+        }?;
+        print!("{}", link::render_list(snapshot));
+        Ok(())
+    }
+
+    pub async fn link_show(&self, name: String) -> Result<()> {
+        let (detail, resolvers) = match &self.inner {
+            Inner::Web(connector) => (
+                connector.show_link(&name).await?,
+                connector.list_dns().await?.items,
+            ),
+            Inner::Uds(connector) => (
+                connector.show_link(name).await?,
+                connector.list_dns().await?.items,
+            ),
+        };
+        print!("{}", link::render_detail(detail, &resolvers));
+        Ok(())
+    }
+
+    pub async fn link_stop(&self, name: String) -> Result<()> {
         match &self.inner {
-            Inner::Web(c) => c.set_conn_log_limit(limit).await,
-            Inner::Uds(c) => c.set_conn_log_limit(limit).await,
+            Inner::Web(connector) => connector.stop_link(&name).await?,
+            Inner::Uds(connector) => connector.stop_link(name.clone()).await?,
+        }
+        println!("Stopped {name}.");
+        Ok(())
+    }
+
+    pub async fn dns_list(&self) -> Result<()> {
+        let snapshot = match &self.inner {
+            Inner::Web(connector) => connector.list_dns().await,
+            Inner::Uds(connector) => connector.list_dns().await,
         }?;
-        println!("{}", "Success".green());
+        print!("{}", dns::render_list(snapshot));
         Ok(())
     }
 
-    pub async fn real_lookup(&self, domain: String) -> Result<()> {
-        let ip = match &self.inner {
-            Inner::Web(c) => c.real_lookup(domain.clone()).await,
-            Inner::Uds(c) => c.real_lookup(domain.clone()).await,
-        }
-        .unwrap_or_default();
-        println!("{}\t{}", domain, ip);
+    pub async fn dns_show(&self, id: String) -> Result<()> {
+        let detail = match &self.inner {
+            Inner::Web(connector) => connector.show_dns(&id).await,
+            Inner::Uds(connector) => connector.show_dns(id).await,
+        }?;
+        print!("{}", dns::render_detail(detail));
         Ok(())
     }
 
-    pub async fn fake_ip_to_real(&self, fake_ip: String) -> Result<()> {
-        match match &self.inner {
-            Inner::Web(c) => c.fake_ip_to_real(fake_ip.clone()).await,
-            Inner::Uds(c) => c.fake_ip_to_real(fake_ip.clone()).await,
-        } {
-            Ok(real_domain) => println!("{}\t{}", fake_ip, real_domain),
-            Err(_) => println!("Mapping for {} not found", fake_ip),
-        }
+    pub async fn dns_lookup(&self, domain: String, resolver_id: Option<String>) -> Result<()> {
+        let request = DnsLookupRequest {
+            domain,
+            resolver_id,
+        };
+        let (response, resolvers) = match &self.inner {
+            Inner::Web(connector) => (
+                connector.lookup_dns(request).await?,
+                connector.list_dns().await?.items,
+            ),
+            Inner::Uds(connector) => (
+                connector.lookup_dns(request).await?,
+                connector.list_dns().await?.items,
+            ),
+        };
+        print!("{}", dns::render_lookup(response, &resolvers));
+        Ok(())
+    }
+
+    pub async fn dns_mapping(&self, fake_ip: IpAddr) -> Result<()> {
+        let mapping = match &self.inner {
+            Inner::Web(connector) => connector.get_dns_mapping(fake_ip).await,
+            Inner::Uds(connector) => connector.get_dns_mapping(fake_ip).await,
+        }?;
+        print!("{}", dns::render_mapping(mapping));
         Ok(())
     }
 
@@ -306,47 +405,5 @@ impl Requester {
             println!("{}", "Failed".red());
         }
         Ok(())
-    }
-
-    pub async fn master_conn_stats(&self) -> Result<()> {
-        let list = match &self.inner {
-            Inner::Web(c) => c.get_master_conn_stat().await?,
-            Inner::Uds(c) => c.get_master_conn_stat().await?,
-        };
-        for entry in list {
-            println!(
-                "{}:\t kind={:?}, state={:?}, generation={}, active={}",
-                entry.name, entry.kind, entry.state, entry.generation, entry.active_conn_count,
-            );
-        }
-        Ok(())
-    }
-
-    pub async fn stop_master_conn(&self, id: String) -> Result<()> {
-        match &self.inner {
-            Inner::Web(c) => c.stop_master_conn(id).await?,
-            Inner::Uds(c) => c.stop_master_conn(id).await?,
-        }
-        Ok(())
-    }
-}
-
-fn pretty_size(data: u64) -> String {
-    if data < 1024 {
-        format!("{} Bytes", data)
-    } else if data < 1024 * 1024 {
-        format!("{} KB", data / 1024)
-    } else {
-        format!("{} MB", data / 1024 / 1024)
-    }
-}
-
-fn pretty_time(elapsed: u64) -> String {
-    if elapsed < 60 {
-        format!("{} seconds ago", elapsed)
-    } else if elapsed < 60 * 60 {
-        format!("{} mins ago", elapsed / 60)
-    } else {
-        format!("{} hours ago", elapsed / 3600)
     }
 }

@@ -1,9 +1,11 @@
-use anyhow::{Result, anyhow};
+use crate::cli::request::api_error;
+use anyhow::Result;
 use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::{ClientStreamServiceRequest, ClientStreamServiceResponse, ControlServiceClient};
 use boltapi::{
-    ApiError, ConnListRequest, ConnStopResult, ConnSummary, DnsLookupRequest, GetGroupRespSchema,
-    GetInterceptDataResp, HttpInterceptSchema, LinkSummary, Snapshot, TunStatusSchema,
+    ApiError, ConnDetail, ConnListRequest, ConnStopResult, ConnSummary, DnsLookupRequest,
+    DnsLookupResponse, DnsResolverDetail, DnsResolverSummary, FakeIpMapping, GetGroupRespSchema,
+    GetInterceptDataResp, HttpInterceptSchema, LinkDetail, LinkSummary, Snapshot, TunStatusSchema,
 };
 use std::net::IpAddr;
 use tarpc::context::Context;
@@ -68,18 +70,66 @@ impl UdsConnector {
             .await?)
     }
 
-    pub async fn get_connections(&self) -> Result<Snapshot<ConnSummary>> {
+    pub async fn list_conn(&self, request: ConnListRequest) -> Result<Snapshot<ConnSummary>> {
+        Ok(self.client.list_conn(Context::current(), request).await?)
+    }
+
+    pub async fn show_conn(&self, id: u64) -> Result<ConnDetail> {
+        map_api_result(self.client.show_conn(Context::current(), id).await?)
+    }
+
+    pub async fn stop_conn(&self, id: u64) -> Result<ConnStopResult> {
+        map_api_result(self.client.stop_conn(Context::current(), id).await?)
+    }
+
+    pub async fn stop_all_conn(&self) -> Result<ConnStopResult> {
+        Ok(self.client.stop_all_conn(Context::current()).await?)
+    }
+
+    pub async fn get_conn_history_limit(&self) -> Result<u32> {
         Ok(self
             .client
-            .list_conn(Context::current(), ConnListRequest::default())
+            .get_conn_history_limit(Context::current())
             .await?)
     }
 
-    pub async fn stop_connections(&self, nth: Option<usize>) -> Result<ConnStopResult> {
-        match nth {
-            None => Ok(self.client.stop_all_conn(Context::current()).await?),
-            Some(id) => map_api_result(self.client.stop_conn(Context::current(), id as u64).await?),
-        }
+    pub async fn set_conn_history_limit(&self, limit: u32) -> Result<u32> {
+        Ok(self
+            .client
+            .set_conn_history_limit(Context::current(), limit)
+            .await?)
+    }
+
+    pub async fn list_link(&self) -> Result<Snapshot<LinkSummary>> {
+        Ok(self.client.list_link(Context::current()).await?)
+    }
+
+    pub async fn show_link(&self, name: String) -> Result<LinkDetail> {
+        map_api_result(self.client.show_link(Context::current(), name).await?)
+    }
+
+    pub async fn stop_link(&self, name: String) -> Result<()> {
+        map_api_result(self.client.stop_link(Context::current(), name).await?)
+    }
+
+    pub async fn list_dns(&self) -> Result<Snapshot<DnsResolverSummary>> {
+        Ok(self.client.list_dns(Context::current()).await?)
+    }
+
+    pub async fn show_dns(&self, id: String) -> Result<DnsResolverDetail> {
+        map_api_result(self.client.show_dns(Context::current(), id).await?)
+    }
+
+    pub async fn lookup_dns(&self, request: DnsLookupRequest) -> Result<DnsLookupResponse> {
+        map_api_result(self.client.lookup_dns(Context::current(), request).await?)
+    }
+
+    pub async fn get_dns_mapping(&self, fake_ip: IpAddr) -> Result<FakeIpMapping> {
+        map_api_result(
+            self.client
+                .get_dns_mapping(Context::current(), fake_ip)
+                .await?,
+        )
     }
 
     pub async fn get_tun(&self) -> Result<TunStatusSchema> {
@@ -113,39 +163,7 @@ impl UdsConnector {
         self.client
             .get_intercepted_payload(Context::current(), id)
             .await?
-            .ok_or(anyhow::anyhow!("No response"))
-    }
-
-    pub async fn real_lookup(&self, domain: String) -> Result<String> {
-        let response = map_api_result(
-            self.client
-                .lookup_dns(
-                    Context::current(),
-                    DnsLookupRequest {
-                        domain,
-                        resolver_id: None,
-                    },
-                )
-                .await?,
-        )?;
-        response
-            .lookup
-            .answers
-            .iter()
-            .find(|answer| answer.selected)
-            .or_else(|| response.lookup.answers.first())
-            .map(|answer| answer.address.to_string())
-            .ok_or_else(|| anyhow!("DNS lookup returned no address"))
-    }
-
-    pub async fn fake_ip_to_real(&self, fake_ip: String) -> Result<String> {
-        let fake_ip = fake_ip.parse::<IpAddr>()?;
-        Ok(map_api_result(
-            self.client
-                .get_dns_mapping(Context::current(), fake_ip)
-                .await?,
-        )?
-        .domain)
+            .ok_or_else(|| anyhow::anyhow!("No response"))
     }
 
     pub async fn add_temporary_rule(&self, rule_literal: String) -> Result<bool> {
@@ -170,20 +188,6 @@ impl UdsConnector {
         Ok(self.client.clear_temporary_rule(Context::current()).await?)
     }
 
-    pub async fn set_conn_log_limit(&self, limit: u32) -> Result<()> {
-        self.client
-            .set_conn_history_limit(Context::current(), limit)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn get_conn_log_limit(&self) -> Result<u32> {
-        Ok(self
-            .client
-            .get_conn_history_limit(Context::current())
-            .await?)
-    }
-
     pub async fn get_log_stream(&self, ctx_id: u64) -> Result<()> {
         Ok(self
             .client
@@ -194,16 +198,30 @@ impl UdsConnector {
     pub async fn reload_config(&self) -> Result<bool> {
         Ok(self.client.reload(Context::current()).await?)
     }
-
-    pub async fn get_master_conn_stat(&self) -> Result<Vec<LinkSummary>> {
-        Ok(self.client.list_link(Context::current()).await?.items)
-    }
-
-    pub async fn stop_master_conn(&self, id: String) -> Result<()> {
-        map_api_result(self.client.stop_link(Context::current(), id).await?)
-    }
 }
 
 fn map_api_result<T>(result: std::result::Result<T, ApiError>) -> Result<T> {
-    result.map_err(|error| anyhow!("{:?}: {}", error.code, error.message))
+    result.map_err(api_error)
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+    use crate::cli::request::ControlApiError;
+    use boltapi::ApiErrorCode;
+
+    #[test]
+    fn uds_result_preserves_stable_api_error() {
+        let error = map_api_result::<()>(Err(ApiError {
+            code: ApiErrorCode::LinkNotActive,
+            message: "link is already stopped".to_string(),
+        }))
+        .unwrap_err();
+        let api_error = error.downcast_ref::<ControlApiError>().unwrap();
+        assert_eq!(api_error.code, ApiErrorCode::LinkNotActive);
+        assert_eq!(
+            error.to_string(),
+            "link_not_active: link is already stopped"
+        );
+    }
 }

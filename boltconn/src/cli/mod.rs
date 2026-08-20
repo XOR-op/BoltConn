@@ -1,5 +1,9 @@
 mod cert;
 mod clean;
+mod conn;
+mod dns;
+mod format;
+mod link;
 mod request;
 mod request_uds;
 mod request_web;
@@ -13,6 +17,7 @@ use anyhow::anyhow;
 use clap::{Args, CommandFactory, Subcommand, ValueHint};
 use colored::Colorize;
 use is_root::is_root;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -39,19 +44,50 @@ pub(crate) enum ProxyOptions {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ConnOptions {
-    /// List all active connections
-    List,
-    /// Stop connection
-    Stop {
-        #[clap(value_hint = ValueHint::Other)]
-        nth: Option<usize>,
+    /// List live and retained terminal connections
+    List {
+        /// Show only active connections depending on this shared link
+        #[arg(long, value_name = "NAME")]
+        link: Option<String>,
     },
-    /// Connection logs limit
+    /// Show one live or retained connection
+    Show {
+        #[arg(value_name = "ID")]
+        id: u64,
+    },
+    /// Stop one connection or all active connections
+    Stop(ConnStopOptions),
+    /// Configure retained terminal connection history
     #[command(subcommand)]
-    Limit(LogsLimitOptions),
-    /// Manage multiplexed master connections
-    #[command(subcommand)]
-    Master(MasterConnOptions),
+    Limit(ConnLimitOptions),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ConnStopOptions {
+    #[arg(
+        value_name = "ID",
+        required_unless_present = "all",
+        conflicts_with = "all"
+    )]
+    id: Option<u64>,
+    #[arg(long, required_unless_present = "id", conflicts_with = "id")]
+    all: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum LinkOptions {
+    /// List initialized shared links
+    List,
+    /// Show the latest generation of a shared link
+    Show {
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Stop the live latest generation of a shared link
+    Stop {
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Subcommand)]
@@ -97,15 +133,24 @@ pub(crate) enum TempRuleOptions {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum DnsOptions {
-    /// Lookup real address of a domain
+    /// List observed upstream resolvers
+    List,
+    /// Show one resolver by an unambiguous ID prefix
+    Show {
+        #[arg(value_name = "RESOLVER_ID")]
+        resolver_id: String,
+    },
+    /// Perform a diagnostic lookup
     Lookup {
-        #[clap(value_hint = ValueHint::Other)]
-        domain_name: String,
+        #[arg(value_name = "DOMAIN")]
+        domain: String,
+        #[arg(long, value_name = "RESOLVER_ID")]
+        resolver: Option<String>,
     },
     /// Find the internal mapping of a fake IP
     Mapping {
-        #[clap(value_hint = ValueHint::Other)]
-        fake_ip: String,
+        #[arg(value_name = "FAKE_IP")]
+        fake_ip: IpAddr,
     },
 }
 
@@ -190,27 +235,14 @@ pub(crate) enum GenerateOptions {
 }
 
 #[derive(Debug, Clone, Copy, Subcommand)]
-pub(crate) enum LogsLimitOptions {
-    /// Set the limit of logs
+pub(crate) enum ConnLimitOptions {
+    /// Set the retained terminal record limit
     Set {
-        #[clap(value_hint = ValueHint::Other)]
-        limit: u32,
+        #[arg(value_name = "RECORDS")]
+        records: u32,
     },
-    /// Get the limit of logs
+    /// Get the retained terminal record limit
     Get,
-}
-
-#[derive(Clone, Debug, Args)]
-pub(crate) struct WgOptions {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub(crate) enum MasterConnOptions {
-    /// Show the WireGuard master connections
-    ListWg,
-    /// Stop a WireGuard connection
-    StopWg(WgOptions),
 }
 
 #[derive(Debug, Subcommand)]
@@ -229,6 +261,9 @@ pub(crate) enum SubCommand {
     /// Connection settings
     #[command(subcommand)]
     Conn(ConnOptions),
+    /// Shared WireGuard, SSH, and AnyTLS links
+    #[command(subcommand)]
+    Link(LinkOptions),
     /// Captured HTTP data
     #[command(subcommand)]
     Intercept(InterceptOptions),
@@ -484,16 +519,22 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             ProxyOptions::List { full: short } => requester.get_group_list(short).await,
         },
         SubCommand::Conn(opt) => match opt {
-            ConnOptions::List => requester.get_connections().await,
-            ConnOptions::Stop { nth } => requester.stop_connections(nth).await,
+            ConnOptions::List { link } => requester.conn_list(link).await,
+            ConnOptions::Show { id } => requester.conn_show(id).await,
+            ConnOptions::Stop(options) => match options.id {
+                Some(id) => requester.conn_stop(id).await,
+                None if options.all => requester.conn_stop_all().await,
+                None => unreachable!("clap requires a connection ID or --all"),
+            },
             ConnOptions::Limit(opt) => match opt {
-                LogsLimitOptions::Set { limit } => requester.set_conn_log_limit(limit).await,
-                LogsLimitOptions::Get => requester.get_conn_log_limit().await,
+                ConnLimitOptions::Set { records } => requester.conn_limit_set(records).await,
+                ConnLimitOptions::Get => requester.conn_limit_get().await,
             },
-            ConnOptions::Master(opt) => match opt {
-                MasterConnOptions::ListWg => requester.master_conn_stats().await,
-                MasterConnOptions::StopWg(opt) => requester.stop_master_conn(opt.name).await,
-            },
+        },
+        SubCommand::Link(opt) => match opt {
+            LinkOptions::List => requester.link_list().await,
+            LinkOptions::Show { name } => requester.link_show(name).await,
+            LinkOptions::Stop { name } => requester.link_stop(name).await,
         },
         SubCommand::Tun(opt) => match opt {
             TunOptions::Get => requester.get_tun().await,
@@ -519,8 +560,10 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             TempRuleOptions::Clear => requester.clear_temporary_rule().await,
         },
         SubCommand::Dns(opt) => match opt {
-            DnsOptions::Lookup { domain_name } => requester.real_lookup(domain_name).await,
-            DnsOptions::Mapping { fake_ip } => requester.fake_ip_to_real(fake_ip).await,
+            DnsOptions::List => requester.dns_list().await,
+            DnsOptions::Show { resolver_id } => requester.dns_show(resolver_id).await,
+            DnsOptions::Lookup { domain, resolver } => requester.dns_lookup(domain, resolver).await,
+            DnsOptions::Mapping { fake_ip } => requester.dns_mapping(fake_ip).await,
         },
         SubCommand::Start(_)
         | SubCommand::Run(_)
@@ -565,4 +608,57 @@ fn validate_uds_path(
         exit(-1)
     }
     path_result.unwrap()
+}
+
+#[cfg(test)]
+mod observability_parser_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn agreed_observability_commands_parse() {
+        let commands = [
+            vec!["boltconn", "conn", "list"],
+            vec!["boltconn", "conn", "list", "--link", "wg us"],
+            vec!["boltconn", "conn", "show", "42"],
+            vec!["boltconn", "conn", "stop", "42"],
+            vec!["boltconn", "conn", "stop", "--all"],
+            vec!["boltconn", "conn", "limit", "get"],
+            vec!["boltconn", "conn", "limit", "set", "100"],
+            vec!["boltconn", "link", "list"],
+            vec!["boltconn", "link", "show", "ssh primary"],
+            vec!["boltconn", "link", "stop", "ssh primary"],
+            vec!["boltconn", "dns", "list"],
+            vec!["boltconn", "dns", "show", "0123456789ab"],
+            vec!["boltconn", "dns", "lookup", "example.com"],
+            vec![
+                "boltconn",
+                "dns",
+                "lookup",
+                "example.com",
+                "--resolver",
+                "0123456789ab",
+            ],
+            vec!["boltconn", "dns", "mapping", "198.18.0.1"],
+        ];
+
+        for command in commands {
+            ProgramArgs::try_parse_from(command).unwrap();
+        }
+    }
+
+    #[test]
+    fn connection_stop_requires_exactly_one_target() {
+        assert!(ProgramArgs::try_parse_from(["boltconn", "conn", "stop"]).is_err());
+        assert!(ProgramArgs::try_parse_from(["boltconn", "conn", "stop", "42", "--all"]).is_err());
+    }
+
+    #[test]
+    fn out_of_scope_flags_and_link_stop_all_are_rejected() {
+        assert!(
+            ProgramArgs::try_parse_from(["boltconn", "dns", "lookup", "example.com", "--fresh",])
+                .is_err()
+        );
+        assert!(ProgramArgs::try_parse_from(["boltconn", "link", "stop", "--all"]).is_err());
+    }
 }
