@@ -330,7 +330,7 @@ impl App {
                 call_param.ret(true);
             }
             Err(err) => {
-                tracing::error!("Reloading config failed: {}", err);
+                tracing::warn!("Reloading config failed: {}", err);
                 call_param.ret(false);
             }
         }

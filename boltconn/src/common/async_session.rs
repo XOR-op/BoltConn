@@ -32,7 +32,7 @@ impl AsyncSession {
                         break;
                     }
                     Err(e) => {
-                        tracing::error!("Failed to receive packet: {:?}", e);
+                        tracing::warn!("Failed to receive packet: {:?}", e);
                         continue;
                     }
                 }

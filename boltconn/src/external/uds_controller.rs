@@ -88,7 +88,7 @@ impl Drop for UnixListenerGuard {
         {
             self.listener = None;
             if let Err(e) = std::fs::remove_file(&self.path) {
-                tracing::error!("Error when removing unix domain socket: {}", e)
+                tracing::warn!("Error when removing unix domain socket: {}", e)
             }
         }
     }

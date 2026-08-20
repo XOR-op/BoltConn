@@ -76,6 +76,16 @@ fn finish_transport_error(info: &ConnHandle, error: &TransportError, fallback_st
     info.finish(code, Some(stage), Some(bounded_detail(&error.to_string())));
 }
 
+fn log_outbound_task_error(error: &tokio::task::JoinError) {
+    if error.is_cancelled() {
+        tracing::debug!("[Dispatcher] outbound task cancelled");
+    } else {
+        // A non-cancellation JoinError means the outbound task panicked, which is an
+        // unexpected internal failure rather than a connection-level transport error.
+        tracing::error!("[Dispatcher] outbound task failed: {}", error);
+    }
+}
+
 fn classify_transport_error(
     error: &TransportError,
     fallback_stage: ConnStage,
@@ -642,7 +652,7 @@ impl Dispatcher {
                 "tcp".to_string(),
                 tokio::spawn(async move {
                     if let Err(err) = inbound_adapter.run(info).await {
-                        tracing::error!("[Dispatcher] run TcpAdapter failed: {}", err)
+                        tracing::debug!("[Dispatcher] run TcpAdapter failed: {}", err)
                     }
                 }),
             )
@@ -673,7 +683,7 @@ impl Dispatcher {
                                     info,
                                 );
                                 if let Err(err) = mocker.run().await {
-                                    tracing::error!("[Dispatcher] mock HTTP failed: {}", err)
+                                    tracing::warn!("[Dispatcher] mock HTTP failed: {}", err)
                                 }
                             })
                         };
@@ -699,10 +709,7 @@ impl Dispatcher {
                             ) {
                                 Ok(v) => v,
                                 Err(err) => {
-                                    tracing::error!(
-                                        "[Dispatcher] sign certificate failed: {}",
-                                        err
-                                    );
+                                    tracing::warn!("[Dispatcher] sign certificate failed: {}", err);
                                     info.finish(
                                         ConnResultCode::HandshakeError,
                                         Some(ConnStage::Handshaking),
@@ -713,7 +720,7 @@ impl Dispatcher {
                             };
                             tokio::spawn(async move {
                                 if let Err(err) = mocker.run().await {
-                                    tracing::error!("[Dispatcher] mock HTTPS failed: {}", err)
+                                    tracing::warn!("[Dispatcher] mock HTTPS failed: {}", err)
                                 }
                             })
                         };
@@ -737,11 +744,11 @@ impl Dispatcher {
                 match result {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
-                        tracing::error!("[Dispatcher] create failed: {}", error);
+                        tracing::debug!("[Dispatcher] create failed: {}", error);
                         finish_transport_error(&outbound_info, &error, ConnStage::Connecting);
                     }
                     Err(error) => {
-                        tracing::error!("[Dispatcher] outbound task failed: {}", error);
+                        log_outbound_task_error(&error);
                         outbound_info.finish(
                             ConnResultCode::InternalError,
                             Some(ConnStage::Connecting),
@@ -922,7 +929,7 @@ impl Dispatcher {
                         let udp_adapter =
                             TunUdpAdapter::new(info, send_rx, recv_tx, adapter_now, dns, indicator);
                         if let Err(err) = udp_adapter.run(abort_handle).await {
-                            tracing::error!("[Dispatcher] run TunUdpAdapter failed: {}", err)
+                            tracing::debug!("[Dispatcher] run TunUdpAdapter failed: {}", err)
                         }
                     }
                     UdpReturnChannel::Socks(recv_tx) => {
@@ -935,7 +942,7 @@ impl Dispatcher {
                             adapter_now,
                         );
                         if let Err(err) = udp_adapter.run(abort_handle).await {
-                            tracing::error!("[Dispatcher] run TunUdpAdapter failed: {}", err)
+                            tracing::debug!("[Dispatcher] run TunUdpAdapter failed: {}", err)
                         }
                     }
                 }
@@ -957,11 +964,11 @@ impl Dispatcher {
                 match result {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
-                        tracing::error!("[Dispatcher] create failed: {}", error);
+                        tracing::debug!("[Dispatcher] create failed: {}", error);
                         finish_transport_error(&outbound_info, &error, ConnStage::Connecting);
                     }
                     Err(error) => {
-                        tracing::error!("[Dispatcher] outbound task failed: {}", error);
+                        log_outbound_task_error(&error);
                         outbound_info.finish(
                             ConnResultCode::InternalError,
                             Some(ConnStage::Connecting),

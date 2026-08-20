@@ -223,7 +223,7 @@ impl TcpConnTask {
                     .replace_recv_buffer(TcpSocketBuffer::new(new_buf))
                     .is_err()
                 {
-                    tracing::error!(
+                    tracing::warn!(
                         "smol failed to increase TCP recv buffer size: old={}, new={}, window_scale={}",
                         cur_capacity,
                         new_cap,

@@ -137,7 +137,7 @@ impl TunDevice {
                     tokio::spawn(proxy.run());
                 }
                 Err(e) => {
-                    tracing::error!("Failed to create ICMP proxy: {:?}", e);
+                    tracing::warn!("Failed to create ICMP proxy: {:?}", e);
                 }
             };
         }
