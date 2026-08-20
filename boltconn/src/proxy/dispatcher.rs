@@ -221,6 +221,19 @@ impl Dispatcher {
         );
     }
 
+    pub(crate) async fn stop_link(&self, name: &str) -> Result<(), boltapi::ApiError> {
+        let invalidation = self.link_table.stop(name)?;
+        tokio::join!(
+            self.wireguard_mgr
+                .stop_generation(&invalidation.name, invalidation.generation),
+            self.ssh_mgr
+                .stop_generation(&invalidation.name, invalidation.generation),
+            self.anytls_mgr
+                .stop_generation(&invalidation.name, invalidation.generation),
+        );
+        Ok(())
+    }
+
     pub fn replace_dispatching(&self, dispatching: Arc<Dispatching>) {
         self.dispatching.store(dispatching);
     }

@@ -12,6 +12,7 @@ use crate::config::DnsConfigError;
 use crate::proxy::error::DnsError;
 pub use bootstrap::BootstrapResolver;
 pub use dns::{Dns, GenericDns};
+pub(crate) use dns::{sort_resolver_summaries, validate_diagnostic_domain};
 use hickory_resolver::Resolver;
 use hickory_resolver::config::{
     CLOUDFLARE, ConnectionConfig, GOOGLE, NameServerConfig, QUAD9, ResolverConfig, ResolverOpts,

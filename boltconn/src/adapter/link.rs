@@ -7,8 +7,9 @@ use crate::transport::ssh::{SshAuthentication, SshConfig};
 use crate::transport::wireguard::WireguardConfig;
 use boltapi::{
     ApiError, ApiErrorCode, ConnResultCode, DnsActivity, DnsCacheStatus, DnsLookupDetail,
-    DnsOutcome, DnsOutcomeCounts, LinkDetail, LinkEvidence, LinkHealth, LinkKind, LinkReason,
-    LinkReasonCode, LinkState, LinkSummary, Snapshot, Traffic,
+    DnsLookupRequest, DnsOutcome, DnsOutcomeCounts, DnsResolverDetail, DnsResolverSummary,
+    LinkDetail, LinkEvidence, LinkHealth, LinkKind, LinkReason, LinkReasonCode, LinkState,
+    LinkSummary, Snapshot, Traffic,
 };
 use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
@@ -437,6 +438,37 @@ impl LinkDnsRuntime {
     fn activity(&self) -> DnsActivity {
         match self {
             Self::Wireguard(dns) => dns.dns_activity(),
+        }
+    }
+
+    fn resolver_summaries(&self, observed_at_ms: u64) -> Vec<DnsResolverSummary> {
+        match self {
+            Self::Wireguard(dns) => dns.resolver_snapshot_at(observed_at_ms).items,
+        }
+    }
+
+    fn resolver_ids(&self) -> Vec<String> {
+        match self {
+            Self::Wireguard(dns) => dns.resolver_ids(),
+        }
+    }
+
+    fn resolver_detail(
+        &self,
+        id: &str,
+        observed_at_ms: u64,
+    ) -> Result<DnsResolverDetail, ApiError> {
+        match self {
+            Self::Wireguard(dns) => dns.resolver_detail_at(id, observed_at_ms),
+        }
+    }
+
+    async fn diagnostic_lookup(
+        &self,
+        request: DnsLookupRequest,
+    ) -> Result<DnsLookupDetail, ApiError> {
+        match self {
+            Self::Wireguard(dns) => dns.diagnostic_lookup_detail(request).await,
         }
     }
 }
@@ -956,10 +988,14 @@ impl LinkTable {
             .ok_or_else(|| link_error(ApiErrorCode::LinkNotFound, "link was not found"))?;
         let inner = link.inner.lock().unwrap();
         let generation = inner.latest.as_ref().ok_or_else(|| {
-            link_error(
-                ApiErrorCode::LinkNotInitialized,
-                "link has not been initialized",
-            )
+            if inner.configured.is_some() {
+                link_error(
+                    ApiErrorCode::LinkNotInitialized,
+                    "link has not been initialized",
+                )
+            } else {
+                link_error(ApiErrorCode::LinkNotFound, "link was not found")
+            }
         })?;
         let number = generation.number;
         drop(inner);
@@ -1016,6 +1052,120 @@ impl LinkTable {
             .get(name)
             .cloned()
             .and_then(|link| link.detail(observed_at_ms))
+    }
+
+    pub(crate) fn detail_result(
+        &self,
+        name: &str,
+        observed_at_ms: u64,
+    ) -> Result<LinkDetail, ApiError> {
+        let link = self
+            .links
+            .read()
+            .unwrap()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| link_error(ApiErrorCode::LinkNotFound, "link was not found"))?;
+        let inner = link.inner.lock().unwrap();
+        if inner.latest.is_none() {
+            return Err(if inner.configured.is_some() {
+                link_error(
+                    ApiErrorCode::LinkNotInitialized,
+                    "link has not been initialized",
+                )
+            } else {
+                link_error(ApiErrorCode::LinkNotFound, "link was not found")
+            });
+        }
+        drop(inner);
+        link.detail(observed_at_ms)
+            .ok_or_else(|| link_error(ApiErrorCode::Internal, "link detail is unavailable"))
+    }
+
+    pub(crate) fn dns_resolver_summaries(&self, observed_at_ms: u64) -> Vec<DnsResolverSummary> {
+        let runtimes = self.live_dns_runtimes();
+        runtimes
+            .into_iter()
+            .flat_map(|(runtime, _)| runtime.resolver_summaries(observed_at_ms))
+            .collect()
+    }
+
+    pub(crate) fn dns_resolver_ids(&self) -> Vec<String> {
+        let mut ids = self
+            .live_dns_runtimes()
+            .into_iter()
+            .flat_map(|(runtime, _)| runtime.resolver_ids())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    pub(crate) fn dns_resolver_detail(
+        &self,
+        id: &str,
+        observed_at_ms: u64,
+    ) -> Option<DnsResolverDetail> {
+        for (runtime, chain) in self.live_dns_runtimes() {
+            if !runtime
+                .resolver_ids()
+                .iter()
+                .any(|candidate| candidate == id)
+            {
+                continue;
+            }
+            if let Ok(mut detail) = runtime.resolver_detail(id, observed_at_ms) {
+                detail.chain = chain;
+                return Some(detail);
+            }
+        }
+        None
+    }
+
+    pub(crate) async fn diagnostic_dns_lookup(
+        &self,
+        id: &str,
+        domain: String,
+    ) -> Result<DnsLookupDetail, ApiError> {
+        let runtime = self
+            .live_dns_runtimes()
+            .into_iter()
+            .find_map(|(runtime, _)| {
+                runtime
+                    .resolver_ids()
+                    .iter()
+                    .any(|candidate| candidate == id)
+                    .then_some(runtime)
+            })
+            .ok_or_else(|| ApiError {
+                code: ApiErrorCode::ResolverUnavailable,
+                message: format!("resolver {id} is not available in a live link generation"),
+            })?;
+        runtime
+            .diagnostic_lookup(DnsLookupRequest {
+                domain,
+                resolver_id: Some(id.to_string()),
+            })
+            .await
+    }
+
+    fn live_dns_runtimes(&self) -> Vec<(LinkDnsRuntime, Vec<boltapi::RouteHop>)> {
+        let links = self
+            .links
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        links
+            .into_iter()
+            .filter_map(|link| {
+                let latest = link.inner.lock().unwrap().latest.clone()?;
+                let state = latest.state.lock().unwrap();
+                let runtime = state.dns_runtime.clone()?;
+                Some((runtime, state.chain.clone()))
+            })
+            .collect()
     }
 
     fn with_latest(
@@ -1422,6 +1572,18 @@ mod tests {
         let table = LinkTable::new(configs(anytls("secret")));
         assert!(table.snapshot(now_ms()).items.is_empty());
         assert!(table.detail("link", now_ms()).is_none());
+        assert_eq!(
+            table.detail_result("link", now_ms()).unwrap_err().code,
+            ApiErrorCode::LinkNotInitialized
+        );
+        assert_eq!(
+            table.stop("link").unwrap_err().code,
+            ApiErrorCode::LinkNotInitialized
+        );
+        assert_eq!(
+            table.detail_result("missing", now_ms()).unwrap_err().code,
+            ApiErrorCode::LinkNotFound
+        );
     }
 
     #[test]
@@ -1893,6 +2055,10 @@ mod tests {
         );
 
         table.stop("link").unwrap();
+        assert_eq!(
+            table.stop("link").unwrap_err().code,
+            ApiErrorCode::LinkNotActive
+        );
         let replacement = acquire_ready(&table, "link", &config, route);
         assert_eq!(replacement.number(), generation.number() + 1);
         let replacement_summary = table.snapshot(now_ms()).items.remove(0);

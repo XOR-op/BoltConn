@@ -31,6 +31,16 @@ use std::time::{Duration, Instant};
 
 const OUTER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
+pub(crate) fn validate_diagnostic_domain(domain: &str) -> Result<(), ApiError> {
+    if domain.trim().is_empty() || Name::from_ascii(domain).is_err() {
+        return Err(ApiError {
+            code: ApiErrorCode::InvalidRequest,
+            message: "invalid DNS name".to_string(),
+        });
+    }
+    Ok(())
+}
+
 struct ResolverEntry<P: RuntimeProvider> {
     resolver: AuxiliaryResolver<Resolver<P>>,
     identity: DnsResolverIdentity,
@@ -401,13 +411,20 @@ impl<P: RuntimeProvider> GenericDns<P> {
     }
 
     pub fn resolver_snapshot(&self) -> Snapshot<DnsResolverSummary> {
-        let observed_at_ms = now_ms();
+        self.resolver_snapshot_at(now_ms())
+    }
+
+    pub(crate) fn resolver_snapshot_at(&self, observed_at_ms: u64) -> Snapshot<DnsResolverSummary> {
         let runtime = self.runtime.load_full();
-        let items = resolver_views(runtime.as_ref())
+        let mut items = resolver_views(runtime.as_ref())
             .into_iter()
             .filter(|view| view.record.lookups() > 0)
-            .map(|view| view.record.summary(&view.identity, view.scopes))
-            .collect();
+            .map(|mut view| {
+                sort_dns_scopes(&mut view.scopes);
+                view.record.summary(&view.identity, view.scopes)
+            })
+            .collect::<Vec<_>>();
+        sort_resolver_summaries(&mut items);
         Snapshot {
             observed_at_ms,
             items,
@@ -415,28 +432,49 @@ impl<P: RuntimeProvider> GenericDns<P> {
     }
 
     pub fn resolver_detail(&self, id_prefix: &str) -> Result<DnsResolverDetail, ApiError> {
-        let observed_at_ms = now_ms();
+        self.resolver_detail_at(id_prefix, now_ms())
+    }
+
+    pub(crate) fn resolver_detail_at(
+        &self,
+        id_prefix: &str,
+        observed_at_ms: u64,
+    ) -> Result<DnsResolverDetail, ApiError> {
         let runtime = self.runtime.load_full();
         let id = resolve_prefix(runtime.as_ref(), id_prefix, true)?;
-        let view = resolver_views(runtime.as_ref())
+        let mut view = resolver_views(runtime.as_ref())
             .into_iter()
             .find(|view| view.identity.id == id)
             .ok_or_else(|| resolver_not_found(id_prefix))?;
+        sort_dns_scopes(&mut view.scopes);
         Ok(view
             .record
             .detail(observed_at_ms, &view.identity, view.scopes, Vec::new()))
+    }
+
+    pub(crate) fn resolver_ids(&self) -> Vec<String> {
+        let runtime = self.runtime.load_full();
+        let mut ids = runtime.records.keys().cloned().collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
     }
 
     pub async fn diagnostic_lookup(
         &self,
         request: DnsLookupRequest,
     ) -> Result<DnsLookupResponse, ApiError> {
-        if request.domain.trim().is_empty() || Name::from_ascii(&request.domain).is_err() {
-            return Err(ApiError {
-                code: ApiErrorCode::InvalidRequest,
-                message: "invalid DNS name".to_string(),
-            });
-        }
+        let lookup = self.diagnostic_lookup_detail(request).await?;
+        Ok(DnsLookupResponse {
+            observed_at_ms: now_ms(),
+            lookup,
+        })
+    }
+
+    pub(crate) async fn diagnostic_lookup_detail(
+        &self,
+        request: DnsLookupRequest,
+    ) -> Result<DnsLookupDetail, ApiError> {
+        validate_diagnostic_domain(&request.domain)?;
         let runtime = self.runtime.load_full();
         let execution = if let Some(prefix) = request.resolver_id.as_deref() {
             let id = resolve_prefix(runtime.as_ref(), prefix, false)?;
@@ -452,10 +490,7 @@ impl<P: RuntimeProvider> GenericDns<P> {
             .await
         };
         self.remember_lookup(execution.detail.clone());
-        Ok(DnsLookupResponse {
-            observed_at_ms: now_ms(),
-            lookup: execution.detail,
-        })
+        Ok(execution.detail)
     }
 
     pub(crate) fn dns_activity(&self) -> DnsActivity {
@@ -886,6 +921,44 @@ fn resolver_views<P: RuntimeProvider>(runtime: &DnsRuntime<P>) -> Vec<ResolverVi
         );
     }
     views
+}
+
+fn sort_dns_scopes(scopes: &mut [DnsScope]) {
+    scopes.sort_by(compare_dns_scopes);
+}
+
+fn compare_dns_scopes(left: &DnsScope, right: &DnsScope) -> std::cmp::Ordering {
+    match (left, right) {
+        (DnsScope::Global { order: left }, DnsScope::Global { order: right }) => left.cmp(right),
+        (DnsScope::Global { .. }, _) => std::cmp::Ordering::Less,
+        (_, DnsScope::Global { .. }) => std::cmp::Ordering::Greater,
+        (
+            DnsScope::Policy {
+                matchers: left_matchers,
+            },
+            DnsScope::Policy {
+                matchers: right_matchers,
+            },
+        ) => left_matchers.cmp(right_matchers),
+        (DnsScope::Policy { .. }, DnsScope::Link { .. }) => std::cmp::Ordering::Less,
+        (DnsScope::Link { .. }, DnsScope::Policy { .. }) => std::cmp::Ordering::Greater,
+        (DnsScope::Link { name: left }, DnsScope::Link { name: right }) => left.cmp(right),
+    }
+}
+
+pub(crate) fn sort_resolver_summaries(items: &mut [DnsResolverSummary]) {
+    for item in items.iter_mut() {
+        sort_dns_scopes(&mut item.scopes);
+    }
+    items.sort_by(|left, right| {
+        match (left.scopes.first(), right.scopes.first()) {
+            (Some(left), Some(right)) => compare_dns_scopes(left, right),
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+        .then_with(|| left.id.cmp(&right.id))
+    });
 }
 
 fn add_resolver_view(
@@ -1452,6 +1525,64 @@ mod tests {
         assert_eq!(views[0].scopes.len(), 2);
         assert!(matches!(views[0].scopes[0], DnsScope::Global { order: 1 }));
         assert!(matches!(views[0].scopes[1], DnsScope::Global { order: 2 }));
+    }
+
+    #[test]
+    fn facade_snapshots_use_supplied_time_and_preserve_counter_invariants() {
+        let dns = Dns::with_config(
+            "test",
+            "en0",
+            DnsPreference::PreferIpv4,
+            &HashMap::new(),
+            NameserverPolicies::empty(),
+            vec![NameServerConfigEnum::Normal(vec![NameServerConfig::udp(
+                "1.1.1.1".parse().unwrap(),
+            )])],
+        );
+        let runtime = dns.runtime.load_full();
+        let record = runtime.resolvers[0].record.clone();
+        record.observe(
+            Duration::from_millis(10),
+            DnsOutcome::Answered {
+                response: DnsResponseKind::Answer,
+            },
+        );
+        record.observe(Duration::from_millis(20), DnsOutcome::Timeout);
+        record.observe(
+            Duration::from_millis(30),
+            DnsOutcome::Error {
+                code: DnsErrorCode::Servfail,
+                detail: None,
+            },
+        );
+
+        let observed_at_ms = 123_456;
+        let snapshot = dns.resolver_snapshot_at(observed_at_ms);
+        assert_eq!(snapshot.observed_at_ms, observed_at_ms);
+        assert_eq!(snapshot.items.len(), 1);
+        assert_eq!(snapshot.items[0].lookups, 3);
+        let detail = dns
+            .resolver_detail_at(&snapshot.items[0].id, observed_at_ms)
+            .unwrap();
+        assert_eq!(detail.observed_at_ms, observed_at_ms);
+        assert_eq!(
+            detail.summary.lookups,
+            detail
+                .outcomes
+                .answered
+                .saturating_add(detail.outcomes.timeout)
+                .saturating_add(detail.outcomes.error)
+        );
+        assert!(detail.outcomes.cache_hits <= detail.outcomes.answered);
+        assert_eq!(detail.latency.sample_count, 1);
+        assert_eq!(detail.failure_episodes.len(), 1);
+
+        assert_eq!(
+            dns.fake_ip_mapping(IpAddr::from([198, 18, 0, 1]))
+                .unwrap_err()
+                .code,
+            ApiErrorCode::DnsMappingNotFound
+        );
     }
 
     #[test]
