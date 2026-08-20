@@ -206,6 +206,10 @@ proxy-local:
     cert-verify: ./certs/server.pem
 ```
 
+AnyTLS session pools are tracked as a named shared link. Use `GET /link`,
+`GET /link/<name>`, or the corresponding `boltconn link` commands to inspect
+aggregate sessions, streams, heartbeat evidence, DNS, routes, and traffic.
+
 ### WireGuard
 
 WireGuard VPN protocol with IPv4/IPv6 support.
@@ -246,7 +250,10 @@ proxy-local:
 - `reserved`: Reserved bytes as array of 3 integers (optional)
 - `over-tcp`: Use TCP transport instead of UDP (optional, default: `false`)
 
-**Note:** WireGuard creates a persistent connection. Monitor it via the `/connections/master` API endpoint.
+WireGuard runtime state is tracked as a named shared link. `GET /link/<name>`
+reports its generation, health, handshake/task evidence, endpoint, DNS, route,
+dependent connections, and traffic. `DELETE /link/<name>` stops its latest live
+generation and dependent connections.
 
 ### SSH
 
@@ -324,7 +331,9 @@ proxy-local:
      host-pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGz..."
    ```
 
-**Note:** SSH creates a persistent connection. Monitor it via the `/connections/master` API endpoint.
+SSH tunnel state is tracked as a named shared link. `GET /link/<name>` reports
+its generation, health, task/channel/probe evidence, endpoint, DNS, route,
+dependent connections, and traffic.
 
 ## Proxy Providers
 

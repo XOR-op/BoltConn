@@ -277,7 +277,7 @@ impl Endpoint {
             });
         }
 
-        tracing::info!("[WireGuard] Established master connection #{}", name);
+        tracing::info!("[WireGuard] Established shared link #{}", name);
 
         Ok(Arc::new(Self {
             name: name.to_string(),
@@ -301,17 +301,6 @@ impl Endpoint {
         // asynchronous cleanup task that drains the broadcast stop signal.
         self.is_active.abort();
         let _ = self.stop_sender.send(());
-    }
-
-    pub async fn debug_internal_state(&self) -> boltapi::MasterConnectionStatus {
-        let tunn_state = self.wg.stats().await;
-        boltapi::MasterConnectionStatus {
-            name: self.name.clone(),
-            alive: self.is_active.alive(),
-            last_active: self.last_active.lock().await.elapsed().as_secs(),
-            last_handshake: tunn_state.1.map(|x| x.as_secs()).unwrap_or(114514),
-            hand_shake_is_expired: tunn_state.0,
-        }
     }
 
     async fn link_snapshot(
@@ -573,17 +562,14 @@ impl WireguardManager {
         Ok(endpoint)
     }
 
-    pub async fn stop_master_conn(&self, name: &str) {
+    pub async fn stop_named_link(&self, name: &str) {
         match self.link_table.stop(name) {
             Ok(invalidation) => {
                 self.stop_generation(name, invalidation.generation).await;
-                tracing::info!("Stop WireGuard master connection #{}", name);
+                tracing::info!("Stop WireGuard link #{}", name);
             }
             Err(_) => {
-                tracing::warn!(
-                    "Stop WireGuard master connection #{} failed: no such connection",
-                    name
-                );
+                tracing::warn!("Stop WireGuard link #{} failed: no such link", name);
             }
         }
     }
@@ -677,22 +663,6 @@ impl WireguardManager {
             },
             boltapi::ConnResultCode::LinkLost,
         );
-    }
-
-    pub async fn debug_internal_state(&self) -> Vec<boltapi::MasterConnectionStatus> {
-        let endpoints: Vec<_> = self
-            .active_conn
-            .read()
-            .await
-            .values()
-            .map(|runtime| runtime.runtime.clone())
-            .collect();
-        let mut ret = Vec::new();
-        for ep in endpoints {
-            let r = ep.debug_internal_state().await;
-            ret.push(r);
-        }
-        ret
     }
 }
 

@@ -661,13 +661,13 @@ struct ContextIndexInner {
 }
 
 impl ContextManager {
-    pub fn new(log_limit: u32) -> Self {
+    pub fn new(history_limit: u32) -> Self {
         Self {
             index: Arc::new(ContextIndex {
                 inner: RwLock::new(ContextIndexInner {
                     active: HashMap::new(),
                     terminal: VecDeque::new(),
-                    history_limit: log_limit,
+                    history_limit,
                 }),
             }),
             global_upload: Arc::new(Default::default()),
@@ -750,11 +750,11 @@ impl ContextManager {
         self.global_download.clone()
     }
 
-    pub fn get_conn_log_limit(&self) -> u32 {
+    pub fn get_conn_history_limit(&self) -> u32 {
         self.index.inner.read().unwrap().history_limit
     }
 
-    pub fn set_conn_log_limit(&self, limit: u32) {
+    pub fn set_conn_history_limit(&self, limit: u32) {
         let mut inner = self.index.inner.write().unwrap();
         inner.history_limit = limit;
         inner.evict_terminal_history();
@@ -762,7 +762,7 @@ impl ContextManager {
 
     /// Clones record handles while holding the index lock. Callers can then
     /// snapshot cold record state without blocking new begin/finish operations.
-    pub fn get_active_copy(&self) -> Vec<ConnHandle> {
+    pub fn active_records(&self) -> Vec<ConnHandle> {
         let mut records: Vec<_> = self
             .index
             .inner
@@ -779,7 +779,7 @@ impl ContextManager {
             .collect()
     }
 
-    pub fn get_inactive_copy(&self) -> Vec<ConnHandle> {
+    pub fn terminal_records(&self) -> Vec<ConnHandle> {
         self.index
             .inner
             .read()
@@ -908,7 +908,7 @@ mod connection_record_tests {
         assert_eq!((first.id(), second.id(), third.id()), (0, 1, 2));
         assert_eq!(
             manager
-                .get_active_copy()
+                .active_records()
                 .iter()
                 .map(ConnHandle::id)
                 .collect::<Vec<_>>(),
@@ -982,10 +982,10 @@ mod connection_record_tests {
 
         assert!(second.finish(ConnResultCode::Completed, None, None));
         assert!(first.finish(ConnResultCode::Completed, None, None));
-        assert!(manager.get_active_copy().is_empty());
+        assert!(manager.active_records().is_empty());
         assert_eq!(
             manager
-                .get_inactive_copy()
+                .terminal_records()
                 .iter()
                 .map(ConnHandle::id)
                 .collect::<Vec<_>>(),
@@ -1004,17 +1004,17 @@ mod connection_record_tests {
             ));
         }
 
-        manager.set_conn_log_limit(2);
+        manager.set_conn_history_limit(2);
         assert_eq!(
             manager
-                .get_inactive_copy()
+                .terminal_records()
                 .iter()
                 .map(ConnHandle::id)
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
-        manager.set_conn_log_limit(0);
-        assert!(manager.get_inactive_copy().is_empty());
+        manager.set_conn_history_limit(0);
+        assert!(manager.terminal_records().is_empty());
     }
 
     #[test]
@@ -1024,8 +1024,8 @@ mod connection_record_tests {
         let active = begin_test_connection(&manager, 10_002);
 
         assert!(completed.finish(ConnResultCode::Completed, None, None));
-        assert!(manager.get_inactive_copy().is_empty());
-        assert_eq!(manager.get_active_copy()[0].id(), active.id());
+        assert!(manager.terminal_records().is_empty());
+        assert_eq!(manager.active_records()[0].id(), active.id());
     }
 
     #[test]
@@ -1056,8 +1056,8 @@ mod connection_record_tests {
         });
 
         assert_eq!(wins, 1);
-        assert!(manager.get_active_copy().is_empty());
-        assert_eq!(manager.get_inactive_copy().len(), 1);
+        assert!(manager.active_records().is_empty());
+        assert_eq!(manager.terminal_records().len(), 1);
         assert!(matches!(
             handle.snapshot().state.termination.unwrap().code,
             ConnResultCode::Completed | ConnResultCode::TransferError

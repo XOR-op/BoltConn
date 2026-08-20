@@ -26,22 +26,6 @@ pub struct ProcessParentSchema {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct ConnectionSchema {
-    pub conn_id: u64,
-    pub inbound: String,
-    pub source: String,
-    pub destination: String,
-    pub protocol: String,
-    pub proxy: String,
-    pub process: Option<ProcessSchema>,
-    pub upload: u64,
-    pub download: u64,
-    pub start_time: u64,
-    pub active: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
 pub struct SessionSchema {
     pub pair: String,
     pub time: String,
@@ -132,14 +116,4 @@ pub struct TrafficResp {
 #[serde(deny_unknown_fields)]
 pub struct TunStatusSchema {
     pub enabled: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct MasterConnectionStatus {
-    pub name: String,
-    pub alive: bool,
-    pub last_active: u64,
-    pub last_handshake: u64,
-    pub hand_shake_is_expired: bool,
 }

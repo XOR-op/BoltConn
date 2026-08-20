@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub(super) const CACHE_HIT_THRESHOLD: Duration = Duration::from_micros(100);
+pub(super) const CACHE_HIT_THRESHOLD: Duration = Duration::from_millis(1);
 const LATENCY_SAMPLE_LIMIT: usize = 200;
 const FAILURE_EPISODE_LIMIT: usize = 3;
 

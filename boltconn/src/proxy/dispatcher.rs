@@ -251,10 +251,6 @@ impl Dispatcher {
             .store(flag, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn get_wg_mgr(&self) -> Arc<WireguardManager> {
-        self.wireguard_mgr.clone()
-    }
-
     pub(super) fn get_iface_name(&self) -> String {
         self.iface_name.clone()
     }
@@ -1066,8 +1062,8 @@ mod tests {
             ConnStage::Inspecting,
         );
 
-        assert!(manager.get_active_copy().is_empty());
-        let snapshot = manager.get_inactive_copy()[0].snapshot();
+        assert!(manager.active_records().is_empty());
+        let snapshot = manager.terminal_records()[0].snapshot();
         assert_eq!(snapshot.state.state, ConnState::Closed);
         let termination = snapshot.state.termination.unwrap();
         assert_eq!(termination.code, ConnResultCode::ClientClosed);

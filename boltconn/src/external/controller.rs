@@ -11,11 +11,11 @@ use crate::proxy::{
 };
 use boltapi::{
     ApiError, ApiErrorCode, ConnDetail, ConnListRequest, ConnOrigin, ConnStopResult, ConnSummary,
-    ConnectionSchema, DnsLookupDetail, DnsLookupRequest, DnsLookupResponse, DnsOutcome,
-    DnsResolverDetail, DnsResolverSummary, FakeIpMapping, GetGroupRespSchema, GetInterceptDataResp,
+    DnsLookupDetail, DnsLookupRequest, DnsLookupResponse, DnsOutcome, DnsResolverDetail,
+    DnsResolverSummary, FakeIpMapping, GetGroupRespSchema, GetInterceptDataResp,
     GetInterceptRangeReq, HttpInterceptSchema, LinkDetail, LinkEvidence, LinkReason, LinkSummary,
-    MasterConnectionStatus, ProcessParentSchema, ProcessSchema, ProxyData, SessionSchema, Snapshot,
-    Traffic, TrafficResp, TunStatusSchema,
+    ProcessParentSchema, ProcessSchema, ProxyData, SessionSchema, Snapshot, Traffic, TrafficResp,
+    TunStatusSchema,
 };
 use std::collections::HashSet;
 use std::io::Write;
@@ -125,12 +125,17 @@ impl Controller {
     }
 
     pub fn get_conn_history_limit(&self) -> u32 {
-        self.stat_center.get_conn_log_limit()
+        self.stat_center.get_conn_history_limit()
     }
 
     pub async fn set_conn_history_limit(&self, limit: u32) -> u32 {
-        self.set_conn_log_limit(limit).await;
-        self.stat_center.get_conn_log_limit()
+        let mut state = self.state.lock().await;
+        self.stat_center.set_conn_history_limit(limit);
+        // Retain the existing persisted key; only the runtime/API terminology
+        // changed from a log limit to terminal connection history.
+        state.state.log_limit = Some(limit);
+        Self::flush_state(&state);
+        self.stat_center.get_conn_history_limit()
     }
 
     pub async fn list_link(&self) -> Snapshot<LinkSummary> {
@@ -242,48 +247,6 @@ impl Controller {
         self.dns
             .fake_ip_mapping(fake_ip)
             .map_err(sanitize_api_error)
-    }
-
-    pub fn get_all_conns(&self) -> Vec<ConnectionSchema> {
-        let mut list = self.stat_center.get_active_copy();
-        list.extend(self.stat_center.get_inactive_copy());
-        // sort and remove duplicated
-        list.sort_by_key(ConnHandle::id);
-        list.dedup_by_key(|x| x.id());
-
-        list.into_iter()
-            .map(|info| Self::get_connection_schema(&info))
-            .collect()
-    }
-
-    pub fn get_active_conns(&self) -> Vec<ConnectionSchema> {
-        let list = self.stat_center.get_active_copy();
-        list.iter().map(Self::get_connection_schema).collect()
-    }
-
-    fn get_connection_schema(info: &ConnHandle) -> ConnectionSchema {
-        let snapshot = info.snapshot();
-        ConnectionSchema {
-            conn_id: snapshot.start.id,
-            inbound: snapshot.start.conn_info.inbound.to_string(),
-            source: snapshot.start.conn_info.src.to_string(),
-            destination: snapshot.start.conn_info.dst.to_string(),
-            protocol: snapshot.state.session_protocol.to_string(),
-            proxy: snapshot
-                .state
-                .outbound_name
-                .unwrap_or_else(|| "-".to_string()),
-            process: snapshot
-                .start
-                .conn_info
-                .process_info
-                .as_ref()
-                .map(Self::to_process_schema),
-            upload: snapshot.upload_bytes,
-            download: snapshot.download_bytes,
-            start_time: snapshot.start.started_at_ms / 1_000,
-            active: !info.done(),
-        }
     }
 
     fn to_process_schema(info: &crate::platform::process::ProcessInfo) -> ProcessSchema {
@@ -560,46 +523,6 @@ impl Controller {
         Self::flush_state(&state);
     }
 
-    pub async fn set_conn_log_limit(&self, limit: u32) {
-        let mut state = self.state.lock().await;
-        self.stat_center.set_conn_log_limit(limit);
-        state.state.log_limit = Some(limit);
-        Self::flush_state(&state);
-    }
-
-    pub fn get_conn_log_limit(&self) -> u32 {
-        self.stat_center.get_conn_log_limit()
-    }
-
-    pub async fn get_master_conn_stat(&self) -> Vec<MasterConnectionStatus> {
-        self.dispatcher.get_wg_mgr().debug_internal_state().await
-    }
-
-    pub async fn stop_master_conn(&self, id: String) {
-        self.dispatcher.get_wg_mgr().stop_master_conn(&id).await;
-    }
-
-    pub async fn real_lookup(&self, domain_name: String) -> Option<String> {
-        match self
-            .dns
-            .genuine_lookup_for(
-                domain_name.as_str(),
-                boltapi::DnsLookupPurpose::Diagnostic,
-                None,
-            )
-            .await
-        {
-            Ok(Some(ip)) => Some(ip.to_string()),
-            _ => None,
-        }
-    }
-
-    pub fn fake_ip_to_real(&self, fake_ip: String) -> Option<String> {
-        self.dns
-            .fake_ip_to_domain(fake_ip.parse().ok()?)
-            .map(|ip| ip.to_string())
-    }
-
     fn flush_state(state: &LinkedState) {
         if let Ok(content) = serde_yaml::to_string(&state.state) {
             let content = "# This file is managed by BoltConn. Do not edit unless you know what you are doing.\n".to_string() + content.as_str();
@@ -678,10 +601,10 @@ fn connection_snapshot_at(
     let mut connections = if let Some(link) = request.link {
         manager.get_active_for_link(&link)
     } else if active_only {
-        manager.get_active_copy()
+        manager.active_records()
     } else {
-        let mut connections = manager.get_active_copy();
-        connections.extend(manager.get_inactive_copy());
+        let mut connections = manager.active_records();
+        connections.extend(manager.terminal_records());
         connections
     };
     connections.sort_unstable_by_key(ConnHandle::id);
@@ -743,7 +666,7 @@ fn stop_connection(manager: &ContextManager, id: u64) -> Result<ConnStopResult, 
 
 fn stop_all_connections(manager: &ContextManager) -> ConnStopResult {
     let stopped_connections = manager
-        .get_active_copy()
+        .active_records()
         .into_iter()
         .filter(|connection| connection.abort())
         .count()
@@ -1196,7 +1119,7 @@ mod observability_tests {
         begin_connection(&manager, 10_002, None);
         begin_connection(&manager, 10_003, None);
         assert_eq!(stop_all_connections(&manager).stopped_connections, 2);
-        assert!(manager.get_active_copy().is_empty());
+        assert!(manager.active_records().is_empty());
     }
 
     fn resolver_summary(id: &str, scope: DnsScope) -> DnsResolverSummary {

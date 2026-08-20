@@ -166,10 +166,20 @@ pub(super) fn render_detail(
             writeln!(output, "  Parents:").unwrap();
             for parent in parents {
                 let path = parent.path.as_deref().unwrap_or("unavailable");
+                let executable = parent
+                    .name
+                    .as_deref()
+                    .filter(|name| !name.is_empty())
+                    .or_else(|| {
+                        std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                    })
+                    .unwrap_or("unavailable");
                 if let Some(command) = &parent.cmdline {
-                    writeln!(output, "    {path} — {command}").unwrap();
+                    writeln!(output, "    {executable} — {command}").unwrap();
                 } else {
-                    writeln!(output, "    {path}").unwrap();
+                    writeln!(output, "    {executable} — {path}").unwrap();
                 }
             }
         }
@@ -390,5 +400,55 @@ mod tests {
         assert!(output.contains("Not used."));
         assert!(output.contains("No shared links."));
         assert!(!output.contains("Process\n"));
+    }
+
+    #[test]
+    fn parent_process_uses_executable_name_before_full_command() {
+        let detail = ConnDetail {
+            observed_at_ms: 10_000,
+            summary: summary(ConnState::Active, None),
+            established_at_ms: Some(2_000),
+            ended_at_ms: None,
+            flow: ConnFlow {
+                inbound: "tun".to_string(),
+                source: "198.18.0.1:1234".parse().unwrap(),
+                accepted: NetworkAddr::Socket {
+                    address: "198.18.0.7:443".parse().unwrap(),
+                },
+                identified: None,
+                resolution: DestinationResolution::NotStarted,
+            },
+            process: Some(boltapi::ProcessSchema {
+                pid: 9_241,
+                path: "/Applications/Firefox.app/Contents/MacOS/firefox".to_string(),
+                name: "firefox".to_string(),
+                cmdline: "firefox --profile default".to_string(),
+                cwd: "/tmp".to_string(),
+                parents: vec![boltapi::ProcessParentSchema {
+                    pid: 9_200,
+                    name: Some("launcher".to_string()),
+                    path: Some("/Applications/Launcher.app/Contents/MacOS/launcher".to_string()),
+                    cmdline: Some(
+                        "/Applications/Launcher.app/Contents/MacOS/launcher --open firefox"
+                            .to_string(),
+                    ),
+                    cwd: None,
+                }],
+                tag: None,
+            }),
+            route: None,
+            dns: ConnDnsActivity {
+                total_lookups: 0,
+                lookups: Vec::new(),
+            },
+            links: Vec::new(),
+            termination: None,
+        };
+
+        let output = render_detail(detail, &[]);
+        assert!(output.contains(
+            "    launcher — /Applications/Launcher.app/Contents/MacOS/launcher --open firefox"
+        ));
+        assert!(!output.contains("    /Applications/Launcher.app/Contents/MacOS/launcher —"));
     }
 }

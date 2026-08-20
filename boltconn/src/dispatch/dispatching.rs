@@ -183,10 +183,10 @@ impl Dispatching {
                         if let Some(p) = self.proxies.get(&real_proxy_name) {
                             match *p.get_impl() {
                                 ProxyImpl::Wireguard(_) => {
-                                    wg_mgr.stop_master_conn(&p.get_name()).await;
+                                    wg_mgr.stop_named_link(&p.get_name()).await;
                                 }
                                 ProxyImpl::Ssh(_) => {
-                                    tracing::warn!("SSH master reconnection not implemented yet");
+                                    tracing::warn!("SSH link reconnection not implemented yet");
                                 }
                                 _ => {}
                             }

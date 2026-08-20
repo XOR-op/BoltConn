@@ -64,52 +64,36 @@ ws.onmessage = (event) => {
 };
 ```
 
-### GET /ws/connections
+### GET /ws/conn
 
-Real-time connection list stream.
-
-**Protocol:** WebSocket
-
-**Description:** Streams the current list of active connections every second.
-
-**Response Format:**
+Streams a complete replacement snapshot of all nonterminal connections once per
+second. Frames are not deltas; replace the client's current view with `items`.
 
 ```json
-[
-  {
-    "conn_id": 12345,
-    "inbound": "http:7890",
-    "source": "192.168.1.100:54321",
-    "destination": "example.com:443",
-    "protocol": "tcp",
-    "proxy": "my-proxy",
-    "process": {
-      "pid": 1234,
-      "path": "/usr/bin/firefox",
-      "name": "firefox",
-      "cmdline": "firefox https://example.com",
-      "parent": {
-        "pid": 4321,
-        "name": "bash",
-        "path": "/bin/bash",
-        "cmdline": "bash"
-      }
-    },
-    "upload": 4096,
-    "download": 16384,
-    "start_time": 1234567890,
-    "active": true
-  }
-]
+{
+  "observed_at_ms": 1786460641000,
+  "items": [
+    {
+      "id": 4821,
+      "state": "active",
+      "started_at_ms": 1786460640000,
+      "duration_ms": 1000,
+      "origin": { "kind": "process", "name": "curl", "tag": null },
+      "protocol": "tls",
+      "target": { "kind": "domain", "name": "example.com", "port": 443 },
+      "via": { "group": "US", "selected": "ssh-us-2" },
+      "traffic": { "upload_bytes": 2048, "download_bytes": 8192 },
+      "result": null
+    }
+  ]
+}
 ```
 
-**Example (JavaScript):**
-
 ```javascript
-const ws = new WebSocket('ws://localhost:9000/ws/connections');
+const ws = new WebSocket('ws://localhost:9000/ws/conn');
 ws.onmessage = (event) => {
-  const connections = JSON.parse(event.data);
-  console.log(`Active connections: ${connections.length}`);
+  const snapshot = JSON.parse(event.data);
+  console.log(`Active connections: ${snapshot.items.length}`);
 };
 ```
 
@@ -190,7 +174,7 @@ curl -X PUT http://localhost:9000/tun \
   -d '{"enabled": true}'
 ```
 
-## Traffic & Connections
+## Traffic and Connections
 
 ### GET /traffic
 
@@ -215,131 +199,89 @@ Get current traffic statistics.
 curl http://localhost:9000/traffic
 ```
 
-### GET /connections
+### GET /conn
 
-Get all active connections.
+Returns an ID-ordered `Snapshot<ConnSummary>` containing live and retained
+terminal connections. `observed_at_ms` is the daemon time used for all live
+durations in the response.
 
-**Method:** GET
-
-**Response:**
-
-```json
-[
-  {
-    "conn_id": 12345,
-    "inbound": "http:7890",
-    "source": "192.168.1.100:54321",
-    "destination": "example.com:443",
-    "protocol": "tcp",
-    "proxy": "my-proxy",
-    "process": {
-      "pid": 1234,
-      "path": "/usr/bin/firefox",
-      "name": "firefox",
-      "cmdline": "firefox https://example.com",
-      "parent": {
-        "pid": 4321,
-        "name": "bash",
-        "path": "/bin/bash",
-        "cmdline": "bash"
-      }
-    },
-    "upload": 4096,
-    "download": 16384,
-    "start_time": 1234567890,
-    "active": true
-  }
-]
-```
-
-**Fields:**
-- `conn_id`: Unique connection identifier
-- `inbound`: Inbound service (e.g., "http:7890", "socks5:1080", "tun")
-- `source`: Source address and port
-- `destination`: Destination address and port
-- `protocol`: Protocol ("tcp" or "udp")
-- `proxy`: Proxy group or name used
-- `process`: Process information (may be null)
-- `upload`: Uploaded bytes
-- `download`: Downloaded bytes
-- `start_time`: Unix timestamp
-- `active`: Whether connection is still active
-
-**Example:**
-
-```bash
-curl http://localhost:9000/connections
-```
-
-### DELETE /connections
-
-Stop all active connections.
-
-**Method:** DELETE
-
-**Response:** Empty (HTTP 200)
-
-**Example:**
-
-```bash
-curl -X DELETE http://localhost:9000/connections
-```
-
-### DELETE /connections/:id
-
-Stop a specific connection.
-
-**Method:** DELETE
-
-**Path Parameter:**
-- `id`: Connection ID (u64)
-
-**Response:**
+Use `GET /conn?link=<name>` to return only active connections currently depending
+on the named shared link.
 
 ```json
-true
+{
+  "observed_at_ms": 1786460641000,
+  "items": [
+    {
+      "id": 4821,
+      "state": "active",
+      "started_at_ms": 1786460640000,
+      "duration_ms": 1000,
+      "origin": { "kind": "process", "name": "curl", "tag": null },
+      "protocol": "tls",
+      "target": { "kind": "domain", "name": "example.com", "port": 443 },
+      "via": { "group": "US", "selected": "ssh-us-2" },
+      "traffic": { "upload_bytes": 2048, "download_bytes": 8192 },
+      "result": null
+    }
+  ]
+}
 ```
-
-Returns `true` if successful.
-
-**Example:**
 
 ```bash
-curl -X DELETE http://localhost:9000/connections/12345
+curl http://localhost:9000/conn
+curl -G http://localhost:9000/conn --data-urlencode 'link=ssh primary'
 ```
 
-### GET /connections/log_limit
+### GET /conn/:id
 
-Get connection log limit.
+Returns `ConnDetail` for a live or retained connection. Detail adds flow,
+process, route provenance, DNS lookup evidence, shared-link dependencies,
+establishment/end timestamps, and terminal information to the summary.
 
-**Method:** GET
+```bash
+curl http://localhost:9000/conn/4821
+```
 
-**Response:**
+### DELETE /conn/:id
+
+Stops one live connection and returns the number stopped:
 
 ```json
-1000
+{ "stopped_connections": 1 }
 ```
 
-Returns the maximum number of connections to keep in history.
-
-**Example:**
+Stopping a retained terminal record returns `conn_not_active`; an unknown or
+evicted ID returns `conn_not_found`.
 
 ```bash
-curl http://localhost:9000/connections/log_limit
+curl -X DELETE http://localhost:9000/conn/4821
 ```
 
-### PUT /connections/log_limit
+### DELETE /conn/all
 
-Set connection log limit.
-
-**Method:** PUT
-
-**Request Body:** Number (u32)
-
-**Example:**
+Stops all live connections and returns `ConnStopResult`.
 
 ```bash
-curl -X PUT http://localhost:9000/connections/log_limit \
+curl -X DELETE http://localhost:9000/conn/all
+```
+
+### GET /conn/history-limit
+
+Returns the retained terminal-record limit as a bare JSON `u32`.
+
+```bash
+curl http://localhost:9000/conn/history-limit
+```
+
+### PUT /conn/history-limit
+
+Accepts a bare JSON `u32` and returns the effective value. Lowering the limit
+evicts the oldest terminal records immediately; zero disables terminal history
+without affecting live connections.
+
+```bash
+curl -X PUT http://localhost:9000/conn/history-limit \
   -H "Content-Type: application/json" \
   -d '500'
 ```
@@ -602,104 +544,102 @@ curl http://localhost:9000/speedtest/Proxy
 curl http://localhost:9000/proxies/Proxy
 ```
 
-## Master Connections
+## Shared Links
 
-Master connections are persistent connections for protocols like WireGuard and SSH.
+WireGuard, SSH, and AnyTLS reusable runtimes are exposed uniformly as named
+shared links. Only the latest attempted generation of each name is retained.
 
-### GET /connections/master
+### GET /link
 
-Get master connection status.
-
-**Method:** GET
-
-**Response:**
+Returns an alphabetically ordered `Snapshot<LinkSummary>`. Configured links that
+have never been initialized are omitted.
 
 ```json
-[
-  {
-    "name": "my-wg",
-    "alive": true,
-    "last_active": 1234567890,
-    "last_handshake": 1234567880,
-    "hand_shake_is_expired": false
-  }
-]
+{
+  "observed_at_ms": 1786460641000,
+  "items": [
+    {
+      "name": "ssh-primary",
+      "kind": "ssh",
+      "state": "ready",
+      "health": "healthy",
+      "generation": 2,
+      "active_conn_count": 3,
+      "last_active_at_ms": 1786460640000,
+      "traffic": { "upload_bytes": 2048, "download_bytes": 8192 },
+      "total_traffic": { "upload_bytes": 4096, "download_bytes": 16384 },
+      "reason": null
+    }
+  ]
+}
 ```
 
-**Fields:**
-- `name`: Connection name (proxy name)
-- `alive`: Whether connection is alive
-- `last_active`: Last activity timestamp
-- `last_handshake`: Last handshake timestamp (WireGuard only)
-- `hand_shake_is_expired`: Whether handshake is expired (WireGuard only)
+### GET /link/:name
 
-**Example:**
+Returns `LinkDetail`, including the latest generation's server, connected
+endpoints, creation route, DNS evidence, traffic, and protocol-specific
+WireGuard, SSH, or AnyTLS evidence. Percent-encode the name as one path segment.
 
 ```bash
-curl http://localhost:9000/connections/master
+curl http://localhost:9000/link/ssh-primary
 ```
 
-### DELETE /connections/master/:id
+### DELETE /link/:name
 
-Stop a master connection.
-
-**Method:** DELETE
-
-**Path Parameter:**
-- `id`: Connection name (string)
-
-**Example:**
+Stops the live latest generation and its dependent connections. Success is HTTP
+200 with an empty body.
 
 ```bash
-curl -X DELETE http://localhost:9000/connections/master/my-wg
+curl -X DELETE http://localhost:9000/link/ssh-primary
 ```
 
-## DNS Utilities
+## DNS Observability
 
-### GET /dns/mapping/:fake_ip
+Resolver IDs share one namespace across global, policy, and link-scoped
+resolvers. Detail and explicit lookup accept an unambiguous ID prefix.
 
-Resolve fake IP to real domain.
+### GET /dns
 
-**Method:** GET
+Returns an ordered `Snapshot<DnsResolverSummary>` with scopes, protocol,
+configured endpoint, egress, lookup count, latency, and latest activity.
 
-**Path Parameter:**
-- `fake_ip`: Fake IP address
+```bash
+curl http://localhost:9000/dns
+```
 
-**Response:**
+### GET /dns/:resolver-id
+
+Returns resolver detail, including current endpoints, timeout/retry settings,
+outcome counters, latency percentiles, and bounded failure episodes.
+
+```bash
+curl http://localhost:9000/dns/0123456789ab
+```
+
+### GET /dns/lookup
+
+Performs a diagnostic lookup and returns structured selection, cache, attempt,
+answer, outcome, and timing evidence. Omit `resolver` to use normal selection.
+
+```bash
+curl -G http://localhost:9000/dns/lookup \
+  --data-urlencode 'domain=example.com'
+curl -G http://localhost:9000/dns/lookup \
+  --data-urlencode 'domain=example.com' \
+  --data-urlencode 'resolver=0123456789ab'
+```
+
+### GET /dns/mapping
+
+Returns a fake-IP mapping. A missing mapping returns `dns_mapping_not_found`.
 
 ```json
-"example.com"
+{ "fake_ip": "198.18.0.1", "domain": "example.com" }
 ```
-
-Returns the domain name or `null` if not found.
-
-**Example:**
 
 ```bash
-curl http://localhost:9000/dns/mapping/198.18.0.1
-```
-
-### GET /dns/lookup/:domain
-
-Perform real DNS lookup.
-
-**Method:** GET
-
-**Path Parameter:**
-- `domain`: Domain name to resolve
-
-**Response:**
-
-```json
-"1.2.3.4"
-```
-
-Returns the IP address or `null` if lookup failed.
-
-**Example:**
-
-```bash
-curl http://localhost:9000/dns/lookup/example.com
+curl -G http://localhost:9000/dns/mapping \
+  --data-urlencode 'fake-ip=198.18.0.1'
 ```
 
 ## System
@@ -781,18 +721,18 @@ echo "Selected fastest proxy: $FASTEST"
 ```bash
 #!/bin/bash
 
-# Get active connections
-CONNECTIONS=$(curl -s http://localhost:9000/connections)
+# Get the complete connection snapshot
+CONNECTIONS=$(curl -s http://localhost:9000/conn)
 
-# Count by proxy
-echo "$CONNECTIONS" | jq -r '.[].proxy' | sort | uniq -c
+# Count concrete selections
+echo "$CONNECTIONS" | jq -r '.items[].via.selected // "DIRECT"' | sort | uniq -c
 
 # List processes
-echo "$CONNECTIONS" | jq -r '.[].process.name' | sort | uniq -c
+echo "$CONNECTIONS" | jq -r '.items[].origin | select(.kind == "process") | .name' | sort | uniq -c
 
 # Total traffic
-UPLOAD=$(echo "$CONNECTIONS" | jq '[.[].upload] | add')
-DOWNLOAD=$(echo "$CONNECTIONS" | jq '[.[].download] | add')
+UPLOAD=$(echo "$CONNECTIONS" | jq '[.items[].traffic.upload_bytes] | add // 0')
+DOWNLOAD=$(echo "$CONNECTIONS" | jq '[.items[].traffic.download_bytes] | add // 0')
 
 echo "Total Upload: $UPLOAD bytes"
 echo "Total Download: $DOWNLOAD bytes"
@@ -805,30 +745,30 @@ echo "Total Download: $DOWNLOAD bytes"
 
 THRESHOLD=10485760  # 10 MB
 
-curl -s http://localhost:9000/connections | \
-  jq -r ".[] | select(.download > $THRESHOLD) | .conn_id" | \
+curl -s http://localhost:9000/conn | \
+  jq -r ".items[] | select(.traffic.download_bytes > $THRESHOLD) | .id" | \
   while read id; do
     echo "Killing connection $id"
-    curl -X DELETE http://localhost:9000/connections/$id
+    curl -X DELETE http://localhost:9000/conn/$id
   done
 ```
 
-### Check Master Connection Health
+### Check Shared-Link Health
 
 ```bash
 #!/bin/bash
 
-# Get master connections
-MASTERS=$(curl -s http://localhost:9000/connections/master)
+# Get initialized shared links
+LINKS=$(curl -s http://localhost:9000/link)
 
 # Check health
-echo "$MASTERS" | jq -r '.[] | "\(.name): alive=\(.alive), expired=\(.hand_shake_is_expired)"'
+echo "$LINKS" | jq -r '.items[] | "\(.name): state=\(.state), health=\(.health)"'
 
-# Restart expired WireGuard connections
-echo "$MASTERS" | jq -r '.[] | select(.hand_shake_is_expired == true) | .name' | \
+# Stop unhealthy links; they are recreated lazily on the next use
+echo "$LINKS" | jq -r '.items[] | select(.health == "unhealthy") | .name' | \
   while read name; do
-    echo "Restarting expired connection: $name"
-    curl -X DELETE http://localhost:9000/connections/master/$name
+    echo "Stopping unhealthy link: $name"
+    curl -X DELETE "http://localhost:9000/link/$name"
   done
 ```
 
@@ -860,7 +800,8 @@ API endpoints may return error responses:
 
 ```json
 {
-  "error": "Error message"
+  "code": "conn_not_active",
+  "message": "connection 4820 is already closed"
 }
 ```
 
@@ -869,7 +810,10 @@ Common HTTP status codes:
 - `400 Bad Request` - Invalid request parameters
 - `401 Unauthorized` - Authentication failed
 - `404 Not Found` - Resource not found
+- `409 Conflict` - Resource is ambiguous or currently unavailable
 - `500 Internal Server Error` - Server error
+
+Clients should branch on the stable snake-case `code`, not on `message`.
 
 ## Rate Limiting
 
