@@ -1,7 +1,7 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use boltapi::{
-    ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
-    MasterConnectionStatus, TunStatusSchema,
+    ConnStopResult, ConnSummary, DnsLookupResponse, FakeIpMapping, GetGroupRespSchema,
+    GetInterceptDataResp, HttpInterceptSchema, LinkSummary, Snapshot, TunStatusSchema,
 };
 
 pub struct WebConnector {
@@ -36,34 +36,24 @@ impl WebConnector {
         Ok(result.as_str() == "true")
     }
 
-    pub async fn get_connections(&self) -> Result<Vec<ConnectionSchema>> {
-        let data = reqwest::get(self.route("/connections"))
+    pub async fn get_connections(&self) -> Result<Snapshot<ConnSummary>> {
+        let data = reqwest::get(self.route("/conn"))
             .await?
+            .error_for_status()?
             .text()
             .await?;
-        let result: Vec<ConnectionSchema> = serde_json::from_str(data.as_str())?;
+        let result: Snapshot<ConnSummary> = serde_json::from_str(data.as_str())?;
         Ok(result)
     }
 
-    pub async fn stop_connections(&self, nth: Option<usize>) -> Result<bool> {
-        Ok(match nth {
-            None => {
-                reqwest::Client::new()
-                    .delete(self.route("/connections"))
-                    .send()
-                    .await?;
-                true
-            }
-            Some(id) => {
-                let data = reqwest::Client::new()
-                    .delete(self.route(format!("/connections/{}", id).as_str()))
-                    .send()
-                    .await?
-                    .text()
-                    .await?;
-                data.as_str() == "true"
-            }
-        })
+    pub async fn stop_connections(&self, nth: Option<usize>) -> Result<ConnStopResult> {
+        let path = nth.map_or_else(|| "/conn/all".to_string(), |id| format!("/conn/{id}"));
+        let response = reqwest::Client::new()
+            .delete(self.route(&path))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(response.json().await?)
     }
 
     pub async fn get_tun(&self) -> Result<TunStatusSchema> {
@@ -106,51 +96,61 @@ impl WebConnector {
         Ok(result)
     }
 
-    pub async fn get_master_conn_stat(&self) -> Result<Vec<MasterConnectionStatus>> {
-        let data = reqwest::get(self.route("/connections/master"))
+    pub async fn get_master_conn_stat(&self) -> Result<Vec<LinkSummary>> {
+        let data = reqwest::get(self.route("/link"))
             .await?
+            .error_for_status()?
             .text()
             .await?;
-        let result: Vec<MasterConnectionStatus> = serde_json::from_str(data.as_str())?;
-        Ok(result)
+        let result: Snapshot<LinkSummary> = serde_json::from_str(data.as_str())?;
+        Ok(result.items)
     }
 
     pub async fn stop_master_conn(&self, id: String) -> Result<()> {
         reqwest::Client::new()
-            .delete(self.route(format!("/connections/master/{}", id).as_str()))
+            .delete(self.route_segment("/link", &id)?)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     pub async fn real_lookup(&self, domain: String) -> Result<String> {
-        let data = reqwest::get(self.route(format!("/dns/lookup/{}", domain).as_str()))
-            .await?
-            .text()
-            .await?;
-        Ok(data)
+        let mut url = reqwest::Url::parse(&self.route("/dns/lookup"))?;
+        url.query_pairs_mut().append_pair("domain", &domain);
+        let response: DnsLookupResponse =
+            reqwest::get(url).await?.error_for_status()?.json().await?;
+        response
+            .lookup
+            .answers
+            .iter()
+            .find(|answer| answer.selected)
+            .or_else(|| response.lookup.answers.first())
+            .map(|answer| answer.address.to_string())
+            .ok_or_else(|| anyhow!("DNS lookup returned no address"))
     }
 
     pub async fn fake_ip_to_real(&self, fake_ip: String) -> Result<String> {
-        let data = reqwest::get(self.route(format!("/dns/mapping/{}", fake_ip).as_str()))
-            .await?
-            .text()
-            .await?;
-        Ok(data)
+        let mut url = reqwest::Url::parse(&self.route("/dns/mapping"))?;
+        url.query_pairs_mut().append_pair("fake-ip", &fake_ip);
+        let mapping: FakeIpMapping = reqwest::get(url).await?.error_for_status()?.json().await?;
+        Ok(mapping.domain)
     }
 
     pub async fn set_conn_log_limit(&self, limit: u32) -> Result<()> {
         reqwest::Client::new()
-            .put(self.route("/connections/log_limit"))
+            .put(self.route("/conn/history-limit"))
             .json(&limit)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
     pub async fn get_conn_log_limit(&self) -> Result<u32> {
-        let data = reqwest::get(self.route("/connections/log_limit"))
+        let data = reqwest::get(self.route("/conn/history-limit"))
             .await?
+            .error_for_status()?
             .text()
             .await?;
         let result: u32 = serde_json::from_str(data.as_str())?;
@@ -168,5 +168,13 @@ impl WebConnector {
 
     fn route(&self, s: &str) -> String {
         format!("{}{}", self.url, s)
+    }
+
+    fn route_segment(&self, base: &str, segment: &str) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&self.route(base))?;
+        url.path_segments_mut()
+            .map_err(|_| anyhow!("controller URL cannot contain path segments"))?
+            .push(segment);
+        Ok(url)
     }
 }

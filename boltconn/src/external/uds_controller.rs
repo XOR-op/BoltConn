@@ -4,11 +4,14 @@ use crate::proxy::error::SystemError;
 use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::{ClientStreamServiceClient, ControlService};
 use boltapi::{
-    ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, GetInterceptRangeReq,
-    HttpInterceptSchema, MasterConnectionStatus, TrafficResp, TunStatusSchema,
+    ApiError, ConnDetail, ConnListRequest, ConnStopResult, ConnSummary, DnsLookupRequest,
+    DnsLookupResponse, DnsResolverDetail, DnsResolverSummary, FakeIpMapping, GetGroupRespSchema,
+    GetInterceptDataResp, GetInterceptRangeReq, HttpInterceptSchema, LinkDetail, LinkSummary,
+    Snapshot, TrafficResp, TunStatusSchema,
 };
 use futures::{FutureExt, StreamExt};
 use std::io;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tarpc::context::Context;
@@ -99,10 +102,6 @@ pub struct UdsController {
 impl UdsController {
     pub fn new(controller: Arc<Controller>) -> Self {
         Self { controller }
-    }
-
-    pub fn get_active_connections(&self) -> Vec<ConnectionSchema> {
-        self.controller.get_active_conns()
     }
 
     pub async fn run(self, listener: Arc<UnixListenerGuard>) -> io::Result<()> {
@@ -219,10 +218,10 @@ impl UdsRpcBackClient {
                 tokio::spawn(async move {
                     let interval_ms = 1000;
                     loop {
-                        let conn = self.controller.get_active_conns();
+                        let snapshot = self.controller.active_conn_snapshot();
                         if !self
                             .client
-                            .post_connections(Context::current(), conn)
+                            .post_connections(Context::current(), snapshot)
                             .await
                             .is_ok_and(|x| x == ctx_id)
                         {
@@ -293,20 +292,64 @@ impl ControlService for UdsRpcServer {
         self.controller.get_intercept_payload(id as usize)
     }
 
-    async fn get_all_conns(self, _ctx: Context) -> Vec<ConnectionSchema> {
-        self.controller.get_all_conns()
+    async fn list_conn(self, _ctx: Context, request: ConnListRequest) -> Snapshot<ConnSummary> {
+        self.controller.list_conn(request)
     }
 
-    async fn get_active_connections(self, _ctx: Context) -> Vec<ConnectionSchema> {
-        self.controller.get_active_conns()
+    async fn show_conn(self, _ctx: Context, id: u64) -> Result<ConnDetail, ApiError> {
+        self.controller.show_conn(id)
     }
 
-    async fn stop_all_conns(self, _ctx: Context) {
+    async fn stop_conn(self, _ctx: Context, id: u64) -> Result<ConnStopResult, ApiError> {
+        self.controller.stop_conn(id)
+    }
+
+    async fn stop_all_conn(self, _ctx: Context) -> ConnStopResult {
         self.controller.stop_all_conn()
     }
 
-    async fn stop_conn(self, _ctx: Context, id: u32) -> bool {
-        self.controller.stop_conn(id as u64).await
+    async fn get_conn_history_limit(self, _ctx: Context) -> u32 {
+        self.controller.get_conn_history_limit()
+    }
+
+    async fn set_conn_history_limit(self, _ctx: Context, limit: u32) -> u32 {
+        self.controller.set_conn_history_limit(limit).await
+    }
+
+    async fn list_link(self, _ctx: Context) -> Snapshot<LinkSummary> {
+        self.controller.list_link().await
+    }
+
+    async fn show_link(self, _ctx: Context, name: String) -> Result<LinkDetail, ApiError> {
+        self.controller.show_link(name).await
+    }
+
+    async fn stop_link(self, _ctx: Context, name: String) -> Result<(), ApiError> {
+        self.controller.stop_link(name).await
+    }
+
+    async fn list_dns(self, _ctx: Context) -> Snapshot<DnsResolverSummary> {
+        self.controller.list_dns()
+    }
+
+    async fn show_dns(self, _ctx: Context, id: String) -> Result<DnsResolverDetail, ApiError> {
+        self.controller.show_dns(id)
+    }
+
+    async fn lookup_dns(
+        self,
+        _ctx: Context,
+        request: DnsLookupRequest,
+    ) -> Result<DnsLookupResponse, ApiError> {
+        self.controller.lookup_dns(request).await
+    }
+
+    async fn get_dns_mapping(
+        self,
+        _ctx: Context,
+        fake_ip: IpAddr,
+    ) -> Result<FakeIpMapping, ApiError> {
+        self.controller.get_dns_mapping(fake_ip)
     }
 
     async fn add_temporary_rule(self, _ctx: Context, rule_literal: String) -> bool {
@@ -327,14 +370,6 @@ impl ControlService for UdsRpcServer {
         self.controller.clear_temporary_rule().await
     }
 
-    async fn real_lookup(self, _ctx: Context, domain: String) -> Option<String> {
-        self.controller.real_lookup(domain).await
-    }
-
-    async fn fake_ip_to_real(self, _ctx: Context, fake_ip: String) -> Option<String> {
-        self.controller.fake_ip_to_real(fake_ip)
-    }
-
     async fn get_tun(self, _ctx: Context) -> TunStatusSchema {
         self.controller.get_tun()
     }
@@ -345,22 +380,6 @@ impl ControlService for UdsRpcServer {
 
     async fn get_traffic(self, _ctx: Context) -> TrafficResp {
         self.controller.get_traffic()
-    }
-
-    async fn set_conn_log_limit(self, _ctx: Context, limit: u32) {
-        self.controller.set_conn_log_limit(limit).await
-    }
-
-    async fn get_conn_log_limit(self, _ctx: Context) -> u32 {
-        self.controller.get_conn_log_limit()
-    }
-
-    async fn get_master_conn_stat(self, _ctx: Context) -> Vec<MasterConnectionStatus> {
-        self.controller.get_master_conn_stat().await
-    }
-
-    async fn stop_master_conn(self, _ctx: Context, id: String) {
-        self.controller.stop_master_conn(id).await
     }
 
     async fn reload(self, _ctx: Context) -> bool {

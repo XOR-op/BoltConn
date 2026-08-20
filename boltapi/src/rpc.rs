@@ -1,7 +1,10 @@
 use crate::{
-    ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
-    MasterConnectionStatus, TrafficResp, TunStatusSchema,
+    ApiError, ConnDetail, ConnListRequest, ConnStopResult, ConnSummary, DnsLookupRequest,
+    DnsLookupResponse, DnsResolverDetail, DnsResolverSummary, FakeIpMapping, GetGroupRespSchema,
+    GetInterceptDataResp, HttpInterceptSchema, LinkDetail, LinkSummary, Snapshot, TrafficResp,
+    TunStatusSchema,
 };
+use std::net::IpAddr;
 
 pub const MAX_CODEC_FRAME_LENGTH: usize = 512 * 1024 * 1024;
 
@@ -23,14 +26,32 @@ pub trait ControlService {
 
     async fn get_intercepted_payload(id: u32) -> Option<GetInterceptDataResp>;
 
-    // Connections
-    async fn get_all_conns() -> Vec<ConnectionSchema>;
+    // Observability
+    async fn list_conn(request: ConnListRequest) -> Snapshot<ConnSummary>;
 
-    async fn get_active_connections() -> Vec<ConnectionSchema>;
+    async fn show_conn(id: u64) -> Result<ConnDetail, ApiError>;
 
-    async fn stop_all_conns();
+    async fn stop_conn(id: u64) -> Result<ConnStopResult, ApiError>;
 
-    async fn stop_conn(id: u32) -> bool;
+    async fn stop_all_conn() -> ConnStopResult;
+
+    async fn get_conn_history_limit() -> u32;
+
+    async fn set_conn_history_limit(limit: u32) -> u32;
+
+    async fn list_link() -> Snapshot<LinkSummary>;
+
+    async fn show_link(name: String) -> Result<LinkDetail, ApiError>;
+
+    async fn stop_link(name: String) -> Result<(), ApiError>;
+
+    async fn list_dns() -> Snapshot<DnsResolverSummary>;
+
+    async fn show_dns(id: String) -> Result<DnsResolverDetail, ApiError>;
+
+    async fn lookup_dns(request: DnsLookupRequest) -> Result<DnsLookupResponse, ApiError>;
+
+    async fn get_dns_mapping(fake_ip: IpAddr) -> Result<FakeIpMapping, ApiError>;
 
     // Temporary rules
     async fn add_temporary_rule(rule_literal: String) -> bool;
@@ -41,25 +62,12 @@ pub trait ControlService {
 
     async fn clear_temporary_rule();
 
-    // DNS
-    async fn real_lookup(domain: String) -> Option<String>;
-
-    async fn fake_ip_to_real(fake_ip: String) -> Option<String>;
-
     // General
     async fn get_tun() -> TunStatusSchema;
 
     async fn set_tun(enabled: TunStatusSchema) -> bool;
 
     async fn get_traffic() -> TrafficResp;
-
-    async fn set_conn_log_limit(limit: u32);
-
-    async fn get_conn_log_limit() -> u32;
-
-    async fn get_master_conn_stat() -> Vec<MasterConnectionStatus>;
-
-    async fn stop_master_conn(id: String);
 
     async fn reload() -> bool;
 
@@ -78,7 +86,7 @@ pub trait ControlService {
 pub trait ClientStreamService {
     async fn post_traffic(traffic: TrafficResp) -> u64;
 
-    async fn post_connections(traffic: Vec<ConnectionSchema>) -> u64;
+    async fn post_connections(snapshot: Snapshot<ConnSummary>) -> u64;
 
     async fn post_log(log: String) -> u64;
 }

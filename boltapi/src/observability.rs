@@ -602,6 +602,9 @@ pub enum DnsFailureKind {
 #[serde(deny_unknown_fields)]
 pub struct DnsLookupRequest {
     pub domain: String,
+    // HTTP spells this query key `resolver`; the alias keeps the typed UDS/JSON
+    // field name explicit without introducing a second transport-only request.
+    #[serde(alias = "resolver")]
     pub resolver_id: Option<String>,
 }
 
@@ -730,6 +733,13 @@ mod tests {
             "unexpected": true,
         }));
         assert!(dns.is_err());
+
+        let dns_query = serde_json::from_value::<DnsLookupRequest>(json!({
+            "domain": "example.com",
+            "resolver": "0123456789ab",
+        }))
+        .unwrap();
+        assert_eq!(dns_query.resolver_id.as_deref(), Some("0123456789ab"));
     }
 
     #[test]

@@ -1,4 +1,10 @@
+use axum::Json;
+use axum::body::Body;
+use axum::response::{IntoResponse, Response};
+use boltapi::{ApiError, ApiErrorCode};
 use http::Method;
+use http::StatusCode;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
@@ -115,4 +121,101 @@ pub(super) fn get_cors_layer(origin: AllowOrigin) -> CorsLayer {
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_origin(origin)
         .allow_headers(AllowHeaders::any())
+}
+
+pub(super) fn api_json<T>(result: Result<T, ApiError>) -> Response
+where
+    T: Serialize,
+{
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => api_error_response(error),
+    }
+}
+
+pub(super) fn api_empty(result: Result<(), ApiError>) -> Response {
+    match result {
+        // The API contract deliberately uses 200 with no response body for unit.
+        Ok(()) => Response::new(Body::empty()),
+        Err(error) => api_error_response(error),
+    }
+}
+
+pub(super) fn invalid_request(message: impl std::fmt::Display) -> ApiError {
+    ApiError {
+        code: ApiErrorCode::InvalidRequest,
+        message: crate::proxy::bounded_error_detail(&format!("invalid request: {message}")),
+    }
+}
+
+fn api_error_response(mut error: ApiError) -> Response {
+    error.message = crate::proxy::bounded_error_detail(&error.message);
+    (api_error_status(error.code), Json(error)).into_response()
+}
+
+fn api_error_status(code: ApiErrorCode) -> StatusCode {
+    match code {
+        ApiErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+        ApiErrorCode::ConnNotFound
+        | ApiErrorCode::LinkNotFound
+        | ApiErrorCode::ResolverNotFound
+        | ApiErrorCode::DnsMappingNotFound => StatusCode::NOT_FOUND,
+        ApiErrorCode::ConnNotActive
+        | ApiErrorCode::LinkNotInitialized
+        | ApiErrorCode::LinkNotActive
+        | ApiErrorCode::ResolverIdAmbiguous
+        | ApiErrorCode::ResolverUnavailable => StatusCode::CONFLICT,
+        ApiErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    #[tokio::test]
+    async fn api_errors_have_stable_status_and_json_payloads() {
+        let cases = [
+            (ApiErrorCode::InvalidRequest, StatusCode::BAD_REQUEST),
+            (ApiErrorCode::ConnNotFound, StatusCode::NOT_FOUND),
+            (ApiErrorCode::LinkNotFound, StatusCode::NOT_FOUND),
+            (ApiErrorCode::ResolverNotFound, StatusCode::NOT_FOUND),
+            (ApiErrorCode::DnsMappingNotFound, StatusCode::NOT_FOUND),
+            (ApiErrorCode::ConnNotActive, StatusCode::CONFLICT),
+            (ApiErrorCode::LinkNotInitialized, StatusCode::CONFLICT),
+            (ApiErrorCode::LinkNotActive, StatusCode::CONFLICT),
+            (ApiErrorCode::ResolverIdAmbiguous, StatusCode::CONFLICT),
+            (ApiErrorCode::ResolverUnavailable, StatusCode::CONFLICT),
+            (ApiErrorCode::Internal, StatusCode::INTERNAL_SERVER_ERROR),
+        ];
+
+        for (code, status) in cases {
+            let response = api_json::<serde_json::Value>(Err(ApiError {
+                code,
+                message: "transport error".to_string(),
+            }));
+            assert_eq!(response.status(), status);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let decoded: ApiError = serde_json::from_slice(&body).unwrap();
+            assert_eq!(decoded.code, code);
+            assert_eq!(decoded.message, "transport error");
+        }
+    }
+
+    #[tokio::test]
+    async fn unit_success_is_200_with_an_empty_body() {
+        let response = api_empty(Ok(()));
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn transport_errors_are_bounded() {
+        let error = invalid_request(format!("{}\nunsafe", "x".repeat(1_000)));
+        assert_eq!(error.code, ApiErrorCode::InvalidRequest);
+        assert!(error.message.chars().count() <= 256);
+        assert!(!error.message.chars().any(char::is_control));
+    }
 }

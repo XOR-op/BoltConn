@@ -101,7 +101,7 @@ impl Controller {
         connection_snapshot_at(self.stat_center.as_ref(), request, observed_at_ms, false)
     }
 
-    /// Full replacement snapshot used by both future HTTP and UDS streams.
+    /// Full replacement snapshot used by both HTTP and UDS streams.
     pub fn active_conn_snapshot(&self) -> Snapshot<ConnSummary> {
         let observed_at_ms = now_ms();
         connection_snapshot_at(
@@ -116,13 +116,11 @@ impl Controller {
         show_connection_at(self.stat_center.as_ref(), id, now_ms())
     }
 
-    /// Temporary suffix avoids changing legacy transport behavior before Step
-    /// 10 replaces those routes with the shared resource contract.
-    pub fn stop_conn_resource(&self, id: u64) -> Result<ConnStopResult, ApiError> {
+    pub fn stop_conn(&self, id: u64) -> Result<ConnStopResult, ApiError> {
         stop_connection(self.stat_center.as_ref(), id)
     }
 
-    pub fn stop_all_conn_resource(&self) -> ConnStopResult {
+    pub fn stop_all_conn(&self) -> ConnStopResult {
         stop_all_connections(self.stat_center.as_ref())
     }
 
@@ -326,17 +324,6 @@ impl Controller {
             parents,
             tag: info.tag.clone(),
         }
-    }
-
-    pub fn stop_all_conn(&self) {
-        let list = self.stat_center.get_active_copy();
-        for entry in list {
-            entry.abort();
-        }
-    }
-
-    pub async fn stop_conn(&self, id: u64) -> bool {
-        self.stat_center.stop(id)
     }
 
     pub fn get_sessions(&self) -> Vec<SessionSchema> {

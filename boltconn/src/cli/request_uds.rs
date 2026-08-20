@@ -1,10 +1,11 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::{ClientStreamServiceRequest, ClientStreamServiceResponse, ControlServiceClient};
 use boltapi::{
-    ConnectionSchema, GetGroupRespSchema, GetInterceptDataResp, HttpInterceptSchema,
-    MasterConnectionStatus, TunStatusSchema,
+    ApiError, ConnListRequest, ConnStopResult, ConnSummary, DnsLookupRequest, GetGroupRespSchema,
+    GetInterceptDataResp, HttpInterceptSchema, LinkSummary, Snapshot, TunStatusSchema,
 };
+use std::net::IpAddr;
 use tarpc::context::Context;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tarpc::transport::channel::UnboundedChannel;
@@ -67,17 +68,18 @@ impl UdsConnector {
             .await?)
     }
 
-    pub async fn get_connections(&self) -> Result<Vec<ConnectionSchema>> {
-        Ok(self.client.get_all_conns(Context::current()).await?)
+    pub async fn get_connections(&self) -> Result<Snapshot<ConnSummary>> {
+        Ok(self
+            .client
+            .list_conn(Context::current(), ConnListRequest::default())
+            .await?)
     }
-    pub async fn stop_connections(&self, nth: Option<usize>) -> Result<bool> {
-        Ok(match nth {
-            None => {
-                self.client.stop_all_conns(Context::current()).await?;
-                true
-            }
-            Some(id) => self.client.stop_conn(Context::current(), id as u32).await?,
-        })
+
+    pub async fn stop_connections(&self, nth: Option<usize>) -> Result<ConnStopResult> {
+        match nth {
+            None => Ok(self.client.stop_all_conn(Context::current()).await?),
+            Some(id) => map_api_result(self.client.stop_conn(Context::current(), id as u64).await?),
+        }
     }
 
     pub async fn get_tun(&self) -> Result<TunStatusSchema> {
@@ -115,17 +117,35 @@ impl UdsConnector {
     }
 
     pub async fn real_lookup(&self, domain: String) -> Result<String> {
-        self.client
-            .real_lookup(Context::current(), domain)
-            .await?
-            .ok_or(anyhow::anyhow!("No DNS record"))
+        let response = map_api_result(
+            self.client
+                .lookup_dns(
+                    Context::current(),
+                    DnsLookupRequest {
+                        domain,
+                        resolver_id: None,
+                    },
+                )
+                .await?,
+        )?;
+        response
+            .lookup
+            .answers
+            .iter()
+            .find(|answer| answer.selected)
+            .or_else(|| response.lookup.answers.first())
+            .map(|answer| answer.address.to_string())
+            .ok_or_else(|| anyhow!("DNS lookup returned no address"))
     }
 
     pub async fn fake_ip_to_real(&self, fake_ip: String) -> Result<String> {
-        self.client
-            .fake_ip_to_real(Context::current(), fake_ip)
-            .await?
-            .ok_or(anyhow::anyhow!("No fake IP mapping"))
+        let fake_ip = fake_ip.parse::<IpAddr>()?;
+        Ok(map_api_result(
+            self.client
+                .get_dns_mapping(Context::current(), fake_ip)
+                .await?,
+        )?
+        .domain)
     }
 
     pub async fn add_temporary_rule(&self, rule_literal: String) -> Result<bool> {
@@ -151,14 +171,17 @@ impl UdsConnector {
     }
 
     pub async fn set_conn_log_limit(&self, limit: u32) -> Result<()> {
-        Ok(self
-            .client
-            .set_conn_log_limit(Context::current(), limit)
-            .await?)
+        self.client
+            .set_conn_history_limit(Context::current(), limit)
+            .await?;
+        Ok(())
     }
 
     pub async fn get_conn_log_limit(&self) -> Result<u32> {
-        Ok(self.client.get_conn_log_limit(Context::current()).await?)
+        Ok(self
+            .client
+            .get_conn_history_limit(Context::current())
+            .await?)
     }
 
     pub async fn get_log_stream(&self, ctx_id: u64) -> Result<()> {
@@ -172,11 +195,15 @@ impl UdsConnector {
         Ok(self.client.reload(Context::current()).await?)
     }
 
-    pub async fn get_master_conn_stat(&self) -> Result<Vec<MasterConnectionStatus>> {
-        Ok(self.client.get_master_conn_stat(Context::current()).await?)
+    pub async fn get_master_conn_stat(&self) -> Result<Vec<LinkSummary>> {
+        Ok(self.client.list_link(Context::current()).await?.items)
     }
 
     pub async fn stop_master_conn(&self, id: String) -> Result<()> {
-        Ok(self.client.stop_master_conn(Context::current(), id).await?)
+        map_api_result(self.client.stop_link(Context::current(), id).await?)
     }
+}
+
+fn map_api_result<T>(result: std::result::Result<T, ApiError>) -> Result<T> {
+    result.map_err(|error| anyhow!("{:?}: {}", error.code, error.message))
 }

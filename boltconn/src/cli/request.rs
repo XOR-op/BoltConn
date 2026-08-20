@@ -1,10 +1,8 @@
 use crate::cli::request_uds::UdsConnector;
 use crate::cli::request_web::WebConnector;
 use anyhow::{Result, anyhow};
-use boltapi::CapturedBodySchema;
+use boltapi::{CapturedBodySchema, ConnOrigin};
 use colored::Colorize;
-use std::ops::Add;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tabular::{Row, Table};
 
 enum Inner {
@@ -94,30 +92,25 @@ impl Requester {
             Inner::Web(c) => c.get_connections().await,
             Inner::Uds(c) => c.get_connections().await,
         }?;
-        for conn in result {
-            let src_ip = conn.source.split(":").next().unwrap();
+        for conn in result.items {
+            let origin = match conn.origin {
+                ConnOrigin::Process { name, .. } => format!("<{name}>"),
+                ConnOrigin::Network { source_ip } => format!("<{source_ip}>"),
+            };
             println!(
                 "#{}: {} ({},{}) {}\t [up:{},down:{},time:{}] [{}]",
-                conn.conn_id,
-                conn.destination.cyan(),
+                conn.id,
+                conn.target.to_string().cyan(),
                 conn.protocol,
-                conn.proxy.italic(),
-                match conn.process {
-                    Some(s) => format!("<{}>", s.name),
-                    None =>
-                        if !(src_ip == "127.0.0.1" || src_ip == "198.18.0.1") {
-                            format!("<{}>", src_ip)
-                        } else {
-                            String::new()
-                        },
-                },
-                pretty_size(conn.upload),
-                pretty_size(conn.download),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH.add(Duration::from_secs(conn.start_time)))
-                    .map(|t| pretty_time(t.as_secs()))
-                    .unwrap_or("N/A".to_string()),
-                if conn.active { "open" } else { "closed" }
+                conn.via
+                    .as_ref()
+                    .map_or("-", |selection| selection.selected.as_str())
+                    .italic(),
+                origin,
+                pretty_size(conn.traffic.upload_bytes),
+                pretty_size(conn.traffic.download_bytes),
+                pretty_time(conn.duration_ms / 1_000),
+                format!("{:?}", conn.state).to_lowercase(),
             );
         }
         Ok(())
@@ -127,11 +120,7 @@ impl Requester {
             Inner::Web(c) => c.stop_connections(nth).await,
             Inner::Uds(c) => c.stop_connections(nth).await,
         }?;
-        if result {
-            println!("Success");
-        } else {
-            println!("Failed");
-        }
+        println!("Stopped {} connection(s)", result.stopped_connections);
         Ok(())
     }
 
@@ -325,14 +314,9 @@ impl Requester {
             Inner::Uds(c) => c.get_master_conn_stat().await?,
         };
         for entry in list {
-            let alive_str = |alive: bool| if alive { "alive" } else { "dead" };
             println!(
-                "{}:\t smol[{}, last active in {}s], wg=[{}, last handshake in {}s]",
-                entry.name,
-                alive_str(entry.alive),
-                entry.last_active,
-                alive_str(!entry.hand_shake_is_expired),
-                entry.last_handshake
+                "{}:\t kind={:?}, state={:?}, generation={}, active={}",
+                entry.name, entry.kind, entry.state, entry.generation, entry.active_conn_count,
             );
         }
         Ok(())

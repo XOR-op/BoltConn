@@ -169,4 +169,5 @@ mimalloc = "0.1.43"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tower = { version = "0.5.3", features = ["util"] }
 tracing-test = "0.2.4"

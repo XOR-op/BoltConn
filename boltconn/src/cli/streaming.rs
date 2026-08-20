@@ -1,6 +1,6 @@
 use crate::cli::request_uds::UdsConnector;
 use boltapi::rpc::ClientStreamService;
-use boltapi::{ConnectionSchema, TrafficResp};
+use boltapi::{ConnSummary, Snapshot, TrafficResp};
 use colored::Colorize;
 use futures::{FutureExt, StreamExt};
 use serde::Deserialize;
@@ -13,7 +13,7 @@ use tokio::sync::{RwLock, mpsc};
 struct ClientStreamServer {
     traffic_sender: Arc<RwLock<Option<ChannelCtx<TrafficResp>>>>,
     logs_sender: Arc<RwLock<Option<ChannelCtx<String>>>>,
-    conn_sender: Arc<RwLock<Option<ChannelCtx<Vec<ConnectionSchema>>>>>,
+    conn_sender: Arc<RwLock<Option<ChannelCtx<Snapshot<ConnSummary>>>>>,
 }
 
 struct ChannelCtx<T> {
@@ -39,10 +39,10 @@ impl ClientStreamService for ClientStreamServer {
         }
     }
 
-    async fn post_connections(self, _: Context, connections: Vec<ConnectionSchema>) -> u64 {
+    async fn post_connections(self, _: Context, snapshot: Snapshot<ConnSummary>) -> u64 {
         let guard = self.conn_sender.read().await;
         if let Some(inner) = &*guard {
-            let _ = inner.handle.send(connections);
+            let _ = inner.handle.send(snapshot);
             inner.ctx_id
         } else {
             0
@@ -64,7 +64,7 @@ pub struct ConnectionState {
     pub client: UdsConnector,
     traffic_sender: Arc<RwLock<Option<ChannelCtx<TrafficResp>>>>,
     logs_sender: Arc<RwLock<Option<ChannelCtx<String>>>>,
-    connection_sender: Arc<RwLock<Option<ChannelCtx<Vec<ConnectionSchema>>>>>,
+    connection_sender: Arc<RwLock<Option<ChannelCtx<Snapshot<ConnSummary>>>>>,
 }
 
 impl ConnectionState {
