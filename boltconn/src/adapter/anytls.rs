@@ -843,7 +843,7 @@ mod tests {
 
         manager.refresh_evidence().await;
         assert!(manager.clients.lock().await.get("link").is_none());
-        let detail = table.detail("link", u64::MAX).unwrap();
+        let detail = table.detail_result("link", u64::MAX).unwrap();
         assert_eq!(detail.summary.state, boltapi::LinkState::Failed);
         assert_eq!(detail.summary.health, boltapi::LinkHealth::Unhealthy);
         assert_eq!(

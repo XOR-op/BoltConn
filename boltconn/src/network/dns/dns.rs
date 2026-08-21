@@ -4,7 +4,7 @@ use crate::network::dns::hosts::HostsResolver;
 use crate::network::dns::ns_policy::{DispatchedDnsResolver, NameserverPolicies, PolicyResolver};
 use crate::network::dns::observability::{
     CACHE_HIT_THRESHOLD, DnsResolverIdentity, DnsResolverRecord, identity_from_config,
-    identity_from_normal, now_ms,
+    identity_from_normal,
 };
 use crate::network::dns::provider::IfaceProvider;
 use crate::network::dns::{AuxiliaryResolver, NameServerConfigEnum, default_resolver_opt};
@@ -13,10 +13,10 @@ use crate::proxy::{ConnHandle, bounded_error_detail};
 use arc_swap::ArcSwap;
 use boltapi::{
     ApiError, ApiErrorCode, DnsActivity, DnsAnswer, DnsAttemptScope, DnsCacheStatus, DnsErrorCode,
-    DnsErrorCount, DnsLookupDetail, DnsLookupPurpose, DnsLookupRequest, DnsLookupResponse,
-    DnsOutcome, DnsOutcomeCounts, DnsProtocol, DnsRecordType, DnsResolverAttempt,
-    DnsResolverDetail, DnsResolverSummary, DnsResponseKind, DnsScope, DnsSelection, FakeIpMapping,
-    RouteEgress, Snapshot,
+    DnsErrorCount, DnsLookupDetail, DnsLookupPurpose, DnsLookupRequest, DnsOutcome,
+    DnsOutcomeCounts, DnsProtocol, DnsRecordType, DnsResolverAttempt, DnsResolverDetail,
+    DnsResolverSummary, DnsResponseKind, DnsScope, DnsSelection, FakeIpMapping, RouteEgress,
+    Snapshot,
 };
 use hickory_proto::op::{Message, MessageType, ResponseCode};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
@@ -237,12 +237,6 @@ fn active_record(
 }
 
 impl<P: RuntimeProvider> GenericDns<P> {
-    /// Creates a single-resolver runtime used by virtual link stacks. Callers
-    /// with configuration metadata should prefer `new_with_resolver_config`.
-    pub fn new_with_resolver(name: &str, resolver: Resolver<P>, preference: DnsPreference) -> Self {
-        Self::new_with_resolver_config(name, resolver, preference, &[])
-    }
-
     pub fn new_with_resolver_config(
         name: &str,
         resolver: Resolver<P>,
@@ -325,22 +319,6 @@ impl<P: RuntimeProvider> GenericDns<P> {
         .await
     }
 
-    pub async fn genuine_lookup_with(
-        &self,
-        domain_name: &str,
-        preference: DnsPreference,
-    ) -> Result<Option<IpAddr>, TransportError> {
-        let runtime = self.runtime.load_full();
-        self.genuine_lookup_in_runtime(
-            runtime,
-            domain_name,
-            Some(preference),
-            DnsLookupPurpose::Destination,
-            None,
-        )
-        .await
-    }
-
     /// Performs a normal dataplane lookup and retains its structured evidence
     /// on the supplied connection. Passing no connection still updates resolver
     /// statistics, which is required for diagnostics and shared-link setup.
@@ -410,10 +388,6 @@ impl<P: RuntimeProvider> GenericDns<P> {
         execution_result(execution).map(|(selected, _)| selected)
     }
 
-    pub fn resolver_snapshot(&self) -> Snapshot<DnsResolverSummary> {
-        self.resolver_snapshot_at(now_ms())
-    }
-
     pub(crate) fn resolver_snapshot_at(&self, observed_at_ms: u64) -> Snapshot<DnsResolverSummary> {
         let runtime = self.runtime.load_full();
         let mut items = resolver_views(runtime.as_ref())
@@ -429,10 +403,6 @@ impl<P: RuntimeProvider> GenericDns<P> {
             observed_at_ms,
             items,
         }
-    }
-
-    pub fn resolver_detail(&self, id_prefix: &str) -> Result<DnsResolverDetail, ApiError> {
-        self.resolver_detail_at(id_prefix, now_ms())
     }
 
     pub(crate) fn resolver_detail_at(
@@ -457,17 +427,6 @@ impl<P: RuntimeProvider> GenericDns<P> {
         let mut ids = runtime.records.keys().cloned().collect::<Vec<_>>();
         ids.sort_unstable();
         ids
-    }
-
-    pub async fn diagnostic_lookup(
-        &self,
-        request: DnsLookupRequest,
-    ) -> Result<DnsLookupResponse, ApiError> {
-        let lookup = self.diagnostic_lookup_detail(request).await?;
-        Ok(DnsLookupResponse {
-            observed_at_ms: now_ms(),
-            lookup,
-        })
     }
 
     pub(crate) async fn diagnostic_lookup_detail(
@@ -1678,6 +1637,10 @@ mod tests {
             activity.lookups[0].cache,
             DnsCacheStatus::NotApplicable
         ));
-        assert!(dns.resolver_snapshot().items.is_empty());
+        assert!(
+            dns.resolver_snapshot_at(crate::network::dns::observability::now_ms())
+                .items
+                .is_empty()
+        );
     }
 }

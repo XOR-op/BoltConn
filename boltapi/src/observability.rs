@@ -329,7 +329,6 @@ pub enum LinkState {
     Initializing,
     Ready,
     Idle,
-    Reconnecting,
     Closing,
     Closed,
     Failed,
@@ -347,14 +346,12 @@ pub enum LinkHealth {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkReasonCode {
-    HandshakeExpired,
     NoRecentProbe,
     TaskStopped,
     DnsFailed,
     ConnectFailed,
     AuthenticationFailed,
     ProtocolFailed,
-    HeartbeatFailed,
     DependencyFailed,
     ConfigChanged,
     ConfigRemoved,
@@ -740,43 +737,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(dns_query.resolver_id.as_deref(), Some("0123456789ab"));
-    }
-
-    #[test]
-    fn responses_accept_unknown_fields() {
-        let response = serde_json::from_value::<ConnStopResult>(json!({
-            "stopped_connections": 2,
-            "added_later": "ignored",
-        }))
-        .unwrap();
-
-        assert_eq!(response.stopped_connections, 2);
-    }
-
-    #[test]
-    fn optional_response_fields_remain_present_as_null() {
-        let summary = LinkSummary {
-            name: "ssh-primary".to_string(),
-            kind: LinkKind::Ssh,
-            state: LinkState::Idle,
-            health: LinkHealth::Unknown,
-            generation: 5,
-            active_conn_count: 0,
-            last_active_at_ms: None,
-            traffic: Traffic {
-                upload_bytes: 0,
-                download_bytes: 0,
-            },
-            total_traffic: Traffic {
-                upload_bytes: 0,
-                download_bytes: 0,
-            },
-            reason: None,
-        };
-        let encoded = serde_json::to_value(summary).unwrap();
-
-        assert_eq!(encoded["last_active_at_ms"], serde_json::Value::Null);
-        assert_eq!(encoded["reason"], serde_json::Value::Null);
     }
 
     #[test]

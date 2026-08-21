@@ -504,10 +504,6 @@ impl LinkGeneration {
         self.number
     }
 
-    pub(crate) fn kind(&self) -> LinkKind {
-        self.kind
-    }
-
     pub(crate) fn link_ref(&self) -> boltapi::LinkRef {
         boltapi::LinkRef {
             name: self.name.clone(),
@@ -827,28 +823,6 @@ impl LinkTable {
         })
     }
 
-    /// Applies a non-terminal transition only to the currently owned generation.
-    pub(crate) fn transition(
-        &self,
-        name: &str,
-        generation: u64,
-        state: LinkState,
-        health: LinkHealth,
-    ) -> bool {
-        if is_terminal(state) {
-            return false;
-        }
-        self.with_latest(name, generation, |latest| {
-            let mut current = latest.state.lock().unwrap();
-            if is_terminal(current.state) {
-                return false;
-            }
-            current.state = state;
-            current.health = health;
-            true
-        })
-    }
-
     pub(crate) fn is_current_generation(&self, name: &str, generation: u64) -> bool {
         let Some(link) = self.links.read().unwrap().get(name).cloned() else {
             return false;
@@ -1043,15 +1017,6 @@ impl LinkTable {
             observed_at_ms,
             items,
         }
-    }
-
-    pub(crate) fn detail(&self, name: &str, observed_at_ms: u64) -> Option<LinkDetail> {
-        self.links
-            .read()
-            .unwrap()
-            .get(name)
-            .cloned()
-            .and_then(|link| link.detail(observed_at_ms))
     }
 
     pub(crate) fn detail_result(
@@ -1571,7 +1536,6 @@ mod tests {
     fn configured_but_never_used_is_omitted() {
         let table = LinkTable::new(configs(anytls("secret")));
         assert!(table.snapshot(now_ms()).items.is_empty());
-        assert!(table.detail("link", now_ms()).is_none());
         assert_eq!(
             table.detail_result("link", now_ms()).unwrap_err().code,
             ApiErrorCode::LinkNotInitialized
@@ -1909,7 +1873,7 @@ mod tests {
             },
         );
 
-        let detail = table.detail("link", now_ms()).unwrap();
+        let detail = table.detail_result("link", now_ms()).unwrap();
         assert_eq!(detail.summary.state, LinkState::Failed);
         // Runtime evidence cannot overwrite the terminal health/reason selected
         // by the lifecycle owner.
@@ -1949,7 +1913,7 @@ mod tests {
         ];
         let child = acquire_ready(&table, "child", &child_config, child_route);
 
-        let detail = table.detail("child", now_ms()).unwrap();
+        let detail = table.detail_result("child", now_ms()).unwrap();
         assert_eq!(
             detail
                 .chain
@@ -2214,7 +2178,7 @@ mod tests {
             assert!(!unrelated.done());
             assert_eq!(
                 table
-                    .detail("link", now_ms())
+                    .detail_result("link", now_ms())
                     .unwrap()
                     .summary
                     .reason

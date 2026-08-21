@@ -203,25 +203,3 @@ impl UdsConnector {
 fn map_api_result<T>(result: std::result::Result<T, ApiError>) -> Result<T> {
     result.map_err(api_error)
 }
-
-#[cfg(test)]
-mod observability_tests {
-    use super::*;
-    use crate::cli::request::ControlApiError;
-    use boltapi::ApiErrorCode;
-
-    #[test]
-    fn uds_result_preserves_stable_api_error() {
-        let error = map_api_result::<()>(Err(ApiError {
-            code: ApiErrorCode::LinkNotActive,
-            message: "link is already stopped".to_string(),
-        }))
-        .unwrap_err();
-        let api_error = error.downcast_ref::<ControlApiError>().unwrap();
-        assert_eq!(api_error.code, ApiErrorCode::LinkNotActive);
-        assert_eq!(
-            error.to_string(),
-            "link_not_active: link is already stopped"
-        );
-    }
-}

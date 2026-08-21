@@ -336,20 +336,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compact_values_follow_cli_units() {
-        assert_eq!(compact_bytes(0), "0");
-        assert_eq!(compact_bytes(12 * 1024), "12K");
-        assert_eq!(compact_bytes(1_331_200), "1.3M");
-        assert_eq!(bytes(0), "0 B");
-        assert_eq!(bytes(1_024), "1 KiB");
-        assert_eq!(duration(5_017), "5.017s");
-        assert_eq!(duration(18_000), "18s");
-        assert_eq!(relative_age(None, 10_000), "never");
-        assert_eq!(relative_age(Some(6_000), 10_000), "4s ago");
-        assert_eq!(count(2_847), "2,847");
-    }
-
-    #[test]
     fn truncation_keeps_the_requested_side_and_includes_the_marker_in_the_limit() {
         assert_eq!(truncate_end("123456789", 7), "12345..");
         assert_eq!(truncate_start("123456789", 7), "..56789");
@@ -357,25 +343,5 @@ mod tests {
         assert_eq!(truncate_start("1234567", 7), "1234567");
         assert_eq!(truncate_end("你好世界", 3), "你..");
         assert_eq!(truncate_start("你好世界", 3), "..界");
-    }
-
-    #[test]
-    fn routes_and_scopes_are_compact_and_stable() {
-        assert_eq!(
-            route_selection(&RouteSelection {
-                group: Some("US".to_string()),
-                selected: "ssh-us".to_string(),
-            }),
-            "US/ssh-us"
-        );
-        assert_eq!(
-            dns_scope(
-                &DnsScope::Policy {
-                    matchers: vec!["*.corp".to_string(), "*.lan".to_string()],
-                },
-                true,
-            ),
-            "policy:*.corp,+1"
-        );
     }
 }

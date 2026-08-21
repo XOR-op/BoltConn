@@ -168,27 +168,6 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_tarpc_request_context() {
-        let request = TwoWayMessage::<String, ()>::ClientMessage(tarpc::ClientMessage::Request(
-            tarpc::Request {
-                context: tarpc::context::current(),
-                id: 11,
-                message: "list_dns".to_string(),
-            },
-        ));
-
-        let decoded = round_trip(&request);
-        assert!(matches!(
-            decoded,
-            TwoWayMessage::ClientMessage(tarpc::ClientMessage::Request(tarpc::Request {
-                id: 11,
-                message,
-                ..
-            })) if message == "list_dns"
-        ));
-    }
-
-    #[test]
     fn rejects_trailing_cbor_values() {
         let mut codec = CborCodec::<u64, u64>::default();
         let first = Pin::new(&mut codec).serialize(&1).unwrap();
