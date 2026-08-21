@@ -7,6 +7,7 @@ use crate::common::{
 };
 use crate::proxy::error::TransportError;
 use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr, SessionProtocol, check_tcp_protocol};
+use boltapi::{ConnResultCode, ConnStage, ConnState, ConnTermination};
 use bytes::{Bytes, BytesMut};
 use std::io;
 use std::net::SocketAddr;
@@ -202,7 +203,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
             )
             .await;
             if upload_info.snapshot().state.established_at_ms.is_some() {
-                upload_info.set_state(boltapi::ConnState::Closing);
+                upload_info.set_state(ConnState::Closing);
             }
             result
         };
@@ -218,7 +219,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
             )
             .await;
             if download_info.snapshot().state.established_at_ms.is_some() {
-                download_info.set_state(boltapi::ConnState::Closing);
+                download_info.set_state(ConnState::Closing);
             }
             result
         };
@@ -233,24 +234,24 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         let outcome = relay_tcp_bidirectional(&label, upload, download, activity).await;
         let reached_active = info.snapshot().state.established_at_ms.is_some();
         let reason = match &outcome.result {
-            Ok(()) => boltapi::ConnTermination::new(
+            Ok(()) => ConnTermination::new(
                 match outcome.first {
-                    TcpRelayDirection::Upload => boltapi::ConnResultCode::ClientClosed,
-                    TcpRelayDirection::Download => boltapi::ConnResultCode::RemoteClosed,
+                    TcpRelayDirection::Upload => ConnResultCode::ClientClosed,
+                    TcpRelayDirection::Download => ConnResultCode::RemoteClosed,
                 },
                 if reached_active {
-                    boltapi::ConnStage::Closing
+                    ConnStage::Closing
                 } else {
-                    boltapi::ConnStage::Connecting
+                    ConnStage::Connecting
                 },
                 None,
             ),
             Err(error) => error_termination(
-                boltapi::ConnResultCode::TransferError,
+                ConnResultCode::TransferError,
                 if reached_active {
-                    boltapi::ConnStage::Transferring
+                    ConnStage::Transferring
                 } else {
-                    boltapi::ConnStage::Connecting
+                    ConnStage::Connecting
                 },
                 error,
             ),
@@ -307,7 +308,7 @@ mod tests {
         let available = Arc::new(AtomicU8::new(2));
         let abort_handle = ConnAbortHandle::placeholder();
         let info = test_context(abort_handle.clone());
-        info.set_state(boltapi::ConnState::Active);
+        info.set_state(ConnState::Active);
         let adapter = TcpAdapter::new(
             info.metadata().conn_info.src,
             info.metadata().conn_info.dst.clone(),
@@ -327,7 +328,7 @@ mod tests {
         // Closing the upload half must not discard a response that is still in flight.
         client.shutdown().await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
-            while info.state() != boltapi::ConnState::Closing {
+            while info.state() != ConnState::Closing {
                 tokio::task::yield_now().await;
             }
         })
@@ -362,7 +363,7 @@ mod tests {
         let available = Arc::new(AtomicU8::new(2));
         let abort_handle = ConnAbortHandle::new();
         let info = test_context(abort_handle.clone());
-        info.set_state(boltapi::ConnState::Active);
+        info.set_state(ConnState::Active);
         let adapter = TcpAdapter::new(
             info.metadata().conn_info.src,
             info.metadata().conn_info.dst.clone(),
@@ -379,16 +380,16 @@ mod tests {
 
         client.shutdown().await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
-            while info.state() != boltapi::ConnState::Closing {
+            while info.state() != ConnState::Closing {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("adapter did not enter closing after the upload half-close");
 
-        abort_handle.cancel(boltapi::ConnTermination::new(
-            boltapi::ConnResultCode::RemoteClosed,
-            boltapi::ConnStage::Closing,
+        abort_handle.cancel(ConnTermination::new(
+            ConnResultCode::RemoteClosed,
+            ConnStage::Closing,
             None,
         ));
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -402,10 +403,10 @@ mod tests {
         drop(outbound_tx);
         assert_eq!(available.load(Ordering::Relaxed), 0);
         let snapshot = info.snapshot();
-        assert_eq!(snapshot.state.state, boltapi::ConnState::Closed);
+        assert_eq!(snapshot.state.state, ConnState::Closed);
         assert_eq!(
             snapshot.state.termination.unwrap().code,
-            boltapi::ConnResultCode::RemoteClosed
+            ConnResultCode::RemoteClosed
         );
     }
 }

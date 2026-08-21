@@ -1,5 +1,6 @@
 use crate::proxy::NetworkAddr;
 use crate::proxy::error::TransportError;
+use boltapi::{LinkEvidence, LinkHealth, LinkReason, LinkReasonCode, LinkState, ProbeEvidence};
 use russh::client::{Handle, Msg, connect_stream};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{ChannelStream, SshId};
@@ -82,7 +83,7 @@ pub struct SshTunnel {
 struct ProbeState {
     last_attempt_at_ms: Option<u64>,
     last_success_at_ms: Option<u64>,
-    last_error: Option<boltapi::LinkReason>,
+    last_error: Option<LinkReason>,
 }
 
 impl SshTunnel {
@@ -177,15 +178,15 @@ impl SshTunnel {
                 probe.last_error = None;
             }
             Ok(Err(error)) => {
-                probe.last_error = Some(boltapi::LinkReason {
-                    code: boltapi::LinkReasonCode::ProtocolFailed,
+                probe.last_error = Some(LinkReason {
+                    code: LinkReasonCode::ProtocolFailed,
                     detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
                 });
                 self.is_active.store(false, Ordering::Relaxed);
             }
             Err(_) => {
-                probe.last_error = Some(boltapi::LinkReason {
-                    code: boltapi::LinkReasonCode::NoRecentProbe,
+                probe.last_error = Some(LinkReason {
+                    code: LinkReasonCode::NoRecentProbe,
                     detail: Some("SSH probe timed out".to_string()),
                 });
                 self.is_active.store(false, Ordering::Relaxed);
@@ -193,16 +194,10 @@ impl SshTunnel {
         }
     }
 
-    pub fn link_snapshot(
-        &self,
-    ) -> (
-        boltapi::LinkState,
-        boltapi::LinkHealth,
-        boltapi::LinkEvidence,
-    ) {
+    pub fn link_snapshot(&self) -> (LinkState, LinkHealth, LinkEvidence) {
         let task_alive = self.is_active();
         let probe = self.probe.lock().unwrap();
-        let evidence = boltapi::LinkEvidence::Ssh {
+        let evidence = LinkEvidence::Ssh {
             task_alive,
             open_channels: self.open_channels.load(Ordering::Relaxed),
             last_channel_open_at_ms: match self.last_channel_open_at_ms.load(Ordering::Relaxed) {
@@ -212,27 +207,27 @@ impl SshTunnel {
             probe: (probe.last_attempt_at_ms.is_some()
                 || probe.last_success_at_ms.is_some()
                 || probe.last_error.is_some())
-            .then(|| boltapi::ProbeEvidence {
+            .then(|| ProbeEvidence {
                 last_attempt_at_ms: probe.last_attempt_at_ms,
                 last_success_at_ms: probe.last_success_at_ms,
                 last_error: probe.last_error.clone(),
             }),
         };
         let health = if !task_alive {
-            boltapi::LinkHealth::Unhealthy
+            LinkHealth::Unhealthy
         } else if probe.last_error.is_some() {
-            boltapi::LinkHealth::Degraded
+            LinkHealth::Degraded
         } else {
-            boltapi::LinkHealth::Healthy
+            LinkHealth::Healthy
         };
         let state = if task_alive {
             if self.open_channels.load(Ordering::Relaxed) == 0 {
-                boltapi::LinkState::Idle
+                LinkState::Idle
             } else {
-                boltapi::LinkState::Ready
+                LinkState::Ready
             }
         } else {
-            boltapi::LinkState::Failed
+            LinkState::Failed
         };
         (state, health, evidence)
     }

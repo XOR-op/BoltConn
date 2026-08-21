@@ -3,6 +3,7 @@
 use crate::adapter::{AddrConnector, DuplexCloseGuard};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
+use boltapi::{ConnResultCode, ConnStage, ConnState, ConnTermination};
 use bytes::Bytes;
 use io::Result;
 use std::io;
@@ -19,20 +20,20 @@ const UDP_ALIVE_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 fn finish_udp(
     info: &ConnHandle,
     abort_handle: &ConnAbortHandle,
-    code: boltapi::ConnResultCode,
-    stage: boltapi::ConnStage,
+    code: ConnResultCode,
+    stage: ConnStage,
     detail: Option<String>,
 ) {
     if info.snapshot().state.established_at_ms.is_some() {
-        info.set_state(boltapi::ConnState::Closing);
+        info.set_state(ConnState::Closing);
         info.finish(code, Some(stage), detail.clone());
-    } else if code == boltapi::ConnResultCode::ClientClosed {
+    } else if code == ConnResultCode::ClientClosed {
         // UDP clients may disappear while their outbound is still connecting.
         // This is still a meaningful terminal cause without an establishment
         // timestamp.
         info.finish(code, Some(stage), detail.clone());
     }
-    abort_handle.cancel(boltapi::ConnTermination::new(code, stage, detail));
+    abort_handle.cancel(ConnTermination::new(code, stage, detail));
 }
 
 pub struct TunUdpAdapter {
@@ -105,15 +106,15 @@ impl TunUdpAdapter {
                     Some(detail) => finish_udp(
                         &outgoing_info_arc,
                         &abort_handle2,
-                        boltapi::ConnResultCode::TransferError,
-                        boltapi::ConnStage::Transferring,
+                        ConnResultCode::TransferError,
+                        ConnStage::Transferring,
                         Some(detail),
                     ),
                     None => finish_udp(
                         &outgoing_info_arc,
                         &abort_handle2,
-                        boltapi::ConnResultCode::ClientClosed,
-                        boltapi::ConnStage::Closing,
+                        ConnResultCode::ClientClosed,
+                        ConnStage::Closing,
                         None,
                     ),
                 }
@@ -142,15 +143,15 @@ impl TunUdpAdapter {
             Some(detail) => finish_udp(
                 &self.info,
                 &abort_handle,
-                boltapi::ConnResultCode::ClientClosed,
-                boltapi::ConnStage::Closing,
+                ConnResultCode::ClientClosed,
+                ConnStage::Closing,
                 Some(detail),
             ),
             None => finish_udp(
                 &self.info,
                 &abort_handle,
-                boltapi::ConnResultCode::RemoteClosed,
-                boltapi::ConnStage::Closing,
+                ConnResultCode::RemoteClosed,
+                ConnStage::Closing,
                 None,
             ),
         }
@@ -226,15 +227,15 @@ impl SocksUdpAdapter {
                     Some(detail) => finish_udp(
                         &outgoing_info_arc,
                         &abort_handle2,
-                        boltapi::ConnResultCode::TransferError,
-                        boltapi::ConnStage::Transferring,
+                        ConnResultCode::TransferError,
+                        ConnStage::Transferring,
                         Some(detail),
                     ),
                     None => finish_udp(
                         &outgoing_info_arc,
                         &abort_handle2,
-                        boltapi::ConnResultCode::ClientClosed,
-                        boltapi::ConnStage::Closing,
+                        ConnResultCode::ClientClosed,
+                        ConnStage::Closing,
                         None,
                     ),
                 }
@@ -271,15 +272,15 @@ impl SocksUdpAdapter {
             Some(detail) => finish_udp(
                 &self.info,
                 &abort_handle,
-                boltapi::ConnResultCode::ClientClosed,
-                boltapi::ConnStage::Closing,
+                ConnResultCode::ClientClosed,
+                ConnStage::Closing,
                 Some(detail),
             ),
             None => finish_udp(
                 &self.info,
                 &abort_handle,
-                boltapi::ConnResultCode::RemoteClosed,
-                boltapi::ConnStage::Closing,
+                ConnResultCode::RemoteClosed,
+                ConnStage::Closing,
                 None,
             ),
         }

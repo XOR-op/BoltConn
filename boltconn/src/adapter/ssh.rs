@@ -12,6 +12,7 @@ use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use crate::transport::ssh::{SshConfig, SshTunnel};
 use async_trait::async_trait;
+use boltapi::{ConnResultCode, LinkHealth, LinkReason, LinkReasonCode, LinkState};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -286,13 +287,13 @@ impl SshManager {
                     self.link_table.mark_terminal(
                         name,
                         lease.generation.number(),
-                        boltapi::LinkState::Failed,
-                        boltapi::LinkHealth::Unhealthy,
-                        boltapi::LinkReason {
-                            code: boltapi::LinkReasonCode::DependencyFailed,
+                        LinkState::Failed,
+                        LinkHealth::Unhealthy,
+                        LinkReason {
+                            code: LinkReasonCode::DependencyFailed,
                             detail: Some("could not resolve SSH creation route".to_string()),
                         },
-                        boltapi::ConnResultCode::LinkLost,
+                        ConnResultCode::LinkLost,
                     );
                     return Err(TransportError::Internal(
                         "SSH link creation route is unavailable",
@@ -373,7 +374,7 @@ impl SshManager {
             .collect();
         for (name, runtime) in runtimes {
             let (state, health, evidence) = runtime.runtime.link_snapshot();
-            if state == boltapi::LinkState::Failed {
+            if state == LinkState::Failed {
                 self.remove_and_finalize_dead(&name, runtime).await;
             } else {
                 runtime.record.set_live_evidence(state, health, evidence);
@@ -396,13 +397,13 @@ impl SshManager {
         self.link_table.mark_terminal(
             name,
             runtime.generation,
-            boltapi::LinkState::Failed,
-            boltapi::LinkHealth::Unhealthy,
-            boltapi::LinkReason {
-                code: boltapi::LinkReasonCode::TaskStopped,
+            LinkState::Failed,
+            LinkHealth::Unhealthy,
+            LinkReason {
+                code: LinkReasonCode::TaskStopped,
                 detail: None,
             },
-            boltapi::ConnResultCode::LinkLost,
+            ConnResultCode::LinkLost,
         );
     }
 
@@ -417,23 +418,23 @@ impl SshManager {
 
     fn mark_creation_failure(&self, name: &str, generation: u64, error: &TransportError) {
         let code = match error {
-            TransportError::Dns(_) => boltapi::LinkReasonCode::DnsFailed,
+            TransportError::Dns(_) => LinkReasonCode::DnsFailed,
             TransportError::Ssh(russh::Error::NotAuthenticated) => {
-                boltapi::LinkReasonCode::AuthenticationFailed
+                LinkReasonCode::AuthenticationFailed
             }
-            TransportError::Ssh(_) => boltapi::LinkReasonCode::ProtocolFailed,
-            _ => boltapi::LinkReasonCode::ConnectFailed,
+            TransportError::Ssh(_) => LinkReasonCode::ProtocolFailed,
+            _ => LinkReasonCode::ConnectFailed,
         };
         self.link_table.mark_terminal(
             name,
             generation,
-            boltapi::LinkState::Failed,
-            boltapi::LinkHealth::Unhealthy,
-            boltapi::LinkReason {
+            LinkState::Failed,
+            LinkHealth::Unhealthy,
+            LinkReason {
                 code,
                 detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
             },
-            boltapi::ConnResultCode::LinkLost,
+            ConnResultCode::LinkLost,
         );
     }
 }

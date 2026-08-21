@@ -446,15 +446,15 @@ async fn established_tcp<T>(
     let reason = match &outcome.result {
         Ok(()) => ConnTermination::new(
             match outcome.first {
-                TcpRelayDirection::Upload => boltapi::ConnResultCode::ClientClosed,
-                TcpRelayDirection::Download => boltapi::ConnResultCode::RemoteClosed,
+                TcpRelayDirection::Upload => ConnResultCode::ClientClosed,
+                TcpRelayDirection::Download => ConnResultCode::RemoteClosed,
             },
-            boltapi::ConnStage::Closing,
+            ConnStage::Closing,
             None,
         ),
         Err(error) => error_termination(
-            boltapi::ConnResultCode::TransferError,
-            boltapi::ConnStage::Transferring,
+            ConnResultCode::TransferError,
+            ConnStage::Transferring,
             error,
         ),
     };
@@ -488,8 +488,8 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
             match res {
                 Ok((0, _)) => {
                     break ConnTermination::new(
-                        boltapi::ConnResultCode::RemoteClosed,
-                        boltapi::ConnStage::Closing,
+                        ConnResultCode::RemoteClosed,
+                        ConnStage::Closing,
                         None,
                     );
                 }
@@ -504,8 +504,8 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                     if tx.send((buf.freeze(), addr)).await.is_err() {
                         tracing::debug!("[{}] write to inbound failed", name);
                         break ConnTermination::new(
-                            boltapi::ConnResultCode::ClientClosed,
-                            boltapi::ConnStage::Closing,
+                            ConnResultCode::ClientClosed,
+                            ConnStage::Closing,
                             None,
                         );
                     }
@@ -513,8 +513,8 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                 Err(err) => {
                     tracing::debug!("[{}] outbound read error: {}", name, err);
                     break error_termination(
-                        boltapi::ConnResultCode::TransferError,
-                        boltapi::ConnStage::Transferring,
+                        ConnResultCode::TransferError,
+                        ConnStage::Transferring,
                         &err,
                     );
                 }
@@ -530,18 +530,14 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                 if let Err(err) = outbound2.send_to(buf.as_ref(), addr).await {
                     tracing::debug!("[{}] write to outbound failed: {}", name2, err);
                     break error_termination(
-                        boltapi::ConnResultCode::TransferError,
-                        boltapi::ConnStage::Transferring,
+                        ConnResultCode::TransferError,
+                        ConnStage::Transferring,
                         &err,
                     );
                 }
             }
             None => {
-                break ConnTermination::new(
-                    boltapi::ConnResultCode::ClientClosed,
-                    boltapi::ConnStage::Closing,
-                    None,
-                );
+                break ConnTermination::new(ConnResultCode::ClientClosed, ConnStage::Closing, None);
             }
         }
     };
@@ -626,8 +622,8 @@ impl Drop for DuplexCloseGuard {
                 }
             }
             self.abort_handle.cancel(ConnTermination::new(
-                boltapi::ConnResultCode::InternalError,
-                boltapi::ConnStage::Closing,
+                ConnResultCode::InternalError,
+                ConnStage::Closing,
                 Some("UDP relay guard dropped before shutdown completed".to_string()),
             ));
         }

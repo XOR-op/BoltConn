@@ -1,6 +1,10 @@
 use super::{AnytlsConfig, AnytlsSession, AnytlsSessionOptions, AnytlsStream};
 use crate::proxy::NetworkAddr;
 use crate::proxy::error::TransportError;
+use boltapi::AnytlsSessionEvidence;
+use boltapi::LinkEvidence;
+use boltapi::LinkHealth;
+use boltapi::LinkState;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -202,14 +206,7 @@ impl AnytlsClient {
         self.inner.closed.load(Ordering::Acquire)
     }
 
-    pub async fn link_snapshot(
-        &self,
-    ) -> (
-        boltapi::LinkState,
-        boltapi::LinkHealth,
-        Vec<SocketAddr>,
-        boltapi::LinkEvidence,
-    ) {
+    pub async fn link_snapshot(&self) -> (LinkState, LinkHealth, Vec<SocketAddr>, LinkEvidence) {
         let mut sessions = self.inner.sessions.lock().await;
         retain_alive_sessions(&mut sessions, &self.inner.problematic_session);
         let session_count = sessions.len() as u64;
@@ -235,24 +232,24 @@ impl AnytlsClient {
         endpoints.dedup();
         let problematic_session = self.inner.problematic_session.lock().unwrap().clone();
         let health = if self.is_closed() {
-            boltapi::LinkHealth::Unhealthy
+            LinkHealth::Unhealthy
         } else if problematic_session.is_some() {
-            boltapi::LinkHealth::Degraded
+            LinkHealth::Degraded
         } else {
-            boltapi::LinkHealth::Healthy
+            LinkHealth::Healthy
         };
         let state = if self.is_closed() {
-            boltapi::LinkState::Closed
+            LinkState::Closed
         } else if active_streams == 0 {
-            boltapi::LinkState::Idle
+            LinkState::Idle
         } else {
-            boltapi::LinkState::Ready
+            LinkState::Ready
         };
         (
             state,
             health,
             endpoints,
-            boltapi::LinkEvidence::Anytls {
+            LinkEvidence::Anytls {
                 sessions: session_count,
                 active_streams,
                 idle_sessions,
@@ -282,7 +279,7 @@ impl AnytlsClient {
 struct AnytlsClientInner {
     options: AnytlsSessionOptions,
     sessions: tokio::sync::Mutex<Vec<ManagedSession>>,
-    problematic_session: Mutex<Option<boltapi::AnytlsSessionEvidence>>,
+    problematic_session: Mutex<Option<AnytlsSessionEvidence>>,
     cleanup_handle: Mutex<Option<JoinHandle<()>>>,
     next_seq: AtomicU64,
     closed: AtomicBool,
@@ -300,7 +297,7 @@ struct ManagedSession {
 
 fn retain_alive_sessions(
     sessions: &mut Vec<ManagedSession>,
-    problematic: &Mutex<Option<boltapi::AnytlsSessionEvidence>>,
+    problematic: &Mutex<Option<AnytlsSessionEvidence>>,
 ) {
     sessions.retain(|session| {
         if session.session.is_alive() {
@@ -347,12 +344,12 @@ mod tests {
             .unwrap();
 
         let (state, health, endpoints, evidence) = client.link_snapshot().await;
-        assert_eq!(state, boltapi::LinkState::Ready);
-        assert_eq!(health, boltapi::LinkHealth::Healthy);
+        assert_eq!(state, LinkState::Ready);
+        assert_eq!(health, LinkHealth::Healthy);
         assert_eq!(endpoints, vec![endpoint]);
         assert!(matches!(
             evidence,
-            boltapi::LinkEvidence::Anytls {
+            LinkEvidence::Anytls {
                 sessions: 1,
                 active_streams: 1,
                 idle_sessions: 0,
@@ -363,10 +360,10 @@ mod tests {
 
         drop(stream);
         let (state, _, _, evidence) = client.link_snapshot().await;
-        assert_eq!(state, boltapi::LinkState::Idle);
+        assert_eq!(state, LinkState::Idle);
         assert!(matches!(
             evidence,
-            boltapi::LinkEvidence::Anytls {
+            LinkEvidence::Anytls {
                 sessions: 1,
                 active_streams: 0,
                 idle_sessions: 1,
@@ -376,12 +373,9 @@ mod tests {
 
         client.close().await;
         let (state, health, endpoints, evidence) = client.link_snapshot().await;
-        assert_eq!(state, boltapi::LinkState::Closed);
-        assert_eq!(health, boltapi::LinkHealth::Unhealthy);
+        assert_eq!(state, LinkState::Closed);
+        assert_eq!(health, LinkHealth::Unhealthy);
         assert!(endpoints.is_empty());
-        assert!(matches!(
-            evidence,
-            boltapi::LinkEvidence::Anytls { sessions: 0, .. }
-        ));
+        assert!(matches!(evidence, LinkEvidence::Anytls { sessions: 0, .. }));
     }
 }

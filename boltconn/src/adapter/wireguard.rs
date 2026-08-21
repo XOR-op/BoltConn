@@ -14,6 +14,10 @@ use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
+use boltapi::{
+    ConnResultCode, DnsLookupPurpose, LinkEvidence, LinkHealth, LinkReason, LinkReasonCode,
+    LinkState,
+};
 use bytes::Bytes;
 use hickory_resolver::Resolver;
 use hickory_resolver::config::ResolverOpts;
@@ -303,20 +307,14 @@ impl Endpoint {
         let _ = self.stop_sender.send(());
     }
 
-    async fn link_snapshot(
-        &self,
-    ) -> (
-        boltapi::LinkState,
-        boltapi::LinkHealth,
-        boltapi::LinkEvidence,
-    ) {
+    async fn link_snapshot(&self) -> (LinkState, LinkHealth, LinkEvidence) {
         let task_alive = self.is_active.alive();
         let (expired, handshake_elapsed) = self.wg.stats().await;
         let observed_at_ms = now_ms();
         let last_handshake_at_ms = handshake_elapsed.map(|elapsed| {
             observed_at_ms.saturating_sub(elapsed.as_millis().try_into().unwrap_or(u64::MAX))
         });
-        let evidence = boltapi::LinkEvidence::Wireguard {
+        let evidence = LinkEvidence::Wireguard {
             task_alive,
             last_handshake_at_ms,
             handshake_expires_at_ms: last_handshake_at_ms
@@ -327,16 +325,16 @@ impl Endpoint {
             },
         };
         let health = if !task_alive || expired {
-            boltapi::LinkHealth::Unhealthy
+            LinkHealth::Unhealthy
         } else if last_handshake_at_ms.is_none() {
-            boltapi::LinkHealth::Degraded
+            LinkHealth::Degraded
         } else {
-            boltapi::LinkHealth::Healthy
+            LinkHealth::Healthy
         };
         let state = if task_alive {
-            boltapi::LinkState::Ready
+            LinkState::Ready
         } else {
-            boltapi::LinkState::Failed
+            LinkState::Failed
         };
         (state, health, evidence)
     }
@@ -481,13 +479,13 @@ impl WireguardManager {
                     self.link_table.mark_terminal(
                         name,
                         lease.generation.number(),
-                        boltapi::LinkState::Failed,
-                        boltapi::LinkHealth::Unhealthy,
-                        boltapi::LinkReason {
-                            code: boltapi::LinkReasonCode::DependencyFailed,
+                        LinkState::Failed,
+                        LinkHealth::Unhealthy,
+                        LinkReason {
+                            code: LinkReasonCode::DependencyFailed,
                             detail: Some("could not resolve WireGuard creation route".to_string()),
                         },
-                        boltapi::ConnResultCode::LinkLost,
+                        ConnResultCode::LinkLost,
                     );
                     return Err(TransportError::Internal(
                         "WireGuard link creation route is unavailable",
@@ -553,12 +551,7 @@ impl WireguardManager {
         let dns = endpoint.stack.lock().await.get_dns();
         record.attach_dns_runtime(LinkDnsRuntime::Wireguard(dns));
         let (_, health, evidence) = endpoint.link_snapshot().await;
-        record.set_live_snapshot(
-            boltapi::LinkState::Ready,
-            health,
-            vec![server_addr],
-            evidence,
-        );
+        record.set_live_snapshot(LinkState::Ready, health, vec![server_addr], evidence);
         Ok(endpoint)
     }
 
@@ -598,7 +591,7 @@ impl WireguardManager {
         let runtimes: Vec<_> = self.active_conn.read().await.values().cloned().collect();
         for runtime in runtimes {
             let (state, health, evidence) = runtime.runtime.link_snapshot().await;
-            if state == boltapi::LinkState::Failed {
+            if state == LinkState::Failed {
                 let name = runtime.runtime.name.clone();
                 self.remove_and_finalize_dead(&name, runtime).await;
             } else {
@@ -627,13 +620,13 @@ impl WireguardManager {
         self.link_table.mark_terminal(
             name,
             runtime.generation,
-            boltapi::LinkState::Failed,
-            boltapi::LinkHealth::Unhealthy,
-            boltapi::LinkReason {
-                code: boltapi::LinkReasonCode::TaskStopped,
+            LinkState::Failed,
+            LinkHealth::Unhealthy,
+            LinkReason {
+                code: LinkReasonCode::TaskStopped,
                 detail: None,
             },
-            boltapi::ConnResultCode::LinkLost,
+            ConnResultCode::LinkLost,
         );
     }
 
@@ -648,20 +641,20 @@ impl WireguardManager {
 
     fn mark_creation_failure(&self, name: &str, generation: u64, error: &TransportError) {
         let code = match error {
-            TransportError::Dns(_) => boltapi::LinkReasonCode::DnsFailed,
-            TransportError::WireGuard(_) => boltapi::LinkReasonCode::ProtocolFailed,
-            _ => boltapi::LinkReasonCode::ConnectFailed,
+            TransportError::Dns(_) => LinkReasonCode::DnsFailed,
+            TransportError::WireGuard(_) => LinkReasonCode::ProtocolFailed,
+            _ => LinkReasonCode::ConnectFailed,
         };
         self.link_table.mark_terminal(
             name,
             generation,
-            boltapi::LinkState::Failed,
-            boltapi::LinkHealth::Unhealthy,
-            boltapi::LinkReason {
+            LinkState::Failed,
+            LinkHealth::Unhealthy,
+            LinkReason {
                 code,
                 detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
             },
-            boltapi::ConnResultCode::LinkLost,
+            ConnResultCode::LinkLost,
         );
     }
 }
@@ -716,7 +709,7 @@ impl WireguardHandle {
                 match smol_dns
                     .genuine_lookup_for(
                         domain_name.as_str(),
-                        boltapi::DnsLookupPurpose::Destination,
+                        DnsLookupPurpose::Destination,
                         conn.as_ref(),
                     )
                     .await

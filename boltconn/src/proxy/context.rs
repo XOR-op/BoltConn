@@ -541,10 +541,6 @@ impl ConnHandle {
         true
     }
 
-    pub fn mark_fin(&self) {
-        self.finish(ConnResultCode::Completed, None, None);
-    }
-
     pub fn done(&self) -> bool {
         is_terminal_state(self.state())
     }
