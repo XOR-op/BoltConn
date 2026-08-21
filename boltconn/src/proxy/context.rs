@@ -77,6 +77,7 @@ enum CancelState {
 struct AbortHandle {
     handles: ArcSwap<Vec<(String, JoinHandle<()>)>>,
     state: AtomicU8,
+    reason: Mutex<Option<ConnTermination>>,
 }
 
 const INIT: u8 = 0;
@@ -91,6 +92,7 @@ impl ConnAbortHandle {
         Self(Arc::new(AbortHandle {
             handles: ArcSwap::new(Arc::new(vec![])),
             state: AtomicU8::new(INIT),
+            reason: Mutex::new(None),
         }))
     }
 
@@ -98,7 +100,23 @@ impl ConnAbortHandle {
         Self(Arc::new(AbortHandle {
             handles: ArcSwap::new(Arc::new(vec![])),
             state: AtomicU8::new(READY),
+            reason: Mutex::new(None),
         }))
+    }
+
+    /// Records why sibling tasks are being aborted before triggering cancellation.
+    /// The first reason wins so concurrent shutdown paths cannot rewrite the cause.
+    pub(crate) fn abort(&self, reason: ConnTermination) {
+        let mut current = self.0.reason.lock().unwrap();
+        if current.is_none() {
+            *current = Some(reason);
+        }
+        drop(current);
+        self.cancel();
+    }
+
+    pub(crate) fn abort_reason(&self) -> Option<ConnTermination> {
+        self.0.reason.lock().unwrap().clone()
     }
 
     pub fn cancel(&self) {

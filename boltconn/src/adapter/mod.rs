@@ -35,7 +35,7 @@ use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 #[allow(unused_imports)]
 pub use anytls::*;
-use boltapi::DnsLookupPurpose;
+use boltapi::{ConnTermination, DnsLookupPurpose};
 pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
@@ -420,10 +420,25 @@ async fn established_tcp<T>(
     let upload = relay_channel_to_writer(rx, out_write, true, activity.clone(), |_| {});
     let download = relay_reader_to_channel(out_read, tx, true, activity.clone(), |_| {});
     let outcome = relay_tcp_bidirectional(&format!("[{name}]"), upload, download, activity).await;
-    if let Err(error) = outcome.result {
+    if let Err(error) = &outcome.result {
         tracing::debug!("[{}] TCP relay failed: {}", name, error);
     }
-    abort_handle.cancel();
+    let reason = match &outcome.result {
+        Ok(()) => ConnTermination {
+            code: match outcome.first {
+                TcpRelayDirection::Upload => boltapi::ConnResultCode::ClientClosed,
+                TcpRelayDirection::Download => boltapi::ConnResultCode::RemoteClosed,
+            },
+            stage: Some(boltapi::ConnStage::Closing),
+            detail: None,
+        },
+        Err(error) => ConnTermination {
+            code: boltapi::ConnResultCode::TransferError,
+            stage: Some(boltapi::ConnStage::Transferring),
+            detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
+        },
+    };
+    abort_handle.abort(reason);
 }
 
 #[tracing::instrument(skip_all)]

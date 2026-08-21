@@ -24,6 +24,38 @@ pub struct TcpAdapter<S> {
     first_packet_buffer: Option<BytesMut>,
 }
 
+/// Completes the connection when another relay aborts this task before its normal finish path.
+struct TcpAbortGuard {
+    info: ConnHandle,
+    abort_handle: ConnAbortHandle,
+    armed: bool,
+}
+
+impl TcpAbortGuard {
+    fn new(info: ConnHandle, abort_handle: ConnAbortHandle) -> Self {
+        Self {
+            info,
+            abort_handle,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TcpAbortGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(reason) = self.abort_handle.abort_reason() {
+            self.info.finish(reason.code, reason.stage, reason.detail);
+        }
+    }
+}
+
 impl<S: StreamOutboundTrait> TcpAdapter<S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -142,6 +174,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
     }
 
     pub async fn run(self, info: ConnHandle) -> io::Result<()> {
+        let mut abort_guard = TcpAbortGuard::new(info.clone(), self.abort_handle.clone());
         let need_parse_first_packet = self.first_packet_buffer.is_none();
         let Connector { tx, rx } = self.connector;
         let activity = TcpRelayActivity::new();
@@ -229,6 +262,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
                 None,
             );
         }
+        abort_guard.disarm();
         self.abort_handle.cancel();
         outcome.result
     }
