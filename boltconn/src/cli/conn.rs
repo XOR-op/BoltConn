@@ -6,6 +6,9 @@ use boltapi::{
 use std::fmt::Write as _;
 use tabular::{Row, Table};
 
+const ORIGIN_MAX_CHARS: usize = 15;
+const TARGET_MAX_CHARS: usize = 50;
+
 pub(super) fn render_list(mut snapshot: Snapshot<ConnSummary>) -> String {
     snapshot
         .items
@@ -31,9 +34,15 @@ pub(super) fn render_list(mut snapshot: Snapshot<ConnSummary>) -> String {
                 .with_cell(format::enum_name(&connection.state))
                 .with_cell(format::local_time(connection.started_at_ms, false))
                 .with_cell(format::duration(connection.duration_ms))
-                .with_cell(origin(&connection.origin))
+                .with_cell(format::truncate_end(
+                    &origin(&connection.origin),
+                    ORIGIN_MAX_CHARS,
+                ))
                 .with_cell(connection.protocol.to_string())
-                .with_cell(connection.target)
+                .with_cell(format::truncate_start(
+                    &connection.target.to_string(),
+                    TARGET_MAX_CHARS,
+                ))
                 .with_cell(format::optional(
                     connection.via.as_ref().map(format::route_selection),
                 ))
@@ -342,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn list_renders_terminal_and_live_absence_without_truncating_values() {
+    fn list_renders_terminal_and_live_absence_with_values_within_limits() {
         let empty = render_list(Snapshot {
             observed_at_ms: 10_000,
             items: Vec::new(),
@@ -361,6 +370,29 @@ mod tests {
         assert!(output.contains("curl{api-test}"));
         assert!(output.contains("dns_timeout"));
         assert!(output.contains("↑0 ↓1K"));
+    }
+
+    #[test]
+    fn list_truncates_origin_at_the_end_and_target_at_the_start() {
+        let mut connection = summary(ConnState::Active, None);
+        connection.origin = ConnOrigin::Process {
+            name: "verylongapplication".to_string(),
+            tag: None,
+        };
+        connection.target = NetworkAddr::Domain {
+            name: "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz".to_string(),
+            port: 1234,
+        };
+
+        let output = render_list(Snapshot {
+            observed_at_ms: 10_000,
+            items: vec![connection],
+        });
+
+        assert!(output.contains("verylongappli.."));
+        assert!(output.contains("..jklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz:1234"));
+        assert!(!output.contains("verylongapplication"));
+        assert!(!output.contains("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz:1234"));
     }
 
     #[test]

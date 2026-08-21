@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow};
 use boltapi::{ApiError, ApiErrorCode, CapturedBodySchema, ConnListRequest, DnsLookupRequest};
 use colored::Colorize;
 use std::fmt::{Display, Formatter};
+use std::io::{self, Write};
 use std::net::IpAddr;
 use tabular::{Row, Table};
 
@@ -47,6 +48,20 @@ impl std::error::Error for ControlApiError {}
 
 pub(super) fn api_error(error: ApiError) -> anyhow::Error {
     ControlApiError::from(error).into()
+}
+
+fn write_stdout(output: &str) -> Result<()> {
+    let stdout = io::stdout();
+    write_output(&mut stdout.lock(), output)?;
+    Ok(())
+}
+
+fn write_output(writer: &mut impl Write, output: &str) -> io::Result<()> {
+    match writer.write_all(output.as_bytes()) {
+        // Closing a pipe early is normal for consumers such as `head` or a quit `less` session.
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
 }
 
 impl Requester {
@@ -128,8 +143,7 @@ impl Requester {
             Inner::Web(connector) => connector.list_conn(request).await,
             Inner::Uds(connector) => connector.list_conn(request).await,
         }?;
-        print!("{}", conn::render_list(snapshot));
-        Ok(())
+        write_stdout(&conn::render_list(snapshot))
     }
 
     pub async fn conn_show(&self, id: u64) -> Result<()> {
@@ -143,8 +157,7 @@ impl Requester {
                 connector.list_dns().await?.items,
             ),
         };
-        print!("{}", conn::render_detail(detail, &resolvers));
-        Ok(())
+        write_stdout(&conn::render_detail(detail, &resolvers))
     }
 
     pub async fn conn_stop(&self, id: u64) -> Result<()> {
@@ -320,8 +333,7 @@ impl Requester {
             Inner::Web(connector) => connector.list_link().await,
             Inner::Uds(connector) => connector.list_link().await,
         }?;
-        print!("{}", link::render_list(snapshot));
-        Ok(())
+        write_stdout(&link::render_list(snapshot))
     }
 
     pub async fn link_show(&self, name: String) -> Result<()> {
@@ -335,8 +347,7 @@ impl Requester {
                 connector.list_dns().await?.items,
             ),
         };
-        print!("{}", link::render_detail(detail, &resolvers));
-        Ok(())
+        write_stdout(&link::render_detail(detail, &resolvers))
     }
 
     pub async fn link_stop(&self, name: String) -> Result<()> {
@@ -353,8 +364,7 @@ impl Requester {
             Inner::Web(connector) => connector.list_dns().await,
             Inner::Uds(connector) => connector.list_dns().await,
         }?;
-        print!("{}", dns::render_list(snapshot));
-        Ok(())
+        write_stdout(&dns::render_list(snapshot))
     }
 
     pub async fn dns_show(&self, id: String) -> Result<()> {
@@ -362,8 +372,7 @@ impl Requester {
             Inner::Web(connector) => connector.show_dns(&id).await,
             Inner::Uds(connector) => connector.show_dns(id).await,
         }?;
-        print!("{}", dns::render_detail(detail));
-        Ok(())
+        write_stdout(&dns::render_detail(detail))
     }
 
     pub async fn dns_lookup(&self, domain: String, resolver_id: Option<String>) -> Result<()> {
@@ -381,8 +390,7 @@ impl Requester {
                 connector.list_dns().await?.items,
             ),
         };
-        print!("{}", dns::render_lookup(response, &resolvers));
-        Ok(())
+        write_stdout(&dns::render_lookup(response, &resolvers))
     }
 
     pub async fn dns_mapping(&self, fake_ip: IpAddr) -> Result<()> {
@@ -390,8 +398,7 @@ impl Requester {
             Inner::Web(connector) => connector.get_dns_mapping(fake_ip).await,
             Inner::Uds(connector) => connector.get_dns_mapping(fake_ip).await,
         }?;
-        print!("{}", dns::render_mapping(mapping));
-        Ok(())
+        write_stdout(&dns::render_mapping(mapping))
     }
 
     pub async fn reload_config(&self) -> Result<()> {
@@ -405,5 +412,37 @@ impl Requester {
             println!("{}", "Failed".red());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingWriter(io::ErrorKind);
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(self.0, "simulated write failure"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn rendered_output_treats_a_closed_pipe_as_normal_completion() {
+        assert!(write_output(&mut FailingWriter(io::ErrorKind::BrokenPipe), "output").is_ok());
+    }
+
+    #[test]
+    fn rendered_output_preserves_other_stdout_errors() {
+        let error = write_output(
+            &mut FailingWriter(io::ErrorKind::PermissionDenied),
+            "output",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 }

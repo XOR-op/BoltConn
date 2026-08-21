@@ -17,6 +17,39 @@ pub(super) fn optional(value: Option<String>) -> String {
     value.unwrap_or_else(|| "-".to_string())
 }
 
+pub(super) fn truncate_end(value: &str, max_chars: usize) -> String {
+    truncate(value, max_chars, false)
+}
+
+pub(super) fn truncate_start(value: &str, max_chars: usize) -> String {
+    truncate(value, max_chars, true)
+}
+
+fn truncate(value: &str, max_chars: usize, from_start: bool) -> String {
+    const MARKER: &str = "..";
+
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= max_chars {
+        return value.to_string();
+    }
+
+    let retained_chars = max_chars.saturating_sub(MARKER.len());
+    if from_start {
+        let skip_chars = chars.len() - retained_chars;
+        MARKER
+            .chars()
+            .take(max_chars)
+            .chain(chars.into_iter().skip(skip_chars))
+            .collect()
+    } else {
+        chars
+            .into_iter()
+            .take(retained_chars)
+            .chain(MARKER.chars().take(max_chars))
+            .collect()
+    }
+}
+
 pub(super) fn count(value: u64) -> String {
     let digits = value.to_string();
     let mut output = String::with_capacity(digits.len() + digits.len() / 3);
@@ -314,6 +347,16 @@ mod tests {
         assert_eq!(relative_age(None, 10_000), "never");
         assert_eq!(relative_age(Some(6_000), 10_000), "4s ago");
         assert_eq!(count(2_847), "2,847");
+    }
+
+    #[test]
+    fn truncation_keeps_the_requested_side_and_includes_the_marker_in_the_limit() {
+        assert_eq!(truncate_end("123456789", 7), "12345..");
+        assert_eq!(truncate_start("123456789", 7), "..56789");
+        assert_eq!(truncate_end("1234567", 7), "1234567");
+        assert_eq!(truncate_start("1234567", 7), "1234567");
+        assert_eq!(truncate_end("你好世界", 3), "你..");
+        assert_eq!(truncate_start("你好世界", 3), "..界");
     }
 
     #[test]
