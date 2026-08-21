@@ -106,20 +106,20 @@ impl ConnAbortHandle {
 
     /// Records why sibling tasks are being aborted before triggering cancellation.
     /// The first reason wins so concurrent shutdown paths cannot rewrite the cause.
-    pub(crate) fn abort(&self, reason: ConnTermination) {
+    pub(crate) fn cancel(&self, reason: ConnTermination) {
         let mut current = self.0.reason.lock().unwrap();
         if current.is_none() {
             *current = Some(reason);
         }
         drop(current);
-        self.cancel();
+        self.abort_tasks();
     }
 
-    pub(crate) fn abort_reason(&self) -> Option<ConnTermination> {
+    pub(crate) fn cancel_reason(&self) -> Option<ConnTermination> {
         self.0.reason.lock().unwrap().clone()
     }
 
-    pub fn cancel(&self) {
+    fn abort_tasks(&self) {
         loop {
             let state = self.0.state.load(Ordering::Acquire);
             match state {
@@ -355,12 +355,13 @@ impl ConnHandle {
                 for registered in registered {
                     registered.complete_connection(self.id(), None);
                 }
-                self.finish(
+                let reason = ConnTermination::new(
                     ConnResultCode::LinkLost,
-                    Some(ConnStage::Connecting),
+                    ConnStage::Connecting,
                     Some("link generation ended before activation".to_string()),
                 );
-                self.record.abort_handle.cancel();
+                self.finish(reason.code, reason.stage, reason.detail.clone());
+                self.record.abort_handle.cancel(reason);
                 return false;
             }
         }
@@ -550,17 +551,20 @@ impl ConnHandle {
 
     pub fn abort(&self) -> bool {
         self.set_state(ConnState::Closing);
-        let completed = self.finish(ConnResultCode::UserStopped, Some(ConnStage::Closing), None);
+        let reason = ConnTermination::new(ConnResultCode::UserStopped, ConnStage::Closing, None);
+        let completed = self.finish(reason.code, reason.stage, reason.detail.clone());
         if completed {
-            self.record.abort_handle.cancel();
+            self.record.abort_handle.cancel(reason);
         }
         completed
     }
 
     pub(crate) fn finish_for_link(&self, result: ConnResultCode) -> bool {
         self.set_state(ConnState::Closing);
-        self.record.abort_handle.cancel();
-        self.finish(result, Some(ConnStage::Closing), None)
+        let reason = ConnTermination::new(result, ConnStage::Closing, None);
+        let completed = self.finish(reason.code, reason.stage, reason.detail.clone());
+        self.record.abort_handle.cancel(reason);
+        completed
     }
 }
 

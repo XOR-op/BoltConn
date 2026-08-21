@@ -2,6 +2,7 @@ use crate::adapter;
 use crate::adapter::{
     AddrConnector, Connector, InitializationDecision, LinkInitializationTable, LinkRuntimeConfig,
     LinkTable, ManagedRuntime, Outbound, OutboundType, empty_handle, established_tcp,
+    handshake_error_termination,
 };
 use crate::common::{StreamOutboundTrait, io_err};
 use crate::network::dns::Dns;
@@ -104,7 +105,7 @@ impl Outbound for SshOutboundHandle {
                 .attach_tcp(inbound, None, abort_handle, tx, conn)
                 .await;
             if let Err(e) = r {
-                abort_handle2.cancel();
+                abort_handle2.cancel(handshake_error_termination(&e));
                 return Err(e);
             }
             Ok(())
@@ -131,7 +132,7 @@ impl Outbound for SshOutboundHandle {
                 .attach_tcp(inbound, tcp_outbound, abort_handle, comp_tx, conn)
                 .await;
             if let Err(e) = r {
-                abort_handle2.cancel();
+                abort_handle2.cancel(handshake_error_termination(&e));
                 return Err(io_err(format!("SSH TCP spawn error: {:?}", e).as_str()));
             }
             Ok(())

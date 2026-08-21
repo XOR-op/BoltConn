@@ -6,6 +6,7 @@ use crate::config::DnsPreference;
 use crate::network::dns::GenericDns;
 use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::InterfaceAddress;
+use boltapi::{ConnResultCode, ConnStage, ConnTermination};
 use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
@@ -239,7 +240,11 @@ impl TcpConnTask {
 
 impl Drop for TcpConnTask {
     fn drop(&mut self) {
-        self.abort_handle.cancel();
+        self.abort_handle.cancel(ConnTermination::new(
+            ConnResultCode::LinkLost,
+            ConnStage::Closing,
+            Some("smoltcp TCP task dropped with its link".to_string()),
+        ));
     }
 }
 
@@ -395,7 +400,11 @@ impl UdpConnTask {
 
 impl Drop for UdpConnTask {
     fn drop(&mut self) {
-        self.abort_handle.cancel();
+        self.abort_handle.cancel(ConnTermination::new(
+            ConnResultCode::LinkLost,
+            ConnStage::Closing,
+            Some("smoltcp UDP task dropped with its link".to_string()),
+        ));
     }
 }
 
@@ -663,7 +672,11 @@ impl SmolStack {
                     }
                     Err(SmolError::Aborted) => {
                         socket.close();
-                        item.abort_handle.cancel();
+                        item.abort_handle.cancel(ConnTermination::new(
+                            ConnResultCode::TransferError,
+                            ConnStage::Transferring,
+                            Some("smoltcp failed to forward client data".to_string()),
+                        ));
                     }
                 }
             } else if socket.may_recv() && item.half_close_timeout.is_none() {
@@ -690,14 +703,22 @@ impl SmolStack {
                     Ok(v) => has_activity |= v,
                     Err(SmolError::Aborted) => {
                         socket.close();
-                        item.abort_handle.cancel();
+                        item.abort_handle.cancel(ConnTermination::new(
+                            ConnResultCode::TransferError,
+                            ConnStage::Transferring,
+                            Some("smoltcp failed to forward a UDP datagram".to_string()),
+                        ));
                     }
                     Err(SmolError::Disconnected) => {
                         // send side has closed
                         // if we don't receive any data in 30s, close the socket
                         if item.last_active.elapsed() > Duration::from_secs(30) {
                             socket.close();
-                            item.abort_handle.cancel();
+                            item.abort_handle.cancel(ConnTermination::new(
+                                ConnResultCode::ClientClosed,
+                                ConnStage::Closing,
+                                None,
+                            ));
                         }
                     }
                 }
@@ -712,19 +733,28 @@ impl SmolStack {
     pub fn purge_invalid_tcp(&mut self) {
         self.tcp_conn.retain(|_port, task| {
             let socket = self.socket_set.get_mut::<SmolTcpSocket>(task.handle);
+            let connect_timed_out = socket.state() == TcpState::SynSent
+                && task.start_timestamp.elapsed() > Duration::from_secs(30);
             if socket.state() == TcpState::Closed
                 // half close timeout
                 || task
                     .half_close_timeout
                     .as_ref()
-                    .is_some_and(|ddl| Instant::now().ge(ddl))
+                    .is_some_and(|deadline| Instant::now().ge(deadline))
                 // syn but no response
-                || (socket.state() == TcpState::SynSent
-                    && task.start_timestamp.elapsed() > Duration::from_secs(30))
+                || connect_timed_out
             {
+                let reason = if connect_timed_out {
+                    ConnTermination::new(
+                        ConnResultCode::ConnectTimeout,
+                        ConnStage::Connecting,
+                        Some("smoltcp TCP handshake timed out".to_string()),
+                    )
+                } else {
+                    ConnTermination::new(ConnResultCode::Completed, ConnStage::Closing, None)
+                };
                 self.socket_set.remove(task.handle);
-                // Here we only abort normally closed sockets. Maybe unnecessary?
-                task.abort_handle.cancel();
+                task.abort_handle.cancel(reason);
                 false
             } else {
                 true
@@ -737,7 +767,11 @@ impl SmolStack {
             let socket = self.socket_set.get_mut::<SmolUdpSocket>(task.handle);
             if !socket.is_open() || task.last_active.elapsed() > self.udp_timeout {
                 self.socket_set.remove(task.handle);
-                task.abort_handle.cancel();
+                task.abort_handle.cancel(ConnTermination::new(
+                    ConnResultCode::Completed,
+                    ConnStage::Closing,
+                    None,
+                ));
                 false
             } else {
                 true

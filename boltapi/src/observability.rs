@@ -274,6 +274,16 @@ pub struct ConnTermination {
     pub detail: Option<String>,
 }
 
+impl ConnTermination {
+    pub fn new(code: ConnResultCode, stage: ConnStage, detail: Option<String>) -> Self {
+        Self {
+            code,
+            stage: Some(stage),
+            detail,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnStage {

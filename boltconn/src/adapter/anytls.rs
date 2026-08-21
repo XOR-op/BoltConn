@@ -1,6 +1,6 @@
 use crate::adapter::{
     AddrConnector, Connector, LinkRuntimeConfig, LinkTable, ManagedRuntime, Outbound, OutboundType,
-    established_tcp, established_udp,
+    established_tcp, established_udp, handshake_error_termination,
 };
 use crate::common::cert::make_tls_config;
 use crate::common::{StreamOutboundTrait, as_io_err, io_err};
@@ -221,7 +221,7 @@ impl Outbound for AnytlsOutboundHandle {
                 .attach_tcp(inbound, None, abort_handle, None, conn)
                 .await;
             if let Err(err) = res {
-                abort_handle2.cancel();
+                abort_handle2.cancel(handshake_error_termination(&err));
                 return Err(err);
             }
             Ok(())
@@ -254,7 +254,7 @@ impl Outbound for AnytlsOutboundHandle {
                 )
                 .await;
             if let Err(err) = res {
-                abort_handle2.cancel();
+                abort_handle2.cancel(handshake_error_termination(&err));
                 return Err(err);
             }
             Ok(())
@@ -278,7 +278,7 @@ impl Outbound for AnytlsOutboundHandle {
                 .attach_udp(inbound, None, abort_handle, None, tunnel_only, conn)
                 .await;
             if let Err(err) = res {
-                abort_handle2.cancel();
+                abort_handle2.cancel(handshake_error_termination(&err));
                 return Err(err);
             }
             Ok(())
@@ -313,7 +313,7 @@ impl Outbound for AnytlsOutboundHandle {
                 )
                 .await;
             if let Err(err) = res {
-                abort_handle2.cancel();
+                abort_handle2.cancel(handshake_error_termination(&err));
                 return Err(err);
             }
             Ok(())

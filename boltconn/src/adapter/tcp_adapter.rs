@@ -1,6 +1,6 @@
 use crate::adapter::{
     Connector, TcpIndicatorGuard, TcpRelayActivity, TcpRelayDirection, TcpStatus,
-    relay_channel_to_writer, relay_reader_to_channel, relay_tcp_bidirectional,
+    error_termination, relay_channel_to_writer, relay_reader_to_channel, relay_tcp_bidirectional,
 };
 use crate::common::{
     MAX_PKT_SIZE, StreamOutboundTrait, parse_http_host, parse_tls_sni, read_to_bytes_mut,
@@ -50,7 +50,7 @@ impl Drop for TcpAbortGuard {
         if !self.armed {
             return;
         }
-        if let Some(reason) = self.abort_handle.abort_reason() {
+        if let Some(reason) = self.abort_handle.cancel_reason() {
             self.info.finish(reason.code, reason.stage, reason.detail);
         }
     }
@@ -232,38 +232,35 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         );
         let outcome = relay_tcp_bidirectional(&label, upload, download, activity).await;
         let reached_active = info.snapshot().state.established_at_ms.is_some();
-        if reached_active {
-            match &outcome.result {
-                Ok(()) => {
-                    info.finish(
-                        match outcome.first {
-                            TcpRelayDirection::Upload => boltapi::ConnResultCode::ClientClosed,
-                            TcpRelayDirection::Download => boltapi::ConnResultCode::RemoteClosed,
-                        },
-                        Some(boltapi::ConnStage::Closing),
-                        None,
-                    );
-                }
-                Err(error) => {
-                    info.finish(
-                        boltapi::ConnResultCode::TransferError,
-                        Some(boltapi::ConnStage::Transferring),
-                        Some(crate::proxy::bounded_error_detail(&error.to_string())),
-                    );
-                }
-            }
-        } else if outcome.first == TcpRelayDirection::Upload && outcome.result.is_ok() {
-            // A client can cleanly close while the outbound is still connecting.
-            // Retain that cause rather than letting cancellation look like an
-            // internal outbound-task failure.
-            info.finish(
-                boltapi::ConnResultCode::ClientClosed,
-                Some(boltapi::ConnStage::Connecting),
+        let reason = match &outcome.result {
+            Ok(()) => boltapi::ConnTermination::new(
+                match outcome.first {
+                    TcpRelayDirection::Upload => boltapi::ConnResultCode::ClientClosed,
+                    TcpRelayDirection::Download => boltapi::ConnResultCode::RemoteClosed,
+                },
+                if reached_active {
+                    boltapi::ConnStage::Closing
+                } else {
+                    boltapi::ConnStage::Connecting
+                },
                 None,
-            );
+            ),
+            Err(error) => error_termination(
+                boltapi::ConnResultCode::TransferError,
+                if reached_active {
+                    boltapi::ConnStage::Transferring
+                } else {
+                    boltapi::ConnStage::Connecting
+                },
+                error,
+            ),
+        };
+        if reached_active || (outcome.first == TcpRelayDirection::Upload && outcome.result.is_ok())
+        {
+            info.finish(reason.code, reason.stage, reason.detail.clone());
         }
         abort_guard.disarm();
-        self.abort_handle.cancel();
+        self.abort_handle.cancel(reason);
         outcome.result
     }
 }
@@ -352,5 +349,63 @@ mod tests {
             .expect("adapter returned an error");
         assert_eq!(available.load(Ordering::Relaxed), 0);
         assert!(info.done());
+    }
+
+    #[tokio::test]
+    async fn transport_cancellation_finishes_a_closing_connection() {
+        let (mut client, adapter_stream) = tokio::io::duplex(1024);
+        let (adapter_connector, outbound_connector) = Connector::new_pair(4);
+        let Connector {
+            tx: outbound_tx,
+            rx: _outbound_rx,
+        } = outbound_connector;
+        let available = Arc::new(AtomicU8::new(2));
+        let abort_handle = ConnAbortHandle::new();
+        let info = test_context(abort_handle.clone());
+        info.set_state(boltapi::ConnState::Active);
+        let adapter = TcpAdapter::new(
+            info.metadata().conn_info.src,
+            info.metadata().conn_info.dst.clone(),
+            adapter_stream,
+            available.clone(),
+            adapter_connector,
+            abort_handle.clone(),
+        );
+        let task_info = info.clone();
+        let adapter_task = tokio::spawn(async move {
+            let _ = adapter.run(task_info).await;
+        });
+        abort_handle.fulfill(vec![("tcp".to_string(), adapter_task)]);
+
+        client.shutdown().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while info.state() != boltapi::ConnState::Closing {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("adapter did not enter closing after the upload half-close");
+
+        abort_handle.cancel(boltapi::ConnTermination::new(
+            boltapi::ConnResultCode::RemoteClosed,
+            boltapi::ConnStage::Closing,
+            None,
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !info.done() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("reasoned cancellation did not finish the connection");
+
+        drop(outbound_tx);
+        assert_eq!(available.load(Ordering::Relaxed), 0);
+        let snapshot = info.snapshot();
+        assert_eq!(snapshot.state.state, boltapi::ConnState::Closed);
+        assert_eq!(
+            snapshot.state.termination.unwrap().code,
+            boltapi::ConnResultCode::RemoteClosed
+        );
     }
 }

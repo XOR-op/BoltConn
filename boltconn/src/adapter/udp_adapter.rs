@@ -18,19 +18,21 @@ const UDP_ALIVE_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 fn finish_udp(
     info: &ConnHandle,
+    abort_handle: &ConnAbortHandle,
     code: boltapi::ConnResultCode,
     stage: boltapi::ConnStage,
     detail: Option<String>,
 ) {
     if info.snapshot().state.established_at_ms.is_some() {
         info.set_state(boltapi::ConnState::Closing);
-        info.finish(code, Some(stage), detail);
+        info.finish(code, Some(stage), detail.clone());
     } else if code == boltapi::ConnResultCode::ClientClosed {
         // UDP clients may disappear while their outbound is still connecting.
         // This is still a meaningful terminal cause without an establishment
         // timestamp.
-        info.finish(code, Some(stage), detail);
+        info.finish(code, Some(stage), detail.clone());
     }
+    abort_handle.cancel(boltapi::ConnTermination::new(code, stage, detail));
 }
 
 pub struct TunUdpAdapter {
@@ -102,18 +104,19 @@ impl TunUdpAdapter {
                 match transfer_error {
                     Some(detail) => finish_udp(
                         &outgoing_info_arc,
+                        &abort_handle2,
                         boltapi::ConnResultCode::TransferError,
                         boltapi::ConnStage::Transferring,
                         Some(detail),
                     ),
                     None => finish_udp(
                         &outgoing_info_arc,
+                        &abort_handle2,
                         boltapi::ConnResultCode::ClientClosed,
                         boltapi::ConnStage::Closing,
                         None,
                     ),
                 }
-                abort_handle2.cancel();
             }),
             abort_handle.clone(),
         );
@@ -132,25 +135,25 @@ impl TunUdpAdapter {
             if let Err(err) = self.recv_tx.send((data, src_addr)).await {
                 tracing::warn!("TunUdpAdapter write to inbound failed: {}", err);
                 client_closed = Some(crate::proxy::bounded_error_detail(&err.to_string()));
-                abort_handle.cancel();
                 break;
             }
         }
         match client_closed {
             Some(detail) => finish_udp(
                 &self.info,
+                &abort_handle,
                 boltapi::ConnResultCode::ClientClosed,
                 boltapi::ConnStage::Closing,
                 Some(detail),
             ),
             None => finish_udp(
                 &self.info,
+                &abort_handle,
                 boltapi::ConnResultCode::RemoteClosed,
                 boltapi::ConnStage::Closing,
                 None,
             ),
         }
-        abort_handle.cancel();
         Ok(())
     }
 }
@@ -222,18 +225,19 @@ impl SocksUdpAdapter {
                 match transfer_error {
                     Some(detail) => finish_udp(
                         &outgoing_info_arc,
+                        &abort_handle2,
                         boltapi::ConnResultCode::TransferError,
                         boltapi::ConnStage::Transferring,
                         Some(detail),
                     ),
                     None => finish_udp(
                         &outgoing_info_arc,
+                        &abort_handle2,
                         boltapi::ConnResultCode::ClientClosed,
                         boltapi::ConnStage::Closing,
                         None,
                     ),
                 }
-                abort_handle2.cancel();
             }),
             abort_handle.clone(),
         );
@@ -266,18 +270,19 @@ impl SocksUdpAdapter {
         match client_closed {
             Some(detail) => finish_udp(
                 &self.info,
+                &abort_handle,
                 boltapi::ConnResultCode::ClientClosed,
                 boltapi::ConnStage::Closing,
                 Some(detail),
             ),
             None => finish_udp(
                 &self.info,
+                &abort_handle,
                 boltapi::ConnResultCode::RemoteClosed,
                 boltapi::ConnStage::Closing,
                 None,
             ),
         }
-        abort_handle.cancel();
         Ok(())
     }
 }

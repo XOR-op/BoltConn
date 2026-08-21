@@ -35,7 +35,7 @@ use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 #[allow(unused_imports)]
 pub use anytls::*;
-use boltapi::{ConnTermination, DnsLookupPurpose};
+use boltapi::{ConnResultCode, ConnStage, ConnTermination, DnsLookupPurpose};
 pub use chain::*;
 pub use direct::*;
 pub use socks5::*;
@@ -45,6 +45,26 @@ pub use tcp_adapter::*;
 pub use trojan::*;
 pub use udp_adapter::*;
 pub use wireguard::*;
+
+pub(crate) fn error_termination(
+    code: ConnResultCode,
+    stage: ConnStage,
+    error: &(impl Display + ?Sized),
+) -> ConnTermination {
+    ConnTermination::new(
+        code,
+        stage,
+        Some(crate::proxy::bounded_error_detail(&error.to_string())),
+    )
+}
+
+pub(crate) fn handshake_error_termination(error: &(impl Display + ?Sized)) -> ConnTermination {
+    error_termination(
+        ConnResultCode::HandshakeError,
+        ConnStage::Handshaking,
+        error,
+    )
+}
 
 pub struct TcpStatus {
     src: SocketAddr,
@@ -424,21 +444,21 @@ async fn established_tcp<T>(
         tracing::debug!("[{}] TCP relay failed: {}", name, error);
     }
     let reason = match &outcome.result {
-        Ok(()) => ConnTermination {
-            code: match outcome.first {
+        Ok(()) => ConnTermination::new(
+            match outcome.first {
                 TcpRelayDirection::Upload => boltapi::ConnResultCode::ClientClosed,
                 TcpRelayDirection::Download => boltapi::ConnResultCode::RemoteClosed,
             },
-            stage: Some(boltapi::ConnStage::Closing),
-            detail: None,
-        },
-        Err(error) => ConnTermination {
-            code: boltapi::ConnResultCode::TransferError,
-            stage: Some(boltapi::ConnStage::Transferring),
-            detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
-        },
+            boltapi::ConnStage::Closing,
+            None,
+        ),
+        Err(error) => error_termination(
+            boltapi::ConnResultCode::TransferError,
+            boltapi::ConnStage::Transferring,
+            error,
+        ),
     };
-    abort_handle.abort(reason);
+    abort_handle.cancel(reason);
 }
 
 #[tracing::instrument(skip_all)]
@@ -462,12 +482,16 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
     let name2 = name.clone();
     let _guard = UdpDropGuard(tokio::spawn(async move {
         // recv from outbound and send to inbound
-        loop {
+        let reason = loop {
             let mut buf = BytesMut::with_capacity(MAX_PKT_SIZE);
             let res = outbound.recv_from(unsafe { mut_buf(&mut buf) }).await;
             match res {
                 Ok((0, _)) => {
-                    break;
+                    break ConnTermination::new(
+                        boltapi::ConnResultCode::RemoteClosed,
+                        boltapi::ConnStage::Closing,
+                        None,
+                    );
                 }
                 Ok((n, addr)) => {
                     unsafe { buf.advance_mut(n) };
@@ -479,27 +503,49 @@ async fn established_udp<S: UdpSocketAdapter + Sync + 'static>(
                     }
                     if tx.send((buf.freeze(), addr)).await.is_err() {
                         tracing::debug!("[{}] write to inbound failed", name);
-                        break;
+                        break ConnTermination::new(
+                            boltapi::ConnResultCode::ClientClosed,
+                            boltapi::ConnStage::Closing,
+                            None,
+                        );
                     }
                 }
                 Err(err) => {
                     tracing::debug!("[{}] outbound read error: {}", name, err);
-                    break;
+                    break error_termination(
+                        boltapi::ConnResultCode::TransferError,
+                        boltapi::ConnStage::Transferring,
+                        &err,
+                    );
                 }
             }
-        }
-        abort_handle.cancel();
+        };
+        abort_handle.cancel(reason);
     }));
     // recv from inbound and send to outbound
-    while let Some((buf, addr)) = rx.recv().await {
-        let addr = tunnel_addr2.clone().unwrap_or(addr);
-        let res = outbound2.send_to(buf.as_ref(), addr).await;
-        if let Err(err) = res {
-            tracing::debug!("[{}] write to outbound failed: {}", name2, err);
-            break;
+    let reason = loop {
+        match rx.recv().await {
+            Some((buf, addr)) => {
+                let addr = tunnel_addr2.clone().unwrap_or(addr);
+                if let Err(err) = outbound2.send_to(buf.as_ref(), addr).await {
+                    tracing::debug!("[{}] write to outbound failed: {}", name2, err);
+                    break error_termination(
+                        boltapi::ConnResultCode::TransferError,
+                        boltapi::ConnStage::Transferring,
+                        &err,
+                    );
+                }
+            }
+            None => {
+                break ConnTermination::new(
+                    boltapi::ConnResultCode::ClientClosed,
+                    boltapi::ConnStage::Closing,
+                    None,
+                );
+            }
         }
-    }
-    abort_handle2.cancel();
+    };
+    abort_handle2.cancel(reason);
 }
 
 #[async_trait]
@@ -579,7 +625,11 @@ impl Drop for DuplexCloseGuard {
                     });
                 }
             }
-            self.abort_handle.cancel();
+            self.abort_handle.cancel(ConnTermination::new(
+                boltapi::ConnResultCode::InternalError,
+                boltapi::ConnStage::Closing,
+                Some("UDP relay guard dropped before shutdown completed".to_string()),
+            ));
         }
     }
 }
