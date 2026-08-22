@@ -13,7 +13,7 @@ use boltapi::{
     ApiError, ApiErrorCode, ConnDetail, ConnListRequest, ConnOrigin, ConnStopResult, ConnSummary,
     DnsLookupDetail, DnsLookupRequest, DnsLookupResponse, DnsOutcome, DnsResolverDetail,
     DnsResolverSummary, FakeIpMapping, GetGroupRespSchema, GetInterceptDataResp,
-    GetInterceptRangeReq, HttpInterceptSchema, LinkDetail, LinkEvidence, LinkReason, LinkSummary,
+    GetInterceptRangeReq, HttpInterceptSchema, LinkDetail, LinkReason, LinkSummary,
     ProcessParentSchema, ProcessSchema, ProxyData, SessionSchema, Snapshot, Traffic, TrafficResp,
     TunStatusSchema,
 };
@@ -139,7 +139,7 @@ impl Controller {
     }
 
     pub async fn list_link(&self) -> Snapshot<LinkSummary> {
-        self.dispatcher.refresh_link_evidence().await;
+        self.dispatcher.refresh_link_liveness().await;
         let observed_at_ms = now_ms();
         let mut snapshot = self.dispatcher.link_table().snapshot(observed_at_ms);
         for summary in &mut snapshot.items {
@@ -149,7 +149,7 @@ impl Controller {
     }
 
     pub async fn show_link(&self, name: String) -> Result<LinkDetail, ApiError> {
-        self.dispatcher.refresh_link_evidence().await;
+        self.dispatcher.refresh_link_liveness().await;
         let observed_at_ms = now_ms();
         let mut detail = self
             .dispatcher
@@ -867,22 +867,6 @@ fn sanitize_link_summary(summary: &mut LinkSummary) {
 
 fn sanitize_link_detail(detail: &mut LinkDetail) {
     sanitize_link_summary(&mut detail.summary);
-    match &mut detail.evidence {
-        LinkEvidence::Wireguard { .. } => {}
-        LinkEvidence::Ssh { probe, .. } => {
-            if let Some(probe) = probe {
-                sanitize_link_reason(&mut probe.last_error);
-            }
-        }
-        LinkEvidence::Anytls {
-            problematic_session,
-            ..
-        } => {
-            if let Some(session) = problematic_session {
-                sanitize_text(&mut session.reason.detail);
-            }
-        }
-    }
     if let Some(lookup) = &mut detail.dns.latest_lookup {
         sanitize_dns_lookup(lookup);
     }

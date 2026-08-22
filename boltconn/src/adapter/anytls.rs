@@ -436,7 +436,9 @@ impl AnytlsManager {
         }
     }
 
-    pub(crate) async fn refresh_evidence(&self) {
+    /// Reaps clients whose sessions have all died and refreshes the health of
+    /// the survivors.
+    pub(crate) async fn refresh_liveness(&self) {
         let runtimes: Vec<_> = self
             .clients
             .lock()
@@ -445,7 +447,7 @@ impl AnytlsManager {
             .map(|(name, runtime)| (name.clone(), runtime.clone()))
             .collect();
         for (name, runtime) in runtimes {
-            let (state, health, endpoints, evidence) = runtime.runtime.link_snapshot().await;
+            let (state, health, endpoints) = runtime.runtime.link_snapshot().await;
             if matches!(
                 state,
                 boltapi::LinkState::Closed | boltapi::LinkState::Failed
@@ -459,9 +461,7 @@ impl AnytlsManager {
                         clients.remove(&name);
                     }
                 }
-                runtime
-                    .record
-                    .retain_final_snapshot(health, endpoints, evidence);
+                runtime.record.retain_final_snapshot(health, endpoints);
                 self.link_table.mark_terminal(
                     &name,
                     runtime.generation,
@@ -474,9 +474,7 @@ impl AnytlsManager {
                     boltapi::ConnResultCode::LinkLost,
                 );
             } else {
-                runtime
-                    .record
-                    .set_live_snapshot(state, health, endpoints, evidence);
+                runtime.record.set_live_snapshot(state, health, endpoints);
             }
         }
     }
@@ -515,10 +513,8 @@ impl AnytlsManager {
     }
 
     async fn refresh_runtime(&self, runtime: &ManagedRuntime<AnytlsClient>) {
-        let (state, health, endpoints, evidence) = runtime.runtime.link_snapshot().await;
-        runtime
-            .record
-            .set_live_snapshot(state, health, endpoints, evidence);
+        let (state, health, endpoints) = runtime.runtime.link_snapshot().await;
+        runtime.record.set_live_snapshot(state, health, endpoints);
     }
 
     async fn finish_failed_if_unused(&self, name: &str, generation: u64, error: &TransportError) {
@@ -526,9 +522,7 @@ impl AnytlsManager {
         let Some(runtime) = runtime.filter(|runtime| runtime.generation == generation) else {
             return;
         };
-        let (_, _, _, evidence) = runtime.runtime.link_snapshot().await;
-        let unused = matches!(evidence, boltapi::LinkEvidence::Anytls { sessions: 0, .. });
-        if !unused {
+        if !runtime.runtime.is_unused().await {
             self.refresh_runtime(&runtime).await;
             return;
         }
@@ -555,11 +549,9 @@ impl AnytlsManager {
     }
 
     async fn close_runtime(&self, runtime: ManagedRuntime<AnytlsClient>) {
-        let (_, health, endpoints, evidence) = runtime.runtime.link_snapshot().await;
+        let (_, health, endpoints) = runtime.runtime.link_snapshot().await;
         runtime.runtime.close().await;
-        runtime
-            .record
-            .retain_final_snapshot(health, endpoints, evidence);
+        runtime.record.retain_final_snapshot(health, endpoints);
     }
 }
 
@@ -834,14 +826,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_removes_dead_pool_and_retains_terminal_evidence() {
+    async fn refresh_removes_dead_pool_and_retains_terminal_state() {
         let (named, config) = configs("link");
         let table = Arc::new(LinkTable::new(HashMap::from([("link".to_string(), named)])));
         let manager = AnytlsManager::new(table.clone());
         let first = manager.get_client("link", &config).await.unwrap();
         first.runtime.close().await;
 
-        manager.refresh_evidence().await;
+        manager.refresh_liveness().await;
         assert!(manager.clients.lock().await.get("link").is_none());
         let detail = table.detail_result("link", u64::MAX).unwrap();
         assert_eq!(detail.summary.state, boltapi::LinkState::Failed);
@@ -850,10 +842,6 @@ mod tests {
             detail.summary.reason.unwrap().code,
             boltapi::LinkReasonCode::TaskStopped
         );
-        assert!(matches!(
-            detail.evidence,
-            boltapi::LinkEvidence::Anytls { sessions: 0, .. }
-        ));
 
         let replacement = manager.get_client("link", &config).await.unwrap();
         assert_eq!(replacement.generation, first.generation + 1);

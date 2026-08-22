@@ -8,7 +8,7 @@ use crate::proxy::NetworkAddr;
 use crate::proxy::error::TransportError;
 use bytes::Bytes;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -52,10 +52,6 @@ impl AnytlsSession {
             settings_sent: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             active_streams: AtomicUsize::new(0),
-            reader_alive: AtomicBool::new(true),
-            writer_alive: AtomicBool::new(true),
-            last_heartbeat_sent_at_ms: AtomicU64::new(0),
-            last_heartbeat_received_at_ms: AtomicU64::new(0),
             failure_reason: Mutex::new(None),
             idle_since: Mutex::new(Some(Instant::now())),
             peer_version: AtomicU8::new(1),
@@ -80,7 +76,6 @@ impl AnytlsSession {
                 writer_shared
                     .set_failure(boltapi::LinkReasonCode::ProtocolFailed, &err.to_string());
             }
-            writer_shared.writer_alive.store(false, Ordering::Release);
             writer_shared.abort();
         });
 
@@ -92,7 +87,6 @@ impl AnytlsSession {
                 reader_shared
                     .set_failure(boltapi::LinkReasonCode::ProtocolFailed, &err.to_string());
             }
-            reader_shared.reader_alive.store(false, Ordering::Release);
             reader_shared.close();
         });
 
@@ -200,14 +194,7 @@ impl AnytlsSession {
         self.shared.seq
     }
 
-    pub fn peer_version(&self) -> u8 {
-        self.shared.peer_version.load(Ordering::Acquire)
-    }
-
     pub fn send_heartbeat(&self) -> Result<(), TransportError> {
-        self.shared
-            .last_heartbeat_sent_at_ms
-            .store(now_ms(), Ordering::Release);
         if self
             .shared
             .write_tx
@@ -232,24 +219,10 @@ impl AnytlsSession {
         self.shared.active_streams.load(Ordering::Acquire)
     }
 
-    pub fn problematic_evidence(&self) -> Option<boltapi::AnytlsSessionEvidence> {
-        let reason = self.shared.failure_reason.lock().unwrap().clone()?;
-        Some(boltapi::AnytlsSessionEvidence {
-            sequence: self.seq(),
-            reader_alive: self.shared.reader_alive.load(Ordering::Acquire),
-            writer_alive: self.shared.writer_alive.load(Ordering::Acquire),
-            last_heartbeat_sent_at_ms: nonzero(
-                self.shared
-                    .last_heartbeat_sent_at_ms
-                    .load(Ordering::Acquire),
-            ),
-            last_heartbeat_received_at_ms: nonzero(
-                self.shared
-                    .last_heartbeat_received_at_ms
-                    .load(Ordering::Acquire),
-            ),
-            reason,
-        })
+    /// The transport failure this session recorded, if any. A live session that
+    /// reports one is degraded rather than closed.
+    pub fn failure_reason(&self) -> Option<boltapi::LinkReason> {
+        self.shared.failure_reason.lock().unwrap().clone()
     }
 }
 
@@ -260,10 +233,6 @@ pub(super) struct SessionShared {
     settings_sent: AtomicBool,
     alive: AtomicBool,
     active_streams: AtomicUsize,
-    reader_alive: AtomicBool,
-    writer_alive: AtomicBool,
-    last_heartbeat_sent_at_ms: AtomicU64,
-    last_heartbeat_received_at_ms: AtomicU64,
     failure_reason: Mutex<Option<boltapi::LinkReason>>,
     idle_since: Mutex<Option<Instant>>,
     pub(super) peer_version: AtomicU8,
@@ -444,9 +413,6 @@ fn handle_frame(frame: FrameRead, shared: &Arc<SessionShared>) -> Result<(), Tra
         }
         Command::HeartRequest => {
             shared
-                .last_heartbeat_received_at_ms
-                .store(now_ms(), Ordering::Release);
-            shared
                 .write_tx
                 .send(WriteRequest::Frames(vec![FrameWrite {
                     command: Command::HeartResponse,
@@ -455,11 +421,7 @@ fn handle_frame(frame: FrameRead, shared: &Arc<SessionShared>) -> Result<(), Tra
                 }]))
                 .map_err(|_| TransportError::Anytls("AnyTLS writer is closed"))?;
         }
-        Command::HeartResponse => {
-            shared
-                .last_heartbeat_received_at_ms
-                .store(now_ms(), Ordering::Release);
-        }
+        Command::HeartResponse => {}
         Command::ServerSettings => {
             let settings = parse_settings(&frame.data);
             if let Some(version) = settings.get("v").and_then(|v| v.parse::<u8>().ok()) {
@@ -472,10 +434,6 @@ fn handle_frame(frame: FrameRead, shared: &Arc<SessionShared>) -> Result<(), Tra
         }
     }
     Ok(())
-}
-
-fn nonzero(value: u64) -> Option<u64> {
-    (value != 0).then_some(value)
 }
 
 fn now_ms() -> u64 {
@@ -569,7 +527,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_session_retains_task_and_heartbeat_evidence() {
+    async fn failed_session_retains_its_transport_failure_reason() {
         let (client, server) = tokio::io::duplex(8192);
         let session =
             AnytlsSession::new_with_seq(client, AnytlsSessionOptions::new("password"), 7, false)
@@ -578,12 +536,10 @@ mod tests {
         session.send_heartbeat().unwrap();
         drop(server);
 
-        let evidence = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        let reason = tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
-                if let Some(evidence) = session.problematic_evidence()
-                    && !evidence.reader_alive
-                {
-                    break evidence;
+                if let Some(reason) = session.failure_reason() {
+                    break reason;
                 }
                 tokio::task::yield_now().await;
             }
@@ -591,12 +547,6 @@ mod tests {
         .await
         .expect("session did not retain its transport failure");
 
-        assert_eq!(evidence.sequence, 7);
-        assert!(!evidence.reader_alive);
-        assert!(evidence.last_heartbeat_sent_at_ms.is_some());
-        assert_eq!(
-            evidence.reason.code,
-            boltapi::LinkReasonCode::ProtocolFailed
-        );
+        assert_eq!(reason.code, boltapi::LinkReasonCode::ProtocolFailed);
     }
 }

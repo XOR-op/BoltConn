@@ -8,8 +8,8 @@ use crate::transport::wireguard::WireguardConfig;
 use boltapi::{
     ApiError, ApiErrorCode, ConnResultCode, DnsActivity, DnsCacheStatus, DnsLookupDetail,
     DnsLookupRequest, DnsOutcome, DnsOutcomeCounts, DnsResolverDetail, DnsResolverSummary,
-    LinkDetail, LinkEvidence, LinkHealth, LinkKind, LinkReason, LinkReasonCode, LinkState,
-    LinkSummary, Snapshot, Traffic,
+    LinkDetail, LinkHealth, LinkKind, LinkReason, LinkReasonCode, LinkState, LinkSummary, Snapshot,
+    Traffic,
 };
 use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
@@ -424,7 +424,6 @@ struct LinkGenerationState {
     connected_endpoints: Vec<SocketAddr>,
     chain: Vec<boltapi::RouteHop>,
     upstream_dependencies: Vec<Arc<LinkGeneration>>,
-    evidence: LinkEvidence,
     dns: DnsActivity,
     dns_runtime: Option<LinkDnsRuntime>,
 }
@@ -489,7 +488,6 @@ impl LinkGeneration {
                 connected_endpoints: Vec::new(),
                 chain: Vec::new(),
                 upstream_dependencies: Vec::new(),
-                evidence: empty_evidence(config.kind()),
                 dns: empty_dns_activity(),
                 dns_runtime: None,
             }),
@@ -517,41 +515,20 @@ impl LinkGeneration {
         state: LinkState,
         health: LinkHealth,
         mut connected_endpoints: Vec<SocketAddr>,
-        evidence: LinkEvidence,
     ) -> bool {
-        if is_terminal(state) || !evidence_matches_kind(&evidence, self.kind) {
-            return false;
-        }
         connected_endpoints.sort_unstable();
         connected_endpoints.dedup();
         let mut current = self.state.lock().unwrap();
-        if is_terminal(current.state) {
+        if !set_live_state(&mut current, state, health) {
             return false;
         }
-        current.state = state;
-        current.health = health;
         current.connected_endpoints = connected_endpoints;
-        current.evidence = evidence;
         true
     }
 
-    pub(crate) fn set_live_evidence(
-        &self,
-        state: LinkState,
-        health: LinkHealth,
-        evidence: LinkEvidence,
-    ) -> bool {
-        if is_terminal(state) || !evidence_matches_kind(&evidence, self.kind) {
-            return false;
-        }
+    pub(crate) fn set_live_state(&self, state: LinkState, health: LinkHealth) -> bool {
         let mut current = self.state.lock().unwrap();
-        if is_terminal(current.state) {
-            return false;
-        }
-        current.state = state;
-        current.health = health;
-        current.evidence = evidence;
-        true
+        set_live_state(&mut current, state, health)
     }
 
     /// Managers call this before dropping a runtime. It intentionally updates a
@@ -560,39 +537,17 @@ impl LinkGeneration {
         &self,
         health: LinkHealth,
         mut connected_endpoints: Vec<SocketAddr>,
-        evidence: LinkEvidence,
     ) {
-        if !evidence_matches_kind(&evidence, self.kind) {
-            return;
-        }
         connected_endpoints.sort_unstable();
         connected_endpoints.dedup();
         let mut current = self.state.lock().unwrap();
-        // Reload and explicit-stop paths terminalize the record before the
-        // manager closes its runtime. Preserve that authoritative terminal
-        // health while still copying the runtime's last endpoints/evidence.
-        if !is_terminal(current.state) {
-            current.health = health;
-        }
+        retain_final_health(&mut current, health);
         current.connected_endpoints = connected_endpoints;
-        current.evidence = evidence;
-        if let Some(runtime) = current.dns_runtime.take() {
-            merge_dns_activity(&mut current.dns, runtime.activity());
-        }
     }
 
-    pub(crate) fn retain_final_evidence(&self, health: LinkHealth, evidence: LinkEvidence) {
-        if !evidence_matches_kind(&evidence, self.kind) {
-            return;
-        }
+    pub(crate) fn retain_final_health(&self, health: LinkHealth) {
         let mut current = self.state.lock().unwrap();
-        if !is_terminal(current.state) {
-            current.health = health;
-        }
-        current.evidence = evidence;
-        if let Some(runtime) = current.dns_runtime.take() {
-            merge_dns_activity(&mut current.dns, runtime.activity());
-        }
+        retain_final_health(&mut current, health);
     }
 
     pub(crate) fn attach_dns_runtime(&self, runtime: LinkDnsRuntime) -> bool {
@@ -1196,7 +1151,6 @@ impl Link {
             server: latest.server.clone(),
             connected_endpoints: state.connected_endpoints,
             chain: state.chain,
-            evidence: state.evidence,
             dns,
         })
     }
@@ -1281,27 +1235,27 @@ fn is_terminal(state: LinkState) -> bool {
     matches!(state, LinkState::Closed | LinkState::Failed)
 }
 
-fn empty_evidence(kind: LinkKind) -> LinkEvidence {
-    match kind {
-        LinkKind::Wireguard => LinkEvidence::Wireguard {
-            task_alive: false,
-            last_handshake_at_ms: None,
-            handshake_expires_at_ms: None,
-            last_packet_at_ms: None,
-        },
-        LinkKind::Ssh => LinkEvidence::Ssh {
-            task_alive: false,
-            open_channels: 0,
-            last_channel_open_at_ms: None,
-            probe: None,
-        },
-        LinkKind::Anytls => LinkEvidence::Anytls {
-            sessions: 0,
-            active_streams: 0,
-            idle_sessions: 0,
-            peer_versions: Vec::new(),
-            problematic_session: None,
-        },
+/// Applies a runtime-observed state to a live record. A terminal record is
+/// authoritative: reload and explicit-stop terminalize it before the manager
+/// closes its runtime, so a late observation must not resurrect it.
+fn set_live_state(current: &mut LinkGenerationState, state: LinkState, health: LinkHealth) -> bool {
+    if is_terminal(state) || is_terminal(current.state) {
+        return false;
+    }
+    current.state = state;
+    current.health = health;
+    true
+}
+
+/// Managers call this before dropping a runtime. It intentionally updates a
+/// terminal record as well, preserving the final observable health, but keeps
+/// an already-terminal record's authoritative health.
+fn retain_final_health(current: &mut LinkGenerationState, health: LinkHealth) {
+    if !is_terminal(current.state) {
+        current.health = health;
+    }
+    if let Some(runtime) = current.dns_runtime.take() {
+        merge_dns_activity(&mut current.dns, runtime.activity());
     }
 }
 
@@ -1317,15 +1271,6 @@ fn empty_dns_activity() -> DnsActivity {
         },
         latest_lookup: None,
     }
-}
-
-fn evidence_matches_kind(evidence: &LinkEvidence, kind: LinkKind) -> bool {
-    matches!(
-        (evidence, kind),
-        (LinkEvidence::Wireguard { .. }, LinkKind::Wireguard)
-            | (LinkEvidence::Ssh { .. }, LinkKind::Ssh)
-            | (LinkEvidence::Anytls { .. }, LinkKind::Anytls)
-    )
 }
 
 fn observe_dns_lookup(activity: &mut DnsActivity, lookup: DnsLookupDetail) {
@@ -1506,11 +1451,7 @@ mod tests {
         table
             .publish_creation_route(name, generation.number(), &route)
             .unwrap();
-        assert!(generation.set_live_evidence(
-            LinkState::Ready,
-            LinkHealth::Healthy,
-            empty_evidence(LinkKind::Anytls),
-        ));
+        assert!(generation.set_live_state(LinkState::Ready, LinkHealth::Healthy));
         generation
     }
 
@@ -1830,7 +1771,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_generation_retains_protocol_endpoint_and_dns_evidence() {
+    fn terminal_generation_retains_endpoint_and_dns_activity() {
         let config = anytls("secret");
         let table = LinkTable::new(configs(config.clone()));
         let generation = acquire(&table, &config).unwrap().generation;
@@ -1861,34 +1802,16 @@ mod tests {
             ConnResultCode::LinkLost,
         ));
         let endpoint = "192.0.2.10:443".parse().unwrap();
-        generation.retain_final_snapshot(
-            LinkHealth::Healthy,
-            vec![endpoint],
-            LinkEvidence::Anytls {
-                sessions: 1,
-                active_streams: 0,
-                idle_sessions: 0,
-                peer_versions: vec![1],
-                problematic_session: None,
-            },
-        );
+        generation.retain_final_snapshot(LinkHealth::Healthy, vec![endpoint]);
 
         let detail = table.detail_result("link", now_ms()).unwrap();
         assert_eq!(detail.summary.state, LinkState::Failed);
-        // Runtime evidence cannot overwrite the terminal health/reason selected
-        // by the lifecycle owner.
+        // A runtime's final health cannot overwrite the terminal health/reason
+        // selected by the lifecycle owner.
         assert_eq!(detail.summary.health, LinkHealth::Unhealthy);
         assert_eq!(detail.connected_endpoints, vec![endpoint]);
         assert_eq!(detail.dns.lookups, 1);
         assert_eq!(detail.dns.outcomes.error, 1);
-        assert!(matches!(
-            detail.evidence,
-            LinkEvidence::Anytls {
-                sessions: 1,
-                peer_versions,
-                ..
-            } if peer_versions == vec![1]
-        ));
     }
 
     #[test]

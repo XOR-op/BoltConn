@@ -15,8 +15,7 @@ use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
 use boltapi::{
-    ConnResultCode, DnsLookupPurpose, LinkEvidence, LinkHealth, LinkReason, LinkReasonCode,
-    LinkState,
+    ConnResultCode, DnsLookupPurpose, LinkHealth, LinkReason, LinkReasonCode, LinkState,
 };
 use bytes::Bytes;
 use hickory_resolver::Resolver;
@@ -27,7 +26,6 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::select;
@@ -52,7 +50,6 @@ pub struct Endpoint {
     notify: Arc<Notify>,
     is_active: AbortCanary,
     last_active: Arc<Mutex<Instant>>,
-    last_packet_at_ms: Arc<AtomicU64>,
     connected_endpoint: SocketAddr,
 }
 
@@ -117,7 +114,6 @@ impl Endpoint {
         };
 
         let last_active = Arc::new(Mutex::new(Instant::now()));
-        let last_packet_at_ms = Arc::new(AtomicU64::new(0));
         let (indicator, indi_write) = AbortCanary::pair();
 
         // drive wg tunnel
@@ -125,7 +121,6 @@ impl Endpoint {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
             let timer = last_active.clone();
-            let last_packet_at_ms = last_packet_at_ms.clone();
             let name = name.to_string();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
@@ -138,7 +133,6 @@ impl Endpoint {
                         return;
                     }
                     *timer.lock().await = Instant::now();
-                    last_packet_at_ms.store(now_ms(), Ordering::Relaxed);
                 }
             })
         };
@@ -147,7 +141,6 @@ impl Endpoint {
             let tunnel = tunnel.clone();
             let stop_send = stop_send.clone();
             let timer = last_active.clone();
-            let last_packet_at_ms = last_packet_at_ms.clone();
             let name = name.to_string();
             tokio::spawn(async move {
                 let mut buf = [0u8; MAX_PKT_SIZE];
@@ -159,7 +152,6 @@ impl Endpoint {
                     {
                         Ok(true) => {
                             *timer.lock().await = Instant::now();
-                            last_packet_at_ms.store(now_ms(), Ordering::Relaxed);
                         }
                         Ok(false) => {}
                         Err(e) => {
@@ -291,7 +283,6 @@ impl Endpoint {
             notify,
             is_active: indicator,
             last_active,
-            last_packet_at_ms,
             connected_endpoint,
         }))
     }
@@ -307,26 +298,12 @@ impl Endpoint {
         let _ = self.stop_sender.send(());
     }
 
-    async fn link_snapshot(&self) -> (LinkState, LinkHealth, LinkEvidence) {
+    async fn link_snapshot(&self) -> (LinkState, LinkHealth) {
         let task_alive = self.is_active.alive();
         let (expired, handshake_elapsed) = self.wg.stats().await;
-        let observed_at_ms = now_ms();
-        let last_handshake_at_ms = handshake_elapsed.map(|elapsed| {
-            observed_at_ms.saturating_sub(elapsed.as_millis().try_into().unwrap_or(u64::MAX))
-        });
-        let evidence = LinkEvidence::Wireguard {
-            task_alive,
-            last_handshake_at_ms,
-            handshake_expires_at_ms: last_handshake_at_ms
-                .map(|handshake| handshake.saturating_add(180_000)),
-            last_packet_at_ms: match self.last_packet_at_ms.load(Ordering::Relaxed) {
-                0 => None,
-                timestamp => Some(timestamp),
-            },
-        };
         let health = if !task_alive || expired {
             LinkHealth::Unhealthy
-        } else if last_handshake_at_ms.is_none() {
+        } else if handshake_elapsed.is_none() {
             LinkHealth::Degraded
         } else {
             LinkHealth::Healthy
@@ -336,7 +313,7 @@ impl Endpoint {
         } else {
             LinkState::Failed
         };
-        (state, health, evidence)
+        (state, health)
     }
 }
 
@@ -550,8 +527,8 @@ impl WireguardManager {
         let endpoint = Endpoint::new(name, outbound, config, server_addr, self.timeout).await?;
         let dns = endpoint.stack.lock().await.get_dns();
         record.attach_dns_runtime(LinkDnsRuntime::Wireguard(dns));
-        let (_, health, evidence) = endpoint.link_snapshot().await;
-        record.set_live_snapshot(LinkState::Ready, health, vec![server_addr], evidence);
+        let (_, health) = endpoint.link_snapshot().await;
+        record.set_live_snapshot(LinkState::Ready, health, vec![server_addr]);
         Ok(endpoint)
     }
 
@@ -587,10 +564,12 @@ impl WireguardManager {
         }
     }
 
-    pub(crate) async fn refresh_evidence(&self) {
+    /// Reaps endpoints whose driver tasks have stopped and refreshes the
+    /// health of the survivors.
+    pub(crate) async fn refresh_liveness(&self) {
         let runtimes: Vec<_> = self.active_conn.read().await.values().cloned().collect();
         for runtime in runtimes {
-            let (state, health, evidence) = runtime.runtime.link_snapshot().await;
+            let (state, health) = runtime.runtime.link_snapshot().await;
             if state == LinkState::Failed {
                 let name = runtime.runtime.name.clone();
                 self.remove_and_finalize_dead(&name, runtime).await;
@@ -599,7 +578,6 @@ impl WireguardManager {
                     state,
                     health,
                     vec![runtime.runtime.connected_endpoint],
-                    evidence,
                 );
             }
         }
@@ -635,8 +613,8 @@ impl WireguardManager {
         record: &Arc<crate::adapter::LinkGeneration>,
         endpoint: &Endpoint,
     ) {
-        let (_, health, evidence) = endpoint.link_snapshot().await;
-        record.retain_final_snapshot(health, vec![endpoint.connected_endpoint], evidence);
+        let (_, health) = endpoint.link_snapshot().await;
+        record.retain_final_snapshot(health, vec![endpoint.connected_endpoint]);
     }
 
     fn mark_creation_failure(&self, name: &str, generation: u64, error: &TransportError) {

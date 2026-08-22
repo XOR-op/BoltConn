@@ -400,7 +400,6 @@ pub struct LinkDetail {
     pub server: NetworkAddr,
     pub connected_endpoints: Vec<SocketAddr>,
     pub chain: Vec<RouteHop>,
-    pub evidence: LinkEvidence,
     pub dns: DnsActivity,
 }
 
@@ -411,51 +410,10 @@ pub struct LinkReason {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProbeEvidence {
-    pub last_attempt_at_ms: Option<u64>,
-    pub last_success_at_ms: Option<u64>,
-    pub last_error: Option<LinkReason>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AnytlsSessionEvidence {
-    pub sequence: u64,
-    pub reader_alive: bool,
-    pub writer_alive: bool,
-    pub last_heartbeat_sent_at_ms: Option<u64>,
-    pub last_heartbeat_received_at_ms: Option<u64>,
-    pub reason: LinkReason,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsActivity {
     pub lookups: u64,
     pub outcomes: DnsOutcomeCounts,
     pub latest_lookup: Option<DnsLookupDetail>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LinkEvidence {
-    Wireguard {
-        task_alive: bool,
-        last_handshake_at_ms: Option<u64>,
-        handshake_expires_at_ms: Option<u64>,
-        last_packet_at_ms: Option<u64>,
-    },
-    Ssh {
-        task_alive: bool,
-        open_channels: u64,
-        last_channel_open_at_ms: Option<u64>,
-        probe: Option<ProbeEvidence>,
-    },
-    Anytls {
-        sessions: u64,
-        active_streams: u64,
-        idle_sessions: u64,
-        peer_versions: Vec<u8>,
-        problematic_session: Option<AnytlsSessionEvidence>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

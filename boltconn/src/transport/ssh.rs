@@ -1,6 +1,6 @@
 use crate::proxy::NetworkAddr;
 use crate::proxy::error::TransportError;
-use boltapi::{LinkEvidence, LinkHealth, LinkReason, LinkReasonCode, LinkState, ProbeEvidence};
+use boltapi::{LinkHealth, LinkReason, LinkReasonCode, LinkState};
 use russh::client::{Handle, Msg, connect_stream};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{ChannelStream, SshId};
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::task::{Context, Poll};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::task::JoinHandle;
 
@@ -74,16 +74,9 @@ pub struct SshTunnel {
     port_counter: AtomicU16,
     is_active: Arc<AtomicBool>,
     open_channels: Arc<AtomicU64>,
-    last_channel_open_at_ms: AtomicU64,
-    probe: Mutex<ProbeState>,
+    /// Last probe failure, retained only to report `LinkHealth::Degraded`.
+    probe_error: Mutex<Option<LinkReason>>,
     probe_task: Mutex<Option<JoinHandle<()>>>,
-}
-
-#[derive(Default)]
-struct ProbeState {
-    last_attempt_at_ms: Option<u64>,
-    last_success_at_ms: Option<u64>,
-    last_error: Option<LinkReason>,
 }
 
 impl SshTunnel {
@@ -100,8 +93,7 @@ impl SshTunnel {
             port_counter: AtomicU16::new(1025),
             is_active: Arc::new(AtomicBool::new(true)),
             open_channels: Arc::new(AtomicU64::new(0)),
-            last_channel_open_at_ms: AtomicU64::new(0),
-            probe: Mutex::new(ProbeState::default()),
+            probe_error: Mutex::new(None),
             probe_task: Mutex::new(None),
         })
     }
@@ -136,8 +128,6 @@ impl SshTunnel {
             }
         };
         self.open_channels.fetch_add(1, Ordering::Relaxed);
-        self.last_channel_open_at_ms
-            .store(now_ms(), Ordering::Relaxed);
         Ok(TrackedSshChannel {
             stream: channel.into_stream(),
             open_channels: self.open_channels.clone(),
@@ -168,24 +158,19 @@ impl SshTunnel {
     }
 
     async fn probe_once(&self) {
-        let attempted_at_ms = now_ms();
-        self.probe.lock().unwrap().last_attempt_at_ms = Some(attempted_at_ms);
         let result = tokio::time::timeout(Duration::from_secs(10), self.client.send_ping()).await;
-        let mut probe = self.probe.lock().unwrap();
+        let mut probe_error = self.probe_error.lock().unwrap();
         match result {
-            Ok(Ok(())) => {
-                probe.last_success_at_ms = Some(now_ms());
-                probe.last_error = None;
-            }
+            Ok(Ok(())) => *probe_error = None,
             Ok(Err(error)) => {
-                probe.last_error = Some(LinkReason {
+                *probe_error = Some(LinkReason {
                     code: LinkReasonCode::ProtocolFailed,
                     detail: Some(crate::proxy::bounded_error_detail(&error.to_string())),
                 });
                 self.is_active.store(false, Ordering::Relaxed);
             }
             Err(_) => {
-                probe.last_error = Some(LinkReason {
+                *probe_error = Some(LinkReason {
                     code: LinkReasonCode::NoRecentProbe,
                     detail: Some("SSH probe timed out".to_string()),
                 });
@@ -194,28 +179,11 @@ impl SshTunnel {
         }
     }
 
-    pub fn link_snapshot(&self) -> (LinkState, LinkHealth, LinkEvidence) {
+    pub fn link_snapshot(&self) -> (LinkState, LinkHealth) {
         let task_alive = self.is_active();
-        let probe = self.probe.lock().unwrap();
-        let evidence = LinkEvidence::Ssh {
-            task_alive,
-            open_channels: self.open_channels.load(Ordering::Relaxed),
-            last_channel_open_at_ms: match self.last_channel_open_at_ms.load(Ordering::Relaxed) {
-                0 => None,
-                timestamp => Some(timestamp),
-            },
-            probe: (probe.last_attempt_at_ms.is_some()
-                || probe.last_success_at_ms.is_some()
-                || probe.last_error.is_some())
-            .then(|| ProbeEvidence {
-                last_attempt_at_ms: probe.last_attempt_at_ms,
-                last_success_at_ms: probe.last_success_at_ms,
-                last_error: probe.last_error.clone(),
-            }),
-        };
         let health = if !task_alive {
             LinkHealth::Unhealthy
-        } else if probe.last_error.is_some() {
+        } else if self.probe_error.lock().unwrap().is_some() {
             LinkHealth::Degraded
         } else {
             LinkHealth::Healthy
@@ -229,7 +197,7 @@ impl SshTunnel {
         } else {
             LinkState::Failed
         };
-        (state, health, evidence)
+        (state, health)
     }
 
     pub async fn close(&self) {
@@ -285,15 +253,6 @@ impl AsyncWrite for TrackedSshChannel {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.stream).poll_shutdown(cx)
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 
 async fn connect_ssh_tunnel<S>(

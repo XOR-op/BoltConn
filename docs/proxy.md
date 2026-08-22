@@ -208,7 +208,7 @@ proxy-local:
 
 AnyTLS session pools are tracked as a named shared link. Use `GET /link`,
 `GET /link/<name>`, or the corresponding `boltconn link` commands to inspect
-aggregate sessions, streams, heartbeat evidence, DNS, routes, and traffic.
+state, health, DNS, routes, and traffic.
 
 ### WireGuard
 
@@ -251,8 +251,8 @@ proxy-local:
 - `over-tcp`: Use TCP transport instead of UDP (optional, default: `false`)
 
 WireGuard runtime state is tracked as a named shared link. `GET /link/<name>`
-reports its generation, health, handshake/task evidence, endpoint, DNS, route,
-dependent connections, and traffic. `DELETE /link/<name>` stops its latest live
+reports its generation, health, endpoint, DNS, route, dependent connections, and
+traffic. `DELETE /link/<name>` stops its latest live
 generation and dependent connections.
 
 ### SSH
@@ -332,8 +332,8 @@ proxy-local:
    ```
 
 SSH tunnel state is tracked as a named shared link. `GET /link/<name>` reports
-its generation, health, task/channel/probe evidence, endpoint, DNS, route,
-dependent connections, and traffic.
+its generation, health, endpoint, DNS, route, dependent connections, and
+traffic.
 
 ## Proxy Providers
 

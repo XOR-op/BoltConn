@@ -221,13 +221,14 @@ impl Dispatcher {
         self.link_table.clone()
     }
 
-    /// Pull protocol-owned evidence into the shared generation records before
-    /// a controller snapshot. This keeps callers independent of manager type.
-    pub(crate) async fn refresh_link_evidence(&self) {
+    /// Reaps runtimes whose transports have died and refreshes the health of
+    /// the survivors before a controller snapshot, so a link listing does not
+    /// report a dead link as live. Keeps callers independent of manager type.
+    pub(crate) async fn refresh_link_liveness(&self) {
         tokio::join!(
-            self.wireguard_mgr.refresh_evidence(),
-            self.ssh_mgr.refresh_evidence(),
-            self.anytls_mgr.refresh_evidence(),
+            self.wireguard_mgr.refresh_liveness(),
+            self.ssh_mgr.refresh_liveness(),
+            self.anytls_mgr.refresh_liveness(),
         );
     }
 

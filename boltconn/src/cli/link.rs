@@ -1,7 +1,5 @@
 use crate::cli::{dns, format};
-use boltapi::{
-    DnsOutcome, DnsResolverSummary, LinkDetail, LinkEvidence, LinkReasonCode, LinkSummary, Snapshot,
-};
+use boltapi::{DnsOutcome, DnsResolverSummary, LinkDetail, LinkReasonCode, LinkSummary, Snapshot};
 use std::fmt::Write as _;
 use tabular::{Row, Table};
 
@@ -168,10 +166,6 @@ pub(super) fn render_detail(detail: LinkDetail, resolvers: &[DnsResolverSummary]
     }
 
     writeln!(output).unwrap();
-    writeln!(output, "Health evidence").unwrap();
-    render_health_evidence(&mut output, &detail.evidence, detail.observed_at_ms);
-
-    writeln!(output).unwrap();
     writeln!(output, "DNS").unwrap();
     writeln!(
         output,
@@ -233,140 +227,6 @@ pub(super) fn render_detail(detail: LinkDetail, resolvers: &[DnsResolverSummary]
     output
 }
 
-fn render_health_evidence(output: &mut String, evidence: &LinkEvidence, observed_at_ms: u64) {
-    match evidence {
-        LinkEvidence::Wireguard {
-            task_alive,
-            last_handshake_at_ms,
-            handshake_expires_at_ms,
-            last_packet_at_ms,
-        } => {
-            writeln!(output, "  Endpoint task:       {}", alive(*task_alive)).unwrap();
-            writeln!(
-                output,
-                "  Last handshake:      {}",
-                format::relative_age(*last_handshake_at_ms, observed_at_ms)
-            )
-            .unwrap();
-            writeln!(
-                output,
-                "  Handshake expires:   {}",
-                handshake_expires_at_ms
-                    .map(|time| format::local_time(time, true))
-                    .unwrap_or_else(|| "unavailable".to_string())
-            )
-            .unwrap();
-            writeln!(
-                output,
-                "  Last packet:         {}",
-                format::relative_age(*last_packet_at_ms, observed_at_ms)
-            )
-            .unwrap();
-        }
-        LinkEvidence::Ssh {
-            task_alive,
-            open_channels,
-            last_channel_open_at_ms,
-            probe,
-        } => {
-            writeln!(output, "  Client task:        {}", alive(*task_alive)).unwrap();
-            writeln!(output, "  Open channels:      {open_channels}").unwrap();
-            writeln!(
-                output,
-                "  Last channel open:  {}",
-                format::relative_age(*last_channel_open_at_ms, observed_at_ms)
-            )
-            .unwrap();
-            if let Some(probe) = probe {
-                writeln!(
-                    output,
-                    "  Probe attempt:      {}",
-                    format::relative_age(probe.last_attempt_at_ms, observed_at_ms)
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "  Probe success:      {}",
-                    format::relative_age(probe.last_success_at_ms, observed_at_ms)
-                )
-                .unwrap();
-                if let Some(error) = &probe.last_error {
-                    writeln!(
-                        output,
-                        "  Probe error:        {}",
-                        format::enum_name(&error.code)
-                    )
-                    .unwrap();
-                }
-            } else {
-                writeln!(output, "  Probe evidence:     unavailable").unwrap();
-            }
-        }
-        LinkEvidence::Anytls {
-            sessions,
-            active_streams,
-            idle_sessions,
-            peer_versions,
-            problematic_session,
-        } => {
-            writeln!(output, "  Sessions:           {sessions}").unwrap();
-            writeln!(output, "  Active streams:     {active_streams}").unwrap();
-            writeln!(output, "  Idle sessions:      {idle_sessions}").unwrap();
-            writeln!(
-                output,
-                "  Peer versions:      {}",
-                if peer_versions.is_empty() {
-                    "unavailable".to_string()
-                } else {
-                    peer_versions
-                        .iter()
-                        .map(u8::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                }
-            )
-            .unwrap();
-            if let Some(session) = problematic_session {
-                writeln!(output, "  Problem session:    #{}", session.sequence).unwrap();
-                writeln!(
-                    output,
-                    "    Reader:           {}",
-                    alive(session.reader_alive)
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "    Writer:           {}",
-                    alive(session.writer_alive)
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "    Heartbeat sent:   {}",
-                    format::relative_age(session.last_heartbeat_sent_at_ms, observed_at_ms)
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "    Heartbeat recv:   {}",
-                    format::relative_age(session.last_heartbeat_received_at_ms, observed_at_ms)
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "    Reason:           {}",
-                    format::enum_name(&session.reason.code)
-                )
-                .unwrap();
-            }
-        }
-    }
-}
-
-fn alive(value: bool) -> &'static str {
-    if value { "alive" } else { "stopped" }
-}
-
 fn failure_explains_health(summary: &LinkSummary, outcome: &DnsOutcome) -> bool {
     let failed_lookup = !matches!(outcome, DnsOutcome::Answered { .. });
     let dns_reason = summary.reason.as_ref().is_some_and(|reason| {
@@ -385,7 +245,7 @@ mod tests {
         DnsActivity, DnsOutcomeCounts, LinkHealth, LinkKind, LinkState, NetworkAddr, Traffic,
     };
 
-    fn detail(evidence: LinkEvidence) -> LinkDetail {
+    fn detail() -> LinkDetail {
         LinkDetail {
             observed_at_ms: 10_000,
             summary: LinkSummary {
@@ -415,7 +275,6 @@ mod tests {
             },
             connected_endpoints: Vec::new(),
             chain: Vec::new(),
-            evidence,
             dns: DnsActivity {
                 lookups: 0,
                 outcomes: DnsOutcomeCounts {
@@ -439,13 +298,7 @@ mod tests {
         assert!(empty.contains("NAME"));
         assert!(empty.contains("REASON"));
 
-        let mut first = detail(LinkEvidence::Ssh {
-            task_alive: true,
-            open_channels: 0,
-            last_channel_open_at_ms: None,
-            probe: None,
-        })
-        .summary;
+        let mut first = detail().summary;
         first.name = "z-link".to_string();
         let mut second = first.clone();
         second.name = "a-link".to_string();
@@ -458,43 +311,9 @@ mod tests {
     }
 
     #[test]
-    fn detail_handles_each_protocol_evidence_variant() {
-        let wireguard = render_detail(
-            detail(LinkEvidence::Wireguard {
-                task_alive: true,
-                last_handshake_at_ms: None,
-                handshake_expires_at_ms: None,
-                last_packet_at_ms: None,
-            }),
-            &[],
-        );
-        assert!(wireguard.contains("Endpoint task:       alive"));
-        assert!(wireguard.contains("Last handshake:      never"));
-
-        let ssh = render_detail(
-            detail(LinkEvidence::Ssh {
-                task_alive: true,
-                open_channels: 0,
-                last_channel_open_at_ms: None,
-                probe: None,
-            }),
-            &[],
-        );
-        assert!(ssh.contains("Probe evidence:     unavailable"));
-
-        let anytls = render_detail(
-            detail(LinkEvidence::Anytls {
-                sessions: 2,
-                active_streams: 1,
-                idle_sessions: 1,
-                peer_versions: vec![1],
-                problematic_session: None,
-            }),
-            &[],
-        );
-        assert!(anytls.contains("Sessions:           2"));
-        assert!(anytls.contains("Peer versions:      1"));
-        assert!(anytls.contains("Connected:  unavailable"));
-        assert!(anytls.contains("Last lookup: never"));
+    fn detail_renders_explicit_absence_for_unused_link() {
+        let output = render_detail(detail(), &[]);
+        assert!(output.contains("Connected:  unavailable"));
+        assert!(output.contains("Last lookup: never"));
     }
 }

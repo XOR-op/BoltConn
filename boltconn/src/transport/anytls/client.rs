@@ -1,8 +1,6 @@
 use super::{AnytlsConfig, AnytlsSession, AnytlsSessionOptions, AnytlsStream};
 use crate::proxy::NetworkAddr;
 use crate::proxy::error::TransportError;
-use boltapi::AnytlsSessionEvidence;
-use boltapi::LinkEvidence;
 use boltapi::LinkHealth;
 use boltapi::LinkState;
 use std::future::Future;
@@ -41,7 +39,7 @@ impl AnytlsClient {
             inner: Arc::new(AnytlsClientInner {
                 options,
                 sessions: tokio::sync::Mutex::new(Vec::new()),
-                problematic_session: Mutex::new(None),
+                failure_reason: Mutex::new(None),
                 cleanup_handle: Mutex::new(None),
                 next_seq: AtomicU64::new(0),
                 closed: AtomicBool::new(false),
@@ -77,7 +75,7 @@ impl AnytlsClient {
                 Ok(stream) => {
                     // A successful stream proves the pool recovered from any
                     // previously retained per-session failure.
-                    *self.inner.problematic_session.lock().unwrap() = None;
+                    *self.inner.failure_reason.lock().unwrap() = None;
                     return Ok(stream);
                 }
                 Err(err) => {
@@ -107,13 +105,13 @@ impl AnytlsClient {
         )
         .await?;
         let anytls_stream = session.open_stream(dst).await?;
-        // Track non-reused sessions as well so evidence includes live streams;
-        // reuse policy affects selection, not observability ownership.
+        // Track non-reused sessions as well so the link's state reflects live
+        // streams; reuse policy affects selection, not ownership.
         self.inner.sessions.lock().await.push(ManagedSession {
             session,
             connected_endpoint,
         });
-        *self.inner.problematic_session.lock().unwrap() = None;
+        *self.inner.failure_reason.lock().unwrap() = None;
         Ok(anytls_stream)
     }
 
@@ -141,7 +139,7 @@ impl AnytlsClient {
     async fn cleanup_idle_sessions(&self, send_heartbeat: bool) {
         let now = Instant::now();
         let mut sessions = self.inner.sessions.lock().await;
-        retain_alive_sessions(&mut sessions, &self.inner.problematic_session);
+        retain_alive_sessions(&mut sessions, &self.inner.failure_reason);
         if send_heartbeat {
             // Reuse the pool's existing maintenance cadence for a lightweight
             // protocol heartbeat. Failed writes terminalize only that session;
@@ -149,7 +147,7 @@ impl AnytlsClient {
             for session in sessions.iter() {
                 let _ = session.session.send_heartbeat();
             }
-            retain_alive_sessions(&mut sessions, &self.inner.problematic_session);
+            retain_alive_sessions(&mut sessions, &self.inner.failure_reason);
         }
 
         let mut idle_sessions = sessions
@@ -206,34 +204,22 @@ impl AnytlsClient {
         self.inner.closed.load(Ordering::Acquire)
     }
 
-    pub async fn link_snapshot(&self) -> (LinkState, LinkHealth, Vec<SocketAddr>, LinkEvidence) {
+    pub async fn link_snapshot(&self) -> (LinkState, LinkHealth, Vec<SocketAddr>) {
         let mut sessions = self.inner.sessions.lock().await;
-        retain_alive_sessions(&mut sessions, &self.inner.problematic_session);
-        let session_count = sessions.len() as u64;
-        let active_streams = sessions
+        retain_alive_sessions(&mut sessions, &self.inner.failure_reason);
+        let active_streams: u64 = sessions
             .iter()
             .map(|session| session.session.active_streams() as u64)
             .sum();
-        let idle_sessions = sessions
-            .iter()
-            .filter(|session| session.session.is_idle())
-            .count() as u64;
-        let mut peer_versions = sessions
-            .iter()
-            .map(|session| session.session.peer_version())
-            .collect::<Vec<_>>();
-        peer_versions.sort_unstable();
-        peer_versions.dedup();
         let mut endpoints = sessions
             .iter()
             .filter_map(|session| session.connected_endpoint)
             .collect::<Vec<_>>();
         endpoints.sort_unstable();
         endpoints.dedup();
-        let problematic_session = self.inner.problematic_session.lock().unwrap().clone();
         let health = if self.is_closed() {
             LinkHealth::Unhealthy
-        } else if problematic_session.is_some() {
+        } else if self.inner.failure_reason.lock().unwrap().is_some() {
             LinkHealth::Degraded
         } else {
             LinkHealth::Healthy
@@ -245,18 +231,15 @@ impl AnytlsClient {
         } else {
             LinkState::Ready
         };
-        (
-            state,
-            health,
-            endpoints,
-            LinkEvidence::Anytls {
-                sessions: session_count,
-                active_streams,
-                idle_sessions,
-                peer_versions,
-                problematic_session,
-            },
-        )
+        (state, health, endpoints)
+    }
+
+    /// Whether this client currently holds no session, so an idle link can be
+    /// reaped without consulting protocol-level detail.
+    pub async fn is_unused(&self) -> bool {
+        let mut sessions = self.inner.sessions.lock().await;
+        retain_alive_sessions(&mut sessions, &self.inner.failure_reason);
+        sessions.is_empty()
     }
 
     async fn latest_idle_session(&self) -> Option<AnytlsSession> {
@@ -272,14 +255,16 @@ impl AnytlsClient {
 
     async fn remove_closed_sessions(&self) {
         let mut sessions = self.inner.sessions.lock().await;
-        retain_alive_sessions(&mut sessions, &self.inner.problematic_session);
+        retain_alive_sessions(&mut sessions, &self.inner.failure_reason);
     }
 }
 
 struct AnytlsClientInner {
     options: AnytlsSessionOptions,
     sessions: tokio::sync::Mutex<Vec<ManagedSession>>,
-    problematic_session: Mutex<Option<AnytlsSessionEvidence>>,
+    /// Last failure reported by a session that has since died, retained so the
+    /// link reports `Degraded` rather than silently recovering.
+    failure_reason: Mutex<Option<boltapi::LinkReason>>,
     cleanup_handle: Mutex<Option<JoinHandle<()>>>,
     next_seq: AtomicU64,
     closed: AtomicBool,
@@ -297,14 +282,14 @@ struct ManagedSession {
 
 fn retain_alive_sessions(
     sessions: &mut Vec<ManagedSession>,
-    problematic: &Mutex<Option<AnytlsSessionEvidence>>,
+    failure_reason: &Mutex<Option<boltapi::LinkReason>>,
 ) {
     sessions.retain(|session| {
         if session.session.is_alive() {
             true
         } else {
-            if let Some(evidence) = session.session.problematic_evidence() {
-                *problematic.lock().unwrap() = Some(evidence);
+            if let Some(reason) = session.session.failure_reason() {
+                *failure_reason.lock().unwrap() = Some(reason);
             }
             false
         }
@@ -325,7 +310,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn aggregate_evidence_tracks_sessions_streams_endpoints_and_close() {
+    async fn link_snapshot_tracks_streams_endpoints_and_close() {
         let client = AnytlsClient::with_options(
             AnytlsSessionOptions::new("secret"),
             true,
@@ -343,39 +328,21 @@ mod tests {
             .await
             .unwrap();
 
-        let (state, health, endpoints, evidence) = client.link_snapshot().await;
+        let (state, health, endpoints) = client.link_snapshot().await;
         assert_eq!(state, LinkState::Ready);
         assert_eq!(health, LinkHealth::Healthy);
         assert_eq!(endpoints, vec![endpoint]);
-        assert!(matches!(
-            evidence,
-            LinkEvidence::Anytls {
-                sessions: 1,
-                active_streams: 1,
-                idle_sessions: 0,
-                ref peer_versions,
-                problematic_session: None,
-            } if peer_versions == &vec![1]
-        ));
+        assert!(!client.is_unused().await);
 
         drop(stream);
-        let (state, _, _, evidence) = client.link_snapshot().await;
+        let (state, _, _) = client.link_snapshot().await;
         assert_eq!(state, LinkState::Idle);
-        assert!(matches!(
-            evidence,
-            LinkEvidence::Anytls {
-                sessions: 1,
-                active_streams: 0,
-                idle_sessions: 1,
-                ..
-            }
-        ));
 
         client.close().await;
-        let (state, health, endpoints, evidence) = client.link_snapshot().await;
+        let (state, health, endpoints) = client.link_snapshot().await;
         assert_eq!(state, LinkState::Closed);
         assert_eq!(health, LinkHealth::Unhealthy);
         assert!(endpoints.is_empty());
-        assert!(matches!(evidence, LinkEvidence::Anytls { sessions: 0, .. }));
+        assert!(client.is_unused().await);
     }
 }

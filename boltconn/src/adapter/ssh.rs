@@ -340,8 +340,8 @@ impl SshManager {
         };
         let tunnel = Arc::new(tunnel);
         tunnel.start_probe();
-        let (state, health, evidence) = tunnel.link_snapshot();
-        record.set_live_snapshot(state, health, endpoints, evidence);
+        let (state, health) = tunnel.link_snapshot();
+        record.set_live_snapshot(state, health, endpoints);
         Ok(tunnel)
     }
 
@@ -364,7 +364,9 @@ impl SshManager {
         }
     }
 
-    pub(crate) async fn refresh_evidence(&self) {
+    /// Reaps tunnels whose sessions have died and refreshes the health of the
+    /// survivors.
+    pub(crate) async fn refresh_liveness(&self) {
         let runtimes: Vec<_> = self
             .active_conn
             .lock()
@@ -373,11 +375,11 @@ impl SshManager {
             .map(|(name, runtime)| (name.clone(), runtime.clone()))
             .collect();
         for (name, runtime) in runtimes {
-            let (state, health, evidence) = runtime.runtime.link_snapshot();
+            let (state, health) = runtime.runtime.link_snapshot();
             if state == LinkState::Failed {
                 self.remove_and_finalize_dead(&name, runtime).await;
             } else {
-                runtime.record.set_live_evidence(state, health, evidence);
+                runtime.record.set_live_state(state, health);
             }
         }
     }
@@ -412,8 +414,8 @@ impl SshManager {
         record: &Arc<crate::adapter::LinkGeneration>,
         tunnel: &SshTunnel,
     ) {
-        let (_, health, evidence) = tunnel.link_snapshot();
-        record.retain_final_evidence(health, evidence);
+        let (_, health) = tunnel.link_snapshot();
+        record.retain_final_health(health);
     }
 
     fn mark_creation_failure(&self, name: &str, generation: u64, error: &TransportError) {

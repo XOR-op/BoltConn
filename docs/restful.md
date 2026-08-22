@@ -577,8 +577,8 @@ have never been initialized are omitted.
 ### GET /link/:name
 
 Returns `LinkDetail`, including the latest generation's server, connected
-endpoints, creation route, DNS evidence, traffic, and protocol-specific
-WireGuard, SSH, or AnyTLS evidence. Percent-encode the name as one path segment.
+endpoints, creation route, DNS activity, and traffic. Percent-encode the name as
+one path segment.
 
 ```bash
 curl http://localhost:9000/link/ssh-primary
