@@ -1,4 +1,4 @@
-use super::session_ctl::{TcpSessionCtl, UdpSessionCtl};
+use super::session_ctl::{TcpSessionCtl, UdpSessionActivity, UdpSessionCtl};
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use io::Result;
@@ -47,7 +47,6 @@ impl MappingSessionManager {
             );
             *pair.value_mut() = TcpSessionCtl::new(src_addr, dst_addr);
         }
-        pair.value_mut().update_time();
         pair.key().1
     }
 
@@ -103,14 +102,20 @@ impl MappingSessionManager {
         self.udp_records.iter().map(|p| p.value().clone()).collect()
     }
 
-    pub fn get_udp_probe(&self, src: SocketAddr) -> Arc<AtomicBool> {
+    /// Return the liveness probe for `src` and the stamp its inbound uses to report
+    /// activity, creating the record when the port is new.
+    pub fn register_udp_session(&self, src: SocketAddr) -> (Arc<AtomicBool>, UdpSessionActivity) {
         match self.udp_records.entry((src.is_ipv6(), src.port())) {
-            Entry::Occupied(s) => s.get().available.clone(),
+            Entry::Occupied(s) => {
+                let ctl = s.get();
+                ctl.activity.touch();
+                (ctl.available.clone(), ctl.activity.clone())
+            }
             Entry::Vacant(entry) => {
                 let ctl = UdpSessionCtl::new(src);
-                let probe = ctl.available.clone();
+                let handles = (ctl.available.clone(), ctl.activity.clone());
                 entry.insert(ctl);
-                probe
+                handles
             }
         }
     }

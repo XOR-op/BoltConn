@@ -308,7 +308,7 @@ impl Controller {
             result.push(session);
         }
         for x in all_udp {
-            let elapsed = x.last_time.elapsed().as_secs();
+            let elapsed = x.activity.idle_duration().as_secs();
             let session = SessionSchema {
                 pair: format!("{}:", x.source_addr.port(),),
                 time: pretty_time(elapsed),

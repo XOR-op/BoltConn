@@ -2,9 +2,10 @@ use crate::dispatch::InboundExtra;
 use crate::network::dns::{Dns, DnsHijackController};
 use crate::network::packet::transport_layer::create_raw_udp_pkt;
 use crate::platform::process;
-use crate::platform::process::{NetworkType, ProcessInfo};
+use crate::platform::process::NetworkType;
 use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::error::TransportError;
+use crate::proxy::session_ctl::UdpSessionActivity;
 use crate::proxy::{
     ConnTarget, Dispatcher, MappingSessionManager, NetworkAddr, socks_to_network_addr,
 };
@@ -20,17 +21,109 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
 struct UdpSession {
-    local_addr: SocketAddr,
-    proc_info: Option<ProcessInfo>,
-    // cache of whether we should allow the connection
-    remote_permit: HashMap<NetworkAddr, bool>,
     sender: mpsc::Sender<(Bytes, NetworkAddr)>,
     probe: Arc<AtomicBool>,
+    activity: UdpSessionActivity,
 }
+
+/// Owns one UDP flow once the inbound loop has handed it off.
+///
+/// Session setup and every per-destination routing decision happen here rather than on
+/// the loop shared by all flows: routing can await a genuine DNS lookup for seconds, and
+/// that must only delay this flow.
+struct UdpSessionTask {
+    dispatcher: Arc<Dispatcher>,
+    src: SocketAddr,
+    first_dst: NetworkAddr,
+    probe: Arc<AtomicBool>,
+    inbound_rx: mpsc::Receiver<(Bytes, NetworkAddr)>,
+}
+
+impl UdpSessionTask {
+    async fn run(self, target: ConnTarget, ret_channel: UdpReturnChannel) {
+        let Self {
+            dispatcher,
+            src,
+            first_dst,
+            probe,
+            mut inbound_rx,
+        } = self;
+        // Walks the whole kernel socket table, so it must stay off the packet loop.
+        let proc_info = process::get_pid(src, NetworkType::Udp).map_or(None, |pid| {
+            process::get_process_info(pid, dispatcher.process_info_depth)
+        });
+        let (outbound_tx, outbound_rx) = mpsc::channel(20);
+
+        let submit_result = match ret_channel {
+            UdpReturnChannel::Tun(tun_tx) => {
+                let (recv_tx, recv_rx) = mpsc::channel(20);
+                tokio::spawn(TunUdpInbound::back_prop(recv_rx, tun_tx, src));
+
+                dispatcher
+                    .submit_tun_udp_session(
+                        src,
+                        target,
+                        proc_info.clone(),
+                        outbound_rx,
+                        recv_tx,
+                        probe.clone(),
+                    )
+                    .await
+            }
+            UdpReturnChannel::Socks(socks_tx, inbound_extra) => {
+                dispatcher
+                    .submit_socks_udp_session(
+                        inbound_extra,
+                        src,
+                        target,
+                        proc_info.clone(),
+                        outbound_rx,
+                        socks_tx,
+                        probe.clone(),
+                    )
+                    .await
+            }
+        };
+
+        match submit_result {
+            Ok(_) | Err(DispatchError::BlackHole) => {}
+            Err(_) => {
+                probe.store(false, Ordering::Relaxed);
+                return;
+            }
+        }
+
+        // cache of whether we should allow the connection; submitting the session already
+        // routed the first destination.
+        let mut remote_permit = HashMap::from([(first_dst, true)]);
+        while let Some((payload, dst_addr)) = inbound_rx.recv().await {
+            let permit = match remote_permit.get(&dst_addr) {
+                Some(permit) => *permit,
+                None => {
+                    // not an encountered dest, query dispatcher
+                    let permit = dispatcher
+                        .allow_tun_udp(src, dst_addr.clone(), proc_info.clone())
+                        .await;
+                    remote_permit.insert(dst_addr.clone(), permit);
+                    permit
+                }
+            };
+            if permit && outbound_tx.send((payload, dst_addr)).await.is_err() {
+                break;
+            }
+        }
+    }
+}
+
+/// Sweep dead sessions out of the mapping once this many have been created. Without it
+/// the map is only pruned when another packet happens to arrive from the same port, so a
+/// flow that never speaks again would be retained forever.
+const SESSION_GC_INTERVAL: usize = 256;
 
 struct UdpInboundInner {
     dispatcher: Arc<Dispatcher>,
     mapping: HashMap<SocketAddr, UdpSession>,
+    created_since_gc: usize,
     session_mgr: Arc<MappingSessionManager>,
     dns: Arc<Dns>,
 }
@@ -41,7 +134,11 @@ enum UdpReturnChannel {
 }
 
 impl UdpInboundInner {
-    async fn send_payload(
+    /// Hand a packet to the session owning `src`, creating that session if needed.
+    ///
+    /// Deliberately never awaits: this runs on the loop shared by every UDP flow, so any
+    /// wait here delays unrelated traffic, including hijacked DNS answers.
+    fn send_payload(
         &mut self,
         src: SocketAddr,
         dst: NetworkAddr,
@@ -71,95 +168,65 @@ impl UdpInboundInner {
                 None,
             ),
         };
-        let target = match identification {
-            Some(source) => ConnTarget::identified(accepted, dst_addr.clone(), source),
-            None => ConnTarget::from(dst_addr.clone()),
-        };
-
-        match self.mapping.entry(src) {
-            Entry::Occupied(mut entry) => {
+        let handled = match self.mapping.entry(src) {
+            Entry::Occupied(entry) => {
                 if !entry.get().probe.load(Ordering::Relaxed) {
                     // connection has been invalid
                     entry.remove();
                     false
                 } else {
-                    let session = entry.get_mut();
-                    if let Some(premit) = session.remote_permit.get(&dst_addr) {
-                        if *premit {
-                            let _ = session.sender.send((payload, dst_addr)).await;
-                        }
-                    } else {
-                        // not an encountered dest, query dispatcher
-                        let permit = self
-                            .dispatcher
-                            .allow_tun_udp(src, dst_addr.clone(), session.proc_info.clone())
-                            .await;
-                        session.remote_permit.insert(dst_addr.clone(), permit);
-                        if permit {
-                            let _ = session.sender.send((payload, dst_addr)).await;
-                        }
-                    }
+                    // Keep the port off the staleness sweep for as long as it is in use.
+                    entry.get().activity.touch();
+                    // A session that cannot keep up drops, as UDP allows; blocking here
+                    // would stall every other flow behind it.
+                    let _ = entry.get().sender.try_send((payload, dst_addr));
                     true
                 }
             }
             Entry::Vacant(entry) => {
                 let (send_tx, send_rx) = mpsc::channel(20);
-                let proc_info = process::get_pid(src, NetworkType::Udp).map_or(None, |pid| {
-                    process::get_process_info(pid, self.dispatcher.process_info_depth)
-                });
-                let probe = self.session_mgr.get_udp_probe(src);
+                let (probe, activity) = self.session_mgr.register_udp_session(src);
 
                 // push payload
-                let _ = send_tx.send((payload, dst_addr.clone())).await;
+                let _ = send_tx.try_send((payload, dst_addr.clone()));
 
                 // create record for local port
-                let session = UdpSession {
-                    local_addr: src,
-                    proc_info: proc_info.clone(),
-                    remote_permit: Default::default(),
+                entry.insert(UdpSession {
                     sender: send_tx,
                     probe: probe.clone(),
+                    activity,
+                });
+                self.created_since_gc += 1;
+
+                let target = match identification {
+                    Some(source) => ConnTarget::identified(accepted, dst_addr.clone(), source),
+                    None => ConnTarget::from(dst_addr.clone()),
                 };
-                entry.insert(session);
-
-                let submit_result = match ret_channel {
-                    UdpReturnChannel::Tun(tun_tx) => {
-                        let (recv_tx, recv_rx) = mpsc::channel(20);
-                        tokio::spawn(TunUdpInbound::back_prop(recv_rx, tun_tx, src));
-
-                        self.dispatcher
-                            .submit_tun_udp_session(
-                                src,
-                                target,
-                                proc_info,
-                                send_rx,
-                                recv_tx,
-                                probe.clone(),
-                            )
-                            .await
+                tokio::spawn(
+                    UdpSessionTask {
+                        dispatcher: self.dispatcher.clone(),
+                        src,
+                        first_dst: dst_addr,
+                        probe,
+                        inbound_rx: send_rx,
                     }
-                    UdpReturnChannel::Socks(socks_tx, inbound_extra) => {
-                        self.dispatcher
-                            .submit_socks_udp_session(
-                                inbound_extra,
-                                src,
-                                target,
-                                proc_info,
-                                send_rx,
-                                socks_tx,
-                                probe.clone(),
-                            )
-                            .await
-                    }
-                };
-
-                match submit_result {
-                    Ok(_) | Err(DispatchError::BlackHole) => {}
-                    Err(_) => probe.store(false, Ordering::Relaxed),
-                }
+                    .run(target, ret_channel),
+                );
                 true
             }
+        };
+        if self.created_since_gc >= SESSION_GC_INTERVAL {
+            self.gc();
         }
+        handled
+    }
+
+    /// Forget sessions whose port has been invalidated or whose task has already exited.
+    fn gc(&mut self) {
+        self.created_since_gc = 0;
+        self.mapping.retain(|_, session| {
+            session.probe.load(Ordering::Relaxed) && !session.sender.is_closed()
+        });
     }
 }
 
@@ -183,6 +250,7 @@ impl TunUdpInbound {
             inner: UdpInboundInner {
                 dispatcher,
                 mapping: Default::default(),
+                created_since_gc: 0,
                 session_mgr,
                 dns,
             },
@@ -261,24 +329,18 @@ impl TunUdpInbound {
                 }
             } else {
                 // retry once
-                if !self
-                    .inner
-                    .send_payload(
+                if !self.inner.send_payload(
+                    src,
+                    NetworkAddr::Socket { address: dst },
+                    payload.clone(),
+                    UdpReturnChannel::Tun(self.tun_tx.clone()),
+                ) {
+                    self.inner.send_payload(
                         src,
                         NetworkAddr::Socket { address: dst },
                         payload.clone(),
                         UdpReturnChannel::Tun(self.tun_tx.clone()),
-                    )
-                    .await
-                {
-                    self.inner
-                        .send_payload(
-                            src,
-                            NetworkAddr::Socket { address: dst },
-                            payload.clone(),
-                            UdpReturnChannel::Tun(self.tun_tx.clone()),
-                        )
-                        .await;
+                    );
                 }
             }
         }
@@ -307,6 +369,7 @@ impl SocksUdpInbound {
             inner: UdpInboundInner {
                 dispatcher,
                 mapping: Default::default(),
+                created_since_gc: 0,
                 session_mgr,
                 dns,
             },
@@ -334,24 +397,18 @@ impl SocksUdpInbound {
             let payload = Bytes::copy_from_slice(payload);
             let dst_addr = socks_to_network_addr(dst_addr);
 
-            if !self
-                .inner
-                .send_payload(
+            if !self.inner.send_payload(
+                src_addr,
+                dst_addr.clone(),
+                payload.clone(),
+                UdpReturnChannel::Socks(self.socket.clone(), self.inbound_extra.clone()),
+            ) {
+                self.inner.send_payload(
                     src_addr,
-                    dst_addr.clone(),
+                    dst_addr,
                     payload.clone(),
                     UdpReturnChannel::Socks(self.socket.clone(), self.inbound_extra.clone()),
-                )
-                .await
-            {
-                self.inner
-                    .send_payload(
-                        src_addr,
-                        dst_addr,
-                        payload.clone(),
-                        UdpReturnChannel::Socks(self.socket.clone(), self.inbound_extra.clone()),
-                    )
-                    .await;
+                );
             }
         }
     }
