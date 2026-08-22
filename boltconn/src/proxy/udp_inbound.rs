@@ -199,10 +199,14 @@ impl TunUdpInbound {
     ) -> Result<(), TransportError> {
         while let Some((data, src)) = back_chan.recv().await {
             let raw_data = create_raw_udp_pkt(data.as_ref(), src, dst);
-            if !tun_tx.is_full() {
-                tun_tx
-                    .send(raw_data.freeze())
-                    .map_err(|_| TransportError::Internal("TUN UDP back channel full"))?;
+            // Must stay non-blocking: flume's `send` parks the whole worker thread when the
+            // channel is full, and this channel is only drained by the TUN loop, which may
+            // itself be waiting on the forward channel. Drop instead, as UDP allows.
+            match tun_tx.try_send(raw_data.freeze()) {
+                Ok(()) | Err(flume::TrySendError::Full(_)) => {}
+                Err(flume::TrySendError::Disconnected(_)) => {
+                    return Err(TransportError::Internal("TUN UDP back channel closed"));
+                }
             }
         }
         Ok(())
@@ -248,8 +252,11 @@ impl TunUdpInbound {
                 // hijack dns
                 if let Ok(answer) = self.inner.dns.respond_to_query(payload.as_ref()) {
                     let raw_data = create_raw_udp_pkt(answer.as_ref(), dst, src);
-                    if self.tun_tx.send_async(raw_data.freeze()).await.is_err() {
-                        tracing::error!("TUN back tx closed");
+                    match self.tun_tx.try_send(raw_data.freeze()) {
+                        Ok(()) | Err(flume::TrySendError::Full(_)) => {}
+                        Err(flume::TrySendError::Disconnected(_)) => {
+                            tracing::error!("TUN back tx closed");
+                        }
                     }
                 }
             } else {
