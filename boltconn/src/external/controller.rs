@@ -10,9 +10,9 @@ use crate::proxy::{
     MappingSessionManager, latency_test,
 };
 use boltapi::{
-    ApiError, ApiErrorCode, ConnDetail, ConnListRequest, ConnOrigin, ConnStopResult, ConnSummary,
-    DnsLookupDetail, DnsLookupRequest, DnsLookupResponse, DnsOutcome, DnsResolverDetail,
-    DnsResolverSummary, FakeIpMapping, GetGroupRespSchema, GetInterceptDataResp,
+    ApiError, ApiErrorCode, ConnDetail, ConnListRequest, ConnOrigin, ConnState, ConnStopResult,
+    ConnSummary, DnsLookupDetail, DnsLookupRequest, DnsLookupResponse, DnsOutcome,
+    DnsResolverDetail, DnsResolverSummary, FakeIpMapping, GetGroupRespSchema, GetInterceptDataResp,
     GetInterceptRangeReq, HttpInterceptSchema, LinkDetail, LinkReason, LinkSummary,
     ProcessParentSchema, ProcessSchema, ProxyData, SessionSchema, Snapshot, Traffic, TrafficResp,
     TunStatusSchema,
@@ -704,6 +704,15 @@ fn conn_summary(snapshot: &ConnRecordSnapshot, observed_at_ms: u64) -> ConnSumma
         duration_ms: snapshot
             .state
             .ended_at_ms
+            .or_else(|| {
+                (snapshot.state.state == ConnState::Closing).then(|| {
+                    snapshot
+                        .state
+                        .closing_at_ms
+                        .unwrap_or(observed_at_ms)
+                        .max(snapshot.last_active_ms)
+                })
+            })
             .unwrap_or(observed_at_ms)
             .saturating_sub(snapshot.start.started_at_ms),
         origin,

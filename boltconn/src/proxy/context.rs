@@ -221,6 +221,7 @@ pub struct ConnRecordState {
     pub outbound_name: Option<String>,
     pub outbound_type: Option<OutboundType>,
     pub established_at_ms: Option<u64>,
+    pub closing_at_ms: Option<u64>,
     pub ended_at_ms: Option<u64>,
     pub flow: ConnFlow,
     pub route: Option<RouteDecision>,
@@ -307,6 +308,9 @@ impl ConnHandle {
         let mut current = self.record.state.lock().unwrap();
         if is_terminal_state(current.state) {
             return false;
+        }
+        if state == ConnState::Closing {
+            current.closing_at_ms.get_or_insert_with(now_ms);
         }
         current.state = state;
         true
@@ -512,8 +516,18 @@ impl ConnHandle {
             if is_terminal_state(state.state) {
                 return false;
             }
+            // A TCP relay may stay in Closing while waiting for its peer. Count any data
+            // transferred after the half-close, but not the final idle drain timeout.
+            let ended_at_ms = if state.state == ConnState::Closing {
+                state
+                    .closing_at_ms
+                    .unwrap_or_else(now_ms)
+                    .max(self.record.last_active_ms.load(Ordering::Relaxed))
+            } else {
+                now_ms()
+            };
             state.state = terminal_state_for(code);
-            state.ended_at_ms = Some(now_ms());
+            state.ended_at_ms = Some(ended_at_ms);
             state.termination = Some(ConnTermination {
                 code,
                 stage,
@@ -732,6 +746,7 @@ impl ContextManager {
                 outbound_name: None,
                 outbound_type: None,
                 established_at_ms: None,
+                closing_at_ms: None,
                 ended_at_ms: None,
                 flow,
                 route: None,
