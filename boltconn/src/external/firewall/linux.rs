@@ -40,10 +40,10 @@ impl KillSwitchGuard {
                     };
                 }
                 tracing::info!(backend = "iptables", "Kill switch has been enabled");
-                return Ok(Self {
+                Ok(Self {
                     backend: Backend::Iptables,
                     active: true,
-                });
+                })
             }
             Err(iptables_error) => {
                 // An iptables setup spans IPv4 and IPv6 commands. Clean both families before
