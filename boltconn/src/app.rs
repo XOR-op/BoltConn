@@ -15,7 +15,7 @@ use crate::intercept::{InterceptModifier, InterceptionManager};
 use crate::network::configure::TunConfigure;
 use crate::network::dns::{
     BootstrapResolver, Dns, DnsHijackController, NameserverPolicies, new_bootstrap_resolver,
-    parse_dns_config,
+    parse_dns_config, validate_dns_config,
 };
 use crate::network::tun_device::TunDevice;
 use crate::platform::get_default_v4_route;
@@ -430,66 +430,6 @@ impl App {
     }
 }
 
-pub async fn validate_config(
-    config_path: &Path,
-    data_path: &Path,
-    cert_path: &Path,
-) -> anyhow::Result<()> {
-    // Read initial config
-    let loaded_config = LoadedConfig::load_config(config_path, data_path)
-        .await
-        .map_err(|e| anyhow!("Load config from {:?} failed: {}", config_path, e))?;
-    let config = &loaded_config.config;
-    let mmdb = load_mmdb(
-        config
-            .dispatching
-            .as_ref()
-            .and_then(|d| d.geoip_db.as_ref()),
-        config_path,
-    )?;
-    let outbound_iface = detect_interface(config)?;
-    // initialize resources
-    let _bootstrap =
-        new_bootstrap_resolver(outbound_iface.as_str(), config.dns.bootstrap.as_slice());
-    let dns = initialize_dns(
-        BootstrapResolver::mocked(),
-        &config.dns,
-        outbound_iface.as_str(),
-    )
-    .await?;
-    let msg_bus = Arc::new(MessageBus::new());
-    let _cert = load_cert_and_key(cert_path)
-        .map_err(|e| anyhow!("Load certs from path {:?} failed: {}", cert_path, e))?;
-    // dispatch
-    let ruleset = load_rulesets(&loaded_config)?;
-    let _dispatching = DispatchingBuilder::new(
-        config_path,
-        dns.clone(),
-        mmdb.clone(),
-        &loaded_config,
-        &ruleset,
-        msg_bus.clone(),
-        Arc::new(WireguardManager::new(
-            &outbound_iface,
-            dns.clone(),
-            Duration::from_secs(180),
-        )),
-    )
-    .and_then(|builder| builder.build(&loaded_config))
-    .map(|wrapper| wrapper.dispatching)
-    .map_err(|e| anyhow!("Parse routing rules failed: {}", e))?;
-    let _interception_mgr = InterceptionManager::new(
-        config_path,
-        config.interception.as_slice(),
-        dns,
-        mmdb,
-        &ruleset,
-        msg_bus,
-    )
-    .map_err(|e| anyhow!("Load intercept rules failed: {}", e))?;
-    Ok(())
-}
-
 /// Parse, expand, and semantically validate configuration without runtime-only
 /// state such as certificates, a live DNS resolver, or a detected interface.
 pub async fn validate_config_only(config_path: &Path) -> anyhow::Result<()> {
@@ -505,9 +445,13 @@ pub async fn validate_config_only(config_path: &Path) -> anyhow::Result<()> {
         config_path,
     )?;
 
+    validate_dns_config(&config.dns)
+        .await
+        .map_err(|error| anyhow!("Parse DNS config failed: {error}"))?;
+
     // Semantic validation does not perform DNS queries. Builders only need a
-    // DNS handle to construct proxy and rule objects, so an empty resolver is
-    // sufficient and keeps `config check` deterministic and offline.
+    // DNS handle to construct proxy and rule objects. The entries were checked
+    // above, so an empty resolver avoids introducing runtime DNS dependencies.
     let dns = Arc::new(Dns::with_config(
         "config-check",
         "config-check",

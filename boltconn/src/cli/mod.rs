@@ -253,8 +253,6 @@ pub(crate) enum SubCommand {
     Run(run::RunOptions),
     /// Reload configurations
     Reload,
-    /// Validate configurations
-    Validate(StartOptions),
     /// Inspect configuration without requiring runtime state
     #[command(subcommand)]
     Config(ConfigOptions),
@@ -441,20 +439,6 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             state.stream_log().await.unwrap();
             exit(0)
         }
-        SubCommand::Validate(opt) => {
-            let (config_path, data_path, cert_path) = match crate::process_path(&opt) {
-                Ok(r) => r,
-                Err(_) => exit(-1),
-            };
-            if let Err(e) = crate::app::validate_config(&config_path, &data_path, &cert_path).await
-            {
-                eprintln!("{}", e);
-                exit(-1)
-            } else {
-                println!("{}", "Configuration is valid".green());
-                exit(0)
-            }
-        }
         SubCommand::Config(command) => {
             let options = match &command {
                 ConfigOptions::Check(options) | ConfigOptions::Explain(options) => options,
@@ -570,7 +554,6 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
         | SubCommand::Generate(_)
         | SubCommand::Clean
         | SubCommand::Log
-        | SubCommand::Validate(_)
         | SubCommand::Config(_) => {
             unreachable!()
         }

@@ -13,9 +13,8 @@ impl BootstrapResolver {
         }
     }
 
-    /// Used only for configuration validation; no network activity is performed.
-    pub(crate) fn mocked() -> Self {
-        tracing::warn!("Using mocked resolver for bootstrap resolver");
+    /// Resolve encrypted-DNS hostnames deterministically during offline validation.
+    pub(crate) fn for_validation() -> Self {
         Self { resolver: None }
     }
 

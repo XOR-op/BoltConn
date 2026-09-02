@@ -41,48 +41,7 @@ impl NameserverPolicies {
         bootstrap: &BootstrapResolver,
         outbound_iface: &str,
     ) -> Result<Self, DnsConfigError> {
-        let mut builder: HashMap<PolicyGroupKey, PolicyGroup> = HashMap::new();
-        for (host, policy) in policies {
-            /*
-             * Examples:
-             * - "*.example.com": doh, 1.1.1.1
-             * - "dns-through-proxy.example.org", udp, 8.8.8.8, plain
-             * - "*.msftconnecttest.com", udp, dhcp://en0
-             */
-            let parts: Vec<&str> = policy.split(',').map(|s| s.trim()).collect();
-            let follow_tun = match parts.len() {
-                2 => false,
-                3 => {
-                    if *parts.get(2).unwrap() != "plain" {
-                        return Err(DnsConfigError::Invalid(policy.clone()));
-                    }
-                    true
-                }
-                _ => {
-                    return Err(DnsConfigError::Invalid(policy.clone()));
-                }
-            };
-            let key = (
-                parts.first().unwrap().to_string(),
-                parts.get(1).unwrap().to_string(),
-                follow_tun,
-            );
-
-            // clustering
-            match builder.entry(key) {
-                Entry::Occupied(mut e) => {
-                    e.get_mut().0.add_auto(host);
-                    e.get_mut().1.push(host.clone());
-                }
-                Entry::Vacant(e) => {
-                    let ns_config =
-                        parse_single_dns(e.key().0.as_str(), e.key().1.as_str(), bootstrap).await?;
-                    let mut matcher = HostMatcher::builder();
-                    matcher.add_auto(host);
-                    e.insert((matcher, vec![host.clone()], ns_config));
-                }
-            }
-        }
+        let builder = parse_policy_groups(policies, bootstrap).await?;
         let res = {
             let mut res = Vec::new();
             for ((_, _, follow_tun), (matcher, mut matchers, config)) in builder {
@@ -145,6 +104,14 @@ impl NameserverPolicies {
         Ok(Self { entries: res })
     }
 
+    /// Check policy syntax and nameserver values without constructing resolvers.
+    pub(crate) async fn validate(
+        policies: &HashMap<String, String>,
+        bootstrap: &BootstrapResolver,
+    ) -> Result<(), DnsConfigError> {
+        parse_policy_groups(policies, bootstrap).await.map(|_| ())
+    }
+
     pub fn empty() -> Self {
         Self {
             entries: Vec::new(),
@@ -164,6 +131,39 @@ impl NameserverPolicies {
     pub(super) fn entries_mut(&mut self) -> impl Iterator<Item = &mut PolicyResolver> {
         self.entries.iter_mut()
     }
+}
+
+async fn parse_policy_groups(
+    policies: &HashMap<String, String>,
+    bootstrap: &BootstrapResolver,
+) -> Result<HashMap<PolicyGroupKey, PolicyGroup>, DnsConfigError> {
+    let mut groups: HashMap<PolicyGroupKey, PolicyGroup> = HashMap::new();
+    for (host, policy) in policies {
+        // Policies contain a nameserver and an optional `plain` routing mode.
+        let parts: Vec<&str> = policy.split(',').map(str::trim).collect();
+        let follow_tun = match parts.as_slice() {
+            [_, _] => false,
+            [_, _, "plain"] => true,
+            _ => return Err(DnsConfigError::Invalid(policy.clone())),
+        };
+        let key = (parts[0].to_string(), parts[1].to_string(), follow_tun);
+
+        match groups.entry(key) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().0.add_auto(host);
+                entry.get_mut().1.push(host.clone());
+            }
+            Entry::Vacant(entry) => {
+                let nameserver =
+                    parse_single_dns(entry.key().0.as_str(), entry.key().1.as_str(), bootstrap)
+                        .await?;
+                let mut matcher = HostMatcher::builder();
+                matcher.add_auto(host);
+                entry.insert((matcher, vec![host.clone()], nameserver));
+            }
+        }
+    }
+    Ok(groups)
 }
 
 impl PolicyResolver {

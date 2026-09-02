@@ -8,7 +8,7 @@ mod ns_policy;
 mod observability;
 mod provider;
 
-use crate::config::DnsConfigError;
+use crate::config::{DnsConfigError, RawDnsConfig};
 use crate::proxy::error::DnsError;
 pub use bootstrap::BootstrapResolver;
 pub use dns::{Dns, GenericDns};
@@ -76,6 +76,18 @@ pub async fn parse_dns_config(
         arr.push(parse_single_dns(proto.as_str(), content.as_str(), bootstrap).await?);
     }
     Ok(arr)
+}
+
+/// Validate DNS entries without discovering interfaces or performing lookups.
+pub(crate) async fn validate_dns_config(config: &RawDnsConfig) -> Result<(), DnsConfigError> {
+    let bootstrap = BootstrapResolver::for_validation();
+    if parse_dns_config(config.nameserver.iter(), &bootstrap)
+        .await?
+        .is_empty()
+    {
+        return Err(DnsConfigError::Invalid("No DNS specified".to_string()));
+    }
+    NameserverPolicies::validate(&config.nameserver_policy, &bootstrap).await
 }
 
 pub async fn parse_single_dns(
@@ -224,6 +236,69 @@ impl<T> AuxiliaryResolver<T> {
         match self {
             Self::Resolver(_) => None,
             Self::Dhcp(record) => Some(record.lock().unwrap().current_server()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod config_validation_tests {
+    use super::validate_dns_config;
+    use crate::config::{DnsPreference, RawDnsConfig};
+    use std::collections::HashMap;
+
+    fn config(nameservers: &[&str], policies: &[(&str, &str)]) -> RawDnsConfig {
+        RawDnsConfig {
+            preference: DnsPreference::PreferIpv4,
+            bootstrap: vec!["1.1.1.1".parse().unwrap()],
+            nameserver: nameservers
+                .iter()
+                .map(|nameserver| (*nameserver).to_string())
+                .collect(),
+            hosts: HashMap::new(),
+            nameserver_policy: policies
+                .iter()
+                .map(|(host, policy)| ((*host).to_string(), (*policy).to_string()))
+                .collect(),
+            tun_hijack_list: None,
+            tun_bypass_list: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn validates_nameservers_and_policies_offline() {
+        validate_dns_config(&config(
+            &["doh, dns.example", "udp, 8.8.8.8"],
+            &[("*.internal", "udp, 192.0.2.53, plain")],
+        ))
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_nameservers() {
+        for nameservers in [
+            Vec::new(),
+            vec!["missing-delimiter"],
+            vec!["udp, not-an-ip"],
+            vec!["unknown, 1.1.1.1"],
+            vec!["doh-preset, unknown"],
+        ] {
+            assert!(
+                validate_dns_config(&config(&nameservers, &[]))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_nameserver_policies() {
+        for policy in ["udp", "udp, 192.0.2.53, bypass"] {
+            assert!(
+                validate_dns_config(&config(&["udp, 8.8.8.8"], &[("*.internal", policy)],))
+                    .await
+                    .is_err()
+            );
         }
     }
 }
