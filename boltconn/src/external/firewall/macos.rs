@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 
 const PF_ANCHOR: &str = "com.apple/boltconn";
 const PF_TOKEN_PATH: &str = "/var/run/boltconn-pf.token";
+const AWDL_INTERFACE: &str = "awdl0";
 const CAPTIVE_AGENT_USER: &str = "_captiveagent";
 
 pub struct KillSwitchGuard {
@@ -144,10 +145,13 @@ fn render_pf_rules(tun_name: &str) -> String {
         .copied()
         .collect::<Vec<_>>()
         .join(", ");
-    // macOS binds captive-network probes to the physical Wi-Fi interface. Keep this
-    // exception user-scoped so other desktop applications cannot bypass the TUN.
+    // AWDL carries local peer-to-peer services such as AirDrop and must stay outside the
+    // tunnel. macOS also binds captive-network probes to the physical Wi-Fi interface;
+    // keep that exception user-scoped so other desktop applications cannot bypass the TUN.
     format!(
         "table <boltconn_bypass> const {{ {bypass} }}\n\
+         pass out quick on {AWDL_INTERFACE} inet proto {{ tcp, udp }} from any to any\n\
+         pass out quick on {AWDL_INTERFACE} inet6 proto {{ tcp, udp }} from any to any\n\
          pass out quick on ! {tun_name} inet proto {{ tcp, udp }} \
              from any to any user = {CAPTIVE_AGENT_USER}\n\
          pass out quick on ! {tun_name} inet6 proto {{ tcp, udp }} \
@@ -216,7 +220,10 @@ fn flush_non_tun_states(tun_name: &str) -> io::Result<()> {
     let interfaces: BTreeSet<String> = pnet_datalink::interfaces()
         .into_iter()
         .filter(|interface| {
-            interface.is_up() && !interface.is_loopback() && interface.name != tun_name
+            interface.is_up()
+                && !interface.is_loopback()
+                && interface.name != tun_name
+                && interface.name != AWDL_INTERFACE
         })
         .map(|interface| interface.name)
         .collect();
@@ -252,7 +259,7 @@ mod tests {
     use super::render_pf_rules;
 
     #[test]
-    fn pf_rules_bypass_lan_root_and_captive_agent() {
+    fn pf_rules_bypass_lan_awdl_root_and_captive_agent() {
         let rules = render_pf_rules("utun42");
         assert!(rules.contains("10.0.0.0/8"));
         assert!(rules.contains("fe80::/10"));
@@ -265,6 +272,12 @@ mod tests {
         let captive_v6 = "pass out quick on ! utun42 inet6 proto { tcp, udp } \
              from any to any user = _captiveagent";
         let first_block = rules.find("block return out quick").unwrap();
+        let awdl_v4 = "pass out quick on awdl0 inet proto { tcp, udp } from any to any";
+        let awdl_v6 = "pass out quick on awdl0 inet6 proto { tcp, udp } from any to any";
+        assert!(rules.contains(awdl_v4));
+        assert!(rules.contains(awdl_v6));
+        assert!(rules.find(awdl_v4).unwrap() < first_block);
+        assert!(rules.find(awdl_v6).unwrap() < first_block);
         assert!(rules.contains(captive_v4));
         assert!(rules.contains(captive_v6));
         assert!(rules.find(captive_v4).unwrap() < first_block);
