@@ -178,7 +178,7 @@ impl DhcpDnsRecord {
 
     // return if the record is updated
     pub fn refresh(&mut self) -> Result<bool, DnsError> {
-        if self.last_checked.elapsed() < Duration::from_secs(30) {
+        if self.last_checked.elapsed() < Duration::from_secs(15) {
             Ok(false)
         } else {
             // when error occurs, update the record in a best-effort way
