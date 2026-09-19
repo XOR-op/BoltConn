@@ -1,18 +1,14 @@
 use windows::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
-        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE, UNICODE_STRING},
+        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE},
         NetworkManagement::IpHelper::{
-            GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP_STATE_ESTAB,
+            GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP_STATE_ESTAB, MIB_TCP_STATE_SYN_SENT,
             TCP_TABLE_OWNER_PID_CONNECTIONS, UDP_TABLE_OWNER_PID,
         },
         Networking::WinSock::{ADDRESS_FAMILY, AF_INET, AF_INET6},
-        System::{
-            Diagnostics::Debug::ReadProcessMemory,
-            Threading::{
-                OpenProcess, PEB, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
-                PROCESS_VM_READ, RTL_USER_PROCESS_PARAMETERS,
-            },
+        System::Threading::{
+            OpenProcess, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
         },
     },
 };
@@ -22,6 +18,15 @@ use std::{
     mem,
     net::{IpAddr, SocketAddr},
 };
+
+/// Owns a process handle, including on early returns from memory reads.
+pub(super) struct ProcessHandle(pub HANDLE);
+
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
 
 pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> std::io::Result<i32> {
     let family = match addr {
@@ -37,7 +42,8 @@ pub fn get_pid(addr: SocketAddr, net_type: NetworkType) -> std::io::Result<i32> 
 fn get_table(family: ADDRESS_FAMILY, net_type: NetworkType) -> std::io::Result<Vec<u8>> {
     let mut buf_size = 8u32;
     for _ in 0..10 {
-        let mut buf = vec![0; buf_size as usize];
+        // IP Helper writes DWORD-aligned table headers and rows.
+        let mut buf = vec![0u32; (buf_size as usize).div_ceil(4)];
         let err_no = match net_type {
             NetworkType::Tcp => unsafe {
                 GetExtendedTcpTable(
@@ -62,7 +68,7 @@ fn get_table(family: ADDRESS_FAMILY, net_type: NetworkType) -> std::io::Result<V
         };
         const ERR_INSUFFICIENT_BUF: u32 = ERROR_INSUFFICIENT_BUFFER.0;
         match err_no {
-            0 => return Ok(buf),
+            0 => return Ok(buf.into_iter().flat_map(u32::to_ne_bytes).collect()),
             ERR_INSUFFICIENT_BUF => continue,
             other => return Err(std::io::Error::from_raw_os_error(other as i32)),
         }
@@ -114,20 +120,22 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String, Stri
         }
         _ => {}
     }
-    let handle = unsafe {
-        OpenProcess(
-            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-            false,
-            pid as u32,
-        )
-    }
-    .ok()?;
+    let handle = ProcessHandle(
+        unsafe {
+            OpenProcess(
+                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                false,
+                pid as u32,
+            )
+        }
+        .ok()?,
+    );
     const INFO_SIZE: usize = std::mem::size_of::<PROCESS_BASIC_INFORMATION>();
     let mut proc_basic_info: PROCESS_BASIC_INFORMATION = unsafe { mem::zeroed() };
     let mut out_len_unused = 0u32;
     let err_no = unsafe {
         NtQueryInformationProcess(
-            handle,
+            handle.0,
             ProcessBasicInformation,
             &mut proc_basic_info as *mut _ as *mut _,
             INFO_SIZE as u32,
@@ -135,53 +143,17 @@ fn get_process_info_inner(pid: i32) -> Option<(i32, String, String, String, Stri
         )
     };
     if err_no.is_err() {
-        let _ = unsafe { CloseHandle(handle) };
         return None;
     }
     let ppid = proc_basic_info.InheritedFromUniqueProcessId as i32;
-    let parameters = unsafe {
-        let peb: PEB = read_from_process(handle, proc_basic_info.PebBaseAddress)?;
-        let parameters: RTL_USER_PROCESS_PARAMETERS =
-            read_from_process(handle, peb.ProcessParameters)?;
-        parameters
-    };
+    let parameters =
+        super::windows_memory::read_parameters(handle.0, proc_basic_info.PebBaseAddress)?;
     let cmdline =
-        unsafe { read_utf16_from_process(handle, &parameters.CommandLine) }.unwrap_or_default();
-    let path =
-        unsafe { read_utf16_from_process(handle, &parameters.ImagePathName) }.unwrap_or_default();
-    let cwd = unsafe { read_utf16_from_process(handle, &parameters.CurrentDirectory.DosPath) }
-        .unwrap_or_default();
+        super::windows_memory::read_string(handle.0, parameters.command_line).unwrap_or_default();
+    let path = super::windows_memory::read_string(handle.0, parameters.image).unwrap_or_default();
+    let cwd = super::windows_memory::read_string(handle.0, parameters.cwd).unwrap_or_default();
     let name = path.rsplit('\\').next().unwrap_or("UNKNOWN").to_owned();
-    let _ = unsafe { CloseHandle(handle) };
     Some((ppid, path, name, cmdline, cwd))
-}
-
-unsafe fn read_from_process<T: Sized>(handle: HANDLE, addr: *const T) -> Option<T> {
-    let mut buf = mem::zeroed();
-    ReadProcessMemory(
-        handle,
-        addr as *const _,
-        &mut buf as *mut _ as *mut _,
-        mem::size_of::<T>(),
-        None,
-    )
-    .ok()?;
-    Some(buf)
-}
-
-unsafe fn read_utf16_from_process(handle: HANDLE, u16str: &UNICODE_STRING) -> Option<String> {
-    let byte_len = u16str.Length as usize;
-    let mut buffer = vec![0u8; byte_len];
-    ReadProcessMemory(
-        handle,
-        u16str.Buffer.0 as *const _,
-        buffer.as_mut_ptr() as *mut _,
-        byte_len,
-        None,
-    )
-    .ok()?;
-    let slice = std::slice::from_raw_parts(buffer.as_ptr() as *const _, byte_len / 2);
-    Some(String::from_utf16_lossy(slice))
 }
 
 // Search for the data returned by GetExtented*Table.
@@ -245,10 +217,12 @@ impl RecordSearcher {
             let record = data
                 .get((4 + i * self.item_size)..(4 + (i + 1) * self.item_size))
                 .ok_or(std::io::ErrorKind::NotFound)?;
-            // only check established TCP record
+            // A TUN can observe the initial SYN before the connection is established.
             if let Some(tcp_state_offset) = self.tcp_state {
                 let tcp_state = slice_to_u32(&record[tcp_state_offset..tcp_state_offset + 4]);
-                if tcp_state != MIB_TCP_STATE_ESTAB.0 as u32 {
+                if tcp_state != MIB_TCP_STATE_ESTAB.0 as u32
+                    && tcp_state != MIB_TCP_STATE_SYN_SENT.0 as u32
+                {
                     continue;
                 }
             }
@@ -269,11 +243,11 @@ impl RecordSearcher {
                 }
                 _ => unreachable!(),
             };
-            // the second clause only happens to 0.0.0.0/[::] UDP
-            if ip != addr.ip() && !(addr.ip().is_unspecified() && self.tcp_state.is_none()) {
-                if self.tcp_state.is_none() {
+            if ip != addr.ip() {
+                // Only a wildcard-bound UDP socket can own traffic from a different
+                // local address. A matching port on another concrete address cannot.
+                if ip.is_unspecified() && self.tcp_state.is_none() {
                     possible_udp = Some(slice_to_u32(&record[self.pid..self.pid + 4]));
-                    continue;
                 }
                 continue;
             }
@@ -288,4 +262,169 @@ impl RecordSearcher {
 
 fn slice_to_u32(slice: &[u8]) -> u32 {
     u32::from_ne_bytes([slice[0], slice[1], slice[2], slice[3]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifies_live_ipv4_tcp_and_udp_sockets() {
+        use std::net::{TcpListener, TcpStream, UdpSocket};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_server, _) = listener.accept().unwrap();
+        let pid = std::process::id() as i32;
+        assert_eq!(
+            get_pid(client.local_addr().unwrap(), NetworkType::Tcp).unwrap(),
+            pid
+        );
+        let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let addr = SocketAddr::from(([127, 0, 0, 1], socket.local_addr().unwrap().port()));
+        assert_eq!(get_pid(addr, NetworkType::Udp).unwrap(), pid);
+    }
+
+    #[test]
+    fn reads_current_process_metadata() {
+        let info =
+            get_process_info(std::process::id() as i32, ProcessInfoDepth::Limited(1)).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(info.name, exe.file_name().unwrap().to_string_lossy());
+        assert_eq!(
+            std::fs::canonicalize(&info.path).unwrap(),
+            exe.canonicalize().unwrap()
+        );
+        assert_eq!(
+            std::fs::canonicalize(&info.cwd).unwrap(),
+            std::env::current_dir().unwrap().canonicalize().unwrap()
+        );
+        assert!(!info.cmdline.is_empty());
+        assert!(info.parent_pid() > 0);
+    }
+
+    #[test]
+    fn reads_native_and_wow64_child_tags() {
+        use std::{
+            process::{Child, Command, Stdio},
+            time::{Duration, Instant},
+        };
+        struct ChildGuard(Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let root = std::env::var("SystemRoot").unwrap();
+        for directory in ["System32", "SysWOW64"] {
+            let exe = std::path::Path::new(&root)
+                .join(directory)
+                .join("WindowsPowerShell/v1.0/powershell.exe");
+            if !exe.exists() {
+                continue;
+            }
+            let tag = "test-标签";
+            let encoded = super::super::tag::validate_and_encode_tag(tag).unwrap();
+            let child = ChildGuard(
+                Command::new(&exe)
+                    .args([
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        "Start-Sleep -Seconds 30",
+                    ])
+                    .env("BOLTCONN_TAG", encoded)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let info = get_process_info(child.0.id() as i32, ProcessInfoDepth::Limited(0));
+                if let Some(info) = info
+                    && info.tag.as_deref() == Some(tag)
+                {
+                    assert!(info.name.eq_ignore_ascii_case("powershell.exe"));
+                    assert!(info.cmdline.contains("Start-Sleep"));
+                    assert!(!info.cwd.is_empty());
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "failed to read {directory} child tag"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+
+    fn udp_table(rows: &[([u8; 4], u16, u32)]) -> Vec<u8> {
+        let mut data = (rows.len() as u32).to_ne_bytes().to_vec();
+        for (ip, port, pid) in rows {
+            data.extend(ip);
+            // dwLocalPort stores the network-order port in the low 16 bits.
+            data.extend((port.to_be() as u32).to_ne_bytes());
+            data.extend(pid.to_ne_bytes());
+        }
+        data
+    }
+
+    #[test]
+    fn udp_lookup_prefers_exact_address_over_wildcard() {
+        let addr = "192.0.2.1:1234".parse().unwrap();
+        let data = udp_table(&[([0, 0, 0, 0], 1234, 10), ([192, 0, 2, 1], 1234, 20)]);
+        assert_eq!(
+            RecordSearcher::new(&addr, NetworkType::Udp)
+                .search(&data, addr)
+                .unwrap(),
+            20
+        );
+    }
+
+    #[test]
+    fn udp_lookup_does_not_guess_from_port_on_another_address() {
+        let addr = "192.0.2.1:1234".parse().unwrap();
+        let data = udp_table(&[([192, 0, 2, 2], 1234, 20)]);
+        assert!(
+            RecordSearcher::new(&addr, NetworkType::Udp)
+                .search(&data, addr)
+                .is_err()
+        );
+        let data = udp_table(&[([0, 0, 0, 0], 1234, 10)]);
+        assert_eq!(
+            RecordSearcher::new(&addr, NetworkType::Udp)
+                .search(&data, addr)
+                .unwrap(),
+            10
+        );
+    }
+
+    #[test]
+    fn tcp_lookup_includes_connecting_socket() {
+        let addr = "192.0.2.1:1234".parse().unwrap();
+        let mut data = 1u32.to_ne_bytes().to_vec();
+        data.extend((MIB_TCP_STATE_SYN_SENT.0 as u32).to_ne_bytes());
+        data.extend([192, 0, 2, 1]);
+        data.extend((1234u16.to_be() as u32).to_ne_bytes());
+        data.extend([0u8; 8]);
+        data.extend(42u32.to_ne_bytes());
+        assert_eq!(
+            RecordSearcher::new(&addr, NetworkType::Tcp)
+                .search(&data, addr)
+                .unwrap(),
+            42
+        );
+    }
+
+    #[test]
+    fn truncated_table_is_an_error() {
+        let addr = "192.0.2.1:1234".parse().unwrap();
+        assert!(
+            RecordSearcher::new(&addr, NetworkType::Udp)
+                .search(&1u32.to_ne_bytes(), addr)
+                .is_err()
+        );
+    }
 }

@@ -11,6 +11,7 @@ mod run;
 mod streaming;
 
 use crate::ProgramArgs;
+#[cfg(unix)]
 use crate::app::app_uds_addr;
 use crate::cli::streaming::ConnectionState;
 use anyhow::anyhow;

@@ -99,7 +99,6 @@ hyper = { version = "1.2.0", features = ["server", "client", "http1", "http2"] }
 hyper-util = { version = "0.1.11", features = ["http1", "http2"] }
 rcgen = { version = "0.12.1", features = ["pem", "x509-parser"] }
 rquickjs = { version = "0.10.0", features = [
-    "bindgen",
     "futures",
     "macro",
     "classes",
@@ -157,6 +156,8 @@ wintun = { version = "0.5.0", features = ["panic_on_unsent_packets"] }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 ioctl-sys = "0.8.0"
+# Windows MSVC bindings are shipped by rquickjs; avoid requiring libclang there.
+rquickjs = { version = "0.10.0", features = ["bindgen"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libproc = "0.13.0"

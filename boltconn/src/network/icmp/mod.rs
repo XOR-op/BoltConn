@@ -1,6 +1,7 @@
 use crate::network::packet::icmp::Icmpv4Pkt;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use tokio::net::UdpSocket;
 
@@ -38,7 +39,7 @@ impl IcmpProxy {
         {
             use crate::common::io_err;
             use crate::platform::get_iface_address;
-            let IpAddr::V4(local_addr) = get_iface_address(outbound_iface)? else {
+            let std::net::IpAddr::V4(local_addr) = get_iface_address(outbound_iface)? else {
                 return Err(io_err("not ipv4"));
             };
             socket.bind(&SocketAddr::new(local_addr.into(), 0).into())?;

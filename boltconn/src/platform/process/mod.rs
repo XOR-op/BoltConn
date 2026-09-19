@@ -12,13 +12,13 @@ pub use linux::*;
 
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+mod windows_memory;
 
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
 mod tag;
-#[cfg(target_os = "windows")]
-pub use tag::setup_tag_env;
 #[cfg(unix)]
 pub use tag::setup_tag_fd;
 pub use tag::validate_and_encode_tag;

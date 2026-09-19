@@ -101,7 +101,7 @@ pub(crate) async fn run_with_tag(opts: RunOptions, uds_path: Option<&str>) -> i3
         #[cfg(unix)]
         {
             match crate::platform::process::setup_tag_fd(&encoded) {
-                Ok(_) => execute_command(program.as_str(), &args),
+                Ok(_) => execute_command(program.as_str(), &args, None),
                 Err(e) => {
                     eprintln!("boltconn run: failed to set up tag fd: {}", e);
                     1
@@ -110,12 +110,11 @@ pub(crate) async fn run_with_tag(opts: RunOptions, uds_path: Option<&str>) -> i3
         }
         #[cfg(target_os = "windows")]
         {
-            crate::platform::process::setup_tag_env(&encoded);
-            execute_command(program.as_str(), &args)
+            execute_command(program.as_str(), &args, Some(&encoded))
         }
         #[cfg(all(not(unix), not(target_os = "windows")))]
         {
-            execute_command(program.as_str(), &args)
+            execute_command(program.as_str(), &args, None)
         }
     };
 
@@ -434,8 +433,13 @@ fn validate_allowlist_flags(
     Ok(())
 }
 
-fn execute_command(program: &str, args: &[String]) -> i32 {
-    match std::process::Command::new(program).args(args).status() {
+fn execute_command(program: &str, args: &[String], encoded_tag: Option<&str>) -> i32 {
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    if let Some(tag) = encoded_tag {
+        command.env("BOLTCONN_TAG", tag);
+    }
+    match command.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
             eprintln!("boltconn run: failed to execute '{}': {}", program, e);
