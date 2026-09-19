@@ -1,5 +1,4 @@
 use crate::common::io_err;
-#[cfg(not(target_os = "windows"))]
 use crate::platform;
 use crate::platform::get_iface_address;
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -7,6 +6,8 @@ use std::io::Result;
 use std::net::{IpAddr, SocketAddr};
 #[cfg(not(target_os = "windows"))]
 use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawSocket;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
 pub struct Egress {
@@ -50,24 +51,27 @@ impl Egress {
             let IpAddr::V4(local_addr) = get_iface_address(self.iface_name.as_str())? else {
                 return Err(io_err("not ipv4"));
             };
+            platform::bind_to_interface_v4(socket.as_raw_socket(), &self.iface_name)?;
             socket.bind(SocketAddr::new(local_addr.into(), 0))?;
         }
         socket.connect(addr).await
     }
 
+    #[cfg(windows)]
+    async fn tcpv6_stream(&self, _addr: SocketAddr) -> Result<TcpStream> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "IPv6 egress is not supported on Windows",
+        ))
+    }
+
+    #[cfg(not(windows))]
     async fn tcpv6_stream(&self, addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v6()?;
         #[cfg(target_os = "linux")]
         platform::set_fwmark(socket.as_raw_fd())?;
         #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(socket.as_raw_fd(), self.iface_name.as_str())?;
-        #[cfg(target_os = "windows")]
-        {
-            let IpAddr::V6(local_addr) = get_iface_address(self.iface_name.as_str())? else {
-                return Err(io_err("not ipv6"));
-            };
-            socket.bind(SocketAddr::new(local_addr.into(), 0))?;
-        }
         socket.connect(addr).await
     }
 
@@ -80,12 +84,23 @@ impl Egress {
         platform::set_fwmark(std_udp_sock.as_raw_fd())?;
         #[cfg(not(target_os = "windows"))]
         platform::bind_to_device(std_udp_sock.as_raw_fd(), self.iface_name.as_str())?;
+        #[cfg(windows)]
+        platform::bind_to_interface_v4(std_udp_sock.as_raw_socket(), &self.iface_name)?;
         std_udp_sock.bind(&SockAddr::from(SocketAddr::new(local_addr.into(), 0)))?;
         std_udp_sock.set_nonblocking(true)?;
         let socket = UdpSocket::from_std(std_udp_sock.into())?;
         Ok(socket)
     }
 
+    #[cfg(windows)]
+    pub async fn udpv6_socket(&self) -> Result<UdpSocket> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "IPv6 egress is not supported on Windows",
+        ))
+    }
+
+    #[cfg(not(windows))]
     pub async fn udpv6_socket(&self) -> Result<UdpSocket> {
         let IpAddr::V6(local_addr) = get_iface_address(self.iface_name.as_str())? else {
             return Err(io_err("not ipv4"));

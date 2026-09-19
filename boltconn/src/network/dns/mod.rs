@@ -97,6 +97,12 @@ pub async fn parse_single_dns(
 ) -> Result<NameServerConfigEnum, DnsConfigError> {
     Ok(NameServerConfigEnum::Normal(match proto {
         "dhcp" => {
+            #[cfg(windows)]
+            return Err(DnsConfigError::Invalid(
+                "DHCP DNS discovery is not supported on Windows; configure an explicit DNS server"
+                    .to_string(),
+            ));
+            #[cfg(not(windows))]
             return Ok(NameServerConfigEnum::Dhcp(content.to_string()));
         }
         "udp" => vec![NameServerConfig::udp(
@@ -272,6 +278,18 @@ mod config_validation_tests {
         ))
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn rejects_dhcp_discovery_on_windows() {
+        for config in [
+            config(&["dhcp, Ethernet"], &[]),
+            config(&["udp, 1.1.1.1"], &[("*.internal", "dhcp, Ethernet")]),
+        ] {
+            let error = validate_dns_config(&config).await.unwrap_err();
+            assert!(error.to_string().contains("not supported on Windows"));
+        }
     }
 
     #[tokio::test]

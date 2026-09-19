@@ -4,7 +4,9 @@ pub struct KillSwitchGuard;
 
 impl KillSwitchGuard {
     pub fn setup(_tun_name: &str) -> io::Result<Self> {
-        tracing::debug!("Kill switch is a no-op on Windows");
+        tracing::warn!(
+            "Kill switch is not supported on Windows; traffic outside BoltConn is not blocked"
+        );
         Ok(Self)
     }
 

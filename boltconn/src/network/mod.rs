@@ -10,6 +10,8 @@ use unix_tun::TunInstance;
 mod icmp;
 #[cfg(target_os = "windows")]
 mod windows_tun;
+#[cfg(windows)]
+mod windows_tun_identity;
 
 #[cfg(target_os = "windows")]
-use windows_tun::TunInstance;
+pub(crate) use windows_tun::TunInstance;

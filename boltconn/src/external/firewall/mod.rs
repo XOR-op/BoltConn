@@ -167,6 +167,7 @@ fn detect_backend() -> Option<FirewallBackend> {
 /// Find Docker bridge subnets by enumerating network interfaces whose names
 /// start with "docker" or "br-" (custom Docker networks) and extracting their
 /// IPv4 subnets.
+#[cfg(not(windows))]
 fn find_docker_subnets() -> Vec<String> {
     let mut subnets = Vec::new();
     for iface in pnet_datalink::interfaces() {
@@ -179,6 +180,11 @@ fn find_docker_subnets() -> Vec<String> {
         }
     }
     subnets
+}
+
+#[cfg(windows)]
+fn find_docker_subnets() -> Vec<String> {
+    Vec::new()
 }
 
 const DEFAULT_DOCKER_SUBNET: &str = "172.16.0.0/12";

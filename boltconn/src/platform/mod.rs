@@ -4,6 +4,10 @@ use std::process::{Command, Stdio};
 
 #[cfg(not(target_os = "windows"))]
 pub mod daemon;
+#[cfg(not(windows))]
+pub mod dhcp;
+#[cfg(windows)]
+#[path = "dhcp_windows.rs"]
 pub mod dhcp;
 pub mod route;
 

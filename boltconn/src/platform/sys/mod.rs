@@ -5,7 +5,9 @@ mod macos_sys;
 
 #[cfg(target_os = "macos")]
 pub use macos_sys::*;
+#[cfg(not(windows))]
 use std::io;
+#[cfg(not(windows))]
 use std::net::IpAddr;
 
 #[cfg(target_os = "macos")]
@@ -35,6 +37,7 @@ mod windows_sys;
 #[cfg(target_os = "windows")]
 pub use windows_sys::*;
 
+#[cfg(not(windows))]
 pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
     get_iface(iface_name)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "interface not found"))
@@ -50,8 +53,22 @@ pub fn get_iface_address(iface_name: &str) -> io::Result<IpAddr> {
         })
 }
 
+#[cfg(not(windows))]
 pub fn get_iface(name: &str) -> Option<pnet_datalink::NetworkInterface> {
     pnet_datalink::interfaces()
         .into_iter()
         .find(|iface| iface.name == name)
 }
+
+#[cfg(windows)]
+mod windows_interface;
+#[cfg(windows)]
+pub use windows_interface::{bind_to_interface_v4, get_default_v4_route, get_iface_address};
+
+#[cfg(windows)]
+pub(crate) use windows_interface::{get_iface_guid, get_iface_index};
+
+#[cfg(windows)]
+mod windows_dns;
+#[cfg(windows)]
+pub use windows_dns::SystemDnsHandle;

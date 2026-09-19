@@ -67,17 +67,36 @@ pub fn ipv6_private_addresses() -> Vec<Ipv6Net> {
 }
 
 pub fn setup_ipv4_routing_table(name: &str) -> io::Result<()> {
+    setup_ipv4_routes(name, &ipv4_relay_addresses())
+}
+
+pub(crate) fn setup_ipv4_routes(name: &str, routes: &[Ipv4Net]) -> io::Result<()> {
     let mut added = Vec::new();
-    for item in ipv4_relay_addresses() {
+    for &item in routes {
         if let Err(error) = platform::add_route_entry(IpNet::V4(item), name) {
             // Only roll back entries successfully added by this call. This avoids leaving a
             // partial routing setup while preserving routes that predated BoltConn.
             for added_item in added.into_iter().rev() {
-                let _ = platform::delete_route_entry(IpNet::V4(added_item));
+                if let Err(rollback) = delete_route_entry(IpNet::V4(added_item), name) {
+                    tracing::error!(%rollback, "failed to roll back TUN route {added_item}");
+                }
             }
             return Err(error);
         }
         added.push(item);
     }
     Ok(())
+}
+
+/// Windows routes must be removed from the same interface they were added to.
+pub fn delete_route_entry(subnet: IpNet, name: &str) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        platform::delete_route_entry_on_interface(subnet, name)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        platform::delete_route_entry(subnet)
+    }
 }
