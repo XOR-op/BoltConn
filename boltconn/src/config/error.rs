@@ -112,8 +112,8 @@ pub enum FileError {
     Serde(String, serde_yaml::Error),
     #[error("{0} serialization error: {1}")]
     Http(String, reqwest::Error),
-    #[error("Env variable error: {0}")]
-    Env(#[from] std::env::VarError),
+    #[error("Environment variable {0} is missing or empty; specify the directory explicitly")]
+    Env(&'static str),
 }
 
 #[derive(Error, Debug)]
