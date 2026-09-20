@@ -1,5 +1,7 @@
 use crate::cli::request::api_error;
 use crate::common::cbor::CborCodec;
+#[cfg(windows)]
+use crate::common::windows_pipe::open_client;
 use anyhow::Result;
 use boltapi::multiplex::rpc_multiplex_twoway;
 use boltapi::rpc::{ClientStreamServiceRequest, ClientStreamServiceResponse, ControlServiceClient};
@@ -14,8 +16,6 @@ use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tarpc::transport::channel::UnboundedChannel;
 #[cfg(unix)]
 use tokio::net::UnixStream;
-#[cfg(windows)]
-use tokio::net::windows::named_pipe::ClientOptions;
 
 pub struct UdsConnector {
     client: ControlServiceClient,
@@ -34,7 +34,7 @@ impl UdsConnector {
         #[cfg(unix)]
         let conn = UnixStream::connect(bind_addr).await?;
         #[cfg(windows)]
-        let conn = ClientOptions::new().open(bind_addr)?;
+        let conn = open_client(bind_addr)?;
         let transport = tarpc::serde_transport::new(
             LengthDelimitedCodec::builder()
                 .max_frame_length(boltapi::rpc::MAX_CODEC_FRAME_LENGTH)
