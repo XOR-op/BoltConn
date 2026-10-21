@@ -105,7 +105,7 @@ rquickjs = { version = "0.10.0", features = [
     "classes",
 ] }
 rustls-pemfile = "2.1.1"
-webpki-roots = "0.26.1"
+webpki-roots = "1"
 x25519-dalek = "2.0.1"
 interpolator = "0.5.0"
 # Proxies

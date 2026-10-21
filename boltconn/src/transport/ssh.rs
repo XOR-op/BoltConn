@@ -219,10 +219,9 @@ pub struct TrackedSshChannel {
 
 impl Drop for TrackedSshChannel {
     fn drop(&mut self) {
-        let _ = self
-            .open_channels
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                Some(count.saturating_sub(1))
+        self.open_channels
+            .update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                count.saturating_sub(1)
             });
     }
 }

@@ -21,6 +21,8 @@ enum SockAddr {
 impl AsyncRawSocket {
     pub fn create(fd: c_int, dst_addr: IpAddr) -> Result<Self> {
         set_nonblock(fd)?;
+        // SAFETY: the caller hands over a valid, open fd that is never closed while this wrapper is alive.
+        let fd = unsafe { unix::AsyncFd::register(fd)? };
         match dst_addr {
             IpAddr::V4(dst_addr) => {
                 let mut sockaddr: sockaddr_in = unsafe { mem::zeroed() };
@@ -30,7 +32,7 @@ impl AsyncRawSocket {
                     s_addr: u32::to_be(u32::from(dst_addr)),
                 };
                 Ok(Self {
-                    fd: unix::AsyncFd::new(fd)?,
+                    fd,
                     sockaddr: SockAddr::V4(sockaddr),
                 })
             }
@@ -42,7 +44,7 @@ impl AsyncRawSocket {
                     s6_addr: dst_addr.octets(),
                 };
                 Ok(Self {
-                    fd: unix::AsyncFd::new(fd)?,
+                    fd,
                     sockaddr: SockAddr::V6(sockaddr),
                 })
             }

@@ -25,7 +25,8 @@ impl TryFrom<RawFd> for AsyncRawFd {
 
     fn try_from(fd: RawFd) -> Result<Self> {
         set_nonblock(fd)?;
-        Ok(Self(unix::AsyncFd::new(fd)?))
+        // SAFETY: the caller hands over a valid, open fd that is never closed while this wrapper is alive.
+        Ok(Self(unsafe { unix::AsyncFd::register(fd)? }))
     }
 }
 
