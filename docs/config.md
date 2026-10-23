@@ -297,7 +297,11 @@ dns:
 4. **DHCP DNS:**
    ```yaml
    - "dhcp, en0"  # Use DNS from interface en0
+   # Windows: use the friendly adapter name, e.g. "dhcp, Ethernet"
    ```
+   Windows uses the DHCP client's option 6, independently of a static/TUN DNS
+   override, and selects the first usable IPv4 server. Discovery runs in the
+   background; an unavailable DHCP server is retried when the resolver is used.
 
 ### Advanced DNS Options
 

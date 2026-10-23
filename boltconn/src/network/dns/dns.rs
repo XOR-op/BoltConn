@@ -981,19 +981,30 @@ async fn query_auxiliary<P: RuntimeProvider>(
 ) -> QueryAttemptResult {
     match resolver {
         AuxiliaryResolver::Dhcp(inner) => {
-            let resolver = {
-                let mut guard = inner.lock().unwrap();
-                if let Err(error) = guard.refresh() {
-                    tracing::warn!(
-                        "failed to update DHCP DNS at ({},{},{}): {:?}",
-                        guard.iface,
-                        guard.iface_addr,
-                        guard.ns_addr,
-                        error
-                    );
-                }
-                record.set_current_endpoints(vec![guard.current_server()]);
-                guard.get_resolver()
+            let started = Instant::now();
+            let resolver = super::DhcpDnsRecord::get_resolver(inner).await;
+            record.set_current_endpoints(
+                inner.lock().unwrap().current_server().into_iter().collect(),
+            );
+            let Some(resolver) = resolver else {
+                let outcome = DnsOutcome::Error {
+                    code: DnsErrorCode::Local,
+                    detail: Some("DHCP DNS server is not available yet".to_string()),
+                };
+                record.observe(
+                    started.elapsed(),
+                    DnsOutcome::Error {
+                        code: DnsErrorCode::Local,
+                        detail: None,
+                    },
+                );
+                return QueryAttemptResult {
+                    answers: Vec::new(),
+                    outcome,
+                    duration: started.elapsed(),
+                    cache_hit: false,
+                    io_error: None,
+                };
             };
             query_one(
                 dns_name,
