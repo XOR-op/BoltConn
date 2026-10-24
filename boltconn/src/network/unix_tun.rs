@@ -1,12 +1,9 @@
 use crate::common::async_raw_fd::AsyncRawFd;
-use crate::common::async_socket::AsyncRawSocket;
-use crate::network::packet::ip::IPPkt;
 use crate::platform;
 use crate::platform::errno_err;
 use ipnet::Ipv4Net;
 use std::io;
-use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
-use tokio::io::AsyncWriteExt;
+use std::os::fd::RawFd;
 
 pub(super) struct TunInstance {
     fd: Option<AsyncRawFd>,
@@ -42,43 +39,5 @@ impl TunInstance {
 
     pub fn set_address(&self, name: &str, addr: Ipv4Net) -> io::Result<()> {
         crate::platform::set_address(self.ctl_fd, name, addr)
-    }
-
-    pub async fn send_outbound(pkt: &IPPkt, gw_name: &str, ipv6_enabled: bool) -> io::Result<()> {
-        match pkt {
-            IPPkt::V4(_) => {
-                let socket = socket2::Socket::new(
-                    socket2::Domain::IPV4,
-                    socket2::Type::DGRAM,
-                    Some(socket2::Protocol::from(libc::IPPROTO_RAW)),
-                )?;
-                #[cfg(target_os = "linux")]
-                platform::set_fwmark(socket.as_raw_fd())?;
-                platform::bind_to_device(socket.as_raw_fd(), gw_name)
-                    .map_err(|e| io::Error::other(format!("Bind to device failed, {}", e)))?;
-                let fd = socket.into_raw_fd();
-                let mut outbound = AsyncRawSocket::create(fd, pkt.dst_addr())?;
-                let _ = outbound.write(pkt.packet_data()).await?;
-            }
-            IPPkt::V6(_) => {
-                if ipv6_enabled {
-                    let socket = socket2::Socket::new(
-                        socket2::Domain::IPV6,
-                        socket2::Type::DGRAM,
-                        Some(socket2::Protocol::from(libc::IPPROTO_RAW)),
-                    )?;
-                    #[cfg(target_os = "linux")]
-                    platform::set_fwmark(socket.as_raw_fd())?;
-                    platform::bind_to_device(socket.as_raw_fd(), gw_name)
-                        .map_err(|e| io::Error::other(format!("Bind to device failed, {}", e)))?;
-                    let fd = socket.into_raw_fd();
-                    let mut outbound = AsyncRawSocket::create(fd, pkt.dst_addr())?;
-                    let _ = outbound.write(pkt.packet_data()).await?;
-                } else {
-                    tracing::trace!("Drop IPv6 packets: IPv6 disabled");
-                }
-            }
-        }
-        Ok(())
     }
 }

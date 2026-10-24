@@ -12,8 +12,6 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 pub mod async_raw_fd;
 #[cfg(target_os = "windows")]
 pub mod async_session;
-#[cfg(not(target_os = "windows"))]
-pub mod async_socket;
 pub mod async_ws_stream;
 pub mod call_chan;
 pub(crate) mod cbor;
