@@ -189,6 +189,14 @@ pub(crate) struct StartOptions {
     /// Run in rootless mode. Certain features may not be available in this mode.
     #[arg(long)]
     pub rootless: bool,
+    /// Run in the background as a daemon.
+    #[cfg(not(target_os = "windows"))]
+    #[arg(short = 'D', long)]
+    pub daemon: bool,
+    /// Path of log file in daemon mode. No log is written if not specified.
+    #[cfg(not(target_os = "windows"))]
+    #[arg(long, requires = "daemon", value_hint = ValueHint::FilePath)]
+    pub log_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

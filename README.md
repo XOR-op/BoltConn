@@ -65,6 +65,8 @@ boltconn generate cert --rootless
 sudo -E boltconn start
 # or run BoltConn with rootless mode (certain features will be unavailable)
 boltconn start --rootless
+# or run BoltConn in the background; logs are discarded unless --log-path is given
+sudo -E boltconn start --daemon --log-path /tmp/boltconn.log
 ```
 
 ### CLI Tools for Management

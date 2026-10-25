@@ -53,12 +53,14 @@ struct ProgramArgs {
 }
 
 fn main() -> ExitCode {
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    let _guard = rt.enter();
     let args: ProgramArgs = ProgramArgs::parse();
     let cmds = match args.cmd {
         SubCommand::Start(sub) => sub,
-        _ => rt.block_on(cli::controller_main(args)),
+        _ => {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            let _guard = rt.enter();
+            rt.block_on(cli::controller_main(args))
+        }
     };
     if !is_root() && !cmds.rootless {
         eprintln!(
@@ -91,12 +93,49 @@ fn main() -> ExitCode {
         Err(e) => return e,
     };
 
+    // Forking is only safe while single-threaded, so this must precede the tokio runtime.
+    #[cfg(not(target_os = "windows"))]
+    let ready_tx = if cmds.daemon {
+        match platform::daemon::daemonize(cmds.log_path.as_deref()) {
+            Ok(fd) => Some(fd),
+            Err(e) => {
+                eprintln!("Failed to daemonize: {e:#}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "windows"))]
+    let _pid_file = {
+        let pid_file = match platform::daemon::PidFile::acquire(&app::app_pid_path(cmds.rootless)) {
+            Ok(pid_file) => pid_file,
+            Err(e) => {
+                eprintln!("{e:#}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let uds_addr = app::app_uds_addr(cmds.rootless);
+        if let Err(e) = platform::daemon::remove_stale_socket(std::path::Path::new(&uds_addr)) {
+            eprintln!("{e:#}");
+            return ExitCode::FAILURE;
+        }
+        pid_file
+    };
+    #[cfg(not(target_os = "windows"))]
+    let stdout_log = !cmds.daemon || cmds.log_path.is_some();
+    #[cfg(target_os = "windows")]
+    let stdout_log = true;
+
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let _guard = rt.enter();
     let app = match rt.block_on(App::create(
         config_path,
         data_path,
         cert_path,
         cmds.enable_tun,
         cmds.rootless,
+        stdout_log,
     )) {
         Ok(app) => app,
         Err(e) => {
@@ -104,6 +143,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    #[cfg(not(target_os = "windows"))]
+    if let Some(ready_tx) = ready_tx {
+        platform::daemon::notify_ready(ready_tx);
+    }
     rt.block_on(app.serve_command());
     tracing::info!("Exiting...");
     rt.shutdown_timeout(Duration::from_millis(300));
@@ -141,5 +184,16 @@ pub(crate) fn process_path(cmds: &StartOptions) -> Result<(PathBuf, PathBuf, Pat
         );
         return Err(ExitCode::FAILURE);
     }
-    Ok((config_path, data_path, cert_path))
+    // Daemon mode changes the working directory, so resolve relative paths up front.
+    match (
+        std::path::absolute(&config_path),
+        std::path::absolute(&data_path),
+        std::path::absolute(&cert_path),
+    ) {
+        (Ok(config_path), Ok(data_path), Ok(cert_path)) => Ok((config_path, data_path, cert_path)),
+        _ => {
+            eprintln!("Failed to resolve absolute paths of config and app data");
+            Err(ExitCode::FAILURE)
+        }
+    }
 }

@@ -98,13 +98,17 @@ impl<'a> MakeWriter<'a> for LoggerMaker {
     }
 }
 
-pub fn init_tracing(logger: &StreamLoggerSend) -> Result<(), ConfigError> {
+pub fn init_tracing(logger: &StreamLoggerSend, stdout_log: bool) -> Result<(), ConfigError> {
     #[cfg(not(feature = "tokio-console"))]
     {
-        let stdout_layer = fmt::layer()
-            .compact()
-            .with_writer(std::io::stdout)
-            .with_timer(SystemTime);
+        use std::io::IsTerminal;
+        let stdout_layer = stdout_log.then(|| {
+            fmt::layer()
+                .compact()
+                .with_writer(std::io::stdout)
+                .with_ansi(std::io::stdout().is_terminal())
+                .with_timer(SystemTime)
+        });
         let stream_layer = fmt::layer()
             .json()
             .with_writer(LoggerMaker {
@@ -117,7 +121,7 @@ pub fn init_tracing(logger: &StreamLoggerSend) -> Result<(), ConfigError> {
             .with(
                 EnvFilter::builder()
                     .with_default_directive(
-                        Directive::from_str("boltconn=trace")
+                        Directive::from_str("boltconn=info")
                             .map_err(|_| ConfigError::Internal("Tracing filter"))?,
                     )
                     .from_env_lossy(),
@@ -127,6 +131,7 @@ pub fn init_tracing(logger: &StreamLoggerSend) -> Result<(), ConfigError> {
     }
     #[cfg(feature = "tokio-console")]
     {
+        let _ = stdout_log;
         let console_layer = console_subscriber::ConsoleLayer::builder().spawn();
         tracing_subscriber::registry().with(console_layer).init();
         Ok(())

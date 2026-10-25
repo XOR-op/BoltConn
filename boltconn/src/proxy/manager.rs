@@ -38,7 +38,7 @@ impl MappingSessionManager {
         let mut pair = entry.or_insert(TcpSessionCtl::new(src_addr, dst_addr));
         // If original connection silently expired
         if pair.dest_addr != dst_addr {
-            tracing::warn!(
+            tracing::debug!(
                 "[Session] Recreate TCP record {}: src={}, old={}, new={}",
                 src_addr.port(),
                 src_addr,

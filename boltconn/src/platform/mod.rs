@@ -2,6 +2,8 @@ use std::ffi::OsStr;
 use std::io;
 use std::process::{Command, Stdio};
 
+#[cfg(not(target_os = "windows"))]
+pub mod daemon;
 pub mod dhcp;
 pub mod route;
 

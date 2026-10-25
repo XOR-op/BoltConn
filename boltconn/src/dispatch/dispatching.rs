@@ -1293,7 +1293,7 @@ impl DispatchingSnippet {
         };
         if !proxy_impl.support_udp() && info.connection_type == NetworkType::Udp {
             if verbose {
-                tracing::info!(
+                tracing::trace!(
                     "[{}]({},{}) {} => {}: Failed(UDP disabled)",
                     provenance.matched_rule,
                     stringfy_process(info),
@@ -1318,7 +1318,7 @@ impl DispatchingSnippet {
             };
         }
         if verbose {
-            tracing::info!(
+            tracing::trace!(
                 "[{}]({},{}) {}{} => {}",
                 provenance.matched_rule,
                 stringfy_process(info),

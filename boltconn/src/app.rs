@@ -63,6 +63,7 @@ impl App {
         cert_path: PathBuf,
         enable_tun: Option<bool>,
         rootless_mode: bool,
+        stdout_log: bool,
     ) -> anyhow::Result<Self> {
         // install rustls provider
         tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
@@ -70,7 +71,7 @@ impl App {
             .expect("Failed to install aws_lc_rs for rustls");
         // tracing
         let stream_logger = StreamLoggerSend::new();
-        external::init_tracing(&stream_logger)?;
+        external::init_tracing(&stream_logger, stdout_log)?;
 
         // setup Unix socket
         let uds_listener = Arc::new(UnixListenerGuard::new(&app_uds_addr(rootless_mode))?);
@@ -298,12 +299,20 @@ impl App {
         })
     }
 
-    /// Serve Ctrl-C and reload command from API server.
+    /// Serve Ctrl-C, SIGTERM and reload command from API server.
     pub async fn serve_command(mut self) {
         let tun_configure = self.tun_configure.clone();
+        #[cfg(not(target_os = "windows"))]
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to register SIGTERM handler");
         'outer: loop {
+            #[cfg(not(target_os = "windows"))]
+            let terminate = sigterm.recv();
+            #[cfg(target_os = "windows")]
+            let terminate = std::future::pending::<Option<()>>();
             select! {
                 _ = tokio::signal::ctrl_c()=>break 'outer,
+                _ = terminate=>break 'outer,
                 restart = self.receiver.recv() => {
                     if let Some(call_param) = restart {
                         // try restarting components
@@ -821,6 +830,11 @@ pub(crate) fn app_uds_addr(rootless_mode: bool) -> String {
             String::from("/var/run/boltconn.sock")
         }
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn app_pid_path(rootless_mode: bool) -> PathBuf {
+    PathBuf::from(app_uds_addr(rootless_mode)).with_extension("pid")
 }
 
 #[cfg(test)]
