@@ -80,10 +80,19 @@ impl TunDevice {
         let start_offset = 4;
         #[cfg(not(target_os = "macos"))]
         let start_offset = 0;
+        if len <= start_offset {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "TUN session closed",
+            ));
+        }
         match handle[start_offset] >> 4 {
             4 => Ok(IPPkt::from_v4(handle, start_offset)),
             6 => Ok(IPPkt::from_v6(handle, start_offset)),
-            _ => panic!("Packet is not IPv4 or IPv6"),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid IP version from TUN",
+            )),
         }
     }
 
@@ -154,6 +163,8 @@ impl TunDevice {
                 data = self.udp_rx.recv_async() => {
                     if let Ok(data) = data{
                         Self::backwarding_udp_v4(data, &mut fd_write).await;
+                    } else {
+                        break;
                     }
                 }
             }

@@ -1,6 +1,5 @@
-use crate::platform;
 use crate::platform::SystemDnsHandle;
-use crate::platform::route::{ipv4_relay_addresses, setup_ipv4_routing_table};
+use crate::platform::route::{delete_route_entry, ipv4_relay_addresses, setup_ipv4_routing_table};
 use ipnet::IpNet;
 use std::io;
 use std::net::Ipv4Addr;
@@ -68,7 +67,10 @@ impl TunConfigure {
             return Err(self.rollback_kill_switch(error));
         }
         if let Err(e) = self.enable_routing_table() {
-            self.disable_dns();
+            let e = match self.disable_dns() {
+                Ok(()) => e,
+                Err(rollback) => io::Error::other(format!("{e}; DNS rollback failed: {rollback}")),
+            };
             return Err(self.rollback_kill_switch(e));
         }
         #[cfg(target_os = "linux")]
@@ -99,7 +101,7 @@ impl TunConfigure {
         }
 
         let route_result = self.disable_routing_table();
-        self.disable_dns();
+        let dns_result = self.disable_dns();
         // If route cleanup failed, retain the kill switch. Removing it while a partially
         // configured routing table remains would turn a cleanup failure into a traffic leak.
         let kill_switch_result = if route_result.is_ok() {
@@ -107,7 +109,10 @@ impl TunConfigure {
         } else {
             Ok(())
         };
-        let result = combine_results(route_result, kill_switch_result);
+        let result = combine_results(
+            combine_results(route_result, dns_result),
+            kill_switch_result,
+        );
         if show_log {
             match &result {
                 Ok(()) => tracing::info!("Tun mode has been disabled"),
@@ -118,9 +123,36 @@ impl TunConfigure {
     }
 
     pub fn get_status(&self) -> bool {
-        self.dns_handle.is_some() && self.routing_table_flag
+        #[cfg(windows)]
+        let dns_active = self
+            .dns_handle
+            .as_ref()
+            .is_some_and(SystemDnsHandle::is_active);
+        #[cfg(not(windows))]
+        let dns_active = self.dns_handle.is_some();
+        dns_active && self.routing_table_flag
     }
 
+    #[cfg(windows)]
+    fn enable_dns(&mut self) -> io::Result<()> {
+        check_rootless!(self, Ok(()));
+        if self
+            .dns_handle
+            .as_ref()
+            .is_some_and(SystemDnsHandle::is_active)
+        {
+            return Ok(());
+        }
+        // Finish any previous rollback before taking a fresh snapshot.
+        self.disable_dns()?;
+        self.dns_handle = Some(SystemDnsHandle::prepare(
+            &self.device_name,
+            &self.outbound_name,
+        )?);
+        self.dns_handle.as_mut().unwrap().apply(self.dns_addr)
+    }
+
+    #[cfg(not(windows))]
     fn enable_dns(&mut self) -> io::Result<()> {
         check_rootless!(self, Ok(()));
         if self.dns_handle.is_none() {
@@ -142,9 +174,16 @@ impl TunConfigure {
         Ok(())
     }
 
-    fn disable_dns(&mut self) {
-        check_rootless!(self, ());
-        self.dns_handle = None
+    fn disable_dns(&mut self) -> io::Result<()> {
+        check_rootless!(self, Ok(()));
+        #[cfg(windows)]
+        if let Some(handle) = &mut self.dns_handle {
+            // Keep the snapshot in self on failure, allowing a subsequent off
+            // request or shutdown to retry restoration.
+            handle.restore()?;
+        }
+        self.dns_handle = None;
+        Ok(())
     }
 
     fn disable_routing_table(&mut self) -> io::Result<()> {
@@ -152,7 +191,7 @@ impl TunConfigure {
         let mut first_error = None;
         if self.routing_table_flag {
             for item in ipv4_relay_addresses() {
-                if let Err(error) = platform::delete_route_entry(IpNet::V4(item))
+                if let Err(error) = delete_route_entry(IpNet::V4(item), &self.device_name)
                     && first_error.is_none()
                 {
                     first_error = Some(error);
@@ -200,7 +239,7 @@ fn combine_results(first: io::Result<()>, second: io::Result<()>) -> io::Result<
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
         (Err(first), Err(second)) => Err(io::Error::other(format!(
-            "route cleanup failed ({first}); kill-switch cleanup failed ({second})"
+            "TUN cleanup failed ({first}); additional cleanup failure ({second})"
         ))),
     }
 }

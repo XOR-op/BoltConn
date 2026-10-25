@@ -55,17 +55,11 @@ pub(crate) fn parse_paths(
     cert: &Option<PathBuf>,
 ) -> Result<(PathBuf, PathBuf, PathBuf), FileError> {
     let config_path = match config {
-        None => {
-            let home = PathBuf::from(std::env::var("HOME")?);
-            home.join(".config").join("boltconn")
-        }
+        None => default_config_path()?,
         Some(p) => p.clone(),
     };
     let data_path = match app_data {
-        None => {
-            let home = PathBuf::from(std::env::var("HOME")?);
-            home.join(".local").join("share").join("boltconn")
-        }
+        None => default_data_path()?,
         Some(p) => p.clone(),
     };
     let cert_path = match cert {
@@ -73,4 +67,27 @@ pub(crate) fn parse_paths(
         Some(p) => p.clone(),
     };
     Ok((config_path, data_path, cert_path))
+}
+
+fn environment_path(name: &'static str) -> Result<PathBuf, FileError> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or(FileError::Env(name))
+}
+
+pub(crate) fn default_config_path() -> Result<PathBuf, FileError> {
+    #[cfg(windows)]
+    let base = environment_path("APPDATA")?;
+    #[cfg(not(windows))]
+    let base = environment_path("HOME")?.join(".config");
+    Ok(base.join("boltconn"))
+}
+
+pub(crate) fn default_data_path() -> Result<PathBuf, FileError> {
+    #[cfg(windows)]
+    let base = environment_path("LOCALAPPDATA")?;
+    #[cfg(not(windows))]
+    let base = environment_path("HOME")?.join(".local").join("share");
+    Ok(base.join("boltconn"))
 }

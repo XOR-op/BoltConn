@@ -1,5 +1,7 @@
 use crate::common::StreamOutboundTrait;
 use crate::common::cbor::CborCodec;
+#[cfg(windows)]
+use crate::common::windows_pipe::PipeSecurity;
 use crate::external::Controller;
 use crate::proxy::error::SystemError;
 use boltapi::multiplex::rpc_multiplex_twoway;
@@ -21,7 +23,7 @@ use tarpc::tokio_util::codec::LengthDelimitedCodec;
 #[cfg(unix)]
 use tokio::net::UnixListener;
 #[cfg(windows)]
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use tokio::net::windows::named_pipe::NamedPipeServer;
 
 pub struct UnixListenerGuard {
     path: String,
@@ -30,6 +32,8 @@ pub struct UnixListenerGuard {
     listener: Option<UnixListener>,
     #[cfg(windows)]
     listener: tokio::sync::Mutex<NamedPipeServer>,
+    #[cfg(windows)]
+    security: PipeSecurity,
 }
 
 impl UnixListenerGuard {
@@ -54,13 +58,14 @@ impl UnixListenerGuard {
         }
         #[cfg(windows)]
         {
-            let listener = ServerOptions::new()
-                .first_pipe_instance(true)
-                .create(path)
+            let security = PipeSecurity::new().map_err(SystemError::Controller)?;
+            let listener = security
+                .create(path, true)
                 .map_err(SystemError::Controller)?;
             Ok(Self {
                 path: path.to_string(),
                 listener: tokio::sync::Mutex::new(listener),
+                security,
             })
         }
     }
@@ -74,7 +79,7 @@ impl UnixListenerGuard {
             let mut listener_guard = self.listener.lock().await;
             listener_guard.connect().await?;
             // ensure there are always at least one server alive
-            let mut new_listener = ServerOptions::new().create(&self.path)?;
+            let mut new_listener = self.security.create(&self.path, false)?;
             // swap the listener so the established connection can be returned
             mem::swap(&mut *listener_guard, &mut new_listener);
             Ok(new_listener)

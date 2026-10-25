@@ -23,6 +23,8 @@ pub mod host_matcher;
 mod hostname_parse;
 mod sync;
 pub mod utils;
+#[cfg(windows)]
+pub(crate) mod windows_pipe;
 
 pub(crate) use domain_name::is_valid_domain_name;
 pub(crate) use hostname_parse::{parse_http_host, parse_tls_sni};

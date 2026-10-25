@@ -809,7 +809,8 @@ fn parse_two_inbound_service(
 pub(crate) fn app_uds_addr(rootless_mode: bool) -> String {
     #[cfg(target_os = "windows")]
     {
-        r"\\.\pipe\boltconn"
+        let _ = rootless_mode;
+        r"\\.\pipe\boltconn".to_string()
     }
     #[cfg(not(target_os = "windows"))]
     {

@@ -1,6 +1,7 @@
 use crate::network::packet::icmp::Icmpv4Pkt;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use tokio::net::UdpSocket;
 
@@ -11,6 +12,19 @@ pub struct IcmpProxy {
 }
 
 impl IcmpProxy {
+    #[cfg(windows)]
+    pub fn new(
+        _tun_addr: Ipv4Addr,
+        _outbound_iface: &str,
+        _tun_rx: flume::Receiver<Icmpv4Pkt>,
+    ) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "ICMP proxying is not supported on Windows",
+        ))
+    }
+
+    #[cfg(not(windows))]
     pub fn new(
         tun_addr: Ipv4Addr,
         outbound_iface: &str,
@@ -34,15 +48,6 @@ impl IcmpProxy {
         crate::platform::set_fwmark(socket.as_raw_fd())?;
         #[cfg(not(target_os = "windows"))]
         crate::platform::bind_to_device(socket.as_raw_fd(), outbound_iface)?;
-        #[cfg(target_os = "windows")]
-        {
-            use crate::common::io_err;
-            use crate::platform::get_iface_address;
-            let IpAddr::V4(local_addr) = get_iface_address(outbound_iface)? else {
-                return Err(io_err("not ipv4"));
-            };
-            socket.bind(&SocketAddr::new(local_addr.into(), 0).into())?;
-        }
         let socket = UdpSocket::from_std(socket.into())?;
         Ok(Self {
             tun_addr,

@@ -163,27 +163,24 @@ pub fn get_tag_for_pid(pid: i32) -> Option<String> {
 #[cfg(target_os = "windows")]
 pub fn get_tag_for_pid(pid: i32) -> Option<String> {
     use windows::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
-    use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-    use windows::Win32::{
-        Foundation::CloseHandle,
-        System::Threading::{
-            OpenProcess, PEB, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
-            PROCESS_VM_READ, RTL_USER_PROCESS_PARAMETERS,
-        },
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
     };
 
     unsafe {
-        let handle = OpenProcess(
-            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-            false,
-            pid as u32,
-        )
-        .ok()?;
+        let handle = super::windows::ProcessHandle(
+            OpenProcess(
+                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                false,
+                pid as u32,
+            )
+            .ok()?,
+        );
 
         let mut basic_info: PROCESS_BASIC_INFORMATION = std::mem::zeroed();
         let mut ret_len = 0u32;
         if NtQueryInformationProcess(
-            handle,
+            handle.0,
             ProcessBasicInformation,
             &mut basic_info as *mut _ as *mut _,
             std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
@@ -191,73 +188,11 @@ pub fn get_tag_for_pid(pid: i32) -> Option<String> {
         )
         .is_err()
         {
-            let _ = CloseHandle(handle);
             return None;
         }
 
-        let peb: PEB = read_vm(handle, basic_info.PebBaseAddress)?;
-        let params: RTL_USER_PROCESS_PARAMETERS = read_vm(handle, peb.ProcessParameters)?;
-
-        // Environment block is a sequence of null-terminated UTF-16 "KEY=VALUE\0" strings,
-        // terminated by an extra \0.
-        let env_ptr = params.Environment as *const u16;
-        let env_size = params.EnvironmentSize as usize / 2; // bytes → u16 count
-        let mut env_buf = vec![0u16; env_size];
-        ReadProcessMemory(
-            handle,
-            env_ptr as *const _,
-            env_buf.as_mut_ptr() as *mut _,
-            params.EnvironmentSize as usize,
-            None,
-        )
-        .ok()?;
-
-        let _ = CloseHandle(handle);
-
-        const KEY: &str = "BOLTCONN_TAG=";
-        // Scan the environment block for our key.
-        let mut i = 0usize;
-        while i < env_buf.len() {
-            // Find the end of this entry.
-            let end = env_buf[i..].iter().position(|&c| c == 0).map(|p| i + p)?;
-            let entry = String::from_utf16_lossy(&env_buf[i..end]);
-            if let Some(value) = entry.strip_prefix(KEY) {
-                let bytes = URL_SAFE_NO_PAD.decode(value).ok()?;
-                return String::from_utf8(bytes).ok();
-            }
-            i = end + 1;
-            if i >= env_buf.len() || env_buf[i] == 0 {
-                break;
-            }
-        }
-        None
+        super::windows_memory::read_parameters(handle.0, basic_info.PebBaseAddress)?.tag(handle.0)
     }
-}
-
-#[cfg(target_os = "windows")]
-unsafe fn read_vm<T: Sized>(
-    handle: windows::Win32::Foundation::HANDLE,
-    addr: *const T,
-) -> Option<T> {
-    use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-    let mut buf: T = unsafe { std::mem::zeroed() };
-    unsafe {
-        ReadProcessMemory(
-            handle,
-            addr as *const _,
-            &mut buf as *mut _ as *mut _,
-            std::mem::size_of::<T>(),
-            None,
-        )
-        .ok()?;
-    }
-    Some(buf)
-}
-
-/// Set the `BOLTCONN_TAG` environment variable before spawning a child (Windows only).
-#[cfg(target_os = "windows")]
-pub fn setup_tag_env(encoded_tag: &str) {
-    std::env::set_var("BOLTCONN_TAG", encoded_tag);
 }
 
 #[cfg(test)]

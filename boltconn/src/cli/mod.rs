@@ -11,6 +11,7 @@ mod run;
 mod streaming;
 
 use crate::ProgramArgs;
+#[cfg(unix)]
 use crate::app::app_uds_addr;
 use crate::cli::streaming::ConnectionState;
 use anyhow::anyhow;
@@ -107,6 +108,7 @@ pub(crate) enum TunOptions {
 
 #[derive(Debug, Args)]
 pub(crate) struct CertOptions {
+    /// Certificate directory. Defaults to the platform's application data directory, under cert
     #[arg(short, long)]
     path: Option<PathBuf>,
     #[arg(long)]
@@ -373,9 +375,12 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 exit(-1)
             } else {
                 fn fetch_path() -> anyhow::Result<PathBuf> {
-                    let p = PathBuf::from(std::env::var("HOME")?).join(".local/share/boltconn");
+                    let p = crate::config::default_data_path()?;
                     if !p.exists() {
-                        Err(anyhow!("${{HOME}}/.local/share/boltconn does not exist"))?;
+                        Err(anyhow!(
+                            "Data path {} does not exist; run `boltconn generate init` first",
+                            p.display()
+                        ))?;
                     }
                     let p = p.join("cert");
                     if !p.exists() {
@@ -414,11 +419,20 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 eprintln!("Must be run with root/admin privilege");
                 exit(-1)
             } else {
+                // On Windows this also refuses cleanup while a daemon owns the
+                // kill switch, before any of that daemon's routes are touched.
+                #[cfg(windows)]
+                if let Err(error) = clean::clean_kill_switch() {
+                    eprintln!("Failed to clean kill-switch firewall state: {error}");
+                    exit(-1)
+                }
                 clean::clean_route_table();
+                #[cfg(not(windows))]
                 let firewall_result = clean::clean_kill_switch();
                 clean::remove_unix_socket(unix_default_path);
                 clean::remove_unix_socket(unix_rootless_fallback_path);
                 clean::remove_unix_socket(crate::app::app_uds_addr(true));
+                #[cfg(not(windows))]
                 if let Err(error) = firewall_result {
                     eprintln!("Failed to clean kill-switch firewall state: {error}");
                     exit(-1)
@@ -451,14 +465,18 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
             let options = match &command {
                 ConfigOptions::Check(options) | ConfigOptions::Explain(options) => options,
             };
-            let (config_path, _, _) =
-                match crate::config::parse_paths(&options.config, &None, &None) {
-                    Ok(paths) => paths,
-                    Err(error) => {
-                        eprintln!("Failed to resolve config path: {error}");
-                        exit(-1)
-                    }
-                };
+            let config_path = match options
+                .config
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(crate::config::default_config_path)
+            {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("Failed to resolve config path: {error}");
+                    exit(-1)
+                }
+            };
             if !config_path.try_exists().is_ok_and(|exists| exists) {
                 eprintln!("Config path {} not found", config_path.display());
                 exit(-1)

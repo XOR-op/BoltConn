@@ -189,11 +189,18 @@ On macOS, the switch is installed in the `com.apple/boltconn` PF anchor. Root-ow
 allowed to bypass it. Traffic on the `awdl0` interface is allowed for local peer-to-peer services
 such as AirDrop. Apple's `_captiveagent` daemon is also allowed to use the physical interface so
 macOS can detect captive networks. BoltConn keeps its own PF enable reference and does not replace
-the system ruleset. Windows accepts the setting but implements it as a no-op.
+the system ruleset.
+
+On Windows, the switch uses native Windows Filtering Platform (WFP) rules for outbound
+IPv4 and IPv6 TCP/UDP connections. It exempts BoltConn's executable, the TUN next-hop
+interface, loopback, and the LAN destinations above, including their IPv4-mapped IPv6
+forms. Other elevated applications are subject to the switch. Replies to inbound
+connections continue to follow the existing Windows firewall policy. BoltConn's exceptions
+do not override blocking rules from Windows Firewall or other providers.
 
 Firewall setup is mandatory when the switch is enabled: if no usable backend is available, TUN
 enablement fails and previously applied settings are rolled back. A graceful TUN disable or
-shutdown removes the rules. After an ungraceful termination, run `boltconn clean` as root to
+shutdown removes the rules. After an ungraceful termination, run `boltconn clean` as root/admin to
 remove stale routes and BoltConn-owned firewall state. Like other inbound settings, changing
 `kill-switch` requires restarting BoltConn.
 
@@ -297,7 +304,11 @@ dns:
 4. **DHCP DNS:**
    ```yaml
    - "dhcp, en0"  # Use DNS from interface en0
+   # Windows: use the friendly adapter name, e.g. "dhcp, Ethernet"
    ```
+   Windows uses the DHCP client's option 6, independently of a static/TUN DNS
+   override, and selects the first usable IPv4 server. Discovery runs in the
+   background; an unavailable DHCP server is retried when the resolver is used.
 
 ### Advanced DNS Options
 

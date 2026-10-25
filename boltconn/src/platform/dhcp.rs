@@ -82,25 +82,6 @@ pub fn get_dhcp_dns(iface_name: &str) -> Result<IpAddr, DnsError> {
     get_dhcp_dns_impl(iface_name)
 }
 
-#[cfg(target_os = "windows")]
-pub fn get_dhcp_dns(iface_name: &str) -> Result<IpAddr, DnsError> {
-    // spawn a thread calling get_dhcp_dns_impl with a timeout
-    let iface_name = iface_name.to_string();
-    let handle = std::thread::spawn(move || get_dhcp_dns_impl(&iface_name));
-    let start = std::time::Instant::now();
-    while start.elapsed() < READ_TIMEOUT {
-        if handle.is_finished() {
-            return handle
-                .join()
-                .map_err(|_| DnsError::DhcpNameServer("dhcp thread"))?;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    Err(DnsError::DhcpNameServer(
-        "timeout waiting for DHCP response",
-    ))
-}
-
 fn get_dhcp_dns_impl(iface_name: &str) -> Result<IpAddr, DnsError> {
     let interface = pnet_datalink::interfaces()
         .into_iter()
