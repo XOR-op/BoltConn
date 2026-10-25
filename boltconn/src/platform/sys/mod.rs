@@ -63,10 +63,12 @@ pub fn get_iface(name: &str) -> Option<pnet_datalink::NetworkInterface> {
 #[cfg(windows)]
 mod windows_interface;
 #[cfg(windows)]
-pub use windows_interface::{bind_to_interface_v4, get_default_v4_route, get_iface_address};
+pub use windows_interface::{
+    bind_to_interface_v4, bind_to_interface_v6, get_default_v4_route, get_iface_address,
+};
 
 #[cfg(windows)]
-pub(crate) use windows_interface::{get_iface_guid, get_iface_index};
+pub(crate) use windows_interface::{get_iface_guid, get_iface_index, get_iface_luid};
 
 #[cfg(windows)]
 mod windows_dns;

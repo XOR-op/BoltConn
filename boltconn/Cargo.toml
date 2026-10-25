@@ -142,6 +142,7 @@ windows = { version = "0.58.0", features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_NetworkManagement_Dhcp",
     "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Networking_WinSock",
     "Wdk",
     "Wdk_System",
@@ -152,6 +153,7 @@ windows = { version = "0.58.0", features = [
     "Win32_System_Kernel",
     "Win32_System_ProcessStatus",
     "Win32_System_Registry",
+    "Win32_System_Rpc",
     "Win32_Devices_DeviceAndDriverInstallation",
 ] }
 wintun = { version = "0.5.0", features = ["panic_on_unsent_packets"] }

@@ -10,8 +10,9 @@ use windows::Win32::{
         GetAdaptersAddresses, GetBestRoute2, IP_ADAPTER_ADDRESSES_LH, MIB_IPFORWARD_ROW2,
     },
     Networking::WinSock::{
-        AF_INET, IP_UNICAST_IF, IPPROTO_IP, IpDadStateDeprecated, IpDadStatePreferred, SOCKADDR_IN,
-        SOCKADDR_INET, SOCKET, SOCKET_ERROR, WSAGetLastError, setsockopt,
+        AF_INET, AF_UNSPEC, IP_UNICAST_IF, IPPROTO_IP, IPPROTO_IPV6, IPV6_UNICAST_IF,
+        IpDadStateDeprecated, IpDadStatePreferred, SOCKADDR_IN, SOCKADDR_INET, SOCKET,
+        SOCKET_ERROR, WSAGetLastError, setsockopt,
     },
 };
 
@@ -19,6 +20,7 @@ use windows::Win32::{
 struct Interface {
     name: String,
     index: u32,
+    ipv6_index: u32,
     addresses: Vec<Ipv4Addr>,
 }
 
@@ -32,7 +34,7 @@ fn interfaces() -> io::Result<Vec<Interface>> {
         let head = storage.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
         let result = unsafe {
             GetAdaptersAddresses(
-                AF_INET.0 as u32,
+                AF_UNSPEC.0 as u32,
                 GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
                 None,
                 Some(head),
@@ -74,6 +76,7 @@ fn interfaces() -> io::Result<Vec<Interface>> {
                 result.push(Interface {
                     name: adapter.FriendlyName.to_string().map_err(io::Error::other)?,
                     index: adapter.Anonymous1.Anonymous.IfIndex,
+                    ipv6_index: adapter.Ipv6IfIndex,
                     addresses,
                 });
                 current = adapter.Next;
@@ -109,7 +112,18 @@ pub(crate) fn get_iface_index(name: &str) -> io::Result<u32> {
     Ok(index)
 }
 
-pub(super) fn get_iface_luid(
+pub(crate) fn get_iface_index_v6(name: &str) -> io::Result<u32> {
+    let index = interface(name)?.ipv6_index;
+    if index == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "interface has no IPv6 index",
+        ));
+    }
+    Ok(index)
+}
+
+pub(crate) fn get_iface_luid(
     name: &str,
 ) -> io::Result<windows::Win32::NetworkManagement::Ndis::NET_LUID_LH> {
     use windows::Win32::NetworkManagement::{
@@ -209,6 +223,24 @@ pub fn bind_to_interface_v4(socket: RawSocket, name: &str) -> io::Result<()> {
     Ok(())
 }
 
+pub fn bind_to_interface_v6(socket: RawSocket, name: &str) -> io::Result<u32> {
+    let index = get_iface_index_v6(name)?;
+    // IPv6 takes host byte order, unlike IP_UNICAST_IF. Let Windows choose a
+    // suitable source address on this interface (including privacy addresses).
+    let result = unsafe {
+        setsockopt(
+            SOCKET(socket as usize),
+            IPPROTO_IPV6.0,
+            IPV6_UNICAST_IF,
+            Some(&index.to_ne_bytes()),
+        )
+    };
+    if result == SOCKET_ERROR {
+        return Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }.0));
+    }
+    Ok(index)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +292,66 @@ mod tests {
                 .kind(),
             io::ErrorKind::NotFound
         );
+        assert_eq!(
+            get_iface_index_v6("boltconn-nonexistent-interface")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn ipv6_interface_binding_and_tcp() {
+        let loopback = interfaces()
+            .unwrap()
+            .into_iter()
+            .find(|iface| iface.addresses.iter().any(Ipv4Addr::is_loopback))
+            .unwrap();
+        let socket = tokio::net::TcpSocket::new_v6().unwrap();
+        assert_eq!(
+            bind_to_interface_v6(socket.as_raw_socket(), &loopback.name).unwrap(),
+            loopback.ipv6_index
+        );
+        let mut index = 0u32;
+        let mut length = mem::size_of::<u32>() as i32;
+        assert_eq!(
+            unsafe {
+                getsockopt(
+                    SOCKET(socket.as_raw_socket() as usize),
+                    IPPROTO_IPV6.0,
+                    IPV6_UNICAST_IF,
+                    PSTR((&mut index as *mut u32).cast()),
+                    &mut length,
+                )
+            },
+            0
+        );
+        assert_eq!(index, loopback.ipv6_index);
+        let listener = tokio::net::TcpListener::bind("[::1]:0").await.unwrap();
+        let connected = socket
+            .connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        assert!(connected.local_addr().unwrap().is_ipv6());
+        assert!(listener.accept().await.unwrap().1.is_ipv6());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a reachable IPv6 TCP endpoint on the selected interface"]
+    async fn live_ipv6_tcp_egress() {
+        let iface = std::env::var("BOLTCONN_TEST_INTERFACE").unwrap();
+        let target = std::env::var("BOLTCONN_TEST_IPV6_TCP")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::network::egress::Egress::new(&iface).tcp_stream(target),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(stream.local_addr().unwrap().is_ipv6());
     }
 
     #[test]

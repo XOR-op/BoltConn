@@ -58,11 +58,18 @@ impl Egress {
     }
 
     #[cfg(windows)]
-    async fn tcpv6_stream(&self, _addr: SocketAddr) -> Result<TcpStream> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "IPv6 egress is not supported on Windows",
-        ))
+    async fn tcpv6_stream(&self, mut addr: SocketAddr) -> Result<TcpStream> {
+        let socket = TcpSocket::new_v6()?;
+        let index = platform::bind_to_interface_v6(socket.as_raw_socket(), &self.iface_name)?;
+        if let SocketAddr::V6(ref mut destination) = addr {
+            if destination.scope_id() != 0 && destination.scope_id() != index {
+                return Err(io_err("IPv6 scope does not match the outbound interface"));
+            }
+            if destination.ip().is_unicast_link_local() {
+                destination.set_scope_id(index);
+            }
+        }
+        socket.connect(addr).await
     }
 
     #[cfg(not(windows))]
@@ -96,7 +103,7 @@ impl Egress {
     pub async fn udpv6_socket(&self) -> Result<UdpSocket> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "IPv6 egress is not supported on Windows",
+            "IPv6 UDP egress is not supported on Windows",
         ))
     }
 

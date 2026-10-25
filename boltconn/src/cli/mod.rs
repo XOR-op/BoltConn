@@ -419,11 +419,20 @@ pub(crate) async fn controller_main(args: ProgramArgs) -> ! {
                 eprintln!("Must be run with root/admin privilege");
                 exit(-1)
             } else {
+                // On Windows this also refuses cleanup while a daemon owns the
+                // kill switch, before any of that daemon's routes are touched.
+                #[cfg(windows)]
+                if let Err(error) = clean::clean_kill_switch() {
+                    eprintln!("Failed to clean kill-switch firewall state: {error}");
+                    exit(-1)
+                }
                 clean::clean_route_table();
+                #[cfg(not(windows))]
                 let firewall_result = clean::clean_kill_switch();
                 clean::remove_unix_socket(unix_default_path);
                 clean::remove_unix_socket(unix_rootless_fallback_path);
                 clean::remove_unix_socket(crate::app::app_uds_addr(true));
+                #[cfg(not(windows))]
                 if let Err(error) = firewall_result {
                     eprintln!("Failed to clean kill-switch firewall state: {error}");
                     exit(-1)
