@@ -24,10 +24,16 @@ pub struct TunDevice {
     gw_name: String,
     // (addr, mask)
     addr: Option<Ipv4Net>,
+    packet_loop: TunPacketLoop,
+    ipv6_enabled: bool,
+}
+
+// Keep packet processing independent of interface setup so it can be exercised
+// with packet-oriented test I/O without changing the host network.
+struct TunPacketLoop {
     session_mgr: Arc<MappingSessionManager>,
     udp_tx: flume::Sender<Bytes>,
     udp_rx: flume::Receiver<Bytes>,
-    ipv6_enabled: bool,
     icmp_proxy_enabled: bool,
 }
 
@@ -46,11 +52,13 @@ impl TunDevice {
             dev_name: name,
             gw_name: outbound_iface.parse().unwrap(),
             addr: None,
-            session_mgr,
-            udp_tx,
-            udp_rx,
+            packet_loop: TunPacketLoop {
+                session_mgr,
+                udp_tx,
+                udp_rx,
+                icmp_proxy_enabled,
+            },
             ipv6_enabled,
-            icmp_proxy_enabled,
         })
     }
 
@@ -58,6 +66,54 @@ impl TunDevice {
         &self.dev_name
     }
 
+    /// Due to API compatibility of OS, we can only set AF_INET addresses.
+    /// See https://man7.org/linux/man-pages/man7/netdevice.7.html
+    pub fn set_network_address(&mut self, addr: Ipv4Net) -> io::Result<()> {
+        self.addr = Some(addr);
+        self.inner.set_address(self.get_name(), addr)
+    }
+
+    pub fn up(&self) -> io::Result<()> {
+        if self.addr.is_none() {
+            return Err(io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                "No available address to up iface",
+            ));
+        }
+        self.inner.interface_up(self.get_name())?;
+        tracing::event!(
+            tracing::Level::INFO,
+            "TUN Device {} is up.",
+            self.get_name()
+        );
+        Ok(())
+    }
+
+    pub async fn run(mut self, nat_addr: SocketAddr) {
+        let nat_addr = if let SocketAddr::V4(addr) = nat_addr {
+            addr
+        } else {
+            panic!("v6 nat not supported")
+        };
+        let fd = self.inner.take_fd().unwrap();
+        let (tun_tx, icmp_rx) = flume::bounded(100);
+        if self.packet_loop.icmp_proxy_enabled {
+            match network::icmp::IcmpProxy::new(*nat_addr.ip(), self.gw_name.as_str(), icmp_rx) {
+                Ok(proxy) => {
+                    tracing::info!("[TUN] ICMP proxy enabled");
+                    tokio::spawn(proxy.run());
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create ICMP proxy: {:?}", e);
+                }
+            };
+        }
+
+        self.packet_loop.run(fd, nat_addr, tun_tx).await;
+    }
+}
+
+impl TunPacketLoop {
     /// Read a full ip packet from tun device.
     async fn recv_ip<T: AsyncRead>(
         receiver: &mut ReadHalf<T>,
@@ -104,49 +160,13 @@ impl TunDevice {
         }
     }
 
-    /// Due to API compatibility of OS, we can only set AF_INET addresses.
-    /// See https://man7.org/linux/man-pages/man7/netdevice.7.html
-    pub fn set_network_address(&mut self, addr: Ipv4Net) -> io::Result<()> {
-        self.addr = Some(addr);
-        self.inner.set_address(self.get_name(), addr)
-    }
-
-    pub fn up(&self) -> io::Result<()> {
-        if self.addr.is_none() {
-            return Err(io::Error::new(
-                ErrorKind::AddrNotAvailable,
-                "No available address to up iface",
-            ));
-        }
-        self.inner.interface_up(self.get_name())?;
-        tracing::event!(
-            tracing::Level::INFO,
-            "TUN Device {} is up.",
-            self.get_name()
-        );
-        Ok(())
-    }
-
-    pub async fn run(mut self, nat_addr: SocketAddr) {
-        let nat_addr = if let SocketAddr::V4(addr) = nat_addr {
-            addr
-        } else {
-            panic!("v6 nat not supported")
-        };
-        let (mut fd_read, mut fd_write) = split(self.inner.take_fd().unwrap());
-        let (mut tun_tx, icmp_rx) = flume::bounded(100);
-        if self.icmp_proxy_enabled {
-            match network::icmp::IcmpProxy::new(*nat_addr.ip(), self.gw_name.as_str(), icmp_rx) {
-                Ok(proxy) => {
-                    tracing::info!("[TUN] ICMP proxy enabled");
-                    tokio::spawn(proxy.run());
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create ICMP proxy: {:?}", e);
-                }
-            };
-        }
-
+    async fn run<T: AsyncRead + AsyncWrite>(
+        &self,
+        fd: T,
+        nat_addr: SocketAddrV4,
+        mut tun_tx: flume::Sender<Icmpv4Pkt>,
+    ) {
+        let (mut fd_read, mut fd_write) = split(fd);
         tracing::info!("[TUN] Running...");
 
         loop {
@@ -267,3 +287,6 @@ impl TunDevice {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
