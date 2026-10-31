@@ -4,7 +4,7 @@ use crate::network::TunInstance;
 use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::proxy::MappingSessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use ipnet::Ipv4Net;
 use network::packet::ip::IPPkt;
 use smoltcp::wire::IpProtocol;
@@ -117,20 +117,17 @@ impl TunPacketLoop {
     /// Read a full ip packet from tun device.
     async fn recv_ip<T: AsyncRead>(
         receiver: &mut ReadHalf<T>,
-        mut handle: BytesMut,
+        handle: &mut BytesMut,
     ) -> io::Result<IPPkt> {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
         // And we are guaranteed to read a full packet when fd is ready.
-        let raw_buffer = handle.chunk_mut();
-        let len = receiver
-            .read(unsafe {
-                core::mem::transmute::<&mut [std::mem::MaybeUninit<u8>], &mut [u8]>(
-                    raw_buffer.as_uninit_slice_mut(),
-                )
-            })
-            .await?;
-        unsafe { handle.advance_mut(len) };
+        // Keep ownership in the loop while awaiting readiness: select! may
+        // cancel this receive when a UDP reply arrives. Reserve a full packet
+        // even after the previous buffer was handed to UDP or the ICMP proxy.
+        handle.clear();
+        handle.reserve(MAX_PKT_SIZE);
+        let len = receiver.read_buf(handle).await?;
         // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
         #[cfg(target_os = "macos")]
         let start_offset = 4;
@@ -143,8 +140,8 @@ impl TunPacketLoop {
             ));
         }
         match handle[start_offset] >> 4 {
-            4 => Ok(IPPkt::from_v4(handle, start_offset)),
-            6 => Ok(IPPkt::from_v6(handle, start_offset)),
+            4 => Ok(IPPkt::from_v4(std::mem::take(handle), start_offset)),
+            6 => Ok(IPPkt::from_v6(std::mem::take(handle), start_offset)),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid IP version from TUN",
@@ -169,16 +166,15 @@ impl TunPacketLoop {
         let (mut fd_read, mut fd_write) = split(fd);
         tracing::info!("[TUN] Running...");
 
+        let mut handle = BytesMut::with_capacity(MAX_PKT_SIZE);
         loop {
-            // read an ip packet from tun device
-            let handle = BytesMut::with_capacity(MAX_PKT_SIZE);
             tokio::select! {
-                pkt = Self::recv_ip(&mut fd_read, handle) => {
+                pkt = Self::recv_ip(&mut fd_read, &mut handle) => {
                     let Ok(pkt) = pkt else{
                         tracing::error!("Invalid IP packet received from TUN");
                         break;
                     };
-                    self.forwarding_packet(pkt, &nat_addr, &mut tun_tx, &mut fd_write).await;
+                    handle = self.forwarding_packet(pkt, &nat_addr, &mut tun_tx, &mut fd_write).await;
                 }
                 data = self.udp_rx.recv_async() => {
                     if let Ok(data) = data{
@@ -203,16 +199,18 @@ impl TunPacketLoop {
         }
     }
 
+    // Return storage that is no longer in use so the next receive can reuse it.
+    // Queued packets keep ownership; an empty buffer requests a new allocation.
     async fn forwarding_packet<T: AsyncWrite>(
         &self,
         pkt: IPPkt,
         nat_addr: &SocketAddrV4,
         icmp_tx: &mut flume::Sender<Icmpv4Pkt>,
         fd_write: &mut WriteHalf<T>,
-    ) {
+    ) -> BytesMut {
         if pkt.src_addr().is_ipv6() {
             // todo: not supported now
-            return;
+            return pkt.into_bytes_mut();
         }
         let (src, dst) = match (pkt.src_addr(), pkt.dst_addr()) {
             (IpAddr::V4(src), IpAddr::V4(dst)) => (src, dst),
@@ -250,11 +248,12 @@ impl TunPacketLoop {
                         tracing::warn!("Send to NAT failed");
                     }
                 }
+                pkt.into_bytes_mut()
             }
             IpProtocol::Udp => {
                 if pkt.pkt_total_len() < pkt.ip_header_len() + 8 {
                     // drop invalid UDP packet
-                    return;
+                    return pkt.into_bytes_mut();
                 }
                 let pkt = UdpPkt::new(pkt);
                 let pkt = {
@@ -265,12 +264,15 @@ impl TunPacketLoop {
                     pkt.into_bytes_mut().freeze().slice(start_offset..)
                 };
                 let _ = self.udp_tx.send_async(pkt).await;
-                // }
+                BytesMut::new()
             }
             IpProtocol::Icmp => {
                 if self.icmp_proxy_enabled {
                     let pkt = Icmpv4Pkt::new(pkt);
-                    let _ = icmp_tx.try_send(pkt);
+                    match icmp_tx.try_send(pkt) {
+                        Ok(()) => BytesMut::new(),
+                        Err(err) => err.into_inner().into_bytes_mut(),
+                    }
                 } else {
                     // just echo now
                     let mut pkt = Icmpv4Pkt::new(pkt);
@@ -279,11 +281,11 @@ impl TunPacketLoop {
                         pkt.set_as_reply();
                         let _ = Self::send_ip(fd_write, pkt.ip_pkt()).await;
                     }
+                    pkt.into_bytes_mut()
                 }
             }
-            _ => {
-                // discarded
-            }
+            // Discarded packets can also reuse their storage.
+            _ => pkt.into_bytes_mut(),
         }
     }
 }

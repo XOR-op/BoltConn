@@ -178,3 +178,188 @@ async fn benchmark_tun_tcp_loop() {
         }
     }
 }
+
+#[tokio::test]
+async fn tcp_nat_preserves_packets_in_both_directions() {
+    let (runner, _udp_in, _udp_out) = packet_loop();
+    let (icmp_tx, _icmp_rx) = flume::bounded(16);
+    let mut packets = Vec::new();
+    let mut expected = Vec::new();
+    // Alternate short and maximum-size packets to catch stale lengths or an
+    // undersized recycled buffer. Each direction exercises a different lookup.
+    for size in [40, 65535, 64, 9000, 1500, 40] {
+        packets.push(tcp_packet(CLIENT, REMOTE, size));
+        expected.push(tcp_packet(
+            SocketAddrV4::new(*REMOTE.ip(), CLIENT.port()),
+            NAT,
+            size,
+        ));
+        packets.push(tcp_packet(
+            NAT,
+            SocketAddrV4::new(*REMOTE.ip(), CLIENT.port()),
+            size,
+        ));
+        expected.push(tcp_packet(REMOTE, CLIENT, size));
+    }
+    let mut io = PacketIo::new(packets, expected.len(), true);
+    runner.run(&mut io, NAT, icmp_tx).await;
+    // Byte-for-byte comparison covers addresses, ports, payload and both checksums.
+    assert_eq!(io.output, expected);
+}
+
+fn with_prefix(packet: &[u8]) -> Bytes {
+    let mut result = BytesMut::with_capacity(PREFIX_LEN + packet.len());
+    #[cfg(target_os = "macos")]
+    {
+        result.extend_from_slice(&[0, 0, 0, libc::AF_INET as u8]);
+    }
+    result.extend_from_slice(packet);
+    result.freeze()
+}
+
+fn icmp_packet(reply: bool) -> Bytes {
+    use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
+    let repr = if reply {
+        Icmpv4Repr::EchoReply {
+            ident: 123,
+            seq_no: 456,
+            data: b"test echo",
+        }
+    } else {
+        Icmpv4Repr::EchoRequest {
+            ident: 123,
+            seq_no: 456,
+            data: b"test echo",
+        }
+    };
+    let (src_addr, dst_addr) = if reply {
+        (*REMOTE.ip(), *CLIENT.ip())
+    } else {
+        (*CLIENT.ip(), *REMOTE.ip())
+    };
+    let mut data = BytesMut::zeroed(20 + repr.buffer_len());
+    Ipv4Repr {
+        src_addr,
+        dst_addr,
+        next_header: IpProtocol::Icmp,
+        payload_len: repr.buffer_len(),
+        hop_limit: 64,
+    }
+    .emit(
+        &mut Ipv4Packet::new_unchecked(&mut data[..]),
+        &ChecksumCapabilities::default(),
+    );
+    repr.emit(
+        &mut Icmpv4Packet::new_unchecked(&mut data[20..]),
+        &ChecksumCapabilities::default(),
+    );
+    with_prefix(&data)
+}
+
+#[tokio::test]
+async fn queued_packets_keep_ownership_while_tcp_reuses_its_buffer() {
+    use crate::network::packet::transport_layer::create_raw_udp_pkt;
+    let (mut runner, _udp_in, udp_out) = packet_loop();
+    runner.icmp_proxy_enabled = true;
+    let (icmp_tx, icmp_rx) = flume::bounded(16);
+    let udp1 = create_raw_udp_pkt(b"first UDP packet", CLIENT.into(), REMOTE.into());
+    let udp2 = create_raw_udp_pkt(
+        b"second UDP packet with a different length",
+        CLIENT.into(),
+        REMOTE.into(),
+    );
+    let icmp = icmp_packet(false);
+    let tcp = tcp_packet(CLIENT, REMOTE, 1500);
+    let packets = vec![
+        with_prefix(&udp1),
+        tcp.clone(),
+        icmp.clone(),
+        tcp.clone(),
+        with_prefix(&udp2),
+        tcp,
+    ];
+    let mut io = PacketIo::new(packets, 6, true);
+    runner.run(&mut io, NAT, icmp_tx).await;
+    assert_eq!(io.writes, 3);
+    assert_eq!(udp_out.try_recv().unwrap(), udp1);
+    assert_eq!(udp_out.try_recv().unwrap(), udp2);
+    assert!(udp_out.try_recv().is_err());
+    assert_eq!(icmp_rx.try_recv().unwrap().ip_pkt().raw_data(), icmp);
+    assert!(icmp_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn local_icmp_echo_can_reuse_buffer_for_tcp() {
+    let (runner, _udp_in, _udp_out) = packet_loop();
+    let (icmp_tx, _icmp_rx) = flume::bounded(16);
+    let packets = vec![icmp_packet(false), tcp_packet(CLIENT, REMOTE, 1500)];
+    let mut io = PacketIo::new(packets, 2, true);
+    runner.run(&mut io, NAT, icmp_tx).await;
+    assert_eq!(
+        io.output,
+        vec![
+            icmp_packet(true),
+            tcp_packet(SocketAddrV4::new(*REMOTE.ip(), CLIENT.port()), NAT, 1500)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn cancelled_receive_keeps_its_allocation() {
+    let (io, _peer) = tokio::io::duplex(1);
+    let (mut reader, _writer) = split(io);
+    let mut buffer = BytesMut::with_capacity(MAX_PKT_SIZE);
+    let ptr = buffer.as_ptr();
+    // This models UDP replies winning select! while the TUN has no input.
+    for _ in 0..100 {
+        {
+            let read = TunPacketLoop::recv_ip(&mut reader, &mut buffer);
+            tokio::pin!(read);
+            assert!(futures::poll!(read).is_pending());
+        }
+        assert_eq!(buffer.as_ptr(), ptr);
+        assert!(buffer.is_empty());
+        assert!(buffer.capacity() >= MAX_PKT_SIZE);
+    }
+}
+
+#[tokio::test]
+async fn receive_handles_eof_and_invalid_version() {
+    let mut invalid = vec![0; PREFIX_LEN + 20];
+    invalid[PREFIX_LEN] = 0x70;
+    for (packet, kind) in [
+        (Bytes::from(invalid), io::ErrorKind::InvalidData),
+        (
+            Bytes::from(vec![0; PREFIX_LEN]),
+            io::ErrorKind::UnexpectedEof,
+        ),
+    ] {
+        let io = PacketIo::new(vec![packet], 1, false);
+        let (mut reader, _writer) = split(io);
+        let mut buffer = BytesMut::new();
+        let result = TunPacketLoop::recv_ip(&mut reader, &mut buffer).await;
+        assert_eq!(result.err().unwrap().kind(), kind);
+    }
+}
+
+#[tokio::test]
+async fn forwarding_returns_the_tcp_allocation() {
+    let (runner, _udp_in, _udp_out) = packet_loop();
+    let (mut icmp_tx, _icmp_rx) = flume::bounded(16);
+    let packet = tcp_packet(CLIENT, REMOTE, 1500);
+    let mut buffer = BytesMut::with_capacity(MAX_PKT_SIZE);
+    buffer.extend_from_slice(&packet);
+    let ptr = buffer.as_ptr();
+    let io = PacketIo::new(vec![], 0, false);
+    let (_reader, mut writer) = split(io);
+    let recycled = runner
+        .forwarding_packet(
+            IPPkt::from_v4(buffer, PREFIX_LEN),
+            &NAT,
+            &mut icmp_tx,
+            &mut writer,
+        )
+        .await;
+    assert_eq!(recycled.as_ptr(), ptr);
+    assert!(recycled.capacity() >= MAX_PKT_SIZE);
+}

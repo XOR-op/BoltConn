@@ -35,7 +35,7 @@ impl MappingSessionManager {
         let entry = self
             .tcp_records
             .entry((src_addr.is_ipv6(), src_addr.port()));
-        let mut pair = entry.or_insert(TcpSessionCtl::new(src_addr, dst_addr));
+        let mut pair = entry.or_insert_with(|| TcpSessionCtl::new(src_addr, dst_addr));
         // If original connection silently expired
         if pair.dest_addr != dst_addr {
             tracing::debug!(
