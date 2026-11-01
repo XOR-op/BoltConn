@@ -4,3 +4,6 @@
 .vscode
 _private
 
+# Keep generated data out of commits.
+*.csv
+*.json
