@@ -65,6 +65,19 @@ impl MappingSessionManager {
         }
     }
 
+    /// Packet forwarding only needs the addresses. Keep the liveness handle in
+    /// the map instead of cloning and dropping its Arc for every return packet.
+    pub fn lookup_tcp_session_addrs(
+        &self,
+        is_ipv6: bool,
+        inbound_port: u16,
+    ) -> Result<(SocketAddr, SocketAddr)> {
+        self.tcp_records
+            .get(&(is_ipv6, inbound_port))
+            .map(|s| (s.source_addr, s.dest_addr))
+            .ok_or_else(|| io::Error::new(ErrorKind::AddrNotAvailable, "No record found"))
+    }
+
     /// Evict all expired sessions.
     /// TCP session expires when closed; UDP session expires when timeout.
     pub fn flush(&self) {
@@ -117,6 +130,62 @@ impl MappingSessionManager {
                 entry.insert(ctl);
                 handles
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forwarding_lookup_observes_replacement_and_eviction() {
+        let manager = MappingSessionManager::new();
+        for (src, first, replacement) in [
+            ("10.0.0.2:50000", "203.0.113.7:443", "203.0.113.8:80"),
+            (
+                "[2001:db8::2]:50000",
+                "[2001:db8::7]:443",
+                "[2001:db8::8]:80",
+            ),
+        ] {
+            let src: SocketAddr = src.parse().unwrap();
+            let first: SocketAddr = first.parse().unwrap();
+            let replacement: SocketAddr = replacement.parse().unwrap();
+            let port = manager.register_tcp_session(src, first);
+            let (_, _, old_liveness) = manager.lookup_tcp_session(src.is_ipv6(), port).unwrap();
+            assert_eq!(
+                manager
+                    .lookup_tcp_session_addrs(src.is_ipv6(), port)
+                    .unwrap(),
+                (src, first)
+            );
+            manager.register_tcp_session(src, replacement);
+            assert_eq!(
+                manager
+                    .lookup_tcp_session_addrs(src.is_ipv6(), port)
+                    .unwrap(),
+                (src, replacement)
+            );
+            // An old connection finishing must not evict the replacement.
+            old_liveness.store(0, Ordering::Relaxed);
+            manager.flush();
+            assert_eq!(
+                manager
+                    .lookup_tcp_session_addrs(src.is_ipv6(), port)
+                    .unwrap(),
+                (src, replacement)
+            );
+            let (_, _, liveness) = manager.lookup_tcp_session(src.is_ipv6(), port).unwrap();
+            liveness.store(0, Ordering::Relaxed);
+            manager.flush();
+            assert_eq!(
+                manager
+                    .lookup_tcp_session_addrs(src.is_ipv6(), port)
+                    .unwrap_err()
+                    .kind(),
+                ErrorKind::AddrNotAvailable
+            );
         }
     }
 }

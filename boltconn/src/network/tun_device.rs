@@ -222,9 +222,9 @@ impl TunPacketLoop {
                 let mut pkt = TcpPkt::new(pkt);
                 if *nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                     // outbound->inbound
-                    if let Ok((conn_src, conn_dst, _)) = self
+                    if let Ok((conn_src, conn_dst)) = self
                         .session_mgr
-                        .lookup_tcp_session(pkt.ip_pkt().src_addr().is_ipv6(), pkt.dst_port())
+                        .lookup_tcp_session_addrs(pkt.ip_pkt().src_addr().is_ipv6(), pkt.dst_port())
                     {
                         pkt.rewrite_addr(conn_dst, conn_src);
                         if Self::send_ip(fd_write, pkt.ip_pkt()).await.is_err() {
