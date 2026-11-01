@@ -1,3 +1,4 @@
+use super::checksum::fill_tcp_checksum;
 use crate::network::packet::ip::IPPkt;
 use bytes::BytesMut;
 use smoltcp::phy::ChecksumCapabilities;
@@ -51,7 +52,8 @@ impl TransLayerPkt for TcpPkt {
                 pkt.set_src_port(src_addr.port());
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
-                pkt.fill_checksum(
+                fill_tcp_checksum(
+                    pkt.into_inner(),
                     &IpAddress::Ipv4(*src_addr.ip()),
                     &IpAddress::Ipv4(*dst_addr.ip()),
                 );
@@ -67,7 +69,8 @@ impl TransLayerPkt for TcpPkt {
                 pkt.set_src_port(src_addr.port());
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
-                pkt.fill_checksum(
+                fill_tcp_checksum(
+                    pkt.into_inner(),
                     &IpAddress::Ipv6(*src_addr.ip()),
                     &IpAddress::Ipv6(*dst_addr.ip()),
                 );
