@@ -12,8 +12,7 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite, split};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const ETH_P_IP: u16 = 0x0800;
 const ETH_P_IPV6: u16 = 0x86DD;
@@ -115,8 +114,8 @@ impl TunDevice {
 
 impl TunPacketLoop {
     /// Read a full ip packet from tun device.
-    async fn recv_ip<T: AsyncRead>(
-        receiver: &mut ReadHalf<T>,
+    async fn recv_ip<T: AsyncRead + Unpin>(
+        receiver: &mut T,
         handle: &mut BytesMut,
     ) -> io::Result<IPPkt> {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
@@ -149,7 +148,7 @@ impl TunPacketLoop {
         }
     }
 
-    async fn send_ip<T: AsyncWrite>(sender: &mut WriteHalf<T>, ip_pkt: &IPPkt) -> io::Result<()> {
+    async fn send_ip<T: AsyncWrite + Unpin>(sender: &mut T, ip_pkt: &IPPkt) -> io::Result<()> {
         if sender.write(ip_pkt.raw_data()).await? != ip_pkt.raw_data().len() {
             Err(io::Error::other("Write partial packet"))
         } else {
@@ -157,28 +156,29 @@ impl TunPacketLoop {
         }
     }
 
-    async fn run<T: AsyncRead + AsyncWrite>(
+    async fn run<T: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        fd: T,
+        mut fd: T,
         nat_addr: SocketAddrV4,
         mut tun_tx: flume::Sender<Icmpv4Pkt>,
     ) {
-        let (mut fd_read, mut fd_write) = split(fd);
+        // Reads and writes run sequentially in this task. Keep a single owner
+        // instead of taking the mutex in tokio::io::split for every operation.
         tracing::info!("[TUN] Running...");
 
         let mut handle = BytesMut::with_capacity(MAX_PKT_SIZE);
         loop {
             tokio::select! {
-                pkt = Self::recv_ip(&mut fd_read, &mut handle) => {
+                pkt = Self::recv_ip(&mut fd, &mut handle) => {
                     let Ok(pkt) = pkt else{
                         tracing::error!("Invalid IP packet received from TUN");
                         break;
                     };
-                    handle = self.forwarding_packet(pkt, &nat_addr, &mut tun_tx, &mut fd_write).await;
+                    handle = self.forwarding_packet(pkt, &nat_addr, &mut tun_tx, &mut fd).await;
                 }
                 data = self.udp_rx.recv_async() => {
                     if let Ok(data) = data{
-                        Self::backwarding_udp_v4(data, &mut fd_write).await;
+                        Self::backwarding_udp_v4(data, &mut fd).await;
                     } else {
                         break;
                     }
@@ -187,7 +187,7 @@ impl TunPacketLoop {
         }
     }
 
-    async fn backwarding_udp_v4<T: AsyncWrite>(packet: Bytes, fd_write: &mut WriteHalf<T>) {
+    async fn backwarding_udp_v4<T: AsyncWrite + Unpin>(packet: Bytes, fd_write: &mut T) {
         #[cfg(not(target_os = "macos"))]
         let _ = fd_write.write_all(packet.as_ref()).await;
         #[cfg(target_os = "macos")]
@@ -201,12 +201,12 @@ impl TunPacketLoop {
 
     // Return storage that is no longer in use so the next receive can reuse it.
     // Queued packets keep ownership; an empty buffer requests a new allocation.
-    async fn forwarding_packet<T: AsyncWrite>(
+    async fn forwarding_packet<T: AsyncWrite + Unpin>(
         &self,
         pkt: IPPkt,
         nat_addr: &SocketAddrV4,
         icmp_tx: &mut flume::Sender<Icmpv4Pkt>,
-        fd_write: &mut WriteHalf<T>,
+        fd_write: &mut T,
     ) -> BytesMut {
         if pkt.src_addr().is_ipv6() {
             // todo: not supported now

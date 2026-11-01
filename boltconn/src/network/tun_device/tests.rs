@@ -4,7 +4,7 @@ use smoltcp::wire::{Ipv4Packet, Ipv4Repr, TcpPacket};
 use std::hint::black_box;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::ReadBuf;
+use tokio::io::{ReadBuf, split};
 
 const CLIENT: SocketAddrV4 = SocketAddrV4::new(std::net::Ipv4Addr::new(10, 0, 0, 2), 50000);
 const REMOTE: SocketAddrV4 = SocketAddrV4::new(std::net::Ipv4Addr::new(203, 0, 113, 7), 443);
@@ -362,4 +362,79 @@ async fn forwarding_returns_the_tcp_allocation() {
         .await;
     assert_eq!(recycled.as_ptr(), ptr);
     assert!(recycled.capacity() >= MAX_PKT_SIZE);
+}
+
+#[tokio::test]
+async fn udp_reply_cancels_idle_read_then_tcp_resumes_on_the_same_io() {
+    use crate::network::packet::transport_layer::create_raw_udp_pkt;
+    let (runner, udp_in, _udp_out) = packet_loop();
+    let (icmp_tx, _icmp_rx) = flume::bounded(16);
+    // Exchange one complete packet at a time so the duplex stream supplies the
+    // same read boundaries as a TUN. Its capacity holds even the largest packet.
+    let (io, mut peer) = tokio::io::duplex(MAX_PKT_SIZE);
+    let task = tokio::spawn(async move { runner.run(io, NAT, icmp_tx).await });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::task::yield_now().await;
+        let reply =
+            create_raw_udp_pkt(b"UDP reply while TUN is idle", REMOTE.into(), CLIENT.into());
+        udp_in.send_async(reply.clone().freeze()).await.unwrap();
+        let expected = with_prefix(&reply);
+        let mut actual = vec![0; expected.len()];
+        peer.read_exact(&mut actual).await.unwrap();
+        assert_eq!(actual, expected);
+
+        let input = tcp_packet(CLIENT, REMOTE, 1500);
+        peer.write_all(&input).await.unwrap();
+        let expected = tcp_packet(SocketAddrV4::new(*REMOTE.ip(), CLIENT.port()), NAT, 1500);
+        let mut actual = vec![0; expected.len()];
+        peer.read_exact(&mut actual).await.unwrap();
+        assert_eq!(actual, expected);
+        drop(peer);
+        task.await.unwrap();
+    })
+    .await
+    .expect("TUN loop stalled when switching between reads and writes");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn tcp_nat_over_real_packet_fd() {
+    use crate::common::async_raw_fd::AsyncRawFd;
+    use std::os::fd::AsRawFd;
+
+    let (runner, udp_in, _udp_out) = packet_loop();
+    let (icmp_tx, _icmp_rx) = flume::bounded(16);
+    let (socket, peer) = std::os::unix::net::UnixDatagram::pair().unwrap();
+    let fd = AsyncRawFd::try_from(socket.as_raw_fd()).unwrap();
+    peer.set_nonblocking(true).unwrap();
+    let peer = tokio::net::UnixDatagram::from_std(peer).unwrap();
+    let task = tokio::spawn(async move {
+        // AsyncRawFd registers a raw fd without closing it. Keep its owner alive
+        // until the packet loop has dropped the readiness registration.
+        let _owner = socket;
+        runner.run(fd, NAT, icmp_tx).await;
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut response = vec![0; MAX_PKT_SIZE];
+        for size in [40, 1500] {
+            for (input, expected) in [
+                (
+                    tcp_packet(CLIENT, REMOTE, size),
+                    tcp_packet(SocketAddrV4::new(*REMOTE.ip(), CLIENT.port()), NAT, size),
+                ),
+                (
+                    tcp_packet(NAT, SocketAddrV4::new(*REMOTE.ip(), CLIENT.port()), size),
+                    tcp_packet(REMOTE, CLIENT, size),
+                ),
+            ] {
+                assert_eq!(peer.send(&input).await.unwrap(), input.len());
+                let len = peer.recv(&mut response).await.unwrap();
+                assert_eq!(&response[..len], expected.as_ref());
+            }
+        }
+        drop(udp_in);
+        task.await.unwrap();
+    })
+    .await
+    .expect("TUN packet loop stalled on real packet-oriented I/O");
 }
