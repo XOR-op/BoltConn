@@ -335,7 +335,9 @@ where
             let _ = writer.flush().await;
         }
     }
-    Ok(())
+    // Channel EOF is a half-close, not just the end of this task. The peer
+    // may wait for FIN before sending its response; keep the read half alive.
+    writer.shutdown().await
 }
 
 async fn drain_tcp_peer<F>(
@@ -766,6 +768,14 @@ mod tests {
 
         // Closing the request direction must not discard a response that is still in flight.
         drop(peer_tx);
+        let mut eof = [0; 1];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), remote.read(&mut eof))
+                .await
+                .expect("upload FIN did not reach the remote")
+                .unwrap(),
+            0
+        );
         remote.write_all(b"response").await.unwrap();
         assert_eq!(
             peer_rx.recv().await.unwrap(),
