@@ -207,6 +207,40 @@ async fn tcp_nat_preserves_packets_in_both_directions() {
     assert_eq!(io.output, expected);
 }
 
+// Exercise the production UDP return-packet builder, including allocation,
+// payload copying, both headers, checksums, and releasing the result.
+#[cfg(target_os = "linux")]
+#[test]
+#[allow(clippy::assertions_on_constants)]
+#[ignore = "CPU benchmark; run in release mode with --ignored --nocapture"]
+fn benchmark_udp_return_packet() {
+    use crate::network::packet::transport_layer::create_raw_udp_pkt;
+    let count = std::env::var("TUN_BENCH_PACKETS")
+        .map(|s| s.parse::<usize>().unwrap())
+        .unwrap_or(500_000);
+    assert!(!cfg!(debug_assertions), "use --release for this benchmark");
+    assert!(count > 0);
+    let src = black_box(SocketAddr::from(REMOTE));
+    let dst = black_box(SocketAddr::from(CLIENT));
+    for size in [64, 1500, 9000] {
+        let payload: Vec<_> = (0..size - 28).map(|i| i as u8).collect();
+        for _ in 0..10_000 {
+            black_box(create_raw_udp_pkt(black_box(&payload), src, dst));
+        }
+        for sample in 0..7 {
+            let start = thread_cpu_time();
+            for _ in 0..count {
+                black_box(create_raw_udp_pkt(black_box(&payload), src, dst));
+            }
+            let elapsed = thread_cpu_time() - start;
+            println!(
+                "udp_return_packet,size={size},sample={sample},packets={count},cpu_ns_per_packet={:.2}",
+                elapsed.as_nanos() as f64 / count as f64,
+            );
+        }
+    }
+}
+
 fn with_prefix(packet: &[u8]) -> Bytes {
     let mut result = BytesMut::with_capacity(PREFIX_LEN + packet.len());
     #[cfg(target_os = "macos")]

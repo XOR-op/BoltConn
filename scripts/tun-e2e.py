@@ -28,6 +28,14 @@ PEER = "192.0.2.2"
 NETNS = "boltconn-e2e-server"
 TCP_PORT = 19001
 UDP_PORT = 19002
+IPERF_CASES = {
+    "upload": [],
+    "download": ["-R"],
+    "parallel4": ["-P", "4"],
+    "paced200m": ["-b", "200M"],
+    "udp-download": ["-u", "-R", "-b", "200M", "-l", "1472"],
+    "udp-small": ["-u", "-R", "-b", "10M", "-l", "64"],
+}
 
 
 def command(*args, timeout=15, **kwargs):
@@ -271,13 +279,11 @@ def integrity_checks(process, tun, allow_half_close_timeout=False):
 
 
 def iperf_sample(process, tun, case, duration, client_cpu, path):
-    cases = {"upload": [], "download": ["-R"], "parallel4": ["-P", "4"],
-             "paced200m": ["-b", "200M"]}
     before = tun_stats(tun)
     cpu = cpu_seconds(process.pid)
     start = time.monotonic()
     output = command("taskset", "-c", str(client_cpu), "iperf3", "-c", REMOTE,
-                     "-t", str(duration), "-J", *cases[case], timeout=duration + 20)
+                     "-t", str(duration), "-J", *IPERF_CASES[case], timeout=duration + 20)
     elapsed = time.monotonic() - start
     cpu = cpu_seconds(process.pid) - cpu
     path.write_text(output)
@@ -287,11 +293,15 @@ def iperf_sample(process, tun, case, duration, client_cpu, path):
     assert received["bytes"] > 0
     after = tun_stats(tun)
     assert after["tx_packets"] > before["tx_packets"] and after["rx_packets"] > before["rx_packets"]
-    return {"case": case, "received_bytes": received["bytes"],
+    row = {"case": case, "received_bytes": received["bytes"],
             "bits_per_second": received["bits_per_second"], "elapsed_seconds": elapsed,
             "boltconn_cpu_seconds": cpu, "boltconn_cpu_percent": cpu / elapsed * 100,
             "cpu_seconds_per_gib": cpu * 2**30 / received["bytes"],
             "tun_counter_delta": {key: after[key] - before[key] for key in before}}
+    if case.startswith("udp-"):
+        row.update({key: received[key] for key in ("packets", "lost_packets", "lost_percent")})
+        assert received["lost_percent"] < 1, f"UDP loss exceeds 1%: {received['lost_percent']}"
+    return row
 
 
 def inside(args):
@@ -301,7 +311,8 @@ def inside(args):
     cpus = [int(cpu) for cpu in args.cpus.split(",")]
     server_process = iperf_server = app = None
     results = {"kernel": os.uname().release, "cpus": cpus,
-               "duration": args.duration, "runs": args.runs, "integrity": {}, "samples": [],
+               "duration": args.duration, "runs": args.runs, "cases": args.cases,
+               "integrity": {}, "samples": [],
                "binaries": {file.name: {"sha256": hashlib.sha256(file.read_bytes()).hexdigest(),
                                         "version": command(file, "--version").strip()}
                             for file in (output / "bin").iterdir()}}
@@ -351,7 +362,7 @@ def inside(args):
                 for label, binary in order:
                     app = start_app(label, binary, run)
                     tun, _ = wait_ready(app)
-                    for case in ("upload", "download", "parallel4", "paced200m"):
+                    for case in args.cases:
                         row = iperf_sample(app, tun, case, args.duration, cpus[2],
                                            output / f"{label}-{run}-{case}.json")
                         row.update(variant=label, run=run)
@@ -380,6 +391,8 @@ def main():
     parser.add_argument("--output", type=Path, help="new artifact directory outside /tmp and /run")
     parser.add_argument("--duration", type=int, default=3, help="iperf seconds per sample")
     parser.add_argument("--runs", type=int, default=3, help="alternating before/after runs")
+    parser.add_argument("--cases", nargs="+", choices=IPERF_CASES, default=list(IPERF_CASES),
+                        help="iperf workloads to measure (default: all TCP and UDP cases)")
     parser.add_argument("--cpus", help="four CPUs: two for BoltConn, client, server")
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--allow-baseline-half-close-timeout", action="store_true",
@@ -420,6 +433,7 @@ def main():
         child = ["unshare", "--net", "--mount", "--pid", "--fork", "--mount-proc", "--kill-child",
                  sys.executable, str(Path(__file__).resolve()), "--_inside", "--output", str(output),
                  "--cpus", args.cpus, "--duration", str(args.duration), "--runs", str(args.runs)]
+        child += ["--cases", *args.cases]
         if args.baseline:
             child += ["--baseline", str(output / "bin" / "baseline")]
         if args.check_only:
