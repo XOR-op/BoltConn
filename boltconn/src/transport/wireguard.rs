@@ -119,6 +119,22 @@ impl WireguardTunnel {
                 outbound: match outbound {
                     AdapterOrSocket::Adapter(a) => AdapterOrChannel::Adapter(a),
                     AdapterOrSocket::Socket(s) => {
+                        const RECEIVE_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+                        let socket_ref = socket2::SockRef::from(&s);
+                        let resize_result = socket_ref.recv_buffer_size().and_then(|current| {
+                            if current < RECEIVE_BUFFER_SIZE {
+                                socket_ref.set_recv_buffer_size(RECEIVE_BUFFER_SIZE)
+                            } else {
+                                Ok(())
+                            }
+                        });
+                        if let Err(e) = resize_result {
+                            tracing::warn!(
+                                "WireGuard #{} could not increase UDP receive buffer: {}",
+                                config.name,
+                                e
+                            );
+                        }
                         let (out_tx, out_rx) = flume::bounded::<Bytes>(4096);
                         let (in_tx, in_rx) = flume::bounded::<BufferIndex<Vec<u8>>>(4096);
                         let socket = Arc::new(s);
