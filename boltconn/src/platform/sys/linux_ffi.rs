@@ -16,6 +16,10 @@ pub const IFF_TUN: c_short = 0x0001;
 pub const IFF_TAP: c_short = 0x0002;
 pub const IFF_NO_PI: c_short = 0x1000;
 pub const IFF_MULTI_QUEUE: c_short = 0x0100;
+pub const IFF_VNET_HDR: c_short = 0x4000;
+
+pub const TUN_F_CSUM: c_ulong = 0x01;
+pub const TUN_F_TSO4: c_ulong = 0x02;
 
 #[repr(C)]
 #[derive(Copy, Clone)]

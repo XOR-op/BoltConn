@@ -8,11 +8,16 @@ use std::os::fd::RawFd;
 pub(super) struct TunInstance {
     fd: Option<AsyncRawFd>,
     ctl_fd: RawFd,
+    #[cfg(target_os = "linux")]
+    pub(super) vnet_hdr: bool,
 }
 
 impl TunInstance {
     pub fn new() -> io::Result<(Self, String)> {
+        #[cfg(target_os = "macos")]
         let (fd, name) = unsafe { platform::open_tun()? };
+        #[cfg(target_os = "linux")]
+        let (fd, name, vnet_hdr) = unsafe { platform::open_tun()? };
         let ctl_fd = {
             let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
             if fd < 0 {
@@ -24,6 +29,8 @@ impl TunInstance {
             Self {
                 fd: Some(AsyncRawFd::try_from(fd)?),
                 ctl_fd,
+                #[cfg(target_os = "linux")]
+                vnet_hdr,
             },
             name,
         ))

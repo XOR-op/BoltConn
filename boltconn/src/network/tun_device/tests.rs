@@ -48,6 +48,7 @@ fn packet_loop() -> (TunPacketLoop, flume::Sender<Bytes>, flume::Receiver<Bytes>
             udp_tx,
             udp_rx,
             icmp_proxy_enabled: false,
+            prefix_len: PREFIX_LEN,
         },
         udp_in,
         udp_out,
@@ -347,7 +348,7 @@ async fn cancelled_receive_keeps_its_allocation() {
     // This models UDP replies winning select! while the TUN has no input.
     for _ in 0..100 {
         {
-            let read = TunPacketLoop::recv_ip(&mut reader, &mut buffer);
+            let read = TunPacketLoop::recv_ip(&mut reader, &mut buffer, PREFIX_LEN);
             tokio::pin!(read);
             assert!(futures::poll!(read).is_pending());
         }
@@ -371,7 +372,7 @@ async fn receive_handles_eof_and_invalid_version() {
         let io = PacketIo::new(vec![packet], 1, false);
         let (mut reader, _writer) = split(io);
         let mut buffer = BytesMut::new();
-        let result = TunPacketLoop::recv_ip(&mut reader, &mut buffer).await;
+        let result = TunPacketLoop::recv_ip(&mut reader, &mut buffer, PREFIX_LEN).await;
         assert_eq!(result.err().unwrap().kind(), kind);
     }
 }
@@ -471,4 +472,96 @@ async fn tcp_nat_over_real_packet_fd() {
     })
     .await
     .expect("TUN packet loop stalled on real packet-oriented I/O");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn vnet_tcp_nat_preserves_metadata_and_completes_checksums() {
+    let (mut runner, _udp_in, _udp_out) = packet_loop();
+    runner.prefix_len = VNET_HEADER_LEN;
+    runner
+        .session_mgr
+        .register_tcp_session(CLIENT.into(), REMOTE.into());
+    let (icmp_tx, _icmp_rx) = flume::bounded(16);
+    let mut inputs = Vec::new();
+    let mut expected = Vec::new();
+    for size in [40, 41, 1500, 32768, 65535] {
+        for partial in [false, true] {
+            for (src, dst, new_src, new_dst) in [
+                (
+                    CLIENT,
+                    REMOTE,
+                    SocketAddrV4::new(*REMOTE.ip(), CLIENT.port()),
+                    NAT,
+                ),
+                (
+                    NAT,
+                    SocketAddrV4::new(*REMOTE.ip(), CLIENT.port()),
+                    REMOTE,
+                    CLIENT,
+                ),
+            ] {
+                let mut header = [0u8; VNET_HEADER_LEN];
+                if partial {
+                    header[0] = VNET_NEEDS_CSUM;
+                    header[1] = if size > 1500 { 1 } else { 0 }; // TCPv4 GSO
+                    header[2..4].copy_from_slice(&40u16.to_ne_bytes());
+                    header[4..6].copy_from_slice(&1460u16.to_ne_bytes());
+                    header[6..8].copy_from_slice(&20u16.to_ne_bytes());
+                    header[8..10].copy_from_slice(&16u16.to_ne_bytes());
+                }
+                let mut input = BytesMut::from(header.as_slice());
+                input.extend_from_slice(&tcp_packet(src, dst, size));
+                input[VNET_HEADER_LEN + 36..VNET_HEADER_LEN + 38].fill(0x5a);
+                inputs.push(input.freeze());
+                expected.push((header, tcp_packet(new_src, new_dst, size)));
+            }
+        }
+    }
+    let mut io = PacketIo::new(inputs, expected.len(), true);
+    runner.run(&mut io, NAT, icmp_tx).await;
+    assert_eq!(io.output.len(), expected.len());
+    for (packet, (header, expected)) in io.output.iter().zip(expected) {
+        assert_eq!(&packet[..VNET_HEADER_LEN], &header);
+        let mut data = packet[VNET_HEADER_LEN..].to_vec();
+        if header[0] & VNET_NEEDS_CSUM != 0 {
+            let mut sum = 0u32;
+            for pair in data[20..].chunks(2) {
+                sum += (u32::from(pair[0]) << 8) | u32::from(*pair.get(1).unwrap_or(&0));
+                sum = (sum & 0xffff) + (sum >> 16);
+            }
+            TcpPacket::new_unchecked(&mut data[20..]).set_checksum(!(sum as u16));
+        }
+        assert_eq!(data, expected);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn vnet_udp_prefix_is_removed_on_receive_and_added_on_reply() {
+    use crate::network::packet::transport_layer::create_raw_udp_pkt;
+    let (mut runner, udp_in, udp_out) = packet_loop();
+    runner.prefix_len = VNET_HEADER_LEN;
+    let (icmp_tx, _icmp_rx) = flume::bounded(16);
+    let (io, mut peer) = tokio::io::duplex(MAX_PKT_SIZE);
+    let task = tokio::spawn(async move { runner.run(io, NAT, icmp_tx).await });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        // Exercise UDP receive re-arming between TUN reads.
+        for size in [1, 1472, 63, 32768] {
+            let packet =
+                create_raw_udp_pkt(&vec![0x5a; size], CLIENT.into(), REMOTE.into()).freeze();
+            let mut wire = vec![0; VNET_HEADER_LEN];
+            wire.extend_from_slice(&packet);
+            peer.write_all(&wire).await.unwrap();
+            assert_eq!(udp_out.recv_async().await.unwrap(), packet);
+            udp_in.send_async(packet).await.unwrap();
+            let mut actual = vec![0; wire.len()];
+            peer.read_exact(&mut actual).await.unwrap();
+            assert_eq!(actual, wire);
+        }
+        drop(peer);
+        task.await.unwrap();
+    })
+    .await
+    .expect("offloaded TUN stalled on UDP traffic");
 }

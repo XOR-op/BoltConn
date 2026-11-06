@@ -5,7 +5,7 @@ use std::net::IpAddr;
 
 pub struct IPPktContent {
     pub handle: BytesMut,
-    // 0 on linux and 4 on macOS: utun in macOS does not support IFF_NO_PI
+    // Offset past the platform's TUN packet prefix.
     pub pkt_start_offset: usize,
 }
 

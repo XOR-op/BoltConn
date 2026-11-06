@@ -1,4 +1,4 @@
-use super::checksum::{fill_tcp_checksum, fill_udp_checksum};
+use super::checksum::{fill_tcp_checksum, fill_tcp_partial_checksum, fill_udp_checksum};
 use crate::network::packet::ip::IPPkt;
 use bytes::BytesMut;
 use smoltcp::phy::ChecksumCapabilities;
@@ -44,6 +44,22 @@ impl TransLayerPkt for TcpPkt {
     }
 
     fn rewrite_addr(&mut self, src_addr: SocketAddr, dst_addr: SocketAddr) {
+        self.rewrite_addr_with_checksum(src_addr, dst_addr, false);
+    }
+}
+
+impl TcpPkt {
+    pub fn rewrite_addr_with_checksum(
+        &mut self,
+        src_addr: SocketAddr,
+        dst_addr: SocketAddr,
+        partial: bool,
+    ) {
+        let fill_checksum = if partial {
+            fill_tcp_partial_checksum
+        } else {
+            fill_tcp_checksum
+        };
         match (src_addr, dst_addr) {
             (SocketAddr::V4(src_addr), SocketAddr::V4(dst_addr)) => {
                 // rewrite tcp
@@ -51,7 +67,7 @@ impl TransLayerPkt for TcpPkt {
                 pkt.set_src_port(src_addr.port());
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
-                fill_tcp_checksum(
+                fill_checksum(
                     pkt.into_inner(),
                     &IpAddress::Ipv4(*src_addr.ip()),
                     &IpAddress::Ipv4(*dst_addr.ip()),
@@ -68,7 +84,7 @@ impl TransLayerPkt for TcpPkt {
                 pkt.set_src_port(src_addr.port());
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
-                fill_tcp_checksum(
+                fill_checksum(
                     pkt.into_inner(),
                     &IpAddress::Ipv6(*src_addr.ip()),
                     &IpAddress::Ipv6(*dst_addr.ip()),

@@ -5,6 +5,7 @@ use crate::network::packet::icmp::Icmpv4Pkt;
 use crate::proxy::MappingSessionManager;
 use crate::{TcpPkt, TransLayerPkt, UdpPkt};
 use bytes::{Bytes, BytesMut};
+use futures::StreamExt;
 use ipnet::Ipv4Net;
 use network::packet::ip::IPPkt;
 use smoltcp::wire::IpProtocol;
@@ -16,6 +17,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const ETH_P_IP: u16 = 0x0800;
 const ETH_P_IPV6: u16 = 0x86DD;
+const VNET_HEADER_LEN: usize = 10;
+const VNET_NEEDS_CSUM: u8 = 1;
 
 pub struct TunDevice {
     inner: TunInstance,
@@ -34,6 +37,8 @@ struct TunPacketLoop {
     udp_tx: flume::Sender<Bytes>,
     udp_rx: flume::Receiver<Bytes>,
     icmp_proxy_enabled: bool,
+    // TUN offload header on Linux; address family on macOS.
+    prefix_len: usize,
 }
 
 impl TunDevice {
@@ -46,6 +51,12 @@ impl TunDevice {
         icmp_proxy_enabled: bool,
     ) -> io::Result<TunDevice> {
         let (inner, name) = TunInstance::new()?;
+        #[cfg(target_os = "linux")]
+        let prefix_len = if inner.vnet_hdr { VNET_HEADER_LEN } else { 0 };
+        #[cfg(target_os = "macos")]
+        let prefix_len = 4;
+        #[cfg(target_os = "windows")]
+        let prefix_len = 0;
         Ok(TunDevice {
             inner,
             dev_name: name,
@@ -56,6 +67,7 @@ impl TunDevice {
                 udp_tx,
                 udp_rx,
                 icmp_proxy_enabled,
+                prefix_len,
             },
             ipv6_enabled,
         })
@@ -117,6 +129,7 @@ impl TunPacketLoop {
     async fn recv_ip<T: AsyncRead + Unpin>(
         receiver: &mut T,
         handle: &mut BytesMut,
+        start_offset: usize,
     ) -> io::Result<IPPkt> {
         // https://stackoverflow.com/questions/17138626/read-on-a-non-blocking-tun-tap-file-descriptor-gets-eagain-error
         // We must read full packet in one syscall, otherwise the remaining part will be discarded.
@@ -127,11 +140,6 @@ impl TunPacketLoop {
         handle.clear();
         handle.reserve(MAX_PKT_SIZE);
         let len = receiver.read_buf(handle).await?;
-        // macOS 4 bytes AF_INET/AF_INET6 prefix because of no IFF_NO_PI flag
-        #[cfg(target_os = "macos")]
-        let start_offset = 4;
-        #[cfg(not(target_os = "macos"))]
-        let start_offset = 0;
         if len <= start_offset {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -167,18 +175,21 @@ impl TunPacketLoop {
         tracing::info!("[TUN] Running...");
 
         let mut handle = BytesMut::with_capacity(MAX_PKT_SIZE);
+        let mut udp_buffer = BytesMut::new();
+        // Reuse the UDP receive registration across TCP packets.
+        let mut udp_replies = self.udp_rx.stream();
         loop {
             tokio::select! {
-                pkt = Self::recv_ip(&mut fd, &mut handle) => {
+                pkt = Self::recv_ip(&mut fd, &mut handle, self.prefix_len) => {
                     let Ok(pkt) = pkt else{
                         tracing::error!("Invalid IP packet received from TUN");
                         break;
                     };
                     handle = self.forwarding_packet(pkt, &nat_addr, &mut tun_tx, &mut fd).await;
                 }
-                data = self.udp_rx.recv_async() => {
-                    if let Ok(data) = data{
-                        Self::backwarding_udp_v4(data, &mut fd).await;
+                data = udp_replies.next() => {
+                    if let Some(data) = data{
+                        self.backwarding_udp_v4(data, &mut fd, &mut udp_buffer).await;
                     } else {
                         break;
                     }
@@ -187,15 +198,24 @@ impl TunPacketLoop {
         }
     }
 
-    async fn backwarding_udp_v4<T: AsyncWrite + Unpin>(packet: Bytes, fd_write: &mut T) {
-        #[cfg(not(target_os = "macos"))]
-        let _ = fd_write.write_all(packet.as_ref()).await;
-        #[cfg(target_os = "macos")]
-        {
-            // Warning: cannot use vectored write here
-            let mut unified_buf = vec![0, 0, 0, libc::AF_INET as u8];
-            unified_buf.extend_from_slice(packet.as_ref());
-            let _ = fd_write.write_all(unified_buf.as_ref()).await;
+    async fn backwarding_udp_v4<T: AsyncWrite + Unpin>(
+        &self,
+        packet: Bytes,
+        fd_write: &mut T,
+        buffer: &mut BytesMut,
+    ) {
+        if self.prefix_len == 0 {
+            let _ = fd_write.write_all(packet.as_ref()).await;
+        } else {
+            // Include the platform header and payload in one packet write.
+            buffer.clear();
+            buffer.resize(self.prefix_len, 0);
+            #[cfg(target_os = "macos")]
+            {
+                buffer[3] = libc::AF_INET as u8;
+            }
+            buffer.extend_from_slice(packet.as_ref());
+            let _ = fd_write.write_all(buffer.as_ref()).await;
         }
     }
 
@@ -219,6 +239,9 @@ impl TunPacketLoop {
         // determine where the packet goes
         match pkt.protocol() {
             IpProtocol::Tcp => {
+                let partial_checksum = cfg!(target_os = "linux")
+                    && self.prefix_len == VNET_HEADER_LEN
+                    && pkt.raw_data()[0] & VNET_NEEDS_CSUM != 0;
                 let mut pkt = TcpPkt::new(pkt);
                 if *nat_addr == SocketAddrV4::new(src, pkt.src_port()) {
                     // outbound->inbound
@@ -226,7 +249,7 @@ impl TunPacketLoop {
                         .session_mgr
                         .lookup_tcp_session_addrs(pkt.ip_pkt().src_addr().is_ipv6(), pkt.dst_port())
                     {
-                        pkt.rewrite_addr(conn_dst, conn_src);
+                        pkt.rewrite_addr_with_checksum(conn_dst, conn_src, partial_checksum);
                         if Self::send_ip(fd_write, pkt.ip_pkt()).await.is_err() {
                             tracing::warn!("Send to NAT failed");
                         }
@@ -240,9 +263,10 @@ impl TunPacketLoop {
                         SocketAddr::V4(SocketAddrV4::new(dst, pkt.dst_port())),
                     );
                     // (_, session_port, nat_ip, nat_port)
-                    pkt.rewrite_addr(
+                    pkt.rewrite_addr_with_checksum(
                         SocketAddr::from(SocketAddrV4::new(dst, inbound_port)),
                         SocketAddr::from(*nat_addr),
+                        partial_checksum,
                     );
                     if Self::send_ip(fd_write, pkt.ip_pkt()).await.is_err() {
                         tracing::warn!("Send to NAT failed");
@@ -256,13 +280,7 @@ impl TunPacketLoop {
                     return pkt.into_bytes_mut();
                 }
                 let pkt = UdpPkt::new(pkt);
-                let pkt = {
-                    #[cfg(target_os = "macos")]
-                    let start_offset = 4;
-                    #[cfg(not(target_os = "macos"))]
-                    let start_offset = 0;
-                    pkt.into_bytes_mut().freeze().slice(start_offset..)
-                };
+                let pkt = pkt.into_bytes_mut().freeze().slice(self.prefix_len..);
                 let _ = self.udp_tx.send_async(pkt).await;
                 BytesMut::new()
             }

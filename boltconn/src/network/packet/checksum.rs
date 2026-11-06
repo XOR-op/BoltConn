@@ -53,6 +53,13 @@ pub(super) fn fill_tcp_checksum(data: &mut [u8], src: &IpAddress, dst: &IpAddres
     TcpPacket::new_unchecked(data).set_checksum(checksum);
 }
 
+/// Seed a CHECKSUM_PARTIAL packet. The kernel completes the TCP header/payload
+/// sum (and adjusts the length when segmenting GSO); the seed is not inverted.
+pub(super) fn fill_tcp_partial_checksum(data: &mut [u8], src: &IpAddress, dst: &IpAddress) {
+    let checksum = fold(pseudo_header_sum(src, dst, IpProtocol::Tcp, data.len()));
+    TcpPacket::new_unchecked(data).set_checksum(checksum);
+}
+
 pub(super) fn fill_udp_checksum(data: &mut [u8], src: &IpAddress, dst: &IpAddress) {
     let mut packet = UdpPacket::new_unchecked(&mut *data);
     packet.set_checksum(0);
@@ -67,6 +74,29 @@ pub(super) fn fill_udp_checksum(data: &mut [u8], src: &IpAddress, dst: &IpAddres
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_tcp_seed_completes_to_the_full_checksum() {
+        let mut rng = fastrand::Rng::with_seed(0x05eed);
+        for (src, dst) in [("10.0.0.2", "203.0.113.7"), ("2001:db8::1", "2001:db8::2")] {
+            let src = src.parse().unwrap();
+            let dst = dst.parse().unwrap();
+            for header in [20, 32, 60] {
+                for len in [0, 1, 1460, 32768, 65415] {
+                    let mut data = vec![0; header + len];
+                    rng.fill(&mut data);
+                    TcpPacket::new_unchecked(&mut data[..]).set_header_len(header as u8);
+                    let mut expected = data.clone();
+                    TcpPacket::new_unchecked(&mut expected[..]).fill_checksum(&src, &dst);
+                    fill_tcp_partial_checksum(&mut data, &src, &dst);
+                    // Complete the kernel's partial checksum seed.
+                    let completed = !reference_sum(&data);
+                    TcpPacket::new_unchecked(&mut data[..]).set_checksum(completed);
+                    assert_eq!(data, expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn udp_checksums_match_smoltcp_with_padding_and_partial_input() {

@@ -16,10 +16,10 @@ use std::{cmp, io, mem};
 use super::super::errno_err;
 use crate::platform::BOLTCONN_FWMARK;
 
-pub unsafe fn open_tun() -> io::Result<(i32, String)> {
+pub unsafe fn open_tun() -> io::Result<(i32, String, bool)> {
     unsafe {
         let mut req: ifreq = mem::zeroed();
-        req.ifru.flags = IFF_TUN | IFF_NO_PI;
+        req.ifru.flags = IFF_TUN | IFF_NO_PI | IFF_VNET_HDR;
         let fd = {
             let fd = libc::open(c"/dev/net/tun".as_ptr() as *const _, O_RDWR);
             if fd < 0 {
@@ -27,15 +27,30 @@ pub unsafe fn open_tun() -> io::Result<(i32, String)> {
             }
             fd
         };
-        if tunsetiff(fd, &mut req as *mut _ as *mut _) < 0 {
-            libc::close(fd);
-            return Err(errno_err("Failed to tunsetiff"));
-        }
+        let vnet_hdr = if tunsetiff(fd, &mut req as *mut _ as *mut _) < 0 {
+            req = mem::zeroed();
+            req.ifru.flags = IFF_TUN | IFF_NO_PI;
+            if tunsetiff(fd, &mut req as *mut _ as *mut _) < 0 {
+                libc::close(fd);
+                return Err(errno_err("Failed to tunsetiff"));
+            }
+            false
+        } else {
+            // TUNSETOFFLOAD takes the flags by value, despite its _IOW encoding.
+            if libc::ioctl(fd, libc::TUNSETOFFLOAD, TUN_F_CSUM | TUN_F_TSO4) < 0 {
+                tracing::debug!(
+                    "TUN TCP offload unavailable: {}",
+                    io::Error::last_os_error()
+                );
+            }
+            true
+        };
         Ok((
             fd,
             CStr::from_ptr(req.ifrn.name.as_ptr())
                 .to_string_lossy()
                 .into_owned(),
+            vnet_hdr,
         ))
     }
 }
