@@ -10,7 +10,7 @@ use crate::network::dns::{Dns, GenericDns};
 use crate::network::egress::Egress;
 use crate::proxy::error::{DnsError, TransportError};
 use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
-use crate::transport::smol::{SmolDnsProvider, SmolStack, VirtualIpDevice};
+use crate::transport::smol::{IpPacketBatch, SmolDnsProvider, SmolStack, VirtualIpDevice};
 use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
@@ -66,7 +66,11 @@ impl Endpoint {
         // control conn
         let (stop_send, mut stop_recv) = broadcast::channel(1);
 
-        let (mut wg_smol_tx, wg_smol_rx) = flume::bounded(4096);
+        let receive_batch_size = match &outbound {
+            AdapterOrSocket::Socket(_) => IpPacketBatch::CAPACITY,
+            AdapterOrSocket::Adapter(_) => 1,
+        };
+        let (mut wg_smol_tx, wg_smol_rx) = flume::bounded(4096 / receive_batch_size);
         let (smol_wg_tx, mut smol_wg_rx) = flume::unbounded();
         let tunnel = Arc::new(
             WireguardTunnel::new(outbound, config, connected_endpoint, notify.clone()).await?,
@@ -147,7 +151,7 @@ impl Endpoint {
                 let mut wg_buf = [0u8; MAX_PKT_SIZE];
                 loop {
                     match tunnel
-                        .receive_incoming_packet(&mut wg_smol_tx, &mut buf, &mut wg_buf)
+                        .receive_incoming_packets(&mut wg_smol_tx, &mut buf, &mut wg_buf)
                         .await
                     {
                         Ok(true) => {

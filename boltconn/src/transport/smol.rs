@@ -788,23 +788,46 @@ impl SmolStack {
 
 // -----------------------------------------------------------------------------------
 
+pub enum IpPacketBatch {
+    Single(BytesMut),
+    Multiple(Vec<BytesMut>),
+}
+
+impl IpPacketBatch {
+    pub const CAPACITY: usize = 16;
+
+    pub fn push(&mut self, packet: BytesMut) {
+        match self {
+            Self::Single(first) => {
+                let mut packets = Vec::with_capacity(Self::CAPACITY);
+                packets.push(std::mem::take(first));
+                packets.push(packet);
+                *self = Self::Multiple(packets);
+            }
+            Self::Multiple(packets) => packets.push(packet),
+        }
+    }
+}
+
 /// Virtual IP device
 pub struct VirtualIpDevice {
     mtu: usize,
     outbound: flume::Sender<BytesMut>,
-    packet_queue: flume::Receiver<BytesMut>,
+    packet_queue: flume::Receiver<IpPacketBatch>,
+    pending: std::vec::IntoIter<BytesMut>,
 }
 
 impl VirtualIpDevice {
     pub fn new(
         mtu: usize,
-        inbound: flume::Receiver<BytesMut>,
+        inbound: flume::Receiver<IpPacketBatch>,
         outbound: flume::Sender<BytesMut>,
     ) -> Self {
         Self {
             mtu,
             outbound,
             packet_queue: inbound,
+            pending: Vec::new().into_iter(),
         }
     }
 }
@@ -817,15 +840,24 @@ impl Device for VirtualIpDevice {
         &mut self,
         _timestamp: SmolInstant,
     ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        match self.packet_queue.try_recv() {
-            Ok(item) => Some((
-                VirtualRxToken { buf: item },
+        loop {
+            let packet = match self.pending.next() {
+                Some(packet) => packet,
+                None => match self.packet_queue.try_recv().ok()? {
+                    IpPacketBatch::Single(packet) => packet,
+                    IpPacketBatch::Multiple(packets) => {
+                        self.pending = packets.into_iter();
+                        continue;
+                    }
+                },
+            };
+            return Some((
+                VirtualRxToken { buf: packet },
                 VirtualTxToken {
                     sender: &self.outbound,
                     mtu: self.mtu,
                 },
-            )),
-            Err(_) => None,
+            ));
         }
     }
 
@@ -966,5 +998,35 @@ impl RuntimeProvider for SmolDnsProvider {
             let outbound = AddrConnectorWrapper::from(outbound);
             Ok(outbound)
         })
+    }
+}
+
+#[cfg(test)]
+mod packet_batch_tests {
+    use super::*;
+
+    #[test]
+    fn device_preserves_packet_order_and_drains_batches_after_disconnect() {
+        let (tx, rx) = flume::bounded(4);
+        let (outbound, _outbound_rx) = flume::unbounded();
+        let mut device = VirtualIpDevice::new(1500, rx, outbound);
+        let mut expected = vec![BytesMut::from(&b"first"[..])];
+        tx.send(IpPacketBatch::Single(expected[0].clone())).unwrap();
+        tx.send(IpPacketBatch::Multiple(Vec::new())).unwrap();
+        let mut batch = IpPacketBatch::Single(BytesMut::from(&b"second"[..]));
+        expected.push(BytesMut::from(&b"second"[..]));
+        for index in 1..IpPacketBatch::CAPACITY {
+            let packet = BytesMut::from(vec![index as u8; index * 73].as_slice());
+            expected.push(packet.clone());
+            batch.push(packet);
+        }
+        tx.send(batch).unwrap();
+        drop(tx);
+
+        let mut actual = Vec::new();
+        while let Some((rx, _tx)) = device.receive(SmolInstant::from_millis(0)) {
+            actual.push(rx.consume(|bytes| BytesMut::from(bytes)));
+        }
+        assert_eq!(actual, expected);
     }
 }
