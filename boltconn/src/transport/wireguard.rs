@@ -112,24 +112,7 @@ impl WireguardTunnel {
             13,
             None,
         );
-        let buf_pool = Arc::new({
-            let pool = Pool::<Vec<u8>>::new();
-            // allocate memory in advance
-            // TODO: profile to determine removal
-            const INIT_POOL_SIZE: usize = 128;
-            let mut index_arr = [0; INIT_POOL_SIZE];
-            for entry in index_arr.iter_mut() {
-                *entry = pool
-                    .create_with(|x| {
-                        x.resize(MAX_PKT_SIZE, 0);
-                    })
-                    .expect("slab pool initialization failed");
-            }
-            for entry in index_arr.iter() {
-                pool.clear(*entry);
-            }
-            pool
-        });
+        let buf_pool = Arc::new(Pool::<Vec<u8>>::new());
         Ok(Self {
             tunnel: tokio::sync::Mutex::new(tunnel),
             inner: WireguardTunnelInner {
@@ -263,10 +246,12 @@ impl WireguardTunnel {
             }
             TunnResult::WriteToNetwork(data) => {
                 self.inner.outbound_send(data).await?;
-                // flush pending queue
-                while let TunnResult::WriteToNetwork(data) =
-                    self.tunnel.lock().await.decapsulate(None, &[], buf)
-                {
+                // Release the tunnel lock before waiting for outbound capacity.
+                loop {
+                    let result = self.tunnel.lock().await.decapsulate(None, &[], buf);
+                    let TunnResult::WriteToNetwork(data) = result else {
+                        break;
+                    };
                     self.inner.outbound_send(data).await?;
                 }
                 false
@@ -290,7 +275,8 @@ impl WireguardTunnel {
             .recv_async()
             .await
             .map_err(|_| io::Error::from(ErrorKind::ConnectionAborted))?;
-        match self.tunnel.lock().await.encapsulate(data.as_ref(), wg_buf) {
+        let result = self.tunnel.lock().await.encapsulate(data.as_ref(), wg_buf);
+        match result {
             TunnResult::WriteToNetwork(packet) => {
                 if self.inner.outbound_send(packet).await? != packet.len() {
                     // size exceeded

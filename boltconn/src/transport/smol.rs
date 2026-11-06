@@ -811,7 +811,7 @@ impl VirtualIpDevice {
 
 impl Device for VirtualIpDevice {
     type RxToken<'a> = VirtualRxToken;
-    type TxToken<'a> = VirtualTxToken;
+    type TxToken<'a> = VirtualTxToken<'a>;
 
     fn receive(
         &mut self,
@@ -821,8 +821,8 @@ impl Device for VirtualIpDevice {
             Ok(item) => Some((
                 VirtualRxToken { buf: item },
                 VirtualTxToken {
-                    sender: self.outbound.clone(),
-                    buf: BytesMut::with_capacity(self.mtu),
+                    sender: &self.outbound,
+                    mtu: self.mtu,
                 },
             )),
             Err(_) => None,
@@ -836,8 +836,8 @@ impl Device for VirtualIpDevice {
             .map_or(self.outbound.len() < 4096, |cap| cap > self.outbound.len())
         {
             Some(VirtualTxToken {
-                sender: self.outbound.clone(),
-                buf: BytesMut::with_capacity(self.mtu),
+                sender: &self.outbound,
+                mtu: self.mtu,
             })
         } else {
             tracing::trace!("smol: VirtIP Device allocate TxToken failed");
@@ -863,15 +863,17 @@ impl RxToken for VirtualRxToken {
     }
 }
 
-pub struct VirtualTxToken {
-    sender: flume::Sender<BytesMut>,
-    buf: BytesMut,
+pub struct VirtualTxToken<'a> {
+    sender: &'a flume::Sender<BytesMut>,
+    mtu: usize,
 }
 
-impl TxToken for VirtualTxToken {
+impl TxToken for VirtualTxToken<'_> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
-        let mut buf = self.buf;
-        debug_assert!(len <= buf.capacity());
+        debug_assert!(len <= self.mtu);
+        // Most received packets do not need an immediate reply. Allocate only
+        // when smoltcp actually consumes the companion transmit token.
+        let mut buf = BytesMut::with_capacity(len);
         // Safety: f exactly writes _len_ bytes, so all bytes are initialized.
         unsafe {
             buf.set_len(len);
