@@ -1,10 +1,10 @@
-//! Full TCP checksum calculation for the TUN NAT path.
+//! Full transport checksum calculation for the TUN path.
 //!
 //! Sum native-endian 32-bit words into a wide accumulator. Carries are folded
 //! only at the end, allowing the compiler to vectorize the payload scan. This
 //! retains full recomputation, including for zero or partial input checksums.
 
-use smoltcp::wire::{IpAddress, IpProtocol, TcpPacket};
+use smoltcp::wire::{IpAddress, IpProtocol, TcpPacket, UdpPacket};
 
 fn fold(mut sum: u64) -> u16 {
     sum = (sum & 0xffff_ffff) + (sum >> 32);
@@ -31,7 +31,8 @@ fn data_sum(data: &[u8]) -> u16 {
     fold(sum).to_be()
 }
 
-pub(super) fn fill_tcp_checksum(data: &mut [u8], src: &IpAddress, dst: &IpAddress) {
+#[inline(always)]
+fn pseudo_header_sum(src: &IpAddress, dst: &IpAddress, protocol: IpProtocol, len: usize) -> u64 {
     let address_sum = match (src, dst) {
         (IpAddress::Ipv4(src), IpAddress::Ipv4(dst)) => {
             data_sum(&src.octets()) as u64 + data_sum(&dst.octets()) as u64
@@ -39,18 +40,79 @@ pub(super) fn fill_tcp_checksum(data: &mut [u8], src: &IpAddress, dst: &IpAddres
         (IpAddress::Ipv6(src), IpAddress::Ipv6(dst)) => {
             data_sum(&src.octets()) as u64 + data_sum(&dst.octets()) as u64
         }
-        _ => unreachable!("TCP addresses must have the same IP version"),
+        _ => unreachable!("transport addresses must have the same IP version"),
     };
-    let len = data.len() as u64;
-    let pseudo_sum = address_sum + u8::from(IpProtocol::Tcp) as u64 + (len >> 16) + (len & 0xffff);
+    let len = len as u64;
+    address_sum + u8::from(protocol) as u64 + (len >> 16) + (len & 0xffff)
+}
+
+pub(super) fn fill_tcp_checksum(data: &mut [u8], src: &IpAddress, dst: &IpAddress) {
+    let pseudo_sum = pseudo_header_sum(src, dst, IpProtocol::Tcp, data.len());
     TcpPacket::new_unchecked(&mut *data).set_checksum(0);
     let checksum = !fold(pseudo_sum + data_sum(data) as u64);
     TcpPacket::new_unchecked(data).set_checksum(checksum);
 }
 
+pub(super) fn fill_udp_checksum(data: &mut [u8], src: &IpAddress, dst: &IpAddress) {
+    let mut packet = UdpPacket::new_unchecked(&mut *data);
+    packet.set_checksum(0);
+    // The UDP length excludes any padding in the enclosing IP packet.
+    let len = packet.len() as usize;
+    let pseudo_sum = pseudo_header_sum(src, dst, IpProtocol::Udp, len);
+    let checksum = !fold(pseudo_sum + data_sum(&data[..len]) as u64);
+    // UDP reserves zero for an omitted checksum, so computed zero is all ones.
+    UdpPacket::new_unchecked(data).set_checksum(if checksum == 0 { 0xffff } else { checksum });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn udp_checksums_match_smoltcp_with_padding_and_partial_input() {
+        let mut rng = fastrand::Rng::with_seed(0x0dc5a1);
+        for (src, dst) in [
+            ("10.0.0.2", "203.0.113.7"),
+            ("2001:db8::1234", "2001:db8::abcd"),
+        ] {
+            let src = src.parse().unwrap();
+            let dst = dst.parse().unwrap();
+            for len in [8, 9, 10, 11, 31, 32, 33, 1472, 8972, 65535] {
+                for padding in [0, 1, 8] {
+                    let mut actual = vec![0; len + padding];
+                    rng.fill(&mut actual);
+                    UdpPacket::new_unchecked(&mut actual[..]).set_len(len as u16);
+                    let mut expected = actual.clone();
+                    UdpPacket::new_unchecked(&mut expected[..]).fill_checksum(&src, &dst);
+                    fill_udp_checksum(&mut actual, &src, &dst);
+                    assert_eq!(actual, expected);
+                    assert!(UdpPacket::new_unchecked(&actual[..]).verify_checksum(&src, &dst));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn udp_computed_zero_is_encoded_as_all_ones() {
+        for (src, dst) in [("10.0.0.2", "203.0.113.7"), ("2001:db8::1", "2001:db8::2")] {
+            let src = src.parse().unwrap();
+            let dst = dst.parse().unwrap();
+            let mut data = [0; 8];
+            let mut packet = UdpPacket::new_unchecked(&mut data[..]);
+            packet.set_len(8);
+            packet.fill_checksum(&src, &dst);
+            packet.set_src_port(packet.checksum());
+            packet.fill_checksum(&src, &dst);
+            assert_eq!(packet.checksum(), 0xffff);
+            for incoming in [0, 1, 0x1234, 0xffff] {
+                UdpPacket::new_unchecked(&mut data[..]).set_checksum(incoming);
+                fill_udp_checksum(&mut data, &src, &dst);
+                let packet = UdpPacket::new_unchecked(&data[..]);
+                assert_eq!(packet.checksum(), 0xffff);
+                assert!(packet.verify_checksum(&src, &dst));
+            }
+        }
+    }
 
     fn reference_sum(data: &[u8]) -> u16 {
         // Independent byte-pair oracle, folding every addition.

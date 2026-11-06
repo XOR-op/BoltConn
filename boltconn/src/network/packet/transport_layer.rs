@@ -1,10 +1,9 @@
-use super::checksum::fill_tcp_checksum;
+use super::checksum::{fill_tcp_checksum, fill_udp_checksum};
 use crate::network::packet::ip::IPPkt;
 use bytes::BytesMut;
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
     IpAddress, IpProtocol, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr, TcpPacket, UdpPacket,
-    UdpRepr,
 };
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
@@ -140,7 +139,8 @@ impl TransLayerPkt for UdpPkt {
                 pkt.set_src_port(src_addr.port());
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
-                pkt.fill_checksum(
+                fill_udp_checksum(
+                    pkt.into_inner(),
                     &IpAddress::Ipv4(*src_addr.ip()),
                     &IpAddress::Ipv4(*dst_addr.ip()),
                 );
@@ -156,7 +156,8 @@ impl TransLayerPkt for UdpPkt {
                 pkt.set_src_port(src_addr.port());
                 pkt.set_dst_port(dst_addr.port());
                 // use new ip addresses
-                pkt.fill_checksum(
+                fill_udp_checksum(
+                    pkt.into_inner(),
                     &IpAddress::Ipv6(*src_addr.ip()),
                     &IpAddress::Ipv6(*dst_addr.ip()),
                 );
@@ -216,7 +217,11 @@ impl UdpPkt {
         let (src_ip, dst_ip) = (ip_pkt.src_addr(), ip_pkt.dst_addr());
         let mut raw_udp = UdpPacket::new_unchecked(ip_pkt.packet_payload_mut());
         raw_udp.set_len((raw_udp.len() as i64 + delta) as u16);
-        raw_udp.fill_checksum(&IpAddress::from(src_ip), &IpAddress::from(dst_ip));
+        fill_udp_checksum(
+            raw_udp.into_inner(),
+            &IpAddress::from(src_ip),
+            &IpAddress::from(dst_ip),
+        );
         // set ip fields
         if is_v4 {
             let mut raw_ip = Ipv4Packet::new_unchecked(ip_pkt.packet_data_mut());
@@ -230,20 +235,15 @@ pub fn create_raw_udp_pkt(data: &[u8], src: SocketAddr, dst: SocketAddr) -> Byte
     let is_v4 = src.is_ipv4();
     let udp_hdr = 8;
     let ip_hdr = if is_v4 { 20 } else { 40 };
-    let mut buf = BytesMut::zeroed(ip_hdr + udp_hdr + data.len());
+    let mut buf = BytesMut::with_capacity(ip_hdr + udp_hdr + data.len());
+    // Initialize the payload by copying it once, without zeroing it first.
+    buf.resize(ip_hdr + udp_hdr, 0);
+    buf.extend_from_slice(data);
     let mut udp_pkt = UdpPacket::new_unchecked(&mut buf.as_mut()[ip_hdr..]);
-    UdpRepr {
-        src_port: src.port(),
-        dst_port: dst.port(),
-    }
-    .emit(
-        &mut udp_pkt,
-        &src.ip().into(),
-        &dst.ip().into(),
-        data.len(),
-        |b| b.copy_from_slice(data),
-        &ChecksumCapabilities::default(),
-    );
+    udp_pkt.set_src_port(src.port());
+    udp_pkt.set_dst_port(dst.port());
+    udp_pkt.set_len((udp_hdr + data.len()) as u16);
+    fill_udp_checksum(udp_pkt.into_inner(), &src.ip().into(), &dst.ip().into());
     if is_v4 {
         let mut ip_pkt = Ipv4Packet::new_unchecked(buf.as_mut());
         let (src, dst) = match (src.ip(), dst.ip()) {
@@ -274,4 +274,42 @@ pub fn create_raw_udp_pkt(data: &[u8], src: SocketAddr, dst: SocketAddr) -> Byte
         .emit(&mut ip_pkt);
     }
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn udp_return_packets_preserve_payload_and_validate_in_both_ip_versions() {
+        for (src, dst) in [
+            ("203.0.113.7:443", "10.0.0.2:50000"),
+            ("[2001:db8::7]:443", "[2001:db8::2]:50000"),
+        ] {
+            let src: SocketAddr = src.parse().unwrap();
+            let dst: SocketAddr = dst.parse().unwrap();
+            for len in [0, 1, 2, 31, 1472, 8960, 65507] {
+                let payload: Vec<_> = (0..len).map(|i| (i * 31) as u8).collect();
+                let data = create_raw_udp_pkt(&payload, src, dst);
+                let ip = if src.is_ipv4() {
+                    let header = Ipv4Packet::new_checked(data.as_ref()).unwrap();
+                    assert!(header.verify_checksum());
+                    IPPkt::from_v4(data, 0)
+                } else {
+                    Ipv6Packet::new_checked(data.as_ref()).unwrap();
+                    IPPkt::from_v6(data, 0)
+                };
+                assert_eq!(ip.src_addr(), src.ip());
+                assert_eq!(ip.dst_addr(), dst.ip());
+                assert_eq!(ip.protocol(), IpProtocol::Udp);
+                assert_eq!(ip.pkt_total_len(), ip.ip_header_len() + 8 + len);
+                let udp = UdpPacket::new_checked(ip.packet_payload()).unwrap();
+                assert_eq!(udp.src_port(), src.port());
+                assert_eq!(udp.dst_port(), dst.port());
+                assert_eq!(udp.payload(), payload);
+                assert_ne!(udp.checksum(), 0);
+                assert!(udp.verify_checksum(&src.ip().into(), &dst.ip().into()));
+            }
+        }
+    }
 }
