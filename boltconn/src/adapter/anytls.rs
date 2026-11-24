@@ -1,6 +1,6 @@
 use crate::adapter::{
     AddrConnector, Connector, LinkRuntimeConfig, LinkTable, ManagedRuntime, Outbound, OutboundType,
-    established_tcp, established_udp, handshake_error_termination,
+    connect_timeout, established_tcp, established_udp, handshake_error_termination,
 };
 use crate::common::cert::make_tls_config;
 use crate::common::{StreamOutboundTrait, as_io_err, io_err};
@@ -563,11 +563,16 @@ async fn connect_proxy(
         .map_err(as_io_err)?
         .to_owned();
     let tls_conn = TlsConnector::from(make_tls_config(&config.cert_verify));
-    let stream = tls_conn
-        .connect(server_name, outbound)
-        .await
-        .map_err(|error| TransportError::Handshake(error.to_string()))?;
-    Ok(stream)
+    connect_timeout(
+        async {
+            tls_conn
+                .connect(server_name, outbound)
+                .await
+                .map_err(|error| TransportError::Handshake(error.to_string()))
+        },
+        "AnyTLS TLS",
+    )
+    .await
 }
 
 fn send_completion(tx: Option<tokio::sync::oneshot::Sender<bool>>, value: bool) {

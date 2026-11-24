@@ -120,6 +120,42 @@ impl Endpoint {
         let last_active = Arc::new(Mutex::new(Instant::now()));
         let (indicator, indi_write) = AbortCanary::pair();
 
+        // drive smol; start it before the tunnel tasks so a failed start leaves nothing running
+        {
+            let smol_stack = smol_stack.clone();
+            let notifier = notify.clone();
+            let smol_canary = indicator.clone();
+
+            local_async_run(Some(format!("ST-{}", name)), async move {
+                let mut immediate_next_loop = false;
+                notifier.notified().await;
+                while smol_canary.alive() {
+                    let mut stack_handle = smol_stack.lock().await;
+                    stack_handle.drive_iface();
+                    immediate_next_loop |= stack_handle.poll_all_tcp().await;
+                    immediate_next_loop |= stack_handle.poll_all_udp().await;
+                    stack_handle.purge_invalid_tcp();
+                    stack_handle.purge_timeout_udp();
+                    let wait_time = if immediate_next_loop {
+                        Duration::from_secs(0)
+                    } else {
+                        stack_handle
+                            .suggested_wait_time()
+                            .unwrap_or(Duration::from_secs(3))
+                    };
+                    drop(stack_handle);
+                    if !immediate_next_loop {
+                        select! {
+                            _ = tokio::time::sleep(wait_time) =>{}
+                            _ = notifier.notified() =>{}
+                        }
+                    }
+                    immediate_next_loop = false;
+                }
+                smol_canary.abort();
+            })?;
+        }
+
         // drive wg tunnel
         let wg_out = {
             let tunnel = tunnel.clone();
@@ -198,42 +234,6 @@ impl Endpoint {
                 }
             })
         };
-
-        // drive smol
-        {
-            let smol_stack = smol_stack.clone();
-            let notifier = notify.clone();
-            let smol_canary = indicator.clone();
-
-            local_async_run(Some(format!("ST-{}", name)), async move {
-                let mut immediate_next_loop = false;
-                notifier.notified().await;
-                while smol_canary.alive() {
-                    let mut stack_handle = smol_stack.lock().await;
-                    stack_handle.drive_iface();
-                    immediate_next_loop |= stack_handle.poll_all_tcp().await;
-                    immediate_next_loop |= stack_handle.poll_all_udp().await;
-                    stack_handle.purge_invalid_tcp();
-                    stack_handle.purge_timeout_udp();
-                    let wait_time = if immediate_next_loop {
-                        Duration::from_secs(0)
-                    } else {
-                        stack_handle
-                            .suggested_wait_time()
-                            .unwrap_or(Duration::from_secs(3))
-                    };
-                    drop(stack_handle);
-                    if !immediate_next_loop {
-                        select! {
-                            _ = tokio::time::sleep(wait_time) =>{}
-                            _ = notifier.notified() =>{}
-                        }
-                    }
-                    immediate_next_loop = false;
-                }
-                smol_canary.abort();
-            });
-        }
 
         // timeout inactive tunnel
         {

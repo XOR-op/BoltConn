@@ -1,5 +1,6 @@
 use crate::adapter::{
-    AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
+    AddrConnector, Connector, Outbound, OutboundType, connect_timeout, established_tcp,
+    established_udp, lookup,
 };
 
 use crate::common::{StreamOutboundTrait, as_io_err};
@@ -70,11 +71,32 @@ impl Socks5Outbound {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let mut conn_cfg = fast_socks5::client::Config::default();
-        conn_cfg.set_connect_timeout(8);
-        Socks5Stream::use_stream(outbound, Some(self.config.get_auth()), conn_cfg)
-            .await
-            .map_err(|error| TransportError::Handshake(error.to_string()))
+        // fast-socks5 only applies its connect timeout when it dials the server itself.
+        let conn_cfg = fast_socks5::client::Config::default();
+        connect_timeout(
+            async {
+                Socks5Stream::use_stream(outbound, Some(self.config.get_auth()), conn_cfg)
+                    .await
+                    .map_err(|error| TransportError::Handshake(error.to_string()))
+            },
+            "SOCKS5 handshake",
+        )
+        .await
+    }
+
+    async fn request<S>(
+        stream: &mut Socks5Stream<S>,
+        cmd: Socks5Command,
+        target: TargetAddr,
+    ) -> Result<TargetAddr, TransportError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        connect_timeout(
+            async { Ok(stream.request(cmd, target).await.map_err(as_io_err)?) },
+            "SOCKS5 request",
+        )
+        .await
     }
 
     async fn run_tcp<S>(
@@ -89,10 +111,8 @@ impl Socks5Outbound {
     {
         let mut socks_stream = self.connect_proxy(outbound).await?;
         let target = network_addr_to_socks(self.dst);
-        let _bound_addr = socks_stream
-            .request(Socks5Command::TCPConnect, target)
-            .await
-            .map_err(as_io_err)?;
+        let _bound_addr =
+            Self::request(&mut socks_stream, Socks5Command::TCPConnect, target).await?;
         established_tcp(self.name, inbound, socks_stream, abort_handle, conn).await;
         Ok(())
     }
@@ -129,13 +149,15 @@ impl Socks5Outbound {
             SocketAddr::V4(_) => Egress::new(&self.iface_name).udpv4_socket().await?,
             SocketAddr::V6(_) => return Err(TransportError::Socks5Extra("IPv6 not supported")),
         });
-        let bound_addr = socks_stream
-            .request(Socks5Command::UDPAssociate, target.clone())
-            .await
-            .map_err(as_io_err)?
-            .to_socket_addrs()?
-            .next()
-            .unwrap();
+        let bound_addr = Self::request(
+            &mut socks_stream,
+            Socks5Command::UDPAssociate,
+            target.clone(),
+        )
+        .await?
+        .to_socket_addrs()?
+        .next()
+        .unwrap();
         out_sock.connect(bound_addr).await?;
         established_udp(
             self.name,

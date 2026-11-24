@@ -728,14 +728,16 @@ pub(super) async fn get_link_dst(
     }
 }
 
-pub(super) async fn connect_timeout<F: Future<Output = Result<(), TransportError>>>(
+/// Bounds a proxy handshake. Outbound tasks are detached from the connection's abort handle,
+/// so a server that stops answering mid-handshake would otherwise hold its socket forever.
+pub(super) async fn connect_timeout<T, F: Future<Output = Result<T, TransportError>>>(
     future: F,
     component_str: &str,
-) -> Result<(), TransportError> {
-    tokio::time::timeout(Duration::from_secs(10), future)
+) -> Result<T, TransportError> {
+    tokio::time::timeout(Duration::from_secs(45), future)
         .await
         .unwrap_or_else(|_| {
-            tracing::debug!("{} timeout after 10s", component_str);
+            tracing::debug!("{} timeout after 45s", component_str);
             Err(TransportError::Timeout("connect"))
         })
 }

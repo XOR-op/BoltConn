@@ -1,5 +1,6 @@
 use crate::adapter::{
-    AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
+    AddrConnector, Connector, Outbound, OutboundType, connect_timeout, established_tcp,
+    established_udp, lookup,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
@@ -154,11 +155,16 @@ impl TrojanOutbound {
             .map_err(as_io_err)?
             .to_owned();
         let tls_conn = TlsConnector::from(make_tls_config(self.config.skip_cert_verify));
-        let stream = tls_conn
-            .connect(server_name, outbound)
-            .await
-            .map_err(|error| TransportError::Handshake(error.to_string()))?;
-        Ok(stream)
+        connect_timeout(
+            async {
+                tls_conn
+                    .connect(server_name, outbound)
+                    .await
+                    .map_err(|error| TransportError::Handshake(error.to_string()))
+            },
+            "Trojan TLS",
+        )
+        .await
     }
 
     async fn with_websocket<S: AsyncRead + AsyncWrite + Unpin + Send + Sync>(
@@ -172,9 +178,15 @@ impl TrojanOutbound {
             .path_and_query(path)
             .build()
             .map_err(|_| TransportError::Trojan("Invalid wss uri"))?;
-        let (stream, resp) = client_async(uri, stream)
-            .await
-            .map_err(|_| TransportError::Trojan("Websocket client_sync failed"))?;
+        let (stream, resp) = connect_timeout(
+            async {
+                client_async(uri, stream)
+                    .await
+                    .map_err(|_| TransportError::Trojan("Websocket client_sync failed"))
+            },
+            "Trojan websocket",
+        )
+        .await?;
         if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
             return Err(TransportError::Trojan("Websocket upgrade failed"));
         }

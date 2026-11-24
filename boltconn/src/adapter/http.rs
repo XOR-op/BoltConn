@@ -1,5 +1,6 @@
 use crate::adapter::{
-    AddrConnector, Connector, Outbound, OutboundType, empty_handle, established_tcp, lookup,
+    AddrConnector, Connector, Outbound, OutboundType, connect_timeout, empty_handle,
+    established_tcp, lookup,
 };
 
 use crate::common::{StreamOutboundTrait, io_err};
@@ -51,12 +52,21 @@ impl HttpOutbound {
     async fn run_tcp<S>(
         self,
         inbound: Connector,
-        mut outbound: S,
+        outbound: S,
         abort_handle: ConnAbortHandle,
         conn: Option<ConnHandle>,
     ) -> Result<(), TransportError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let tcp_stream = connect_timeout(self.connect_proxy(outbound), "HTTP CONNECT").await?;
+        established_tcp(self.name, inbound, tcp_stream, abort_handle, conn).await;
+        Ok(())
+    }
+
+    async fn connect_proxy<S>(&self, mut outbound: S) -> Result<S, TransportError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
     {
         // construct request
         let mut req = format!(
@@ -65,7 +75,7 @@ impl HttpOutbound {
             Proxy-Connection: Keep-Alive\r\n",
             self.dst
         );
-        if let Some(auth) = self.config.auth {
+        if let Some(auth) = &self.config.auth {
             let b64encoder = base64::engine::general_purpose::STANDARD;
             let encoded = b64encoder.encode(format!("{}:{}", auth.username, auth.password));
             req += format!("Proxy-Authorization: basic {encoded}\r\n").as_str();
@@ -92,9 +102,7 @@ impl HttpOutbound {
             .parse(resp.as_bytes())
             .map_err(|_| TransportError::Http("Parsing failed"))?;
         if let Some(200) = resp_struct.code {
-            let tcp_stream = buf_reader.into_inner();
-            established_tcp(self.name, inbound, tcp_stream, abort_handle, conn).await;
-            Ok(())
+            Ok(buf_reader.into_inner())
         } else {
             Err(TransportError::Http("CONNECT request rejected"))
         }
@@ -181,5 +189,48 @@ impl Outbound for HttpOutbound {
     ) -> Result<bool, TransportError> {
         tracing::error!("spawn_udp_with_outbound() should not be called with HttpOutbound");
         Err(TransportError::Internal("Invalid outbound"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DnsPreference;
+    use crate::network::dns::NameserverPolicies;
+    use std::collections::HashMap;
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_proxy_fails_connect_instead_of_waiting_forever() {
+        let dns = Dns::with_config(
+            "test",
+            "unused",
+            DnsPreference::PreferIpv4,
+            &HashMap::new(),
+            NameserverPolicies::empty(),
+            Vec::new(),
+        );
+        let outbound = HttpOutbound::new(
+            "http",
+            "unused",
+            NetworkAddr::Domain {
+                name: "example.com".to_string(),
+                port: 443,
+            },
+            Arc::new(dns),
+            HttpConfig {
+                server_addr: NetworkAddr::Socket {
+                    address: "127.0.0.1:8080".parse().unwrap(),
+                },
+                auth: None,
+            },
+        );
+        let (proxy_stream, _silent_proxy) = tokio::io::duplex(4096);
+        let (inbound, _client) = Connector::new_pair(4);
+
+        let result = outbound
+            .run_tcp(inbound, proxy_stream, ConnAbortHandle::placeholder(), None)
+            .await;
+
+        assert!(matches!(result, Err(TransportError::Timeout(_))));
     }
 }

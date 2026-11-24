@@ -4,11 +4,14 @@ use crate::proxy::dispatcher::DispatchError;
 use crate::proxy::manager::MappingSessionManager;
 use crate::proxy::{ConnTarget, Dispatcher, NetworkAddr};
 use boltapi::IdentificationSource;
-use std::io::Result;
+use std::io::{ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::net::TcpListener;
+
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_secs(1);
 
 pub struct TunTcpInbound {
     nat_addr: SocketAddr,
@@ -45,9 +48,24 @@ impl TunTcpInbound {
         loop {
             let (socket, addr) = match tcp_listener.accept().await {
                 Ok(r) => r,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        ErrorKind::ConnectionAborted
+                            | ErrorKind::ConnectionReset
+                            | ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    // The client went away before accept; the listener is still healthy.
+                    tracing::debug!("[NAT] Dropped TCP before accept: {}", e);
+                    continue;
+                }
                 Err(e) => {
+                    // Typically fd exhaustion. Keep listening: returning would stop all TUN TCP
+                    // for the rest of the process even after descriptors are released.
                     tracing::error!("[NAT] Failed to accept TCP: {}", e);
-                    Err(e)?
+                    tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
+                    continue;
                 }
             };
             if let Ok((src_addr, dst_addr, indicator)) = self

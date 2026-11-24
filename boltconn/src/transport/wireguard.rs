@@ -201,7 +201,7 @@ impl WireguardTunnel {
                                     tracing::warn!("channel full, dropping packet");
                                 }
                             }
-                        });
+                        })?;
                         let name = config.name.clone();
                         tokio::spawn(async move {
                             while let Ok(data) = out_rx.recv_async().await {
