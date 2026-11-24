@@ -263,10 +263,14 @@ impl Endpoint {
         {
             let name = name.to_string();
             let stack = smol_stack.clone();
+            let notify = notify.clone();
             tokio::spawn(async move {
                 // kill all coroutine
                 let _ = stop_recv.recv().await;
                 indi_write.abort();
+                // The stack driver only checks the canary after a wakeup. An endpoint
+                // stopped before any traffic would otherwise leave that thread parked forever.
+                notify.notify_one();
                 wg_out.abort();
                 wg_in.abort();
                 wg_tick.abort();
@@ -898,5 +902,62 @@ impl DnsUdpSocket for AddrConnectorWrapper {
             Ok(_) => Poll::Ready(Ok(len)),
             Err(_) => Poll::Pending,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DnsPreference;
+    use hickory_resolver::config::ResolverConfig;
+    use tokio::net::UdpSocket;
+
+    fn config(peer: SocketAddr) -> WireguardConfig {
+        let peer_secret = x25519_dalek::StaticSecret::from([2; 32]);
+        WireguardConfig {
+            name: "wireguard".to_string(),
+            ip_addr: Some("10.0.0.2".parse().unwrap()),
+            ip_addr6: None,
+            private_key: x25519_dalek::StaticSecret::from([1; 32]),
+            public_key: x25519_dalek::PublicKey::from(&peer_secret),
+            endpoint: NetworkAddr::Socket { address: peer },
+            mtu: 1420,
+            preshared_key: None,
+            keepalive: None,
+            dns: ResolverConfig::default(),
+            dns_preference: DnsPreference::PreferIpv4,
+            reserved: None,
+            over_tcp: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn aborted_endpoint_stops_stack_driver_before_any_traffic() {
+        // The peer never answers, so the stack driver receives no packet wakeups.
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let peer_addr = peer.local_addr().unwrap();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        socket.connect(peer_addr).await.unwrap();
+        let endpoint = Endpoint::new(
+            "wireguard",
+            AdapterOrSocket::Socket(socket),
+            &config(peer_addr),
+            peer_addr,
+            Duration::from_secs(180),
+        )
+        .await
+        .unwrap();
+        let stack = Arc::downgrade(&endpoint.stack);
+
+        endpoint.abort_connection();
+        drop(endpoint);
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while stack.strong_count() > 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("stack driver thread kept the aborted endpoint alive");
     }
 }
