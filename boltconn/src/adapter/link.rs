@@ -18,7 +18,7 @@ use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The complete effective configuration of one reusable link.
 ///
@@ -277,6 +277,8 @@ pub(crate) enum LinkRouteError {
     StaleGeneration,
     InvalidRoute,
     DependencyUnavailable,
+    /// The upstream link is not live yet or has not published its own route.
+    UpstreamNotReady,
 }
 
 pub(crate) struct LinkLease {
@@ -375,7 +377,12 @@ pub(crate) struct LinkInvalidation {
 
 pub(crate) struct LinkTable {
     links: RwLock<HashMap<String, Arc<Link>>>,
+    route_published: tokio::sync::Notify,
 }
+
+/// Bounds how long a dependent link waits for its upstream, matching how long a WireGuard
+/// link may take to initialize.
+const UPSTREAM_ROUTE_WAIT: Duration = Duration::from_secs(10);
 
 struct Link {
     name: String,
@@ -669,6 +676,7 @@ impl LinkTable {
             .collect();
         Self {
             links: RwLock::new(links),
+            route_published: tokio::sync::Notify::new(),
         }
     }
 
@@ -821,13 +829,13 @@ impl LinkTable {
         let (mut chain, mut dependencies, start) = if let Some((index, spec)) = upstream {
             let upstream = self
                 .latest_live_generation(&spec.proxy)
-                .ok_or(LinkRouteError::DependencyUnavailable)?;
+                .ok_or(LinkRouteError::UpstreamNotReady)?;
             if upstream.kind != spec.link_kind.unwrap() {
                 return Err(LinkRouteError::DependencyUnavailable);
             }
             let (chain, mut dependencies) = upstream
                 .creation_route()
-                .ok_or(LinkRouteError::DependencyUnavailable)?;
+                .ok_or(LinkRouteError::UpstreamNotReady)?;
             dependencies.push(upstream);
             (chain, dependencies, index + 1)
         } else {
@@ -850,7 +858,33 @@ impl LinkTable {
             });
         }
         current.set_creation_route(chain, std::mem::take(&mut dependencies));
+        self.route_published.notify_waiters();
         Ok(current)
+    }
+
+    /// Chains create their links concurrently, so a dependent link can become usable before
+    /// its upstream link has published a route. Wait for the upstream instead of failing.
+    pub(crate) async fn publish_creation_route_when_ready(
+        &self,
+        name: &str,
+        generation: u64,
+        specs: &[LinkRouteSpec],
+    ) -> Result<Arc<LinkGeneration>, LinkRouteError> {
+        let deadline = tokio::time::Instant::now() + UPSTREAM_ROUTE_WAIT;
+        loop {
+            // Register before checking so a route published in between still wakes us.
+            let published = self.route_published.notified();
+            tokio::pin!(published);
+            published.as_mut().enable();
+            match self.publish_creation_route(name, generation, specs) {
+                Err(LinkRouteError::UpstreamNotReady) => {
+                    if tokio::time::timeout_at(deadline, published).await.is_err() {
+                        return Err(LinkRouteError::UpstreamNotReady);
+                    }
+                }
+                result => return result,
+            }
+        }
     }
 
     fn latest_generation(&self, name: &str, generation: u64) -> Option<Arc<LinkGeneration>> {
@@ -1812,6 +1846,49 @@ mod tests {
         assert_eq!(detail.connected_endpoints, vec![endpoint]);
         assert_eq!(detail.dns.lookups, 1);
         assert_eq!(detail.dns.outcomes.error, 1);
+    }
+
+    #[tokio::test]
+    async fn dependent_link_waits_for_upstream_route() {
+        let upstream_config = named_anytls("upstream", "upstream-secret");
+        let child_config = named_anytls("child", "child-secret");
+        let table = Arc::new(LinkTable::new(HashMap::from([
+            ("upstream".to_string(), upstream_config.clone()),
+            ("child".to_string(), child_config.clone()),
+        ])));
+        let child_route = vec![shared("upstream"), shared("child")];
+        let child = acquire_named(&table, "child", &child_config, child_route.clone())
+            .unwrap()
+            .generation;
+
+        // A chain creates both links at once; here the child is ready before its upstream exists.
+        let waiting = tokio::spawn({
+            let table = table.clone();
+            async move {
+                table
+                    .publish_creation_route_when_ready("child", child.number(), &child_route)
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !waiting.is_finished(),
+            "child did not wait for its upstream"
+        );
+
+        acquire_ready(
+            &table,
+            "upstream",
+            &upstream_config,
+            vec![shared("upstream")],
+        );
+        let published = waiting.await.unwrap().unwrap();
+        let path: Vec<_> = published
+            .dependency_path()
+            .iter()
+            .map(|generation| generation.name.clone())
+            .collect();
+        assert_eq!(path, ["upstream", "child"]);
     }
 
     #[test]

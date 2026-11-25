@@ -268,11 +268,12 @@ impl SshManager {
                 };
                 if self
                     .link_table
-                    .publish_creation_route(
+                    .publish_creation_route_when_ready(
                         name,
                         lease.generation.number(),
                         &requested.creation_route,
                     )
+                    .await
                     .is_err()
                 {
                     tunnel.close().await;

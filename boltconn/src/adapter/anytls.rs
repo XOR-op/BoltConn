@@ -175,11 +175,10 @@ impl AnytlsOutboundHandle {
             .await;
         match result {
             Ok(stream) => {
-                let record = self.manager.publish_creation_route(
-                    &self.name,
-                    generation,
-                    &self.config.creation_route,
-                )?;
+                let record = self
+                    .manager
+                    .publish_creation_route(&self.name, generation, &self.config.creation_route)
+                    .await?;
                 if let Some(conn) = conn {
                     conn.consider_link_path(record.dependency_path());
                 }
@@ -482,14 +481,15 @@ impl AnytlsManager {
         }
     }
 
-    fn publish_creation_route(
+    async fn publish_creation_route(
         &self,
         name: &str,
         generation: u64,
         route: &[crate::adapter::LinkRouteSpec],
     ) -> Result<Arc<crate::adapter::LinkGeneration>, TransportError> {
         self.link_table
-            .publish_creation_route(name, generation, route)
+            .publish_creation_route_when_ready(name, generation, route)
+            .await
             .map_err(|_| {
                 self.link_table.mark_terminal(
                     name,
