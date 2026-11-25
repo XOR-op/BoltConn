@@ -1,6 +1,7 @@
 use crate::adapter::{
-    Connector, TcpIndicatorGuard, TcpRelayActivity, TcpRelayDirection, TcpStatus,
-    error_termination, relay_channel_to_writer, relay_reader_to_channel, relay_tcp_bidirectional,
+    Connector, RelayAbortGuard, TcpIndicatorGuard, TcpRelayActivity, TcpRelayDirection, TcpStatus,
+    error_termination, finish_unreported, relay_channel_to_writer, relay_reader_to_channel,
+    relay_tcp_bidirectional,
 };
 use crate::common::{
     MAX_PKT_SIZE, StreamOutboundTrait, parse_http_host, parse_tls_sni, read_to_bytes_mut,
@@ -23,38 +24,6 @@ pub struct TcpAdapter<S> {
     connector: Connector,
     abort_handle: ConnAbortHandle,
     first_packet_buffer: Option<BytesMut>,
-}
-
-/// Completes the connection when another relay aborts this task before its normal finish path.
-struct TcpAbortGuard {
-    info: ConnHandle,
-    abort_handle: ConnAbortHandle,
-    armed: bool,
-}
-
-impl TcpAbortGuard {
-    fn new(info: ConnHandle, abort_handle: ConnAbortHandle) -> Self {
-        Self {
-            info,
-            abort_handle,
-            armed: true,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for TcpAbortGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        if let Some(reason) = self.abort_handle.cancel_reason() {
-            self.info.finish(reason.code, reason.stage, reason.detail);
-        }
-    }
 }
 
 impl<S: StreamOutboundTrait> TcpAdapter<S> {
@@ -175,7 +144,7 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
     }
 
     pub async fn run(self, info: ConnHandle) -> io::Result<()> {
-        let mut abort_guard = TcpAbortGuard::new(info.clone(), self.abort_handle.clone());
+        let mut abort_guard = RelayAbortGuard::new(info.clone(), self.abort_handle.clone());
         let need_parse_first_packet = self.first_packet_buffer.is_none();
         let Connector { tx, rx } = self.connector;
         let activity = TcpRelayActivity::new();
@@ -259,6 +228,8 @@ impl<S: StreamOutboundTrait> TcpAdapter<S> {
         if reached_active || (outcome.first == TcpRelayDirection::Upload && outcome.result.is_ok())
         {
             info.finish(reason.code, reason.stage, reason.detail.clone());
+        } else {
+            finish_unreported(&info, &self.abort_handle, reason.clone()).await;
         }
         abort_guard.disarm();
         self.abort_handle.cancel(reason);
@@ -407,6 +378,47 @@ mod tests {
         assert_eq!(
             snapshot.state.termination.unwrap().code,
             ConnResultCode::RemoteClosed
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_chained_hop_finishes_a_connecting_connection() {
+        let (_client, adapter_stream) = tokio::io::duplex(1024);
+        let (adapter_connector, outbound_connector) = Connector::new_pair(4);
+        let abort_handle = ConnAbortHandle::new();
+        let info = test_context(abort_handle.clone());
+        let adapter = TcpAdapter::new(
+            info.metadata().conn_info.src,
+            info.metadata().conn_info.dst.clone(),
+            adapter_stream,
+            Arc::new(AtomicU8::new(2)),
+            adapter_connector,
+            abort_handle.clone(),
+        );
+        let task_info = info.clone();
+        let adapter_task = tokio::spawn(async move {
+            let _ = adapter.run(task_info).await;
+        });
+        abort_handle.fulfill(vec![("tcp".to_string(), adapter_task)]);
+
+        // Like a chained WireGuard hop whose DNS lookup timed out: it drops the relay and fails.
+        crate::adapter::spawn_hop("hop".to_string(), abort_handle.clone(), async move {
+            drop(outbound_connector);
+            Err(TransportError::Dns(
+                crate::proxy::error::DnsError::ResolveDomain("example.com".to_string()),
+            ))
+        });
+
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while !info.done() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("failed hop left the connection connecting");
+        assert_eq!(
+            info.snapshot().state.termination.unwrap().code,
+            ConnResultCode::DnsError
         );
     }
 }

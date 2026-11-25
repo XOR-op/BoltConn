@@ -794,13 +794,17 @@ impl Outbound for WireguardHandle {
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(self.clone().attach_tcp(
-            inbound,
-            abort_handle,
-            Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-            ret_tx,
-            conn,
-        ));
+        adapter::spawn_hop(
+            self.name.clone(),
+            abort_handle.clone(),
+            self.clone().attach_tcp(
+                inbound,
+                abort_handle,
+                Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
+                ret_tx,
+                conn,
+            ),
+        );
         ret_rx
             .await
             .map_err(|_| TransportError::Internal("Return rx closed"))
@@ -835,13 +839,17 @@ impl Outbound for WireguardHandle {
         }
         let udp_outbound = udp_outbound.unwrap();
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(self.clone().attach_udp(
-            inbound,
-            abort_handle,
-            Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
-            ret_tx,
-            conn,
-        ));
+        adapter::spawn_hop(
+            self.name.clone(),
+            abort_handle.clone(),
+            self.clone().attach_udp(
+                inbound,
+                abort_handle,
+                Some(AdapterOrSocket::Adapter(Arc::from(udp_outbound))),
+                ret_tx,
+                conn,
+            ),
+        );
         ret_rx
             .await
             .map_err(|_| TransportError::Internal("Return rx closed"))

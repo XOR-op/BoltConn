@@ -1,6 +1,6 @@
 use crate::adapter::{
     AddrConnector, Connector, Outbound, OutboundType, connect_timeout, established_tcp,
-    established_udp, lookup,
+    established_udp, lookup, spawn_hop,
 };
 
 use crate::common::{StreamOutboundTrait, as_io_err};
@@ -221,7 +221,7 @@ impl Outbound for Socks5Outbound {
             return Err(TransportError::Internal("Invalid outbound"));
         }
         let self_clone = self.clone();
-        tokio::spawn(async move {
+        spawn_hop(self.name.clone(), abort_handle.clone(), async move {
             self_clone
                 .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle, conn)
                 .await

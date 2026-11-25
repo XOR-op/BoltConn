@@ -127,15 +127,17 @@ impl ChainOutbound {
             let last_conn = (last_index == 0 || is_shared_link(last_one[0].outbound_type()))
                 .then_some(conn)
                 .flatten();
-            if use_tcp {
+            let last_hop = if use_tcp {
                 let inbound = inbound_tcp_container.unwrap();
-                last_one[0].spawn_tcp(inbound, abort_handle, last_conn);
+                last_one[0].spawn_tcp(inbound, abort_handle, last_conn)
             } else {
                 let inbound = inbound_udp_container.unwrap();
-                last_one[0].spawn_udp(inbound, abort_handle, true, last_conn);
-            }
-
-            Ok(())
+                last_one[0].spawn_udp(inbound, abort_handle, true, last_conn)
+            };
+            // Return the last hop's result so the dispatcher records its failure.
+            last_hop
+                .await
+                .unwrap_or_else(|_| Err(TransportError::Internal("chain hop task failed")))
         })
     }
 }

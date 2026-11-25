@@ -1,6 +1,6 @@
 use crate::adapter::{
     AddrConnector, Connector, LinkRuntimeConfig, LinkTable, ManagedRuntime, Outbound, OutboundType,
-    connect_timeout, established_tcp, established_udp, handshake_error_termination,
+    connect_timeout, established_tcp, established_udp, spawn_hop, transport_error_termination,
 };
 use crate::common::cert::make_tls_config;
 use crate::common::{StreamOutboundTrait, as_io_err, io_err};
@@ -221,7 +221,10 @@ impl Outbound for AnytlsOutboundHandle {
                 .attach_tcp(inbound, None, abort_handle, None, conn)
                 .await;
             if let Err(err) = res {
-                abort_handle2.cancel(handshake_error_termination(&err));
+                abort_handle2.cancel(transport_error_termination(
+                    &err,
+                    boltapi::ConnStage::Connecting,
+                ));
                 return Err(err);
             }
             Ok(())
@@ -242,9 +245,8 @@ impl Outbound for AnytlsOutboundHandle {
         }
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let self_clone = self.clone();
-        tokio::spawn(async move {
-            let abort_handle2 = abort_handle.clone();
-            let res = self_clone
+        spawn_hop(self.name.clone(), abort_handle.clone(), async move {
+            self_clone
                 .attach_tcp(
                     inbound,
                     tcp_outbound,
@@ -252,12 +254,7 @@ impl Outbound for AnytlsOutboundHandle {
                     Some(completion_tx),
                     conn,
                 )
-                .await;
-            if let Err(err) = res {
-                abort_handle2.cancel(handshake_error_termination(&err));
-                return Err(err);
-            }
-            Ok(())
+                .await
         });
         completion_rx
             .await
@@ -278,7 +275,10 @@ impl Outbound for AnytlsOutboundHandle {
                 .attach_udp(inbound, None, abort_handle, None, tunnel_only, conn)
                 .await;
             if let Err(err) = res {
-                abort_handle2.cancel(handshake_error_termination(&err));
+                abort_handle2.cancel(transport_error_termination(
+                    &err,
+                    boltapi::ConnStage::Connecting,
+                ));
                 return Err(err);
             }
             Ok(())
@@ -300,9 +300,8 @@ impl Outbound for AnytlsOutboundHandle {
         }
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let self_clone = self.clone();
-        tokio::spawn(async move {
-            let abort_handle2 = abort_handle.clone();
-            let res = self_clone
+        spawn_hop(self.name.clone(), abort_handle.clone(), async move {
+            self_clone
                 .attach_udp(
                     inbound,
                     tcp_outbound,
@@ -311,12 +310,7 @@ impl Outbound for AnytlsOutboundHandle {
                     tunnel_only,
                     conn,
                 )
-                .await;
-            if let Err(err) = res {
-                abort_handle2.cancel(handshake_error_termination(&err));
-                return Err(err);
-            }
-            Ok(())
+                .await
         });
         completion_rx
             .await

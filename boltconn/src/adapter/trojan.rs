@@ -1,6 +1,6 @@
 use crate::adapter::{
     AddrConnector, Connector, Outbound, OutboundType, connect_timeout, established_tcp,
-    established_udp, lookup,
+    established_udp, lookup, spawn_hop,
 };
 use crate::common::async_ws_stream::AsyncWsStream;
 
@@ -243,7 +243,7 @@ impl Outbound for TrojanOutbound {
             return Err(TransportError::Internal("Invalid outbound"));
         }
         let self_clone = self.clone();
-        tokio::spawn(async move {
+        spawn_hop(self.name.clone(), abort_handle.clone(), async move {
             self_clone
                 .run_tcp(inbound, tcp_outbound.unwrap(), abort_handle, conn)
                 .await
@@ -293,7 +293,7 @@ impl Outbound for TrojanOutbound {
         }
         let tcp_outbound = tcp_outbound.unwrap();
         let self_clone = self.clone();
-        tokio::spawn(async move {
+        spawn_hop(self.name.clone(), abort_handle.clone(), async move {
             self_clone
                 .run_udp(inbound, tcp_outbound, abort_handle, tunnel_only, conn)
                 .await

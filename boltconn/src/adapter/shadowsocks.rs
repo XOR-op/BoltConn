@@ -1,5 +1,6 @@
 use crate::adapter::{
     AddrConnector, Connector, Outbound, OutboundType, established_tcp, established_udp, lookup,
+    spawn_hop,
 };
 
 use crate::common::StreamOutboundTrait;
@@ -178,7 +179,7 @@ impl Outbound for SSOutbound {
             return Err(TransportError::Internal("Invalid outbound"));
         }
         let self_clone = self.clone();
-        tokio::spawn(async move {
+        spawn_hop(self.name.clone(), abort_handle.clone(), async move {
             let server_addr = self_clone.get_server_addr(conn.as_ref()).await?;
             self_clone
                 .run_tcp(
@@ -241,7 +242,7 @@ impl Outbound for SSOutbound {
         }
         let udp_outbound = udp_outbound.unwrap();
         let self_clone = self.clone();
-        tokio::spawn(async move {
+        spawn_hop(self.name.clone(), abort_handle.clone(), async move {
             let server_addr = self_clone.get_server_addr(conn.as_ref()).await?;
             self_clone
                 .run_udp(

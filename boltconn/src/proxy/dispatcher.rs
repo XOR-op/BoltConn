@@ -3,7 +3,7 @@ use crate::adapter::{
     HttpOutbound, LinkInvalidation, LinkRouteSpec, LinkRuntimeConfig, LinkTable, NamedLinkConfig,
     Outbound, OutboundType, SSOutbound, Socks5Outbound, SocksUdpAdapter, SshManager,
     SshOutboundHandle, TcpAdapter, TrojanOutbound, TunUdpAdapter, WireguardHandle,
-    WireguardManager,
+    WireguardManager, classify_transport_error,
 };
 use crate::common::StreamOutboundTrait;
 use crate::common::duplex_chan::DuplexChan;
@@ -83,39 +83,6 @@ fn log_outbound_task_error(error: &tokio::task::JoinError) {
         // A non-cancellation JoinError means the outbound task panicked, which is an
         // unexpected internal failure rather than a connection-level transport error.
         tracing::error!("[Dispatcher] outbound task failed: {}", error);
-    }
-}
-
-fn classify_transport_error(
-    error: &TransportError,
-    fallback_stage: ConnStage,
-) -> (ConnResultCode, ConnStage) {
-    match error {
-        TransportError::Dns(_) => (ConnResultCode::DnsError, ConnStage::Resolving),
-        TransportError::Timeout(_) => (ConnResultCode::ConnectTimeout, ConnStage::Connecting),
-        TransportError::Http(_)
-        | TransportError::Socks5(_)
-        | TransportError::Socks5Extra(_)
-        | TransportError::Trojan(_)
-        | TransportError::Anytls(_)
-        | TransportError::ShadowSocks(_)
-        | TransportError::Ssh(_)
-        | TransportError::Handshake(_) => (ConnResultCode::HandshakeError, ConnStage::Handshaking),
-        TransportError::Io(error)
-            if fallback_stage == ConnStage::Inspecting
-                && error.kind() == std::io::ErrorKind::UnexpectedEof =>
-        {
-            (ConnResultCode::ClientClosed, ConnStage::Inspecting)
-        }
-        TransportError::Io(_) if fallback_stage == ConnStage::Transferring => {
-            (ConnResultCode::TransferError, ConnStage::Transferring)
-        }
-        TransportError::Io(_) | TransportError::WireGuard(_) => {
-            (ConnResultCode::ConnectError, fallback_stage)
-        }
-        TransportError::Internal(_) | TransportError::InternalExtra(_) => {
-            (ConnResultCode::InternalError, fallback_stage)
-        }
     }
 }
 

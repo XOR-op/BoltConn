@@ -58,12 +58,109 @@ pub(crate) fn error_termination(
     )
 }
 
-pub(crate) fn handshake_error_termination(error: &(impl Display + ?Sized)) -> ConnTermination {
-    error_termination(
-        ConnResultCode::HandshakeError,
-        ConnStage::Handshaking,
-        error,
-    )
+pub(crate) fn classify_transport_error(
+    error: &TransportError,
+    fallback_stage: ConnStage,
+) -> (ConnResultCode, ConnStage) {
+    match error {
+        TransportError::Dns(_) => (ConnResultCode::DnsError, ConnStage::Resolving),
+        TransportError::Timeout(_) => (ConnResultCode::ConnectTimeout, ConnStage::Connecting),
+        TransportError::Http(_)
+        | TransportError::Socks5(_)
+        | TransportError::Socks5Extra(_)
+        | TransportError::Trojan(_)
+        | TransportError::Anytls(_)
+        | TransportError::ShadowSocks(_)
+        | TransportError::Ssh(_)
+        | TransportError::Handshake(_) => (ConnResultCode::HandshakeError, ConnStage::Handshaking),
+        TransportError::Io(error)
+            if fallback_stage == ConnStage::Inspecting
+                && error.kind() == std::io::ErrorKind::UnexpectedEof =>
+        {
+            (ConnResultCode::ClientClosed, ConnStage::Inspecting)
+        }
+        TransportError::Io(_) if fallback_stage == ConnStage::Transferring => {
+            (ConnResultCode::TransferError, ConnStage::Transferring)
+        }
+        TransportError::Io(_) | TransportError::WireGuard(_) => {
+            (ConnResultCode::ConnectError, fallback_stage)
+        }
+        TransportError::Internal(_) | TransportError::InternalExtra(_) => {
+            (ConnResultCode::InternalError, fallback_stage)
+        }
+    }
+}
+
+pub(crate) fn transport_error_termination(
+    error: &TransportError,
+    fallback_stage: ConnStage,
+) -> ConnTermination {
+    let (code, stage) = classify_transport_error(error, fallback_stage);
+    error_termination(code, stage, error)
+}
+
+/// Runs a chained hop in the background. Nothing awaits intermediate hops, so a failed hop
+/// must record its own failure; otherwise its connection would stay connecting forever.
+pub(super) fn spawn_hop<F>(name: String, abort_handle: ConnAbortHandle, hop: F)
+where
+    F: Future<Output = Result<(), TransportError>> + Send + 'static,
+{
+    tokio::spawn(async move {
+        if let Err(error) = hop.await {
+            tracing::debug!("[{}] chained hop failed: {}", name, error);
+            abort_handle.cancel(transport_error_termination(&error, ConnStage::Connecting));
+        }
+    });
+}
+
+/// Completes the connection when another task aborts a relay before its normal finish path.
+struct RelayAbortGuard {
+    info: ConnHandle,
+    abort_handle: ConnAbortHandle,
+    armed: bool,
+}
+
+impl RelayAbortGuard {
+    fn new(info: ConnHandle, abort_handle: ConnAbortHandle) -> Self {
+        Self {
+            info,
+            abort_handle,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RelayAbortGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(reason) = self.abort_handle.cancel_reason() {
+            self.info.finish(reason.code, reason.stage, reason.detail);
+        }
+    }
+}
+
+const UNREPORTED_CLOSE_GRACE: Duration = Duration::from_secs(1);
+
+/// Finishes a connection whose outbound closed before it was established. The outbound or
+/// a chained hop normally records the specific failure; this waits briefly for that report so
+/// the generic `fallback` neither races it nor leaves the connection stuck connecting.
+async fn finish_unreported(
+    info: &ConnHandle,
+    abort_handle: &ConnAbortHandle,
+    fallback: ConnTermination,
+) {
+    if info.snapshot().state.ended_at_ms.is_some() {
+        return;
+    }
+    tokio::time::sleep(UNREPORTED_CLOSE_GRACE).await;
+    let reason = abort_handle.cancel_reason().unwrap_or(fallback);
+    info.finish(reason.code, reason.stage, reason.detail);
 }
 
 pub struct TcpStatus {

@@ -2,7 +2,6 @@ use crate::adapter;
 use crate::adapter::{
     AddrConnector, Connector, InitializationDecision, LinkInitializationTable, LinkRuntimeConfig,
     LinkTable, ManagedRuntime, Outbound, OutboundType, empty_handle, established_tcp,
-    handshake_error_termination,
 };
 use crate::common::{StreamOutboundTrait, io_err};
 use crate::network::dns::Dns;
@@ -12,7 +11,7 @@ use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::UdpSocketAdapter;
 use crate::transport::ssh::{SshConfig, SshTunnel};
 use async_trait::async_trait;
-use boltapi::{ConnResultCode, LinkHealth, LinkReason, LinkReasonCode, LinkState};
+use boltapi::{ConnResultCode, ConnStage, LinkHealth, LinkReason, LinkReasonCode, LinkState};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -106,7 +105,10 @@ impl Outbound for SshOutboundHandle {
                 .attach_tcp(inbound, None, abort_handle, tx, conn)
                 .await;
             if let Err(e) = r {
-                abort_handle2.cancel(handshake_error_termination(&e));
+                abort_handle2.cancel(adapter::transport_error_termination(
+                    &e,
+                    ConnStage::Connecting,
+                ));
                 return Err(e);
             }
             Ok(())
@@ -127,16 +129,10 @@ impl Outbound for SshOutboundHandle {
         }
         let (comp_tx, comp_rx) = tokio::sync::oneshot::channel();
         let self_clone = self.clone();
-        tokio::spawn(async move {
-            let abort_handle2 = abort_handle.clone();
-            let r = self_clone
+        adapter::spawn_hop(self.name.clone(), abort_handle.clone(), async move {
+            self_clone
                 .attach_tcp(inbound, tcp_outbound, abort_handle, comp_tx, conn)
-                .await;
-            if let Err(e) = r {
-                abort_handle2.cancel(handshake_error_termination(&e));
-                return Err(io_err(format!("SSH TCP spawn error: {:?}", e).as_str()));
-            }
-            Ok(())
+                .await
         });
         comp_rx
             .await

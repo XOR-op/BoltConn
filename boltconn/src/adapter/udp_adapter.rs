@@ -1,6 +1,6 @@
 // Adapter to NAT
 
-use crate::adapter::{AddrConnector, DuplexCloseGuard};
+use crate::adapter::{AddrConnector, DuplexCloseGuard, RelayAbortGuard, finish_unreported};
 use crate::network::dns::Dns;
 use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use boltapi::{ConnResultCode, ConnStage, ConnState, ConnTermination};
@@ -17,7 +17,7 @@ use tokio::time::timeout;
 
 const UDP_ALIVE_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
-fn finish_udp(
+async fn finish_udp(
     info: &ConnHandle,
     abort_handle: &ConnAbortHandle,
     code: ConnResultCode,
@@ -32,6 +32,13 @@ fn finish_udp(
         // This is still a meaningful terminal cause without an establishment
         // timestamp.
         info.finish(code, Some(stage), detail.clone());
+    } else {
+        finish_unreported(
+            info,
+            abort_handle,
+            ConnTermination::new(code, stage, detail.clone()),
+        )
+        .await;
     }
     abort_handle.cancel(ConnTermination::new(code, stage, detail));
 }
@@ -67,6 +74,7 @@ impl TunUdpAdapter {
     }
 
     pub async fn run(self, abort_handle: ConnAbortHandle) -> Result<()> {
+        let mut abort_guard = RelayAbortGuard::new(self.info.clone(), abort_handle.clone());
         let mut first_packet = true;
         let outgoing_info_arc = self.info.clone();
         let mut inbound_read = self.send_rx;
@@ -103,20 +111,26 @@ impl TunUdpAdapter {
                     }
                 }
                 match transfer_error {
-                    Some(detail) => finish_udp(
-                        &outgoing_info_arc,
-                        &abort_handle2,
-                        ConnResultCode::TransferError,
-                        ConnStage::Transferring,
-                        Some(detail),
-                    ),
-                    None => finish_udp(
-                        &outgoing_info_arc,
-                        &abort_handle2,
-                        ConnResultCode::ClientClosed,
-                        ConnStage::Closing,
-                        None,
-                    ),
+                    Some(detail) => {
+                        finish_udp(
+                            &outgoing_info_arc,
+                            &abort_handle2,
+                            ConnResultCode::TransferError,
+                            ConnStage::Transferring,
+                            Some(detail),
+                        )
+                        .await
+                    }
+                    None => {
+                        finish_udp(
+                            &outgoing_info_arc,
+                            &abort_handle2,
+                            ConnResultCode::ClientClosed,
+                            ConnStage::Closing,
+                            None,
+                        )
+                        .await
+                    }
                 }
             }),
             abort_handle.clone(),
@@ -140,21 +154,28 @@ impl TunUdpAdapter {
             }
         }
         match client_closed {
-            Some(detail) => finish_udp(
-                &self.info,
-                &abort_handle,
-                ConnResultCode::ClientClosed,
-                ConnStage::Closing,
-                Some(detail),
-            ),
-            None => finish_udp(
-                &self.info,
-                &abort_handle,
-                ConnResultCode::RemoteClosed,
-                ConnStage::Closing,
-                None,
-            ),
+            Some(detail) => {
+                finish_udp(
+                    &self.info,
+                    &abort_handle,
+                    ConnResultCode::ClientClosed,
+                    ConnStage::Closing,
+                    Some(detail),
+                )
+                .await
+            }
+            None => {
+                finish_udp(
+                    &self.info,
+                    &abort_handle,
+                    ConnResultCode::RemoteClosed,
+                    ConnStage::Closing,
+                    None,
+                )
+                .await
+            }
         }
+        abort_guard.disarm();
         Ok(())
     }
 }
@@ -188,6 +209,7 @@ impl SocksUdpAdapter {
     }
 
     pub async fn run(self, abort_handle: ConnAbortHandle) -> Result<()> {
+        let mut abort_guard = RelayAbortGuard::new(self.info.clone(), abort_handle.clone());
         let mut first_packet = true;
         let outgoing_info_arc = self.info.clone();
         let mut inbound_read = self.send_rx;
@@ -224,20 +246,26 @@ impl SocksUdpAdapter {
                     }
                 }
                 match transfer_error {
-                    Some(detail) => finish_udp(
-                        &outgoing_info_arc,
-                        &abort_handle2,
-                        ConnResultCode::TransferError,
-                        ConnStage::Transferring,
-                        Some(detail),
-                    ),
-                    None => finish_udp(
-                        &outgoing_info_arc,
-                        &abort_handle2,
-                        ConnResultCode::ClientClosed,
-                        ConnStage::Closing,
-                        None,
-                    ),
+                    Some(detail) => {
+                        finish_udp(
+                            &outgoing_info_arc,
+                            &abort_handle2,
+                            ConnResultCode::TransferError,
+                            ConnStage::Transferring,
+                            Some(detail),
+                        )
+                        .await
+                    }
+                    None => {
+                        finish_udp(
+                            &outgoing_info_arc,
+                            &abort_handle2,
+                            ConnResultCode::ClientClosed,
+                            ConnStage::Closing,
+                            None,
+                        )
+                        .await
+                    }
                 }
             }),
             abort_handle.clone(),
@@ -269,21 +297,104 @@ impl SocksUdpAdapter {
             }
         }
         match client_closed {
-            Some(detail) => finish_udp(
-                &self.info,
-                &abort_handle,
-                ConnResultCode::ClientClosed,
-                ConnStage::Closing,
-                Some(detail),
-            ),
-            None => finish_udp(
-                &self.info,
-                &abort_handle,
-                ConnResultCode::RemoteClosed,
-                ConnStage::Closing,
-                None,
-            ),
+            Some(detail) => {
+                finish_udp(
+                    &self.info,
+                    &abort_handle,
+                    ConnResultCode::ClientClosed,
+                    ConnStage::Closing,
+                    Some(detail),
+                )
+                .await
+            }
+            None => {
+                finish_udp(
+                    &self.info,
+                    &abort_handle,
+                    ConnResultCode::RemoteClosed,
+                    ConnStage::Closing,
+                    None,
+                )
+                .await
+            }
         }
+        abort_guard.disarm();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DnsPreference;
+    use crate::dispatch::{ConnInfo, InboundInfo};
+    use crate::network::dns::NameserverPolicies;
+    use crate::platform::process::NetworkType;
+    use crate::proxy::ContextManager;
+    use crate::proxy::error::{DnsError, TransportError};
+    use std::collections::HashMap;
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_chained_hop_finishes_a_connecting_connection() {
+        let dst: SocketAddr = "127.0.0.1:53".parse().unwrap();
+        let abort_handle = ConnAbortHandle::new();
+        let info = ContextManager::new(10).begin(
+            ConnInfo {
+                src: "127.0.0.1:12345".parse().unwrap(),
+                dst: NetworkAddr::Socket { address: dst },
+                local_ip: None,
+                inbound: InboundInfo::Tun,
+                resolved_dst: None,
+                connection_type: NetworkType::Udp,
+                process_info: None,
+            },
+            NetworkAddr::Socket { address: dst },
+            None,
+            abort_handle.clone(),
+        );
+        let dns = Dns::with_config(
+            "test",
+            "unused",
+            DnsPreference::PreferIpv4,
+            &HashMap::new(),
+            NameserverPolicies::empty(),
+            Vec::new(),
+        );
+        let (_send_tx, send_rx) = mpsc::channel(4);
+        let (recv_tx, _recv_rx) = mpsc::channel(4);
+        let (adapter_connector, outbound_connector) = AddrConnector::new_pair(4);
+        let adapter = TunUdpAdapter::new(
+            info.clone(),
+            send_rx,
+            recv_tx,
+            adapter_connector,
+            Arc::new(dns),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let adapter_abort = abort_handle.clone();
+        let adapter_task = tokio::spawn(async move {
+            let _ = adapter.run(adapter_abort).await;
+        });
+        abort_handle.fulfill(vec![("udp".to_string(), adapter_task)]);
+
+        // The hop drops the relay before it reports, so the adapter sees the close first.
+        crate::adapter::spawn_hop("hop".to_string(), abort_handle.clone(), async move {
+            drop(outbound_connector);
+            Err(TransportError::Dns(DnsError::ResolveDomain(
+                "example.com".to_string(),
+            )))
+        });
+
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while !info.done() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("failed hop left the connection connecting");
+        assert_eq!(
+            info.snapshot().state.termination.unwrap().code,
+            ConnResultCode::DnsError
+        );
     }
 }
