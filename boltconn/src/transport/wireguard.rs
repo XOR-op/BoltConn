@@ -83,6 +83,39 @@ enum BufferIndex<T> {
     Raw(T),
 }
 
+/// Errors that a connected UDP socket reports for an earlier datagram, mostly from ICMP
+/// unreachable messages. The socket stays usable and WireGuard retransmits on its own, so
+/// treating them as fatal would turn one lost datagram into a lost tunnel.
+///
+/// `ENETDOWN` is deliberately absent: it only means the local interface went down, so
+/// failing fast and rebuilding beats stalling connections until the handshake expires.
+fn is_transient_socket_error(error: &io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        ErrorKind::ConnectionRefused
+            | ErrorKind::ConnectionReset
+            | ErrorKind::HostUnreachable
+            | ErrorKind::NetworkUnreachable
+    ) {
+        return true;
+    }
+    #[cfg(unix)]
+    if let Some(code) = error.raw_os_error() {
+        return code == libc::ENOBUFS || code == libc::EHOSTDOWN;
+    }
+    false
+}
+
+/// Outcome of driving the WireGuard timers once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickOutcome {
+    Idle,
+    Sent,
+    /// The peer stopped completing handshakes. Recreating the tunnel gets a fresh
+    /// transport, which retrying forever over the same one never would.
+    Expired,
+}
+
 /// Wireguard Tunnel, with only one peer.
 pub struct WireguardTunnel {
     tunnel: tokio::sync::Mutex<Tunn>,
@@ -157,12 +190,25 @@ impl WireguardTunnel {
                                                 continue
                                             },
                                         };
-                                        let Ok(len) = recv_result else {
-                                            tracing::warn!(
-                                                "WireGuard #{} failed to receive from socket",
-                                                name,
-                                            );
-                                            break;
+                                        let len = match recv_result {
+                                            Ok(len) => len,
+                                            Err(e) if is_transient_socket_error(&e) => {
+                                                tracing::debug!(
+                                                    "WireGuard #{} ignored receive error: {}",
+                                                    name,
+                                                    e
+                                                );
+                                                pool.clear(buf.key());
+                                                continue;
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "WireGuard #{} failed to receive from socket: {}",
+                                                    name,
+                                                    e
+                                                );
+                                                break;
+                                            }
                                         };
                                         buf.resize(len, 0);
                                         key
@@ -176,6 +222,14 @@ impl WireguardTunnel {
                                         buf.resize(MAX_UDP_PKT_SIZE, 0);
                                         let len = match recv_result {
                                             Ok(len) => len,
+                                            Err(e) if is_transient_socket_error(&e) => {
+                                                tracing::debug!(
+                                                    "WireGuard #{} ignored receive error: {}",
+                                                    name,
+                                                    e
+                                                );
+                                                continue;
+                                            }
                                             Err(e) => {
                                                 tracing::warn!(
                                                     "WireGuard #{} failed to receive: {}",
@@ -205,13 +259,23 @@ impl WireguardTunnel {
                         let name = config.name.clone();
                         tokio::spawn(async move {
                             while let Ok(data) = out_rx.recv_async().await {
-                                if let Err(e) = socket_clone.send(&data).await {
-                                    tracing::warn!(
-                                        "WireGuard #{} outbound send failed: {}",
-                                        name,
-                                        e
-                                    );
-                                    return Err(e);
+                                match socket_clone.send(&data).await {
+                                    Ok(_) => {}
+                                    Err(e) if is_transient_socket_error(&e) => {
+                                        tracing::debug!(
+                                            "WireGuard #{} dropped a datagram on send error: {}",
+                                            name,
+                                            e
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "WireGuard #{} outbound send failed: {}",
+                                            name,
+                                            e
+                                        );
+                                        return Err(e);
+                                    }
                                 }
                             }
                             Ok::<(), io::Error>(())
@@ -292,10 +356,11 @@ impl WireguardTunnel {
                 false
             }
             TunnResult::Err(e) => {
-                return Err(TransportError::InternalExtra(format!(
-                    "WireGuard receive failed: {:?}",
-                    e
-                )));
+                // Late handshake replies, replays and packets for a session the peer has not
+                // yet retired are normal. Like other WireGuard implementations, drop them and
+                // let the timers repair the session instead of tearing down every connection.
+                tracing::debug!("WireGuard dropped an undecryptable packet: {:?}", e);
+                true
             }
             TunnResult::Done => true,
         };
@@ -329,47 +394,28 @@ impl WireguardTunnel {
     }
 
     /// Used for ticking tunnel, keeping internal state healthy.
-    /// Return whether sending any message
-    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> Result<bool, TransportError> {
+    pub async fn tick(&self, buf: &mut [u8; MAX_PKT_SIZE]) -> Result<TickOutcome, TransportError> {
         let mut guard = self.tunnel.lock().await;
         match guard.update_timers(buf) {
             TunnResult::Done => {
                 // do nothing
-                Ok(false)
+                Ok(TickOutcome::Idle)
             }
-            TunnResult::Err(WireGuardError::ConnectionExpired) => {
-                match guard.format_handshake_initiation(buf, false) {
-                    TunnResult::Done => {
-                        // handshake ongoing, ignore
-                        Ok(false)
-                    }
-                    TunnResult::WriteToNetwork(data) => {
-                        drop(guard);
-                        if let Err(e) = self.inner.outbound_send(data).await {
-                            tracing::warn!("Failed to write to network: {}", e);
-                            Err(e)
-                        } else {
-                            Ok(true)
-                        }
-                    }
-                    other => {
-                        tracing::warn!("Unexpected WireGuard timer message: {:?}", other);
-                        Ok(false)
-                    }
-                }
-            }
+            // boringtun reports this only after handshakes kept failing for REKEY_ATTEMPT_TIME,
+            // or no new keys were agreed for REJECT_AFTER_TIME * 3 while data was flowing.
+            TunnResult::Err(WireGuardError::ConnectionExpired) => Ok(TickOutcome::Expired),
             TunnResult::WriteToNetwork(packet) => {
                 drop(guard);
                 if let Err(e) = self.inner.outbound_send(packet).await {
                     tracing::warn!("Failed to send timer message: {}", e);
                     Err(e)
                 } else {
-                    Ok(true)
+                    Ok(TickOutcome::Sent)
                 }
             }
             other => {
                 tracing::warn!("Unexpected WireGuard timer message: {:?}", other);
-                Ok(false)
+                Ok(TickOutcome::Idle)
             }
         }
     }
@@ -447,145 +493,4 @@ impl WireguardTunnelInner {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::network::packet::transport_layer::create_raw_udp_pkt;
-    use smoltcp::phy::ChecksumCapabilities;
-    use smoltcp::wire::{IpProtocol, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr, TcpPacket};
-
-    fn tcp_packet(ipv6: bool, value: u8) -> BytesMut {
-        let ip_len = if ipv6 { 40 } else { 20 };
-        let mut packet = BytesMut::zeroed(ip_len + 20 + usize::from(value) + 1);
-        let (src, dst) = if ipv6 {
-            let src: Ipv6Addr = "2001:db8::1".parse().unwrap();
-            let dst: Ipv6Addr = "2001:db8::2".parse().unwrap();
-            Ipv6Repr {
-                src_addr: src,
-                dst_addr: dst,
-                next_header: IpProtocol::Tcp,
-                payload_len: packet.len() - ip_len,
-                hop_limit: 64,
-            }
-            .emit(&mut Ipv6Packet::new_unchecked(&mut packet[..]));
-            (src.into(), dst.into())
-        } else {
-            let src = Ipv4Addr::new(192, 0, 2, 1);
-            let dst = Ipv4Addr::new(192, 0, 2, 2);
-            Ipv4Repr {
-                src_addr: src,
-                dst_addr: dst,
-                next_header: IpProtocol::Tcp,
-                payload_len: packet.len() - ip_len,
-                hop_limit: 64,
-            }
-            .emit(
-                &mut Ipv4Packet::new_unchecked(&mut packet[..]),
-                &ChecksumCapabilities::default(),
-            );
-            (src.into(), dst.into())
-        };
-        let mut tcp = TcpPacket::new_unchecked(&mut packet[ip_len..]);
-        tcp.set_header_len(20);
-        tcp.set_src_port(1000);
-        tcp.set_dst_port(2000);
-        tcp.set_ack(true);
-        tcp.set_window_len(65535);
-        tcp.payload_mut().fill(value);
-        tcp.fill_checksum(&src, &dst);
-        packet
-    }
-
-    fn network_packet(result: TunnResult<'_>) -> Vec<u8> {
-        match result {
-            TunnResult::WriteToNetwork(packet) => packet.to_vec(),
-            other => panic!("expected a WireGuard network packet, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn receive_batches_count_control_packets_and_preserve_mixed_data() {
-        let sender_key = x25519_dalek::StaticSecret::from([1; 32]);
-        let receiver_key = x25519_dalek::StaticSecret::from([2; 32]);
-        let sender_public = x25519_dalek::PublicKey::from(&sender_key);
-        let receiver_public = x25519_dalek::PublicKey::from(&receiver_key);
-        let mut sender = Tunn::new(sender_key, receiver_public, None, None, 1, None);
-        let mut receiver = Tunn::new(receiver_key, sender_public, None, None, 2, None);
-        let mut wire = [0; MAX_PKT_SIZE];
-        let request = network_packet(sender.format_handshake_initiation(&mut wire, true));
-        let reply = network_packet(receiver.decapsulate(None, &request, &mut wire));
-        let confirmation = network_packet(sender.decapsulate(None, &reply, &mut wire));
-        assert!(matches!(
-            receiver.decapsulate(None, &confirmation, &mut wire),
-            TunnResult::Done
-        ));
-
-        let (incoming, incoming_rx) = flume::unbounded();
-        let (outgoing, _outgoing_rx) = flume::unbounded();
-        let tunnel = WireguardTunnel {
-            tunnel: tokio::sync::Mutex::new(receiver),
-            inner: WireguardTunnelInner {
-                outbound: AdapterOrChannel::Channel(outgoing, incoming_rx.clone()),
-                endpoint: "127.0.0.1:51820".parse().unwrap(),
-                smol_notify: Arc::new(Notify::new()),
-                inbound_buf_pool: Arc::new(Pool::new()),
-                reserved: None,
-            },
-        };
-        for _ in 0..IpPacketBatch::CAPACITY {
-            let packet = network_packet(sender.encapsulate(&[], &mut wire));
-            incoming.send(BufferIndex::Raw(packet)).unwrap();
-        }
-        let mut expected: Vec<_> = (0..IpPacketBatch::CAPACITY + 1)
-            .map(|index| tcp_packet(index % 2 == 1, index as u8))
-            .collect();
-        for index in 0..=IpPacketBatch::CAPACITY {
-            expected.push(create_raw_udp_pkt(
-                &vec![index as u8; index + 1],
-                "192.0.2.1:1000".parse().unwrap(),
-                "192.0.2.2:2000".parse().unwrap(),
-            ));
-            expected.push(create_raw_udp_pkt(
-                &vec![index as u8; index + 13],
-                "[2001:db8::1]:1000".parse().unwrap(),
-                "[2001:db8::2]:2000".parse().unwrap(),
-            ));
-        }
-        expected.push(tcp_packet(false, 100));
-        expected.push(tcp_packet(true, 101));
-        for packet in &expected {
-            let encrypted = network_packet(sender.encapsulate(packet, &mut wire));
-            incoming.send(BufferIndex::Raw(encrypted)).unwrap();
-        }
-        let (mut stack_tx, stack_rx) = flume::bounded(4);
-        let mut plaintext = [0; MAX_PKT_SIZE];
-        assert!(
-            !tunnel
-                .receive_incoming_packets(&mut stack_tx, &mut wire, &mut plaintext)
-                .await
-                .unwrap()
-        );
-        assert_eq!(incoming_rx.len(), expected.len());
-        assert!(stack_rx.is_empty());
-
-        let mut actual = Vec::new();
-        for expected_batch in expected.chunks(IpPacketBatch::CAPACITY) {
-            assert!(
-                tokio::time::timeout(
-                    Duration::from_secs(1),
-                    tunnel.receive_incoming_packets(&mut stack_tx, &mut wire, &mut plaintext),
-                )
-                .await
-                .expect("a partial batch must not wait for more packets")
-                .unwrap()
-            );
-            let previous_len = actual.len();
-            match stack_rx.try_recv().unwrap() {
-                IpPacketBatch::Single(packet) => actual.push(packet),
-                IpPacketBatch::Multiple(packets) => actual.extend(packets),
-            }
-            assert_eq!(actual.len() - previous_len, expected_batch.len());
-        }
-        assert_eq!(actual, expected);
-        assert!(incoming_rx.is_empty());
-    }
-}
+mod tests;

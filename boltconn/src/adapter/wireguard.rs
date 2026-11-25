@@ -11,7 +11,7 @@ use crate::network::egress::Egress;
 use crate::proxy::error::{DnsError, TransportError};
 use crate::proxy::{ConnAbortHandle, ConnHandle, NetworkAddr};
 use crate::transport::smol::{IpPacketBatch, SmolDnsProvider, SmolStack, VirtualIpDevice};
-use crate::transport::wireguard::{WireguardConfig, WireguardTunnel};
+use crate::transport::wireguard::{TickOutcome, WireguardConfig, WireguardTunnel};
 use crate::transport::{AdapterOrSocket, InterfaceAddress, UdpSocketAdapter};
 use async_trait::async_trait;
 use boltapi::{
@@ -223,8 +223,20 @@ impl Endpoint {
                             }
                             tokio::time::sleep(Duration::from_millis(30)).await;
                         }
-                        Ok(has_sent) => {
-                            if has_sent {
+                        Ok(TickOutcome::Expired) => {
+                            // Outgoing traffic keeps the inactivity timer fresh, so without this
+                            // a peer that never answers would pin the endpoint forever. A new
+                            // endpoint re-resolves the server and, behind a chain, gets a new
+                            // source port in the upstream tunnel.
+                            let _ = stop_send.send(());
+                            tracing::warn!(
+                                "[WireGuard] Close connection #{} for handshake expiry",
+                                name
+                            );
+                            return;
+                        }
+                        Ok(outcome) => {
+                            if outcome == TickOutcome::Sent {
                                 continuous_err_cnt = 0;
                             }
                             // From boringtun, the recommended interval is 100ms.
@@ -306,6 +318,12 @@ impl Endpoint {
         let _ = self.stop_sender.send(());
     }
 
+    /// A live endpoint is reusable only while the upstream generations its route went through
+    /// are live. Otherwise its connections fail activation on the ended upstream.
+    fn usable(managed: &ManagedRuntime<Self>) -> bool {
+        managed.runtime.is_active.alive() && !managed.record.upstream_ended()
+    }
+
     async fn link_snapshot(&self) -> (LinkState, LinkHealth) {
         let task_alive = self.is_active.alive();
         let (expired, handshake_elapsed) = self.wg.stats().await;
@@ -322,6 +340,15 @@ impl Endpoint {
             LinkState::Failed
         };
         (state, health)
+    }
+}
+
+impl Drop for Endpoint {
+    fn drop(&mut self) {
+        // Once no manager map or caller holds the endpoint, nothing can route new connections
+        // to it. Its tasks would otherwise keep a second tunnel alive with the same key, and two
+        // such tunnels keep stealing the peer's session from each other.
+        self.abort_connection();
     }
 }
 
@@ -368,38 +395,57 @@ impl WireguardManager {
         creating_new_conn: tokio::sync::oneshot::Sender<bool>,
     ) -> Result<ManagedRuntime<Endpoint>, TransportError> {
         let config = &requested.config;
-        let mut lease = self
-            .link_table
-            .acquire(name, requested)
-            .map_err(|_| TransportError::Internal("stale WireGuard link acquisition"))?;
-
-        let active = self.active_conn.read().await.get(name).cloned();
-        if let Some(active) = active {
-            if active.generation == lease.generation.number() && active.runtime.is_active.alive() {
-                let _ = creating_new_conn.send(false);
-                return Ok(active);
-            }
-            self.remove_and_finalize_dead(name, active).await;
-            // A dead cached runtime terminalizes its generation. Reacquire so
-            // the replacement is tagged with the next generation rather than
-            // doing network setup against an already-terminal record.
-            lease = self
-                .link_table
+        let acquire = || {
+            self.link_table
                 .acquire(name, requested)
-                .map_err(|_| TransportError::Internal("stale WireGuard link acquisition"))?;
-        }
+                .map_err(|_| TransportError::Internal("stale WireGuard link acquisition"))
+        };
+        let mut lease = acquire()?;
 
-        match self
-            .initializing_conn
-            .begin(name, lease.generation.number())
-            .await
-        {
+        // Reconnect bursts race here: many callers lease the same generation before the first
+        // one retires its dead runtime. Each pass either returns, or makes progress by taking a
+        // newer lease or retiring the cached runtime.
+        let decision = loop {
+            let generation = lease.generation.number();
+            let active = self.active_conn.read().await.get(name).cloned();
+            if let Some(active) = active {
+                if active.generation > generation {
+                    // The lease predates a replacement another caller already published.
+                    // Retiring that runtime would discard a healthy tunnel; re-read instead.
+                    lease = acquire()?;
+                    continue;
+                }
+                if active.generation == generation && Endpoint::usable(&active) {
+                    let _ = creating_new_conn.send(false);
+                    return Ok(active);
+                }
+                // A dead runtime, one whose upstream ended, or a leftover from an older
+                // generation. Retiring it terminalizes its generation, so reacquire to tag the
+                // replacement with a live generation record.
+                self.retire_runtime(name, active).await;
+                lease = acquire()?;
+                continue;
+            }
+            let decision = self.initializing_conn.begin(name, generation).await;
+            if matches!(decision, InitializationDecision::Create)
+                && self.active_conn.read().await.contains_key(name)
+            {
+                // Another creator published and released this generation between the map
+                // read and `begin`. Creating again would start a second tunnel.
+                self.initializing_conn.finish(name, generation).await;
+                continue;
+            }
+            break decision;
+        };
+
+        match decision {
             InitializationDecision::Wait(completed) => {
                 let _ = creating_new_conn.send(false);
                 LinkInitializationTable::wait(completed).await;
+                // A stale lease waits for the replacement's initializer, so accept a newer one.
                 if let Some(active) = self.active_conn.read().await.get(name)
-                    && active.generation == lease.generation.number()
-                    && active.runtime.is_active.alive()
+                    && active.generation >= lease.generation.number()
+                    && Endpoint::usable(active)
                 {
                     return Ok(active.clone());
                 }
@@ -573,15 +619,15 @@ impl WireguardManager {
         }
     }
 
-    /// Reaps endpoints whose driver tasks have stopped and refreshes the
-    /// health of the survivors.
+    /// Reaps endpoints whose driver tasks have stopped or whose upstream link
+    /// ended, and refreshes the health of the survivors.
     pub(crate) async fn refresh_liveness(&self) {
         let runtimes: Vec<_> = self.active_conn.read().await.values().cloned().collect();
         for runtime in runtimes {
             let (state, health) = runtime.runtime.link_snapshot().await;
-            if state == LinkState::Failed {
+            if state == LinkState::Failed || runtime.record.upstream_ended() {
                 let name = runtime.runtime.name.clone();
-                self.remove_and_finalize_dead(&name, runtime).await;
+                self.retire_runtime(&name, runtime).await;
             } else {
                 runtime.record.set_live_snapshot(
                     state,
@@ -592,7 +638,16 @@ impl WireguardManager {
         }
     }
 
-    async fn remove_and_finalize_dead(&self, name: &str, runtime: ManagedRuntime<Endpoint>) {
+    /// Stops a cached runtime, removes it from the map, and terminalizes its generation.
+    async fn retire_runtime(&self, name: &str, runtime: ManagedRuntime<Endpoint>) {
+        let code = if runtime.runtime.is_active.alive() {
+            LinkReasonCode::DependencyFailed
+        } else {
+            LinkReasonCode::TaskStopped
+        };
+        // A retired endpoint that kept running would compete with its replacement
+        // for the peer's session, since both use the same key.
+        runtime.runtime.abort_connection();
         {
             let mut active = self.active_conn.write().await;
             if active
@@ -609,10 +664,7 @@ impl WireguardManager {
             runtime.generation,
             LinkState::Failed,
             LinkHealth::Unhealthy,
-            LinkReason {
-                code: LinkReasonCode::TaskStopped,
-                detail: None,
-            },
+            LinkReason { code, detail: None },
             ConnResultCode::LinkLost,
         );
     }
@@ -915,58 +967,4 @@ impl DnsUdpSocket for AddrConnectorWrapper {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::DnsPreference;
-    use hickory_resolver::config::ResolverConfig;
-    use tokio::net::UdpSocket;
-
-    fn config(peer: SocketAddr) -> WireguardConfig {
-        let peer_secret = x25519_dalek::StaticSecret::from([2; 32]);
-        WireguardConfig {
-            name: "wireguard".to_string(),
-            ip_addr: Some("10.0.0.2".parse().unwrap()),
-            ip_addr6: None,
-            private_key: x25519_dalek::StaticSecret::from([1; 32]),
-            public_key: x25519_dalek::PublicKey::from(&peer_secret),
-            endpoint: NetworkAddr::Socket { address: peer },
-            mtu: 1420,
-            preshared_key: None,
-            keepalive: None,
-            dns: ResolverConfig::default(),
-            dns_preference: DnsPreference::PreferIpv4,
-            reserved: None,
-            over_tcp: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn aborted_endpoint_stops_stack_driver_before_any_traffic() {
-        // The peer never answers, so the stack driver receives no packet wakeups.
-        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let peer_addr = peer.local_addr().unwrap();
-        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        socket.connect(peer_addr).await.unwrap();
-        let endpoint = Endpoint::new(
-            "wireguard",
-            AdapterOrSocket::Socket(socket),
-            &config(peer_addr),
-            peer_addr,
-            Duration::from_secs(180),
-        )
-        .await
-        .unwrap();
-        let stack = Arc::downgrade(&endpoint.stack);
-
-        endpoint.abort_connection();
-        drop(endpoint);
-
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while stack.strong_count() > 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("stack driver thread kept the aborted endpoint alive");
-    }
-}
+mod tests;
