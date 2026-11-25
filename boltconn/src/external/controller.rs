@@ -560,7 +560,7 @@ impl Controller {
                         continue;
                     }
                     tested_proxy.insert(p.get_name());
-                    if let Ok(h) = latency_test(
+                    match latency_test(
                         self.dispatcher.as_ref(),
                         p.clone(),
                         speedtest_url.as_str(),
@@ -569,9 +569,15 @@ impl Controller {
                     )
                     .await
                     {
-                        handles.push(h);
-                    } else {
-                        p.set_latency(Latency::Failed)
+                        Ok(h) => handles.push(h),
+                        Err(e) => {
+                            tracing::debug!(
+                                "Latency test for proxy <{}> failed for {}",
+                                p.get_name(),
+                                e
+                            );
+                            p.set_latency(Latency::Failed)
+                        }
                     }
                 }
                 for h in handles {

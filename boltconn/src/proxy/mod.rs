@@ -27,7 +27,7 @@ use rand::{Rng, SeedableRng};
 pub use socks5_inbound::*;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::task::JoinHandle;
 use tokio_rustls::rustls::pki_types::ServerName;
 pub use tun_inbound::*;
@@ -146,17 +146,41 @@ pub async fn latency_test(
         let end_timer = SystemTime::now();
         match end_timer.duration_since(start_timer) {
             Ok(duration) => Ok(Latency::Value(duration.as_millis() as u32)),
-            Err(_) => Ok(Latency::Failed),
+            Err(_) => Err(anyhow::anyhow!("system clock went backwards")),
         }
     });
 
     let timeout_future = tokio::spawn(async move {
-        if let Ok(Ok(Ok(l))) = tokio::time::timeout(timeout, http_handle).await {
-            proxy.set_latency(l);
+        let start = Instant::now();
+        let reason = match tokio::time::timeout(timeout, http_handle).await {
+            Ok(Ok(Ok(l))) => {
+                proxy.set_latency(l);
+                proxy_handle.abort();
+                return;
+            }
+            Ok(Ok(Err(e))) => format!("{:#}", e),
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => "timeout".to_string(),
+        };
+        // A failing outbound only shows up as a closed channel to hyper; its own error is the cause.
+        let outbound = if proxy_handle.is_finished() {
+            match proxy_handle.await {
+                Ok(Ok(())) => "closed".to_string(),
+                Ok(Err(e)) => e.to_string(),
+                Err(e) => e.to_string(),
+            }
         } else {
-            proxy.set_latency(Latency::Failed)
-        }
-        proxy_handle.abort()
+            proxy_handle.abort();
+            "still running".to_string()
+        };
+        tracing::debug!(
+            "Latency test for proxy <{}> failed after {:?} for {}; outbound: {}",
+            proxy.get_name(),
+            start.elapsed(),
+            reason,
+            outbound
+        );
+        proxy.set_latency(Latency::Failed)
     });
     Ok(timeout_future)
 }
