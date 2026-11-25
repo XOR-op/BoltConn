@@ -54,14 +54,20 @@ pub async fn latency_test(
     iface: Option<String>,
 ) -> Result<JoinHandle<()>, RuntimeError> {
     let tls_conector = create_tls_connector(None);
-    let req = Request::builder()
-        .method("GET")
-        .uri(url)
-        .body(http_body_util::Empty::<Bytes>::new())
-        .unwrap();
     let (inbound, outbound) = Connector::new_pair(10);
     let parsed_url =
         url::Url::parse(url).map_err(|_| RuntimeError::LatencyTest("Failed to parse test url"))?;
+    // hyper's low-level client sends the URI verbatim and adds no Host header; without one,
+    // servers reject the request (400 + Connection: close) instead of answering it.
+    let req = Request::builder()
+        .method("GET")
+        .uri(&parsed_url[url::Position::BeforePath..url::Position::AfterQuery])
+        .header(
+            http::header::HOST,
+            &parsed_url[url::Position::BeforeHost..url::Position::AfterPort],
+        )
+        .body(http_body_util::Empty::<Bytes>::new())
+        .unwrap();
     let port = match parsed_url.port() {
         Some(p) => p,
         None => match parsed_url.scheme() {
@@ -97,7 +103,7 @@ pub async fn latency_test(
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_else(|_| Duration::default())
-            .as_secs(),
+            .as_nanos() as u64,
     );
     let src_addr = get_random_local_addr(&dst_addr, rng.gen_range(32768..65535));
     // create outbound
